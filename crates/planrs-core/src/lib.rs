@@ -14,7 +14,10 @@
 //!   aussi dans un build du workspace, où chrono reçoit la feature `now` par
 //!   rmcp.
 //!
-//! État : squelette du jalon J1, pas encore de modèle.
+//! État : jalon J1 en cours (ADR-0008). Modules :
+//! - [`fixed`] : arrondi unique (R-001) et décimal exact ;
+//! - [`quantity`] : unités, pourcentages et coûts en point fixe (R-002) ;
+//! - [`error`] : erreurs typées, codes stables.
 
 #![deny(
     clippy::float_arithmetic,
@@ -23,7 +26,14 @@
     clippy::dbg_macro
 )]
 
+pub mod error;
+pub mod fixed;
 pub mod parity;
+pub mod quantity;
+
+pub use error::FixedError;
+pub use fixed::{Decimal, round_div};
+pub use quantity::{Money, Percent, Rate, RateUnit, SignedPercent, Units};
 
 /// Nom affiché du produit.
 ///

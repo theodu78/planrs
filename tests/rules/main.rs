@@ -4,20 +4,19 @@
 //! `rNNN_titre_court.rs`, déclaré ci-dessous par `mod rNNN_titre_court;`.
 //! Chaque test porte l'identifiant de sa règle dans son nom et commente ses
 //! valeurs calculées à la main.
-//!
-//! Aucune règle n'existe encore (jalon J1, socle) : seul le contrôle de la
-//! convention de nommage tourne.
 
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
     clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
     reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
 )]
 
 // Modules des règles, un par fichier, dans l'ordre des identifiants.
-// mod r001_exemple;
+mod r001_rounding_half_away_from_zero;
+mod r002_fixed_point_quantities;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

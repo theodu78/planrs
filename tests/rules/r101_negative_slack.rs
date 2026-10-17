@@ -40,3 +40,26 @@ fn r101_negative_total_slack_and_bounded_free_slack() {
     assert!(ps.total_slack < Minutes::ZERO);
     assert_eq!(ps.free_slack, Minutes::ZERO);
 }
+
+#[test]
+fn r101_same_chain_with_mso() {
+    // Même chaîne, A MSO mar 20/10 08:00 : mêmes marges.
+    let run = Net::new("2026-10-19T08:00")
+        .task("Q", 480)
+        .task("P", 1_440)
+        .task("A", 480)
+        .fs("Q", "P")
+        .fs("P", "A")
+        .constraint(
+            "A",
+            Constraint::MustStartOn {
+                date: moment("2026-10-20T08:00"),
+            },
+        )
+        .run();
+    for name in ["P", "Q"] {
+        assert_eq!(run.at(name).total_slack, Minutes::new(-1_440), "{name}");
+        assert_eq!(run.at(name).free_slack, Minutes::ZERO, "{name}");
+        assert!(run.at(name).critical, "{name}");
+    }
+}

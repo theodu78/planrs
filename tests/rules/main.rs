@@ -108,6 +108,8 @@ mod r093_start_no_earlier_than;
 mod r094_finish_no_earlier_than;
 mod r095_start_no_later_than;
 mod r096_finish_no_later_than;
+mod r097_must_start_on;
+mod r098_must_finish_on;
 mod r099_honor_constraints_option;
 mod r100_constraint_conflict_diagnostics;
 mod r101_negative_slack;

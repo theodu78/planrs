@@ -229,6 +229,14 @@ impl Calc<'_, '_> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
         let (place, duration, parent, constraint) =
             (node.place, node.duration, node.parent_rollup, node.constraint);
+        // R-097, R-098 : une feuille épinglée (MSO, MFO, option active) a
+        // ses dates au plus tard sur l'ancrage, sans plafond : une borne
+        // violée s'exprime par la marge négative de l'amont.
+        if let Some(c) = constraint
+            && let ConstraintRule::Pin(_) = c.rule
+        {
+            return Ok((c.span()?, LateDriver::Constraint { kind: c.kind }));
+        }
         let scale = *self
             .net
             .scale(place)
@@ -285,15 +293,14 @@ impl Calc<'_, '_> {
 
     /// La règle `rule` plafonne la fin au plus tard dans la passe arrière
     /// secondaire depuis le début : SNLT, FNLT (plafond, ou serrage si
-    /// l'option est active).
+    /// l'option est active) ; MSO, MFO option inactive (fenêtre).
     fn caps_late(&self, rule: ConstraintRule) -> bool {
         match rule {
-            ConstraintRule::Cap(_) => true,
+            ConstraintRule::Cap(_) | ConstraintRule::Window(_) => true,
             ConstraintRule::Clamped(_) => self.mode == Mode::FromStart,
             ConstraintRule::None
             | ConstraintRule::Opposite
             | ConstraintRule::Floor(_)
-            | ConstraintRule::Window(_)
             | ConstraintRule::Pin(_) => false,
         }
     }

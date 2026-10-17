@@ -73,3 +73,28 @@ fn r099_floors_do_not_depend_on_the_option() {
         assert_eq!(on.codes(), [""; 0], "{c:?}");
     }
 }
+
+#[test]
+fn r099_mso_and_mfo_in_both_modes() {
+    // MSO mar 20/10 08:00 et MFO mar 20/10 17:00 : épingle (option active)
+    // ou fenêtre (inactive), mêmes marges de P (−480) qu'avec SNLT.
+    for c in [
+        Constraint::MustStartOn {
+            date: moment("2026-10-20T08:00"),
+        },
+        Constraint::MustFinishOn {
+            date: moment("2026-10-20T17:00"),
+        },
+    ] {
+        let on = run(c, true);
+        assert_eq!(on.at("A").early.start, moment("2026-10-20T08:00"), "{c:?}");
+        assert_eq!(on.at("A").early, on.at("A").late, "{c:?}");
+        assert_eq!(codes(&on), ["constraint.override"], "{c:?}");
+        let off = run(c, false);
+        assert_eq!(off.at("A").early.start, moment("2026-10-21T08:00"), "{c:?}");
+        assert_eq!(codes(&off), ["constraint.not_honored"], "{c:?}");
+        for r in [&on, &off] {
+            assert_eq!(r.at("P").total_slack, Minutes::new(-480), "{c:?}");
+        }
+    }
+}

@@ -105,7 +105,9 @@ impl Calc<'_, '_> {
             let (Some(c), Some(early)) = (node.constraint, s.early) else {
                 continue;
             };
-            let (ConstraintRule::Cap(side), Mode::FromStart) = (c.rule, self.mode) else {
+            let (ConstraintRule::Cap(side) | ConstraintRule::Window(side), Mode::FromStart) =
+                (c.rule, self.mode)
+            else {
                 continue;
             };
             let (Some(date), Some(Ok(a)), Some(scale)) = (c.date, c.anchor, self.net.scale(node.place))

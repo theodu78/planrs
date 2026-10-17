@@ -276,6 +276,13 @@ impl Calc<'_, '_> {
         let pinned = Driver::Constraint { kind: c.kind };
         let primary_from_start = self.role == PassRole::Primary && self.mode == Mode::FromStart;
         match c.rule {
+            // R-097, R-098 : option active, MSO et MFO épinglent la feuille
+            // sur l'ancrage, quelles que soient ses bornes (R-100).
+            ConstraintRule::Pin(_) => {
+                let a = c.span()?;
+                self.overrides(v, scale, a, c.kind)?;
+                return Ok((a, pinned));
+            }
             // R-095, R-096, R-099 : option active, le plafond (SNLT, FNLT)
             // s'impose en passe principale ; chaque borne violée est
             // signalée (R-100).
@@ -290,13 +297,15 @@ impl Calc<'_, '_> {
                     return Ok((a, pinned));
                 }
             }
-            ConstraintRule::Floor(Side::Start) => {
+            // Plancher : SNET, FNET ; MSO, MFO option inactive (fenêtre,
+            // R-097, R-098).
+            ConstraintRule::Floor(Side::Start) | ConstraintRule::Window(Side::Start) => {
                 let a = c.span()?;
                 if a.start > natural.start {
                     return Ok((a, pinned));
                 }
             }
-            ConstraintRule::Floor(Side::Finish) => {
+            ConstraintRule::Floor(Side::Finish) | ConstraintRule::Window(Side::Finish) => {
                 let a = c.span()?;
                 if scale.between(natural.finish, a.finish)?.get() > 0 {
                     return Ok((a, pinned));
@@ -305,9 +314,7 @@ impl Calc<'_, '_> {
             ConstraintRule::None
             | ConstraintRule::Opposite
             | ConstraintRule::Cap(_)
-            | ConstraintRule::Window(_)
-            | ConstraintRule::Clamped(_)
-            | ConstraintRule::Pin(_) => {}
+            | ConstraintRule::Clamped(_) => {}
         }
         Ok((natural, driver))
     }

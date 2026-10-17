@@ -61,3 +61,38 @@ fn r105_project_start_wins_when_the_option_is_off() {
         }]
     );
 }
+
+#[test]
+fn r105_pin_before_the_project_start() {
+    // A 1 j MSO ven 16/10 08:00 → ven 16/10 08:00 – 17:00, override du début
+    // du projet, UID 0 depuis ven 16/10 08:00 ; option inactive : A lun
+    // 19/10, TF −480, `not_honored`.
+    let mso = Constraint::MustStartOn {
+        date: moment("2026-10-16T08:00"),
+    };
+    let run = Net::new("2026-10-19T08:00")
+        .task("A", 480)
+        .constraint("A", mso)
+        .run();
+    assert_eq!(run.at("A").early.start, moment("2026-10-16T08:00"));
+    assert_eq!(
+        run.schedule.diagnostics,
+        [Diagnostic::ConstraintOverride {
+            task: run.uid("A"),
+            kind: ConstraintKind::MustStartOn,
+            bound: OverriddenBound::ProjectStart,
+        }]
+    );
+    assert_eq!(
+        run.schedule.project_summary.unwrap().start,
+        moment("2026-10-16T08:00")
+    );
+    let run = Net::new("2026-10-19T08:00")
+        .task("A", 480)
+        .constraint("A", mso)
+        .honor(false)
+        .run();
+    assert_eq!(run.at("A").early.start, moment("2026-10-19T08:00"));
+    assert_eq!(run.at("A").total_slack, Minutes::new(-480));
+    assert_eq!(run.codes(), ["constraint.not_honored"]);
+}

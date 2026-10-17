@@ -103,3 +103,36 @@ fn r100_finish_link_override() {
         }]
     );
 }
+
+#[test]
+fn r100_summary_gate_override_with_mso() {
+    // Cas de la spécification : S {A 1 j MSO lun 19/10 08:00} ; X 2 j FS →
+    // S → A lun 08:00 – 17:00, override de la porte de S ; X au plus tard
+    // jeu 15/10 08:00 – ven 16/10 17:00, TF(X) −960.
+    let run = Net::new("2026-10-19T08:00")
+        .task("X", 960)
+        .task("S", 0)
+        .task("A", 480)
+        .level("A", 2)
+        .fs("X", "S")
+        .constraint(
+            "A",
+            Constraint::MustStartOn {
+                date: moment("2026-10-19T08:00"),
+            },
+        )
+        .run();
+    assert_eq!(run.at("A").early.start, moment("2026-10-19T08:00"));
+    assert_eq!(
+        run.schedule.diagnostics,
+        [Diagnostic::ConstraintOverride {
+            task: run.uid("A"),
+            kind: ConstraintKind::MustStartOn,
+            bound: OverriddenBound::SummaryGate {
+                summary: run.uid("S")
+            },
+        }]
+    );
+    assert_eq!(run.at("X").late.start, moment("2026-10-15T08:00"));
+    assert_eq!(run.at("X").total_slack, Minutes::new(-960));
+}

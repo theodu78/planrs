@@ -1,6 +1,7 @@
 # Intégration continue de planrs : mêmes checks que ceux exigés avant tout
 # commit (CLAUDE.md), plus les contrôles xtask, la compilation WebAssembly,
-# les tests sur macOS et Windows et la MSRV.
+# les tests sur macOS et Windows, la MSRV, le budget du moteur et la parité
+# sur le corpus public.
 #
 # Aucun paquet système n'est installé : aucune dépendance actuelle n'en exige à
 # la compilation (winit et xkbcommon chargent leurs bibliothèques par dlopen,
@@ -108,6 +109,45 @@ jobs:
 
       - name: Benchmark (informatif)
         run: cargo bench -p planrs-tests --bench schedule -- --warm-up-time 1 --measurement-time 5 --noplot
+
+  # Corpus public (ADR-0004, ADR-0009) : fichiers MSPDI enregistrés par MS
+  # Project, téléchargés (sha256 vérifié) et gardés dans un cache privé au
+  # dépôt ; recalcul, comparaison et verdict contre les planchers. Seul le
+  # rapport (sans nom de tâche) est publié, jamais les fichiers.
+  corpus:
+    name: corpus public (parité)
+    # Pas de PR venue d'un fork : le cache et le téléchargement restent internes au dépôt.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache du corpus
+        uses: actions/cache@v4
+        with:
+          path: tests/corpus/files
+          key: corpus-${{ hashFiles('tests/corpus/manifest.toml') }}
+          restore-keys: corpus-
+
+      - name: Téléchargement (sha256 vérifié)
+        run: cargo xtask corpus fetch
+
+      - name: Parité
+        run: cargo test -p planrs-tests --test corpus -- --nocapture
+        env:
+          PLANRS_CORPUS: required
+
+      - name: Rapport
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: corpus-report
+          # Rapport seul, jamais les fichiers du corpus.
+          path: target/tmp/corpus-report.*
 
   msrv:
     name: MSRV (Rust 1.95)

@@ -6,10 +6,21 @@
 //! nouvelle ligne sans faire baisser la parité mesurée (ADR-0004, écart au
 //! brief qui parlait de pourcentage).
 //!
-//! Le harnais du corpus (J2) échouera si le nombre de cas reproduits passe
-//! sous [`FLOOR`]. Quand la parité monte, on relève le plancher dans le même
-//! commit ; on ne le baisse jamais.
+//! Le harnais du corpus (`tests/corpus`, ADR-0009) échoue si un fichier
+//! présent passe sous son `floor`, ou si la parité globale passe sous
+//! [`CORPUS_FLOOR`] (planchers des fichiers absents déduits : un absent ne
+//! compte ni pour ni contre). Quand la parité monte, on relève les planchers
+//! du manifeste et [`CORPUS_FLOOR`] dans le même commit ; on ne les baisse
+//! jamais, sauf ADR (fichier retiré, valeur enregistrée reconnue fausse).
 
-/// Nombre minimal de cas (corpus public + oracle) que le moteur doit
-/// reproduire à l'identique. Zéro tant que le harnais du corpus n'existe pas.
-pub const FLOOR: u32 = 0;
+/// Somme des `floor` du manifeste du corpus (vérifiée par le harnais).
+pub const CORPUS_FLOOR: u32 = 0;
+
+/// Cas de l'oracle MS Project (`tests/oracle`), zéro sans licence.
+pub const ORACLE_FLOOR: u32 = 0;
+
+/// Plancher total en nombre de cas identiques (ADR-0004).
+pub const FLOOR: u32 = match CORPUS_FLOOR.checked_add(ORACLE_FLOOR) {
+    Some(v) => v,
+    None => u32::MAX,
+};

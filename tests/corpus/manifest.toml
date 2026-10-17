@@ -1,19 +1,86 @@
-# Manifeste figé du corpus public (ADR-0004).
+# Manifeste figé du corpus public (ADR-0004, ADR-0009), format 2.
 #
-# Les fichiers ne sont PAS commités (droits d'auteur) : ils se placent dans
-# tests/corpus/files/, ignoré par git. Seul ce manifeste est versionné.
-# Le plancher de parité (planrs_core::parity::FLOOR) se mesure en nombre de cas
-# sur cette liste : ajouter un fichier ouvre une nouvelle ligne, il ne fait pas
-# baisser la parité mesurée.
-#
-# Format d'une entrée (toutes les clés sauf `note` sont obligatoires) :
-#
-# [[file]]
-# name = "exemple.xml"                 # nom dans tests/corpus/files/
-# source = "Support de formation X"    # provenance lisible
-# url = "https://exemple.org/plan.xml" # adresse de téléchargement
-# date = "2026-10-17"                  # date de récupération, AAAA-MM-JJ
-# sha256 = "<64 hexadécimaux minuscules>"
-# note = "converti depuis .mpp avec MPXJ (outil externe)"
+# Les fichiers ne sont PAS commités (droits d'auteur) : `cargo xtask corpus
+# fetch` les télécharge dans tests/corpus/files/, ignoré par git, et contrôle
+# taille et SHA-256. Seul ce manifeste est versionné. Le plancher de parité se
+# mesure en nombre de cas identiques sur cette liste : `floor` par fichier,
+# `planrs_core::parity::CORPUS_FLOOR` = somme des `floor` (vérifiée par le
+# harnais). Ajouter un fichier ouvre une nouvelle ligne, il ne fait pas baisser
+# la parité mesurée. Clés et règles : tests/corpus/README.md.
 
-format = 1
+format = 2
+
+[[file]]
+name = "cogito-advanced-sample-msp2010.xml"
+source = "oeg-upm/cogito_data_repository (GitHub), projet de recherche COGITO (UPM)"
+url = "https://raw.githubusercontent.com/oeg-upm/cogito_data_repository/61e23ac13c871753edd95cdeabf38d0dfdac772a/schedule/rst_advanced_sample_project_MSP2010.xml"
+mirrors = ["https://raw.githubusercontent.com/oeg-upm/cogito_wrapper_module/a9f006f9788dbdb667d579fe1db9e7822307c474/repository/schedule/example/rst_advanced_sample_project_MSP2010.xml"]
+license = "Apache-2.0"
+rights = "Licence du dépôt Apache-2.0 ; métadonnées Author Frederic Bosche, Company Microsoft ; droits sur le contenu non établis. Jamais commité ni publié."
+date = "2026-10-17"
+size = 347268
+sha256 = "95fd0ad64af02cf0e725aa8c7bb6caeaeeb92bce4be447d3fa83e6e8f72f4092"
+producer = "msproject"
+save_version = 14
+note = "CPM pur : 50 tâches, 17 récapitulatives, 36 FS, aucune contrainte, aucun avancement."
+floor = 0
+
+[[file]]
+name = "practicemap.xml"
+source = "toarnabchak/MS-Project_ClassWork (GitHub), support de formation"
+url = "https://raw.githubusercontent.com/toarnabchak/MS-Project_ClassWork/233b61ffc8b1a06e3397bad6e5ae236eb6b78015/Practice%20Files/PracticeMap.xml"
+mirrors = ["https://raw.githubusercontent.com/toarnabtrainer/MS-Project_ClassWork/6ee1c35830c4a0f139807391db4bab12ccc436f0/Practice%20Files/PracticeMap.xml"]
+license = "none"
+rights = "Aucune licence déclarée : tous droits réservés. Copie privée de test, jamais commitée ni publiée."
+date = "2026-10-17"
+size = 127230
+sha256 = "7a5292c924c3229de38d063213cd092acd858bedb665643e752340a9b4f05ea4"
+producer = "msproject"
+save_version = 14
+note = "CPM pur : 17 tâches, 2 jalons, 22 FS."
+floor = 0
+
+[[file]]
+name = "shopmetrics.xml"
+source = "javieravellanedaa/ShopMetrics-Negocio (GitHub), travail de fin d'études"
+url = "https://raw.githubusercontent.com/javieravellanedaa/ShopMetrics-Negocio/a7d2191e8e3369b08d6077d4c86dc1d66d231751/project/ShopMetrics-desarrollo-verificado.xml"
+mirrors = []
+license = "none"
+rights = "Aucune licence déclarée : tous droits réservés. Copie privée de test, jamais commitée ni publiée."
+date = "2026-10-17"
+size = 292938
+sha256 = "fa066ebe350248171360810271de7747d3267e0535bd6f35a5d4b94199e0fb06"
+producer = "msproject"
+save_version = 14
+note = "41 tâches, 11 récapitulatives, 32 FS ; calendrier du projet dérivé (UID 1, base 2) : marges libres de 2 h attendues en divergence."
+floor = 0
+
+[[file]]
+name = "takeout-system-zh.xml"
+source = "windStr1der/ITprojectManagement (GitHub), projet d'étudiant"
+url = "https://raw.githubusercontent.com/windStr1der/ITprojectManagement/41cfbc8a0060727b9a712f63675f9c0909243c16/%E5%A4%96%E5%8D%96%E7%AE%A1%E7%90%86%E7%B3%BB%E7%BB%9F.xml"
+mirrors = []
+license = "none"
+rights = "Aucune licence déclarée : tous droits réservés. Copie privée de test, jamais commitée ni publiée."
+date = "2026-10-17"
+size = 274759
+sha256 = "1c6fc94d87808dc1b925438db7db9f309ff1ce67ebcf504259b295b8935c6772"
+producer = "msproject"
+save_version = 14
+note = "36 tâches, FF/SS, 12 liens touchant une récapitulative, 2 LevelingDelay, 1 FNET, calendrier du projet ouvré le samedi, noms UTF-8."
+floor = 0
+
+[[file]]
+name = "projinteg.xml"
+source = "sfd-sdc/ProjInt (GitHub), projet d'étudiant"
+url = "https://raw.githubusercontent.com/sfd-sdc/ProjInt/dc345185e187808fa2fb9a1c48da07726b1c15da/projectoIntegrado.xml"
+mirrors = []
+license = "none"
+rights = "Aucune licence déclarée : tous droits réservés. Copie privée de test, jamais commitée ni publiée."
+date = "2026-10-17"
+size = 258373
+sha256 = "aa3869d37ef4fb908e75f783d7b99d2c6dc9b14aca71767e6f79be2a65ee7156"
+producer = "msproject"
+save_version = 14
+note = "25 tâches dont 15 manuelles, 11 FNET, avancement, 1 échéance : surtout J3+."
+floor = 0

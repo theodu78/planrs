@@ -1,22 +1,46 @@
 # Corpus public
 
-Fichiers MSPDI réels (modèles, supports de formation, exemples publics) : chacun contient les dates que MS Project a calculées. Le harnais (J2, ADR-0004) efface les valeurs calculées, laisse le moteur recalculer et compare ; les tâches en planification manuelle sont exclues de la comparaison.
+Fichiers MSPDI réels enregistrés par MS Project : chacun contient les valeurs que MS Project a calculées (dates au plus tôt et au plus tard, marges, criticité, durées des récapitulatives). Le harnais (ADR-0004, ADR-0009) lit chaque fichier — les valeurs calculées vont dans `RecordedSchedule`, jamais dans le `Project`, l'effacement est donc structurel —, laisse le moteur recalculer et compare champ par champ, sans tolérance.
+
+## Commandes
+
+```sh
+cargo xtask corpus fetch                              # télécharge les fichiers (curl, taille et sha256 vérifiés)
+cargo test -p planrs-tests --test corpus -- --nocapture
+PLANRS_CORPUS=required cargo test -p planrs-tests --test corpus   # échec si tous les fichiers sont absents (job CI `corpus`)
+```
+
+Le rapport est écrit dans `target/tmp/corpus-report.md` et `target/tmp/corpus-report.json` (déterministe, **aucun nom de tâche ni texte du fichier** : UID, ID, champs et valeurs seulement). Le job CI `corpus` le publie en artefact ; les fichiers eux-mêmes ne le sont jamais.
 
 ## Règles
 
-- Les fichiers ne sont **pas** versionnés (droits d'auteur) : ils vont dans `tests/corpus/files/`, ignoré par git.
-- Seul [`manifest.toml`](manifest.toml) est versionné. Une entrée `[[file]]` par fichier :
+- Les fichiers ne sont **pas** versionnés (droits d'auteur) : ils vont dans `tests/corpus/files/`, ignoré par git. Copie privée de test : jamais commitée, publiée en artefact ni redistribuée. En CI, ils sont téléchargés puis gardés dans un cache privé au dépôt (`actions/cache`, clé = empreinte du manifeste), vérifié par sha256 ; le job ne tourne pas pour une PR venue d'un fork.
+- Seul [`manifest.toml`](manifest.toml) est versionné (format 2). Une entrée `[[file]]` par fichier, **toutes les clés obligatoires**, clé inconnue refusée :
 
-| Clé | Obligatoire | Contenu |
-|---|---|---|
-| `name` | oui | nom du fichier dans `files/` |
-| `source` | oui | provenance lisible |
-| `url` | oui | adresse de téléchargement |
-| `date` | oui | date de récupération, `AAAA-MM-JJ` |
-| `sha256` | oui | empreinte SHA-256, 64 hexadécimaux minuscules |
-| `note` | non | remarque (conversion, particularités) |
+| Clé | Contenu |
+|---|---|
+| `name` | nom du fichier dans `files/`, sans séparateur, unique |
+| `source` | provenance lisible |
+| `url` | adresse de téléchargement, `https://` |
+| `mirrors` | adresses de repli `https://`, dans l'ordre (peut être vide) |
+| `license` | identifiant SPDX, ou `"none"` (aucune licence : tous droits réservés) |
+| `rights` | droits et usage |
+| `date` | date de récupération, `AAAA-MM-JJ` |
+| `size` | taille en octets (> 0) |
+| `sha256` | empreinte SHA-256, 64 hexadécimaux minuscules, unique |
+| `producer` | `msproject`, `msproject-probable` ou `unknown` |
+| `save_version` | `SaveVersion` attendu |
+| `note` | remarque (peut être vide) |
+| `floor` | plancher : nombre minimal de cas identiques sur ce fichier (≥ 0) |
 
-- Le manifeste est **figé** : on ajoute des lignes, on n'en retire pas sans ADR. Le plancher `planrs_core::parity::FLOOR` compte des cas sur cette liste.
+- Le manifeste est **figé** : on ajoute des lignes ; un retrait passe par un ADR et garde le nom. `planrs_core::parity::CORPUS_FLOOR` vaut la somme des `floor` (testé) et `FLOOR = CORPUS_FLOOR + ORACLE_FLOOR`.
+- Critère « enregistré par MS Project » (signature vérifiée et affichée par le rapport) : `SaveVersion` conforme, tâche UID 0, `EarlyStart`/`LateFinish`/`TotalSlack`/`FreeSlack` sur toutes les tâches, sections d'interface (`Views` … `VBAProjects`). Exclus : composants Gantt dotés d'un moteur, visionneuses et clones (règle 1), exports d'autres outils, fichiers sans valeurs calculées.
 - Un `.mpp` peut être converti en MSPDI avec MPXJ **comme outil externe uniquement** ; son code et sa documentation ne sont jamais lus (règle 1). Le noter dans `note`.
 
-`cargo test -p planrs-tests --test corpus` vérifie aujourd'hui le format du manifeste.
+## Comparaison et verdict
+
+- **Cas** : une tâche (UID 0 compris) présente dans le fichier et planifiée par le moteur. **Exclus**, comptés par raison : manuelle (feuille ou récapitulative), inactive, ligne vide, exclue par le moteur, aucune valeur comparable.
+- **Champs**, comparés quand la valeur enregistrée existe : `start`, `finish`, `early_start`, `early_finish`, `late_start`, `late_finish` (instant exact), `total_slack`, `free_slack` (minutes du moteur × 10 contre les dixièmes de MSPDI, exact), `critical`, `duration` (récapitulatives et UID 0). **Identique** : tous les champs comparés égaux.
+- Les tâches touchées par une fonction hors J2 ne sont pas exclues : elles sont **étiquetées** par causes probables (`constraint`, `deadline`, `progress`, `leveling_delay`, `assigned`, `summary_link`, `milestone`, `manual_predecessor`, `task_calendar`, `project_calendar_derived`, `elapsed`, `lag`, `slack_not_tenth_multiple`, plus `divergent_predecessor` et `divergent_child` pour une divergence propagée) et comptent si elles coïncident.
+- **Verdict** : tout fichier présent doit atteindre son `floor` (sinon régression nommée) ; un fichier absent ne compte ni pour ni contre ; une erreur de lecture d'un fichier qui a un plancher échoue ; « plancher relevable » si identiques > `floor`.
+- **Relever le plancher** : recopier dans chaque `floor` le nombre d'identiques mesuré, recalculer `CORPUS_FLOOR`, commiter les deux ensemble ; jamais à la baisse, sauf ADR. Les règles exercées par des cas identiques (table du rapport) passent à `vérifié contre MS Project` dans `docs/scheduling-rules.md`, avec la référence du cas.

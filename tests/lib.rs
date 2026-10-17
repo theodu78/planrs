@@ -5,7 +5,8 @@
 //! - `oracle` (`tests/oracle/`) : comparaison avec des fichiers recalculés par
 //!   MS Project, quand une licence sera disponible (ADR-0004) ;
 //! - `corpus` (`tests/corpus/`) : fichiers MSPDI publics, recalculés et
-//!   comparés aux dates enregistrées par MS Project (harnais complet en J2).
+//!   comparés aux valeurs enregistrées par MS Project ; le harnais vit dans
+//!   [`corpus`] (manifeste, comparaison, verdict, rapport).
 //!
 //! Le module [`net`] construit de petits réseaux nommés pour les tests du
 //! moteur (`Net`, `Run`) ; [`generate`] tire de grands réseaux déterministes
@@ -18,6 +19,7 @@
 
 use std::path::{Path, PathBuf};
 
+pub mod corpus;
 pub mod generate;
 pub mod net;
 

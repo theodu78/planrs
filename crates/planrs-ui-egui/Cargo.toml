@@ -9,9 +9,29 @@ repository.workspace = true
 
 [dependencies]
 planrs-core.workspace = true
-planrs-automation.workspace = true
+planrs-mspdi.workspace = true
 egui.workspace = true
 eframe.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+fluent-bundle.workspace = true
+unic-langid.workspace = true
+sys-locale.workspace = true
+rfd.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Langue du navigateur (`navigator.language`).
+sys-locale = { workspace = true, features = ["js"] }
+# Sélecteur de fichiers asynchrone (rfd) lancé sur l'exécuteur du navigateur.
+wasm-bindgen-futures.workspace = true
+js-sys.workspace = true
+
+[dev-dependencies]
+egui_kittest.workspace = true
+fluent-syntax.workspace = true
 
 [lints]
 workspace = true

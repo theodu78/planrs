@@ -16,4 +16,5 @@ Le nom est provisoire. Endroits où il apparaît (à tenir à jour) :
 - `tools/oracle/generate.bas` : nom du module `PlanrsOracle`, en-tête, titres des boîtes de dialogue et chemin d'exemple `C:\planrs\...`
 - `LICENSE-MIT` (« The planrs contributors »), `README.md`, `CLAUDE.md`, `docs/`, READMEs de `tests/`
 - fichier compagnon `<nom>.planrs.json`, répertoire d'état utilisateur, fichier de rendez-vous du canal de contrôle
+- clé de persistance de l'état d'interface `planrs.ui_state` (`STATE_KEY` dans `crates/planrs-ui-egui/src/state.rs`, stockage eframe : fichier sur le desktop, localStorage sur le web)
 - `.github/workflows/*`

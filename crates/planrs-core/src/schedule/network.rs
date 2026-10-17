@@ -145,6 +145,9 @@ pub(super) struct Node {
     /// Contrainte d'une feuille automatique active (ADR-0010, R-090 à
     /// R-099) ; `None` sans effet (ASAP depuis le début).
     pub constraint: Option<NodeConstraint>,
+    /// Échéance d'une feuille automatique active (R-102) : plafond brut de
+    /// sa fin au plus tard.
+    pub deadline: Option<Moment>,
     /// Agrégat de la récapitulative parente.
     pub parent_rollup: Option<NodeIx>,
     /// Porte : son agrégat ; agrégat : sa porte.
@@ -492,8 +495,8 @@ fn leaf_constraint(task: &Task, scale: TimeScale<'_>, d: Minutes, ctx: BuildCtx)
 }
 
 /// Nœud d'une feuille en position `p` : échelle de placement, dates saisies
-/// d'une manuelle (R-063), contrainte d'une automatique active (R-090 à
-/// R-099 ; inactive : ignorée sans diagnostic).
+/// d'une manuelle (R-063), contrainte et échéance d'une automatique active
+/// (R-090 à R-102 ; inactive : ignorées sans diagnostic).
 fn leaf_node(
     task: &Task,
     p: usize,
@@ -509,11 +512,13 @@ fn leaf_node(
     } else {
         manual_span(task, scale, diags)
     };
-    let constraint = if info.inactive() || fixed.is_some() {
-        None
-    } else {
+    let automatic = !info.inactive() && fixed.is_none();
+    let constraint = if automatic {
         leaf_constraint(task, scale, duration, ctx)
+    } else {
+        None
     };
+    let deadline = task.deadline.filter(|_| automatic);
     Some(Node {
         kind: NodeKind::Leaf,
         task: p,
@@ -523,6 +528,7 @@ fn leaf_node(
         duration,
         fixed,
         constraint,
+        deadline,
         parent_rollup: None,
         twin: None,
     })
@@ -558,6 +564,7 @@ fn number_nodes(
                 duration,
                 fixed,
                 constraint: None,
+                deadline: None,
                 parent_rollup: None,
                 twin: Some(gate),
             });
@@ -603,6 +610,7 @@ fn number_nodes(
                 duration: Minutes::ZERO,
                 fixed: None,
                 constraint: None,
+                deadline: None,
                 parent_rollup: None,
                 twin: None,
             });

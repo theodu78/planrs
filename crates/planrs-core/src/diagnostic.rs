@@ -429,6 +429,17 @@ pub enum Diagnostic {
         /// Date saisie de la contrainte.
         date: Moment,
     },
+    /// Échéance dépassée : la fin planifiée tombe après l'échéance, en
+    /// temps ouvré de l'échelle de placement (avertissement, R-102).
+    #[serde(rename = "task.deadline_missed")]
+    TaskDeadlineMissed {
+        /// Tâche.
+        task: TaskUid,
+        /// Échéance saisie.
+        deadline: Moment,
+        /// Fin planifiée.
+        finish: Moment,
+    },
     /// Planification à rebours non prise en charge (J3) : aucune tâche
     /// planifiée (erreur).
     #[serde(rename = "schedule.from_finish_unsupported")]
@@ -511,7 +522,8 @@ impl Diagnostic {
             | Self::LinkManualNotHonored { .. }
             | Self::TaskCalendarFallback { .. }
             | Self::ConstraintOverride { .. }
-            | Self::ConstraintNotHonored { .. } => Severity::Warning,
+            | Self::ConstraintNotHonored { .. }
+            | Self::TaskDeadlineMissed { .. } => Severity::Warning,
             Self::LinkInactive { .. }
             | Self::LinkExcludedEndpoint { .. }
             | Self::TaskManualUndated { .. } => Severity::Info,
@@ -547,7 +559,8 @@ impl Diagnostic {
             | Self::TaskCalendarFallback { task, .. }
             | Self::TaskUnschedulable { task, .. }
             | Self::ConstraintOverride { task, .. }
-            | Self::ConstraintNotHonored { task, .. } => Subject::Task(*task),
+            | Self::ConstraintNotHonored { task, .. }
+            | Self::TaskDeadlineMissed { task, .. } => Subject::Task(*task),
             Self::LinkCycle { tasks } => tasks.iter().min().map_or(Subject::Project, |t| Subject::Task(*t)),
             Self::LinkSelf { task } => Subject::Link {
                 predecessor: *task,
@@ -637,6 +650,7 @@ impl Diagnostic {
             Self::TaskUnschedulable { .. } => "task.unschedulable",
             Self::ConstraintOverride { .. } => "constraint.override",
             Self::ConstraintNotHonored { .. } => "constraint.not_honored",
+            Self::TaskDeadlineMissed { .. } => "task.deadline_missed",
             Self::ScheduleFromFinishUnsupported => "schedule.from_finish_unsupported",
             Self::ScheduleInternal { .. } => "schedule.internal",
         }
@@ -837,6 +851,14 @@ impl fmt::Display for Diagnostic {
                 f,
                 "la contrainte {} du {date} de la tâche {task} n'est pas respectée : les liens l'emportent",
                 constraint_name(*kind)
+            ),
+            Self::TaskDeadlineMissed {
+                task,
+                deadline,
+                finish,
+            } => write!(
+                f,
+                "la tâche {task} finit le {finish}, après son échéance du {deadline}"
             ),
             Self::ScheduleFromFinishUnsupported => f.write_str(
                 "la planification à partir de la date de fin n'est pas encore prise en charge : \
@@ -1068,6 +1090,11 @@ mod tests {
                 kind: ConstraintKind::StartNoLaterThan,
                 date: "2026-10-20T08:00".parse::<Moment>().unwrap(),
             },
+            Diagnostic::TaskDeadlineMissed {
+                task: t,
+                deadline: "2026-10-20T17:00".parse::<Moment>().unwrap(),
+                finish: "2026-10-21T17:00".parse::<Moment>().unwrap(),
+            },
         ]
     }
 
@@ -1096,7 +1123,7 @@ mod tests {
     }
 
     #[test]
-    fn severities_and_subjects() {
+    fn severities() {
         let warnings: Vec<&str> = all()
             .iter()
             .filter(|d| d.severity() == Severity::Warning)
@@ -1116,6 +1143,7 @@ mod tests {
                 "task.calendar_fallback",
                 "constraint.override",
                 "constraint.not_honored",
+                "task.deadline_missed",
             ]
         );
         let infos: Vec<&str> = all()
@@ -1127,6 +1155,10 @@ mod tests {
             infos,
             ["link.inactive", "link.excluded_endpoint", "task.manual_undated"]
         );
+    }
+
+    #[test]
+    fn subjects() {
         let c = CalendarUid::new(5);
         let t = TaskUid::new(3);
         assert_eq!(all()[0].subject(), Subject::Task(t));
@@ -1203,9 +1235,13 @@ mod tests {
     fn constraint_diagnostics() {
         // Contraintes (J3) : sujet la tâche contrainte, borne sérialisée.
         let t = TaskUid::new(3);
-        for i in [35, 36] {
+        for i in [35, 36, 37] {
             assert_eq!(all()[i].subject(), Subject::Task(t));
         }
+        assert_eq!(
+            all()[37].to_string(),
+            "la tâche 3 finit le 2026-10-21T17:00, après son échéance du 2026-10-20T17:00"
+        );
         assert_eq!(
             all()[35].to_string(),
             "la contrainte « début au plus tard le » de la tâche 3 est respectée malgré le lien depuis la tâche 1"

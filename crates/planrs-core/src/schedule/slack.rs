@@ -95,16 +95,27 @@ impl Calc<'_, '_> {
         Ok((tf, fs.min(tf).max(Minutes::ZERO)))
     }
 
-    /// Contraintes non tenues, après les marges (R-099) : depuis le début,
+    /// Échéances dépassées (R-102) et contraintes non tenues (R-099), après
+    /// les marges. Contraintes : depuis le début,
     /// un plafond ou une fenêtre (option inactive) dont la date au plus tôt
     /// dépasse l'ancrage : début en brut (`ES > s*`), fin en temps ouvré
     /// (`P.between(f*, EF) > 0`) ; `constraint.not_honored` avec la date
     /// saisie.
     pub(super) fn check_constraints(&mut self) {
         for (node, s) in self.net.nodes.iter().zip(&self.st) {
-            let (Some(c), Some(early)) = (node.constraint, s.early) else {
-                continue;
-            };
+            let Some(early) = s.early else { continue };
+            // R-102 : échéance dépassée, jugée sur la fin planifiée (depuis
+            // le début : la fin au plus tôt), en temps ouvré de l'échelle.
+            if let (Some(deadline), Some(scale)) = (node.deadline, self.net.scale(node.place))
+                && scale.between(deadline, early.finish).is_ok_and(|m| m.get() > 0)
+            {
+                self.diags.push(Diagnostic::TaskDeadlineMissed {
+                    task: node.uid,
+                    deadline,
+                    finish: early.finish,
+                });
+            }
+            let Some(c) = node.constraint else { continue };
             let (ConstraintRule::Cap(side) | ConstraintRule::Window(side), Mode::FromStart) =
                 (c.rule, self.mode)
             else {

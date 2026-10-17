@@ -171,6 +171,13 @@ impl Net {
         self
     }
 
+    /// Échéance de la tâche (R-102).
+    #[must_use]
+    pub fn deadline(mut self, name: &str, date: &str) -> Self {
+        self.task_mut(name).deadline = Some(moment(date));
+        self
+    }
+
     /// Option « les tâches respectent toujours leurs dates de contrainte »
     /// (R-099).
     #[must_use]

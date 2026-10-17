@@ -114,6 +114,7 @@ mod r098_must_finish_on;
 mod r099_honor_constraints_option;
 mod r100_constraint_conflict_diagnostics;
 mod r101_negative_slack;
+mod r102_deadline;
 mod r105_constraint_outside_project;
 mod r124_resources_mspdi;
 mod r125_assignments_mspdi;

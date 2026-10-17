@@ -227,8 +227,13 @@ impl Calc<'_, '_> {
     /// cet ordre, donne la cause (`LateDriver`, R-047).
     fn leaf_late(&mut self, v: NodeIx, early: Span, has_succ: bool) -> Result<(Span, LateDriver), Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
-        let (place, duration, parent, constraint) =
-            (node.place, node.duration, node.parent_rollup, node.constraint);
+        let (place, duration, parent, constraint, deadline) = (
+            node.place,
+            node.duration,
+            node.parent_rollup,
+            node.constraint,
+            node.deadline,
+        );
         // R-097, R-098 : une feuille épinglée (MSO, MFO, option active) a
         // ses dates au plus tard sur l'ancrage, sans plafond : une borne
         // violée s'exprime par la marge négative de l'amont.
@@ -287,6 +292,11 @@ impl Calc<'_, '_> {
             && self.caps_late(c.rule)
         {
             lf.apply(c.span()?.finish, LateDriver::Constraint { kind: c.kind });
+        }
+        // R-102 : échéance, plafond brut (comme les autres plafonds, avant
+        // `backward_span`), propagé à l'amont par les liens.
+        if let Some(d) = deadline {
+            lf.apply(d, LateDriver::Deadline);
         }
         Ok((scale.backward_span(lf.finish, duration)?, lf.driver))
     }

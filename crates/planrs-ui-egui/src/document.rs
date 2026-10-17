@@ -54,3 +54,47 @@ pub fn load(bytes: &[u8], now: Moment) -> Result<LoadedDocument, OpenError> {
         range,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        reason = "tests : un échec doit s'arrêter net et lisiblement"
+    )]
+
+    use super::{OpenError, load};
+
+    fn now() -> planrs_core::Moment {
+        "2026-10-17T08:00".parse().unwrap()
+    }
+
+    #[test]
+    fn document_load_demo() {
+        let doc = load(crate::DEMO_MSPDI, now()).unwrap();
+        assert_eq!(doc.project.tasks.len(), 49);
+        assert!(doc.import_diagnostics.is_empty(), "{:?}", doc.import_diagnostics);
+        assert!(
+            doc.schedule.diagnostics.is_empty(),
+            "{:?}",
+            doc.schedule.diagnostics
+        );
+        assert_eq!(doc.schedule.project_finish, "2027-05-17T17:00".parse().unwrap());
+        let links: usize = doc.project.tasks.iter().map(|t| t.predecessors.len()).sum();
+        assert_eq!(links, 46);
+        assert!(doc.range.start <= doc.schedule.project_start.day());
+        assert!(doc.range.end > doc.schedule.project_finish.day());
+    }
+
+    #[test]
+    fn document_load_garbage_is_error() {
+        let Err(err) = load(b"pas du xml", now()) else {
+            panic!("un document illisible doit être refusé");
+        };
+        assert!(matches!(err, OpenError::Mspdi(_)));
+        assert!(!err.to_string().is_empty());
+        let read = OpenError::Read("accès refusé".to_owned());
+        assert_eq!(read.to_string(), "lecture impossible : accès refusé");
+    }
+}

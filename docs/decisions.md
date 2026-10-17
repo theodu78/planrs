@@ -77,3 +77,34 @@ Une entrée par décision, datée, avec le contexte, les options écartées et l
 - Conversions durée ↔ dates (date de début + durée ouvrée → date de fin, et l'inverse ; durées écoulées) : chaque règle consignée `R-xxx` dans `docs/scheduling-rules.md` (hypothèse tant qu'elle n'est pas vérifiée contre MS Project) avec ses tests dans `tests/rules/`.
 
 **Critère de fin.** Conversions durée ↔ dates testées sur les calendriers standard, 24 h et avec exceptions ; tous les checks de `CLAUDE.md` verts ; `docs/scorecard.md` à jour ; tag `j1`.
+
+## ADR-0008 — 2026-10-17 — J1 : modèle de données et calendriers
+
+**Contexte.** Seconde moitié de J1 (ADR-0007) : modèle V1, point fixe, calendriers et conversions dans `planrs-core`. Trois conceptions ont été comparées (fidélité MSPDI, segments périodiques, ergonomie commandes/agents). La spécification détaillée (types, règles R-001 à R-034, tests, plan de commits) sert de cahier des charges aux agents ; ce qui suit en fixe les choix.
+
+**Décision.**
+- **Temps.** `Moment(i64)` en minutes depuis 1984-01-01 00:00 (un dimanche), domaine [1984-01-01 ; 2150-01-01 00:00] (bornes de MS Project). chrono seulement aux frontières (serde, import). Résolution à la minute ; secondes tronquées à l'import. Heure locale, sans fuseau ni heure d'été.
+- **Point fixe.** `Minutes(i64)` signé ; `Duration` (minutes ≥ 0, unité d'affichage, ouvrée/écoulée, estimée) et `Work` distincts ; `Units`, `Percent`, `SignedPercent` en 1/10 000 ; `Money` en centièmes ; un seul arrondi (au plus proche, moitié loin de zéro, en `i128`). Sérialisés en entiers ; la présentation « 50% » appartient au MCP et à l'interface. Unités de durée converties par les options du projet, jamais par les plages du calendrier ; emois = 30 jours.
+- **Modèle.** `Arena<K, T>` (Vec dans l'ordre des ID + index UID) pour tâches, ressources, affectations, calendriers ; l'ID se déduit de la position. Lignes vides (`is_null`) dans le Vec, tâche UID 0 à part. Liens portés par le successeur (ordre MSPDI conservé). `Constraint` porte sa date. 11 lignes de base, champs optionnels, seule la n° 0 calculée en V1. Mode manuel, inactive et récurrente stockés, non calculés. `Extras` opaque sur chaque entité pour les données hors modèle (le cœur ne les interprète jamais). Valeurs calculées hors du modèle (`Schedule`, J2). GUID jamais généré par le cœur.
+- **Couches.** Aucun code numérique MSPDI dans le cœur (DayType, LinkType, Month, DurationFormat, types d'exception, valeurs −1 et −65535) : correspondances dans `planrs-mspdi` (J3). Valeurs par défaut doubles : celles de l'application pour un projet neuf (dans le cœur), celles du schéma pour un élément absent à l'import (J3).
+- **Calendriers.** `CalendarKind::Base` (semaine complète) ou `Derived` (base + différences) : héritage à **un niveau** comme MS Project, cycle et base non-base détectés et nommés. Exceptions (jours entiers inclus, remplacent la journée), récurrences dépliées dès J1 (types de sémantique inconnue ignorés avec diagnostic, jamais lus comme une période continue), semaines de travail datées calculées dès J1. Précédence : exception du dérivé > exception de la base > semaine datée puis semaine par défaut du dérivé > idem pour la base (hypothèse). Standard, 24 heures et Équipe de nuit fournis (UID 1 à 3, hypothèse).
+- **Forme compilée.** Fonction cumulée W(t) (minutes ouvrées depuis 1984) en segments `Weekly`/`Daily` avec cumul ; recompilée à chaque recalcul, immuable, sans fenêtre ni cache ; O(log n) par conversion. Conventions : fin au plus tôt (lundi 8:00 + 1 j = lundi 17:00), décalage négatif en convention de début, `add_working(t, 0) = t`, début aligné sur l'instant ouvré suivant, jalon recalé (t s'il termine une minute ouvrée, sinon l'instant ouvré suivant). Ces conventions vivent dans `TimeScale::forward_span` / `backward_span`, seul point d'entrée du CPM de J2.
+- **Erreurs et diagnostics.** Chemin chaud : `Result` typé (`NoWorkingTime`, `OutOfDomain` avec sa direction). Désérialisation : refus des seules valeurs invalides par type (bornes, UID en double) ; le reste est rapporté par `Project::validate`. `Diagnostic` est une enum unique, gravité et sujet déduits de la variante, code stable, liste triée et dédoublonnée. Pas de `#[non_exhaustive]`.
+- **Hors J1.** Parseur et affichage du texte (« 5j », « 3FS+2j ») et API de mutation métier : J4 (`planrs-automation`). Intersection tâche × ressource : J5, la forme compilée y est fermée.
+
+**Écarté.**
+- `chrono::NaiveDateTime` dans le modèle : arithmétique qui panique, aucune borne.
+- Dixièmes de minute (LinkLag MSPDI) : écart à ADR-0005 pour un gain non démontré ; réévalué si le corpus montre des écarts.
+- Index de calendrier : tableau dense 1984-2149 (mémoire par calendrier de ressource), fenêtre étendue à la demande (mutabilité dans le chemin chaud), jours dérogatoires dépliés un à un (semaines datées longues).
+- `Option` dans le chemin chaud : la cause (aucun temps ouvré ou hors domaine) serait perdue.
+- Chaîne d'héritage générique de profondeur N : MS Project n'a qu'un niveau.
+- Liens dans un `BTreeMap` global par paire : perd l'ordre MSPDI ; valeurs calculées dans `Task` : un résultat périmé passerait pour une entrée.
+- Point fixe sérialisé en chaînes ; crate `uuid` ; parseur FR/EN et API de mutation dès J1.
+- Report des récurrences en J3 : un import réel aurait des fériés annuels faux.
+- Jalon en identité pure (une seule source communautaire) : gardé comme hypothèse concurrente.
+
+**Écarts au brief.** 11 lignes de base stockées (brief : une) ; semaines de travail datées et récurrences dans J1 ; calendriers 24 heures et Équipe de nuit créés dans tout projet neuf.
+
+**Hypothèses à confronter au corpus en priorité.** Précédence d'héritage ; placement des jalons ; minute contre dixième de minute ; emois = 30 jours ; découpage de l'Équipe de nuit et UID des calendriers fournis ; valeurs par défaut de l'application ; sémantique des récurrences.
+
+**Conséquences.** 34 règles R-001 à R-034, chacune avec son test `tests/rules/rNNN_*.rs` ; tests de propriétés proptest (dont la comparaison à un oracle naïf fondé sur `resolve_day`) ; benchmark criterion informatif (cibles : compilation < 50 µs, conversion < 300 ns). Dépendances de développement ajoutées : proptest, serde_json, criterion. Onze commits, chacun avec ses règles et ses tests, puis scorecard et tag `j1`.

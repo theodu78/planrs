@@ -3,10 +3,10 @@
 # les tests sur macOS et Windows, la MSRV, le budget du moteur et la parité
 # sur le corpus public.
 #
-# Aucun paquet système n'est installé : aucune dépendance actuelle n'en exige à
-# la compilation (winit et xkbcommon chargent leurs bibliothèques par dlopen,
-# pas de rfd ni d'openssl). À ajouter le jour où une dépendance l'exige (par
-# exemple mesa-vulkan-drivers pour lavapipe avec egui_kittest, ADR-0005).
+# Aucun paquet système n'est exigé à la compilation (winit, xkbcommon et rfd
+# chargent leurs bibliothèques par dlopen, pas d'openssl). Seul le job `ui`
+# installe le pilote Vulkan logiciel (mesa-vulkan-drivers, lavapipe) pour les
+# captures egui_kittest (ADR-0005, ADR-0011).
 name: CI
 
 on:
@@ -90,6 +90,54 @@ jobs:
 
       - name: Tests
         run: cargo test --workspace
+
+  # Interface egui (ADR-0011, décision 12) : tests egui_kittest avec captures
+  # comparées au pixel (tests/snapshots/*.png, seuils dans kittest.toml),
+  # rendues par lavapipe (Vulkan logiciel de Mesa) ; le harnais refuse tout
+  # adaptateur qui n'est pas un CPU. Les autres jobs exécutent les mêmes tests
+  # sans rendu ni comparaison (PLANRS_UI_SNAPSHOTS absent).
+  #
+  # La CI fait foi : si Mesa du runner rend autrement que le poste local,
+  # télécharger l'artefact `ui-snapshots-diff`, vérifier les `*.new.png` à
+  # l'œil et les adopter comme références. En local (Linux, mesa-vulkan-drivers) :
+  #   PLANRS_UI_SNAPSHOTS=1 UPDATE_SNAPSHOTS=1 WGPU_BACKEND=vulkan \
+  #     cargo test -p planrs-ui-egui --test ui
+  # réécrit les captures en écart (UPDATE_SNAPSHOTS=force : toutes).
+  ui:
+    name: interface (captures egui_kittest)
+    runs-on: ubuntu-24.04
+    env:
+      PLANRS_UI_SNAPSHOTS: "1"
+      # lavapipe par Vulkan : un seul chemin de rendu, pas de repli GL.
+      WGPU_BACKEND: vulkan
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Pilote Vulkan logiciel (lavapipe)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools libxkbcommon-x11-0
+
+      - name: Adaptateur disponible (diagnostic)
+        run: vulkaninfo --summary
+
+      - name: Tests de l'interface (captures comparées)
+        run: cargo test -p planrs-ui-egui --test ui
+
+      - name: Captures en échec
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-snapshots-diff
+          path: |
+            crates/planrs-ui-egui/tests/snapshots/*.new.png
+            crates/planrs-ui-egui/tests/snapshots/*.diff.png
+          if-no-files-found: ignore
+          retention-days: 14
 
   # Budget du moteur (ADR-0009 A18) : médiane de `schedule` sur 5 000 tâches
   # et 10 000 liens, en release ; échec au-delà de 50 ms (cible locale

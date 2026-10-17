@@ -16,6 +16,9 @@
     reason = "tests : un échec doit s'arrêter net et lisiblement"
 )]
 
+mod common;
+mod snapshots;
+
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable as _;
 use planrs_core::Moment;

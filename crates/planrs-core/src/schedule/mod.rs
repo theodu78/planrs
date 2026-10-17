@@ -74,6 +74,9 @@ struct NodeState {
     /// Agrégat : plafond de début hérité `K(S)` (R-057, A11) et la
     /// récapitulative qui l'a posé.
     cap_start: Option<(Moment, TaskUid)>,
+    /// Épingle d'une tâche à placement opposé (ALAP depuis le début,
+    /// R-092) : dates fixes de la repasse.
+    pin: Option<Span>,
     /// Marge totale (R-048).
     total_slack: Minutes,
     /// Marge libre (R-049).
@@ -92,6 +95,7 @@ impl NodeState {
         late_driver: LateDriver::ProjectFinish,
         cap_finish: None,
         cap_start: None,
+        pin: None,
         total_slack: Minutes::ZERO,
         free_slack: Minutes::ZERO,
     };
@@ -105,6 +109,8 @@ struct Calc<'n, 'a> {
     mode: Mode,
     /// Rôle de la passe en cours.
     role: PassRole,
+    /// Repasse (R-092) : aucun diagnostic, sauf `schedule.internal`.
+    quiet: bool,
     /// Début du projet (brut, R-036).
     start: Moment,
     /// Fin du projet (R-045), connue après la passe avant ; plafond commun
@@ -172,8 +178,29 @@ impl Calc<'_, '_> {
         pos(a).and_then(|i| self.dropped.get(i)).copied().unwrap_or(false)
     }
 
-    /// Signale l'échec du calcul de la tâche `uid` dans la passe `pass`.
+    /// Ajoute un diagnostic ; en repasse (`quiet`), seul un invariant violé
+    /// (`schedule.internal`) est gardé : la passe principale a déjà tout
+    /// signalé.
+    fn emit(&mut self, d: Diagnostic) {
+        if !self.quiet || matches!(d, Diagnostic::ScheduleInternal { .. }) {
+            self.diags.push(d);
+        }
+    }
+
+    /// Signale l'échec du calcul de la tâche `uid` dans la passe `pass`. En
+    /// repasse, un échec est un invariant violé (la passe principale a
+    /// réussi sur ce nœud).
     fn report(&mut self, uid: TaskUid, pass: Pass, fail: Fail) {
+        if self.quiet {
+            let detail = match fail {
+                Fail::Conversion(cause) => cause,
+                Fail::Internal(detail) => detail,
+            };
+            self.diags.push(Diagnostic::ScheduleInternal {
+                detail: format!("tâche {uid} : échec en repasse ({detail})"),
+            });
+            return;
+        }
         match fail {
             Fail::Conversion(cause) => self.diags.push(Diagnostic::TaskUnschedulable {
                 task: uid,
@@ -344,6 +371,7 @@ pub fn schedule(project: &Project) -> Schedule {
         project,
         mode,
         role: PassRole::Primary,
+        quiet: false,
         start,
         finish: start,
         st: vec![NodeState::NEW; net.nodes.len()],
@@ -354,6 +382,11 @@ pub fn schedule(project: &Project) -> Schedule {
     // Étapes 6 à 9.
     calc.forward(&order, PassRole::Primary);
     calc.backward(&order, PassRole::Secondary);
+    // R-092 : tâches ALAP épinglées sur leurs dates au plus tard, puis une
+    // seule repasse de la passe avant, seulement s'il y a une épingle.
+    if calc.pin_opposite() {
+        calc.forward(&order, PassRole::Replay);
+    }
     calc.summary_late();
     calc.slack();
     calc.check_constraints();

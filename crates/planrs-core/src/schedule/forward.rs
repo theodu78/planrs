@@ -11,6 +11,7 @@ use super::network::{Fail, NodeIx, NodeKind};
 use super::{Calc, Driver, Pass, PassRole, transfer};
 use crate::calendar::{Span, TimeScale};
 use crate::diagnostic::{Diagnostic, OverriddenBound};
+use crate::ids::TaskUid;
 use crate::model::{ConstraintKind, LinkType};
 use crate::time::Moment;
 
@@ -35,14 +36,20 @@ impl Calc<'_, '_> {
     /// c'est la passe principale (`role` = `Primary`).
     pub(super) fn forward(&mut self, order: &[NodeIx], role: PassRole) {
         self.role = role;
+        self.quiet = role == PassRole::Replay;
         for &v in order {
             let Some(node) = self.net.node(v) else {
-                self.diags.push(Diagnostic::ScheduleInternal {
+                self.emit(Diagnostic::ScheduleInternal {
                     detail: "nœud hors bornes en passe avant".to_owned(),
                 });
                 continue;
             };
             let (kind, uid) = (node.kind, node.uid);
+            // Repasse : un nœud en échec dans la passe principale le reste
+            // (ses voisins l'ont déjà ignoré).
+            if self.quiet && self.state(v).is_some_and(|s| s.failed) {
+                continue;
+            }
             let result = match kind {
                 NodeKind::Gate => self.gate(v),
                 NodeKind::Leaf => self.leaf(v),
@@ -55,6 +62,12 @@ impl Calc<'_, '_> {
                 }
                 self.report(uid, Pass::Forward, fail);
             }
+        }
+        // Repasse : la fin du projet de la passe principale est gardée (les
+        // épingles ne la déplacent pas, R-092).
+        if role == PassRole::Replay {
+            self.quiet = false;
+            return;
         }
         // R-045 : fin du projet = max des fins au plus tôt des feuilles
         // actives planifiées (manuelles comprises, inactives exclues) et des
@@ -97,7 +110,7 @@ impl Calc<'_, '_> {
             let Some(se) = src.early else {
                 // Origine non planifiée (R-069) ou récapitulative vide.
                 if let Some(l) = arc.link {
-                    self.diags.push(Diagnostic::LinkExcludedEndpoint {
+                    self.emit(Diagnostic::LinkExcludedEndpoint {
                         predecessor: l.pred,
                         successor: l.succ,
                     });
@@ -151,7 +164,7 @@ impl Calc<'_, '_> {
                     if x > f.start
                         && let Some(l) = arc.link
                     {
-                        self.diags.push(Diagnostic::LinkManualNotHonored {
+                        self.emit(Diagnostic::LinkManualNotHonored {
                             predecessor: l.pred,
                             successor: l.succ,
                         });
@@ -162,7 +175,7 @@ impl Calc<'_, '_> {
                     if scale.between(f.finish, x)?.get() > 0
                         && let Some(l) = arc.link
                     {
-                        self.diags.push(Diagnostic::LinkManualNotHonored {
+                        self.emit(Diagnostic::LinkManualNotHonored {
                             predecessor: l.pred,
                             successor: l.succ,
                         });
@@ -204,7 +217,7 @@ impl Calc<'_, '_> {
         if let Some(slot) = super::network::pos(a).and_then(|i| self.dropped.get_mut(i)) {
             *slot = true;
         }
-        self.diags.push(Diagnostic::LinkUnschedulable {
+        self.emit(Diagnostic::LinkUnschedulable {
             predecessor: l.pred,
             successor: l.succ,
             cause: cause.to_owned(),
@@ -225,13 +238,14 @@ impl Calc<'_, '_> {
             b.start = date;
             b.driver = Driver::Constraint { kind: c.kind };
         }
+        let replay = self.role == PassRole::Replay;
         let s = self.state_mut(v).ok_or(Fail::Internal("nœud hors bornes"))?;
         s.early = Some(Span {
             start: b.start,
             finish: b.start,
         });
         s.driver = b.driver;
-        s.degraded = b.degraded;
+        s.degraded = b.degraded || (replay && s.degraded);
         Ok(())
     }
 
@@ -240,12 +254,13 @@ impl Calc<'_, '_> {
     /// l'affichage, R-062).
     fn leaf(&mut self, v: NodeIx) -> Result<(), Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
-        let (place, duration) = (node.place, node.duration);
+        let (place, duration, constraint) = (node.place, node.duration, node.constraint);
         let fixed = match node.fixed {
             Some(r) => Some(r?),
             None => None,
         };
         let b = self.bounds(v, fixed)?;
+        let pin = self.state(v).and_then(|s| s.pin);
         let (early, driver) = if let Some(f) = fixed {
             (f, Driver::Manual)
         } else {
@@ -253,13 +268,22 @@ impl Calc<'_, '_> {
                 .net
                 .scale(place)
                 .ok_or(Fail::Internal("échelle hors bornes"))?;
-            let natural = scale.forward_span(b.start, duration)?;
-            self.constrain(v, scale, natural, b.driver)?
+            // R-092 : épingle d'une tâche ALAP, tenue pour fixe en repasse ;
+            // une borne violée est un invariant violé.
+            if let (Some(p), Some(c)) = (pin, constraint) {
+                self.overrides(v, scale, p, c.kind, true)?;
+                (p, Driver::Constraint { kind: c.kind })
+            } else {
+                let natural = scale.forward_span(b.start, duration)?;
+                self.constrain(v, scale, natural, b.driver)?
+            }
         };
+        let replay = self.role == PassRole::Replay;
         let s = self.state_mut(v).ok_or(Fail::Internal("nœud hors bornes"))?;
         s.early = Some(early);
         s.driver = driver;
-        s.degraded = b.degraded;
+        // Repasse : les drapeaux posés par la passe arrière sont gardés.
+        s.degraded = b.degraded || (replay && s.degraded);
         Ok(())
     }
 
@@ -284,13 +308,15 @@ impl Calc<'_, '_> {
             return Ok((natural, driver));
         };
         let pinned = Driver::Constraint { kind: c.kind };
-        let primary_from_start = self.role == PassRole::Primary && self.mode == Mode::FromStart;
+        // Passe principale depuis le début, repasse comprise (R-092 : la
+        // repasse rejoue la passe principale, contraintes comprises).
+        let primary_from_start = self.role != PassRole::Secondary && self.mode == Mode::FromStart;
         match c.rule {
             // R-097, R-098 : option active, MSO et MFO épinglent la feuille
             // sur l'ancrage, quelles que soient ses bornes (R-100).
             ConstraintRule::Pin(_) => {
                 let a = c.span()?;
-                self.overrides(v, scale, a, c.kind)?;
+                self.overrides(v, scale, a, c.kind, false)?;
                 return Ok((a, pinned));
             }
             // R-095, R-096, R-099 : option active, le plafond (SNLT, FNLT)
@@ -303,7 +329,7 @@ impl Calc<'_, '_> {
                     Side::Finish => scale.between(a.finish, natural.finish)?.get() > 0,
                 };
                 if late {
-                    self.overrides(v, scale, a, c.kind)?;
+                    self.overrides(v, scale, a, c.kind, false)?;
                     return Ok((a, pinned));
                 }
             }
@@ -330,7 +356,8 @@ impl Calc<'_, '_> {
     }
 
     /// R-100 : la feuille `v`, placée de force sur `a` par sa contrainte de
-    /// type `kind`, viole ces bornes ; un `constraint.override` par borne
+    /// type `kind` (`opposite` : épingle d'une tâche ALAP en repasse, R-092),
+    /// viole ces bornes ; un `constraint.override` par borne
     /// violée, en passe principale seulement : début du projet si
     /// `a.start <` début (brut) ; porte du parent si `a.start < G` ; lien
     /// FS/SS si `a.start <` borne (brut) ; lien FF/SF si
@@ -342,17 +369,17 @@ impl Calc<'_, '_> {
         scale: TimeScale<'_>,
         a: Span,
         kind: ConstraintKind,
+        opposite: bool,
     ) -> Result<(), Fail> {
-        if self.role != PassRole::Primary {
+        // Passe secondaire : jamais ; repasse : seulement pour contrôler les
+        // épingles des tâches à placement opposé (les contraintes dures ont
+        // déjà été signalées par la passe principale).
+        if self.role == PassRole::Secondary || (self.role == PassRole::Replay && !opposite) {
             return Ok(());
         }
         let task = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?.uid;
         if a.start < self.start {
-            self.diags.push(Diagnostic::ConstraintOverride {
-                task,
-                kind,
-                bound: OverriddenBound::ProjectStart,
-            });
+            self.violated(task, kind, OverriddenBound::ProjectStart);
         }
         let incoming = self
             .net
@@ -390,11 +417,23 @@ impl Calc<'_, '_> {
                 }
             };
             if let Some(bound) = bound {
-                self.diags
-                    .push(Diagnostic::ConstraintOverride { task, kind, bound });
+                self.violated(task, kind, bound);
             }
         }
         Ok(())
+    }
+
+    /// Borne `bound` violée par la tâche `task` placée de force : en passe
+    /// principale, `constraint.override` (R-100) ; en repasse, une épingle
+    /// (R-092) ne viole jamais un lien : invariant violé.
+    fn violated(&mut self, task: TaskUid, kind: ConstraintKind, bound: OverriddenBound) {
+        if self.role == PassRole::Replay {
+            self.emit(Diagnostic::ScheduleInternal {
+                detail: format!("tâche {task} : épingle en repasse, {bound} est violé(e)"),
+            });
+        } else {
+            self.emit(Diagnostic::ConstraintOverride { task, kind, bound });
+        }
     }
 
     /// Agrégat d'une récapitulative (R-053) : min des débuts, max des fins
@@ -413,6 +452,7 @@ impl Calc<'_, '_> {
             .ok_or(Fail::Internal("arcs entrants hors bornes"))?;
         let mut span: Option<Span> = None;
         let (mut degraded, mut failed) = (false, false);
+        let replay = self.role == PassRole::Replay;
         for a in incoming {
             let arc = self.net.arc(a).ok_or(Fail::Internal("arc hors bornes"))?;
             let child = self.state(arc.from).ok_or(Fail::Internal("nœud hors bornes"))?;
@@ -437,7 +477,7 @@ impl Calc<'_, '_> {
         }
         s.early = span;
         s.driver = Driver::Rollup;
-        s.degraded = degraded;
+        s.degraded = degraded || (replay && s.degraded);
         // Tous les enfants en échec : l'agrégat compte comme non planifiable
         // pour ses successeurs (dégradés, R-069).
         s.failed = span.is_none() && failed;

@@ -14,7 +14,8 @@ use crate::error::CalendarError;
 use crate::model::ConstraintKind;
 use crate::time::Moment;
 
-use super::network::Fail;
+use super::Calc;
+use super::network::{Fail, NodeKind, ix};
 
 /// Sens de planification (ADR-0010) : depuis le début, passe avant
 /// principale ; à rebours, passe arrière principale.
@@ -35,6 +36,10 @@ pub(super) enum PassRole {
     Primary,
     /// Passe secondaire.
     Secondary,
+    /// Repasse de la passe principale après l'épingle des tâches à
+    /// placement opposé (R-092) : épingles tenues pour fixes, aucun
+    /// diagnostic sauf un invariant violé.
+    Replay,
 }
 
 /// Côté de la date d'une contrainte : début (MSO, SNET, SNLT) ou fin (MFO,
@@ -147,6 +152,66 @@ impl NodeConstraint {
     pub fn span(&self) -> Result<Span, Fail> {
         self.anchor
             .unwrap_or(Err(Fail::Internal("contrainte sans ancrage")))
+    }
+}
+
+impl Calc<'_, '_> {
+    /// R-092 (R-108 à rebours) : après la passe secondaire, chaque feuille
+    /// automatique active de règle `Opposite` (ALAP depuis le début), non
+    /// dégradée, de marge totale ≥ 0 (R-048 sur son échelle) et dont les
+    /// dates secondaires ne précèdent pas les dates principales en brut, est
+    /// épinglée sur ses dates secondaires (`pin`) ; la repasse de la passe
+    /// principale les tient pour fixes. Rend vrai si au moins une épingle
+    /// déplace une tâche. Une tâche à marge négative n'est pas épinglée
+    /// (S8 : une ALAP avec échéance « could still finish after its deadline
+    /// if its predecessors slipped »).
+    ///
+    /// Preuve (depuis le début) : une feuille placée sur ses dates au plus
+    /// tard vérifie `g(LF) ≤ LS_s` pour tout successeur (adjoint R-047, P13
+    /// (g)) ; les successeurs replacés restent donc au plus tard à leurs
+    /// dates au plus tard, inchangées ; la fin du projet ne bouge pas (la
+    /// tâche qui la fixe a TF = 0 ; avec R-051, une feuille terminale a
+    /// LS = ES). Miroir à rebours.
+    pub(super) fn pin_opposite(&mut self) -> bool {
+        let mut any = false;
+        for k in 0..self.net.nodes.len() {
+            let Some(v) = ix(k) else { continue };
+            let Some(node) = self.net.node(v) else { continue };
+            let (Some(c), Some(scale)) = (node.constraint, self.net.scale(node.place).copied()) else {
+                continue;
+            };
+            if node.kind != NodeKind::Leaf || node.inactive || c.rule != ConstraintRule::Opposite {
+                continue;
+            }
+            let Some(state) = self.state(v).copied() else {
+                continue;
+            };
+            let (Some(early), Some(late)) = (state.early, state.late) else {
+                continue;
+            };
+            if state.degraded || state.late_degraded || state.failed || early == late {
+                continue;
+            }
+            let tf = match (
+                scale.between(early.start, late.start),
+                scale.between(early.finish, late.finish),
+            ) {
+                (Ok(start_slack), Ok(finish_slack)) => start_slack.min(finish_slack),
+                _ => continue,
+            };
+            if tf.is_negative() || late.start < early.start || late.finish < early.finish {
+                continue;
+            }
+            let pin = match self.mode {
+                Mode::FromStart => late,
+                Mode::FromFinish => early,
+            };
+            if let Some(st) = self.state_mut(v) {
+                st.pin = Some(pin);
+                any = true;
+            }
+        }
+        any
     }
 }
 

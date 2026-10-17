@@ -9,6 +9,8 @@
 //! Toutes les limites sont vérifiées au fil de la lecture, avant
 //! l'allocation qu'elles protègent.
 
+use std::borrow::Cow;
+
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
@@ -19,13 +21,14 @@ use crate::error::{LineIndex, MspdiError};
 /// Élément XML retenu : nom local, texte concaténé, enfants retenus,
 /// position (octet du début de la balise ouvrante).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Element {
-    /// Nom local (préfixe d'espace de noms retiré).
-    pub(crate) name: String,
-    /// Texte, CDATA et références résolues, concaténés, sans rognage.
-    pub(crate) text: String,
+pub(crate) struct Element<'a> {
+    /// Nom local (préfixe d'espace de noms retiré), emprunté à l'entrée.
+    pub(crate) name: Cow<'a, str>,
+    /// Texte, CDATA et références résolues, concaténés, sans rognage ;
+    /// emprunté à l'entrée tant qu'il tient en un morceau.
+    pub(crate) text: Cow<'a, str>,
     /// Enfants retenus, dans l'ordre du document.
-    pub(crate) children: Vec<Element>,
+    pub(crate) children: Vec<Element<'a>>,
     /// Octet du début de la balise ouvrante.
     pub(crate) at: u64,
 }
@@ -80,19 +83,19 @@ pub(crate) const UI_SECTIONS: &[&str] = &[
 
 /// Résultat de la lecture XML, avant la correspondance typée.
 #[derive(Debug, Default)]
-pub(crate) struct RawDocument {
+pub(crate) struct RawDocument<'a> {
     /// Espace de noms de la racine, s'il est déclaré.
     pub(crate) namespace: Option<String>,
     /// Octet du début de la racine `Project`.
     pub(crate) root_at: u64,
     /// Champs scalaires de `Project` (enfants sautés).
-    pub(crate) fields: Vec<Element>,
+    pub(crate) fields: Vec<Element<'a>>,
     /// Éléments `Calendars/Calendar`.
-    pub(crate) calendars: Vec<Element>,
+    pub(crate) calendars: Vec<Element<'a>>,
     /// Éléments `Tasks/Task`.
-    pub(crate) tasks: Vec<Element>,
+    pub(crate) tasks: Vec<Element<'a>>,
     /// Éléments `Assignments/Assignment`, réduits à leur `TaskUID`.
-    pub(crate) assignments: Vec<Element>,
+    pub(crate) assignments: Vec<Element<'a>>,
     /// Sections d'interface présentes, dans l'ordre du document, sans doublon.
     pub(crate) ui_sections: Vec<String>,
     /// Éléments sautés.
@@ -134,18 +137,20 @@ enum Role {
 }
 
 /// Élément ouvert.
-struct Frame {
-    name: String,
+struct Frame<'a> {
+    name: Cow<'a, str>,
     role: Role,
 }
 
 /// État de la lecture.
-struct State<'s, 'l> {
+struct State<'a, 's, 'l> {
+    /// Entrée.
+    input: &'a str,
     limits: Limits,
-    open: Vec<Frame>,
+    open: Vec<Frame<'a>>,
     /// Pile des éléments retenus en construction (parallèle aux cadres `Build`).
-    building: Vec<Element>,
-    doc: RawDocument,
+    building: Vec<Element<'a>>,
+    doc: RawDocument<'a>,
     elements: u64,
     root_seen: bool,
     sink: &'s mut Sink<'l>,
@@ -153,12 +158,12 @@ struct State<'s, 'l> {
 
 /// Lit le document : contrôles structurels (erreurs) et anomalies tolérées
 /// (diagnostics dans `sink`).
-pub(crate) fn read_document(
-    text: &str,
+pub(crate) fn read_document<'a>(
+    text: &'a str,
     limits: Limits,
     lines: &LineIndex<'_>,
     sink: &mut Sink<'_>,
-) -> Result<RawDocument, MspdiError> {
+) -> Result<RawDocument<'a>, MspdiError> {
     let mut reader = Reader::from_str(text);
     {
         let config = reader.config_mut();
@@ -167,6 +172,7 @@ pub(crate) fn read_document(
         config.trim_text(false);
     }
     let mut state = State {
+        input: text,
         limits,
         open: Vec::new(),
         building: Vec::new(),
@@ -194,8 +200,8 @@ pub(crate) fn read_document(
                 state.start(&e, at, lines)?;
                 state.end();
             }
-            Event::Text(t) => state.text(&t.xml10_content(), at, lines)?,
-            Event::CData(t) => state.text(&t.xml10_content(), at, lines)?,
+            Event::Text(t) => state.text(t.xml10_content(), at, lines)?,
+            Event::CData(t) => state.text(t.xml10_content(), at, lines)?,
             Event::GeneralRef(r) => {
                 let resolved = if r.is_char_ref() {
                     r.resolve_char_ref().ok().flatten().map(String::from)
@@ -209,7 +215,7 @@ pub(crate) fn read_document(
                         .push(ImportCode::Inconsistent, None, at, &state.path(), Some(&raw));
                     raw
                 });
-                state.text(&piece, at, lines)?;
+                state.text(Cow::Owned(piece), at, lines)?;
             }
             Event::Decl(d) => {
                 if let Some(Ok(enc)) = d.encoding() {
@@ -229,7 +235,7 @@ pub(crate) fn read_document(
                 if !state.open.is_empty() || !state.root_seen {
                     return Err(MspdiError::UnexpectedEof {
                         at: lines.locate(at),
-                        open: state.open.iter().map(|f| f.name.clone()).collect(),
+                        open: state.open.iter().map(|f| f.name.to_string()).collect(),
                     });
                 }
                 return Ok(state.doc);
@@ -238,9 +244,19 @@ pub(crate) fn read_document(
     }
 }
 
-/// Nom local d'une balise (préfixe retiré), en texte.
-fn local_name(e: &BytesStart<'_>) -> String {
-    e.local_name().as_ref().to_owned()
+/// Nom local d'une balise (préfixe retiré), emprunté à l'entrée : la balise
+/// commence à l'octet `at` par `<` suivi du nom qualifié. Repli sur une copie
+/// si l'entrée ne correspond pas (jamais attendu).
+fn local_name<'a>(input: &'a str, at: u64, e: &BytesStart<'_>) -> Cow<'a, str> {
+    let qname = e.name();
+    let qname = qname.as_ref();
+    let borrowed = usize::try_from(at)
+        .ok()
+        .and_then(|a| a.checked_add(1))
+        .and_then(|start| input.get(start..start.checked_add(qname.len())?))
+        .filter(|s| *s == qname)
+        .and_then(|s| s.rsplit(':').next());
+    borrowed.map_or_else(|| Cow::Owned(e.local_name().as_ref().to_owned()), Cow::Borrowed)
 }
 
 /// Espace de noms déclaré par la racine pour son propre préfixe.
@@ -255,10 +271,10 @@ fn root_namespace(e: &BytesStart<'_>) -> Option<String> {
         .find_map(|a| (a.key.as_ref() == wanted).then(|| a.value.clone().into_owned()))
 }
 
-impl State<'_, '_> {
+impl<'a> State<'a, '_, '_> {
     /// Chemin des éléments ouverts sous la racine (« Tasks/Task/UID »).
     fn path(&self) -> String {
-        let names: Vec<&str> = self.open.iter().skip(1).map(|f| f.name.as_str()).collect();
+        let names: Vec<&str> = self.open.iter().skip(1).map(|f| f.name.as_ref()).collect();
         names.join("/")
     }
 
@@ -275,7 +291,7 @@ impl State<'_, '_> {
                 max: self.limits.max_depth,
             });
         }
-        let name = local_name(e);
+        let name = local_name(self.input, at, e);
         let role = match self.open.last().map(|f| f.role) {
             None => {
                 if self.root_seen {
@@ -285,14 +301,16 @@ impl State<'_, '_> {
                     });
                 }
                 if name != "Project" {
-                    return Err(MspdiError::NotMspdi { root: name });
+                    return Err(MspdiError::NotMspdi {
+                        root: name.into_owned(),
+                    });
                 }
                 self.root_seen = true;
                 self.doc.namespace = root_namespace(e);
                 self.doc.root_at = at;
                 Role::Root
             }
-            Some(Role::Root) => match name.as_str() {
+            Some(Role::Root) => match name.as_ref() {
                 "Calendars" => Role::Container(Container::Calendars),
                 "Tasks" => Role::Container(Container::Tasks),
                 "Assignments" => Role::Container(Container::Assignments),
@@ -302,12 +320,12 @@ impl State<'_, '_> {
                 },
                 n => {
                     if UI_SECTIONS.contains(&n) && !self.doc.ui_sections.iter().any(|s| s == n) {
-                        self.doc.ui_sections.push(name.clone());
+                        self.doc.ui_sections.push(name.to_string());
                     }
                     Role::Skip
                 }
             },
-            Some(Role::Container(c)) => match (c, name.as_str()) {
+            Some(Role::Container(c)) => match (c, name.as_ref()) {
                 (Container::Calendars, "Calendar") => Role::Build {
                     top: Some(Dest::Calendar),
                     only: None,
@@ -322,7 +340,7 @@ impl State<'_, '_> {
                 },
                 _ => Role::Skip,
             },
-            Some(Role::Build { only: Some(want), .. }) if name.as_str() != want => Role::Skip,
+            Some(Role::Build { only: Some(want), .. }) if name.as_ref() != want => Role::Skip,
             Some(Role::Build { .. }) => Role::Build {
                 top: None,
                 only: None,
@@ -333,7 +351,7 @@ impl State<'_, '_> {
             Role::Skip => self.doc.skipped_elements = self.doc.skipped_elements.saturating_add(1),
             Role::Build { .. } => self.building.push(Element {
                 name: name.clone(),
-                text: String::new(),
+                text: Cow::Borrowed(""),
                 children: Vec::new(),
                 at,
             }),
@@ -356,6 +374,11 @@ impl State<'_, '_> {
         match top {
             None => {
                 if let Some(parent) = self.building.last_mut() {
+                    // Le texte d'un élément qui a des enfants n'est jamais lu
+                    // (indentation) : il n'est pas gardé.
+                    if parent.children.is_empty() {
+                        parent.text = Cow::Borrowed("");
+                    }
                     parent.children.push(done);
                 }
             }
@@ -366,7 +389,7 @@ impl State<'_, '_> {
         }
     }
 
-    fn text(&mut self, piece: &str, at: u64, lines: &LineIndex<'_>) -> Result<(), MspdiError> {
+    fn text(&mut self, piece: Cow<'a, str>, at: u64, lines: &LineIndex<'_>) -> Result<(), MspdiError> {
         let max = self.limits.max_text_bytes;
         let too_long = || MspdiError::TextTooLong {
             at: lines.locate(at),
@@ -379,10 +402,17 @@ impl State<'_, '_> {
             return Ok(());
         }
         if let Some(current) = self.building.last_mut() {
+            if !current.children.is_empty() {
+                return Ok(());
+            }
             if current.text.len().saturating_add(piece.len()) > max {
                 return Err(too_long());
             }
-            current.text.push_str(piece);
+            if current.text.is_empty() {
+                current.text = piece;
+            } else {
+                current.text.to_mut().push_str(&piece);
+            }
         }
         Ok(())
     }
@@ -406,14 +436,14 @@ mod tests {
     use crate::diag::{ImportCode, ImportDiagnostic, Sink};
     use crate::error::{LineIndex, MspdiError};
 
-    fn read_with(text: &str, limits: Limits) -> (Result<RawDocument, MspdiError>, Vec<ImportDiagnostic>) {
+    fn read_with(text: &str, limits: Limits) -> (Result<RawDocument<'_>, MspdiError>, Vec<ImportDiagnostic>) {
         let lines = LineIndex::new(text);
         let mut sink = Sink::new(&lines);
         let r = read_document(text, limits, &lines, &mut sink);
         (r, sink.out)
     }
 
-    fn read(text: &str) -> (Result<RawDocument, MspdiError>, Vec<ImportDiagnostic>) {
+    fn read(text: &str) -> (Result<RawDocument<'_>, MspdiError>, Vec<ImportDiagnostic>) {
         read_with(text, Limits::default())
     }
 
@@ -447,7 +477,7 @@ mod tests {
             doc.namespace.as_deref(),
             Some("http://schemas.microsoft.com/project")
         );
-        let names: Vec<&str> = doc.fields.iter().map(|f| f.name.as_str()).collect();
+        let names: Vec<&str> = doc.fields.iter().map(|f| f.name.as_ref()).collect();
         assert_eq!(names, ["SaveVersion", "Name", "Title"]);
         assert_eq!(doc.fields[1].text, "A & B éA");
         assert_eq!(doc.fields[2].text, "x < y");

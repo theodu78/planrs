@@ -2,7 +2,7 @@
 //! signalé, valeur illisible signalée et rendue absente (l'appelant applique
 //! le défaut).
 
-use std::collections::BTreeMap;
+use std::borrow::Cow;
 
 use planrs_core::{Moment, Subject, TimeOfDay};
 
@@ -14,10 +14,11 @@ use crate::xml::Element;
 
 /// Champs d'un élément, indexés par nom local.
 pub(crate) struct Fields<'e> {
-    /// Première occurrence et nombre d'occurrences de chaque nom.
-    items: BTreeMap<&'e str, (&'e Element, u32)>,
+    /// Enfants triés par nom, ordre du document conservé entre homonymes
+    /// (tri stable) : recherche par dichotomie, le premier gagne.
+    items: Vec<&'e Element<'e>>,
     /// Chemin de l'élément porteur (« Tasks/Task »), vide pour `Project`.
-    path: String,
+    path: Cow<'static, str>,
     /// Élément du projet concerné.
     subject: Option<Subject>,
     /// Position de l'élément porteur (diagnostic d'un champ absent).
@@ -26,21 +27,16 @@ pub(crate) struct Fields<'e> {
 
 impl<'e> Fields<'e> {
     pub(crate) fn new(
-        children: impl IntoIterator<Item = &'e Element>,
-        path: &str,
+        children: impl IntoIterator<Item = &'e Element<'e>>,
+        path: impl Into<Cow<'static, str>>,
         subject: Option<Subject>,
         at: u64,
     ) -> Self {
-        let mut items: BTreeMap<&'e str, (&'e Element, u32)> = BTreeMap::new();
-        for c in children {
-            items
-                .entry(c.name.as_str())
-                .and_modify(|(_, n)| *n = n.saturating_add(1))
-                .or_insert((c, 1));
-        }
+        let mut items: Vec<&'e Element<'e>> = children.into_iter().collect();
+        items.sort_by(|a, b| a.name.cmp(&b.name));
         Self {
             items,
-            path: path.to_owned(),
+            path: path.into(),
             subject,
             at,
         }
@@ -71,9 +67,14 @@ impl<'e> Fields<'e> {
     }
 
     /// Premier élément de ce nom ; un doublon est signalé (le premier gagne).
-    pub(crate) fn get(&self, name: &str, sink: &mut Sink<'_>) -> Option<&'e Element> {
-        let (e, count) = self.items.get(name)?;
-        if *count > 1 {
+    pub(crate) fn get(&self, name: &str, sink: &mut Sink<'_>) -> Option<&'e Element<'e>> {
+        let i = self.items.partition_point(|e| e.name.as_ref() < name);
+        let e = *self.items.get(i).filter(|e| e.name == name)?;
+        let duplicated = self
+            .items
+            .get(i.saturating_add(1))
+            .is_some_and(|next| next.name == name);
+        if duplicated {
             sink.push(
                 ImportCode::Duplicate,
                 self.subject,
@@ -82,17 +83,18 @@ impl<'e> Fields<'e> {
                 None,
             );
         }
-        Some(*e)
+        Some(e)
     }
 
     /// Vrai si le champ est présent (même vide).
     pub(crate) fn has(&self, name: &str) -> bool {
-        self.items.contains_key(name)
+        let i = self.items.partition_point(|e| e.name.as_ref() < name);
+        self.items.get(i).is_some_and(|e| e.name == name)
     }
 
     /// Texte brut d'un champ ; `None` si absent.
     pub(crate) fn raw(&self, name: &str, sink: &mut Sink<'_>) -> Option<&'e str> {
-        self.get(name, sink).map(|e| e.text.as_str())
+        self.get(name, sink).map(|e| e.text.as_ref())
     }
 
     /// Texte rogné d'un champ scalaire ; un élément vide vaut absent.

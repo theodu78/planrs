@@ -4,6 +4,7 @@
 //! inexploitable (vide, trop grand, mal formé, trop profond, autre racine) ;
 //! tout le reste devient un diagnostic d'import (`crate::diag`).
 
+use std::cell::OnceCell;
 use std::fmt;
 
 /// Position dans l'entrée : octet (depuis 0), ligne et colonne (depuis 1,
@@ -124,36 +125,88 @@ impl MspdiError {
     }
 }
 
-/// Index des débuts de ligne d'un texte : octet → ligne et colonne.
+/// Taille d'un bloc de l'index des caractères.
+const BLOCK: usize = 4_096;
+
+/// Vrai pour un octet qui commence un caractère UTF-8 (pas une suite).
+const fn starts_char(b: u8) -> bool {
+    b & 0xC0 != 0x80
+}
+
+/// Index d'un texte : débuts de ligne et nombre de caractères avant chaque
+/// bloc de 4 Kio. Construit en un parcours, au premier besoin seulement (une
+/// lecture sans diagnostic ne le paie pas) ; `locate` coûte ensuite une
+/// dichotomie et le parcours d'au plus deux blocs, même sur un fichier d'une
+/// seule ligne.
 pub(crate) struct LineIndex<'a> {
     text: &'a str,
+    index: OnceCell<Index>,
+}
+
+/// Index construit.
+struct Index {
     /// Octet de début de chaque ligne ; le premier vaut 0.
     starts: Vec<usize>,
+    /// Caractères dans `[0, i × BLOCK)`.
+    blocks: Vec<usize>,
 }
 
 impl<'a> LineIndex<'a> {
+    /// Index paresseux du texte.
+    pub(crate) const fn new(text: &'a str) -> Self {
+        Self {
+            text,
+            index: OnceCell::new(),
+        }
+    }
+
     /// Un parcours de l'entrée.
-    pub(crate) fn new(text: &'a str) -> Self {
+    fn build(&self) -> Index {
+        let bytes = self.text.as_bytes();
         let mut starts = vec![0];
-        starts.extend(
-            text.bytes()
-                .enumerate()
-                .filter(|(_, b)| *b == b'\n')
-                .map(|(i, _)| i.saturating_add(1)),
-        );
-        Self { text, starts }
+        let mut blocks = Vec::with_capacity((bytes.len() / BLOCK).saturating_add(1));
+        let mut chars: usize = 0;
+        for (index, chunk) in bytes.chunks(BLOCK).enumerate() {
+            blocks.push(chars);
+            chars = chars.saturating_add(chunk.iter().filter(|b| starts_char(**b)).count());
+            let base = index.saturating_mul(BLOCK);
+            starts.extend(
+                chunk
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, b)| **b == b'\n')
+                    .map(|(i, _)| base.saturating_add(i).saturating_add(1)),
+            );
+        }
+        if blocks.is_empty() {
+            blocks.push(0);
+        }
+        Index { starts, blocks }
+    }
+
+    /// Caractères commencés dans `[0, offset)` (`offset` ≤ longueur).
+    fn chars_before(&self, index: &Index, offset: usize) -> usize {
+        let block = offset / BLOCK;
+        let base = index.blocks.get(block).copied().unwrap_or(0);
+        let from = block.saturating_mul(BLOCK);
+        let tail = self
+            .text
+            .as_bytes()
+            .get(from..offset)
+            .map_or(0, |s| s.iter().filter(|b| starts_char(**b)).count());
+        base.saturating_add(tail)
     }
 
     /// Position de l'octet `byte` (borné à la longueur du texte).
     pub(crate) fn locate(&self, byte: u64) -> Location {
         let len = self.text.len();
         let offset = usize::try_from(byte).map_or(len, |b| b.min(len));
-        let line_index = self.starts.partition_point(|s| *s <= offset).saturating_sub(1);
-        let start = self.starts.get(line_index).copied().unwrap_or(0);
+        let index = self.index.get_or_init(|| self.build());
+        let line_index = index.starts.partition_point(|s| *s <= offset).saturating_sub(1);
+        let start = index.starts.get(line_index).copied().unwrap_or(0);
         let column = self
-            .text
-            .get(start..offset)
-            .map_or_else(|| offset.saturating_sub(start), |s| s.chars().count());
+            .chars_before(index, offset)
+            .saturating_sub(self.chars_before(index, start));
         Location {
             byte: u64::try_from(offset).unwrap_or(u64::MAX),
             line: u32::try_from(line_index.saturating_add(1)).unwrap_or(u32::MAX),
@@ -206,6 +259,18 @@ mod tests {
         // Au milieu d'un caractère : colonne en octets, sans panique.
         assert_eq!(idx.locate(6).line, 2);
         assert_eq!(LineIndex::new("").locate(5).byte, 0);
+    }
+
+    #[test]
+    fn line_index_across_blocks() {
+        // Une seule ligne de 10 000 « é » (2 octets chacun) puis « x » : la
+        // colonne compte les caractères, au-delà de plusieurs blocs.
+        let text = format!("{}x\n{}", "é".repeat(10_000), "a".repeat(5_000));
+        let idx = LineIndex::new(&text);
+        let loc = idx.locate(20_000);
+        assert_eq!((loc.line, loc.column), (1, 10_001));
+        let loc = idx.locate(20_002 + 4_500);
+        assert_eq!((loc.line, loc.column), (2, 4_501));
     }
 
     #[test]

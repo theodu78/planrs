@@ -24,7 +24,7 @@ const DEFAULT_HOURS: [(u16, u16); 2] = [(480, 720), (780, 1_020)];
 
 /// En-tête d'un calendrier lu (premier passage).
 struct Header<'e> {
-    element: &'e Element,
+    element: &'e Element<'e>,
     uid: CalendarUid,
     /// `IsBaseCalendar` ; absent : base si `BaseCalendarUID` est absent ou
     /// négatif (hypothèse), signalé.
@@ -43,7 +43,7 @@ enum Kind {
 /// Importe les calendriers dans l'ordre du document ; `project_calendar` sert
 /// de base aux dérivés sans base valide (R-079).
 pub(crate) fn import(
-    elements: &[Element],
+    elements: &[Element<'_>],
     project_calendar: CalendarUid,
     sink: &mut Sink<'_>,
 ) -> Arena<CalendarUid, Calendar> {
@@ -305,8 +305,8 @@ struct DayEntry {
 }
 
 /// Lit un `WeekDay` (R-078) ; `DayType` absent ou inconnu : ignoré.
-fn day_entry(e: &Element, path: &str, subject: Option<Subject>, sink: &mut Sink<'_>) -> Option<DayEntry> {
-    let f = Fields::new(&e.children, path, subject, e.at);
+fn day_entry(e: &Element<'_>, path: &str, subject: Option<Subject>, sink: &mut Sink<'_>) -> Option<DayEntry> {
+    let f = Fields::new(&e.children, path.to_owned(), subject, e.at);
     let Some(day_type) = code(&f, "DayType", codes::day_type, sink) else {
         if f.scalar("DayType", sink).is_none() {
             f.missing("DayType", sink);
@@ -364,11 +364,11 @@ fn hours(ranges: &[(TimeOfDay, TimeOfDay)]) -> DaySetting {
 /// lu 24:00 ; vide ou inversée → ignorée ; triées ; chevauchements fusionnés
 /// (signalé) ; au-delà de 5 plages, les contiguës fusionnées, puis les 5
 /// premières gardées (signalé).
-fn working_times(w: &Element, owner: &Fields<'_>, sink: &mut Sink<'_>) -> Vec<(TimeOfDay, TimeOfDay)> {
+fn working_times(w: &Element<'_>, owner: &Fields<'_>, sink: &mut Sink<'_>) -> Vec<(TimeOfDay, TimeOfDay)> {
     let path = owner.path_of("WorkingTimes/WorkingTime");
     let mut out: Vec<(TimeOfDay, TimeOfDay)> = Vec::new();
     for wt in w.children.iter().filter(|c| c.name == "WorkingTime") {
-        let f = Fields::new(&wt.children, &path, owner.subject(), wt.at);
+        let f = Fields::new(&wt.children, path.clone(), owner.subject(), wt.at);
         let from = f.time("FromTime", sink);
         let to = f.time("ToTime", sink).map(|t| {
             if t == TimeOfDay::MIDNIGHT {
@@ -435,7 +435,7 @@ fn time_period(owner: &Fields<'_>, sink: &mut Sink<'_>) -> Option<DayRange> {
         owner.missing("TimePeriod", sink);
         return None;
     };
-    let f = Fields::new(&tp.children, &owner.path_of("TimePeriod"), owner.subject(), tp.at);
+    let f = Fields::new(&tp.children, owner.path_of("TimePeriod"), owner.subject(), tp.at);
     let Some(from) = f.datetime("FromDate", sink) else {
         if f.scalar("FromDate", sink).is_none() {
             f.missing("FromDate", sink);
@@ -506,8 +506,8 @@ fn month_day(f: &Fields<'_>, sink: &mut Sink<'_>) -> Option<u8> {
 }
 
 /// R-080 : une exception de la forme `Exceptions/Exception`.
-fn exception(e: &Element, subject: Option<Subject>, sink: &mut Sink<'_>) -> Option<CalendarException> {
-    let f = Fields::new(&e.children, &format!("{CAL}/Exceptions/Exception"), subject, e.at);
+fn exception(e: &Element<'_>, subject: Option<Subject>, sink: &mut Sink<'_>) -> Option<CalendarException> {
+    let f = Fields::new(&e.children, format!("{CAL}/Exceptions/Exception"), subject, e.at);
     let period = time_period(&f, sink)?;
     let kind = code(&f, "Type", codes::exception_type, sink);
     let kind = match kind {
@@ -573,9 +573,9 @@ fn exception(e: &Element, subject: Option<Subject>, sink: &mut Sink<'_>) -> Opti
 }
 
 /// R-082 : une semaine de travail datée ; jour absent → `Inherit`.
-fn work_week(e: &Element, subject: Option<Subject>, sink: &mut Sink<'_>) -> Option<WorkWeek> {
+fn work_week(e: &Element<'_>, subject: Option<Subject>, sink: &mut Sink<'_>) -> Option<WorkWeek> {
     let path = format!("{CAL}/WorkWeeks/WorkWeek");
-    let f = Fields::new(&e.children, &path, subject, e.at);
+    let f = Fields::new(&e.children, path.clone(), subject, e.at);
     let period = time_period(&f, sink)?;
     let mut days: Week<DayRule> = Week::from_fn(|_| DayRule::Inherit);
     let mut seen: Week<bool> = Week::default();

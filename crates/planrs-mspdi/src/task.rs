@@ -25,7 +25,7 @@ const LINK: &str = "Tasks/Task/PredecessorLink";
 /// Tâche lue, avant la résolution des liens.
 struct Read<'e> {
     task: Task,
-    element: &'e Element,
+    element: &'e Element<'e>,
     /// Durée telle qu'écrite (minutes ≥ 0, unité, base, estimation).
     duration: Duration,
 }
@@ -33,8 +33,8 @@ struct Read<'e> {
 /// Importe les tâches dans `project` et leurs valeurs enregistrées dans
 /// `recorded`.
 pub(crate) fn import(
-    elements: &[Element],
-    assignments: &[Element],
+    elements: &[Element<'_>],
+    assignments: &[Element<'_>],
     project: &mut Project,
     recorded: &mut RecordedSchedule,
     sink: &mut Sink<'_>,
@@ -432,7 +432,7 @@ fn summary_flags(rows: &[Read<'_>]) -> Vec<bool> {
 /// R-072 à R-074 : liens d'une tâche, dans l'ordre du document.
 fn links(
     successor: TaskUid,
-    children: &[Element],
+    children: &[Element<'_>],
     known: &BTreeSet<TaskUid>,
     options: &ProjectOptions,
     sink: &mut Sink<'_>,
@@ -559,7 +559,7 @@ fn lag(f: &Fields<'_>, options: &ProjectOptions, sink: &mut Sink<'_>) -> Lag {
 }
 
 /// Compte les affectations par tâche (`Assignments/Assignment/TaskUID`).
-fn count_assignments(assignments: &[Element], recorded: &mut RecordedSchedule, sink: &mut Sink<'_>) {
+fn count_assignments(assignments: &[Element<'_>], recorded: &mut RecordedSchedule, sink: &mut Sink<'_>) {
     let mut counts: BTreeMap<TaskUid, u32> = BTreeMap::new();
     for a in assignments {
         let f = Fields::new(&a.children, "Assignments/Assignment", None, a.at);

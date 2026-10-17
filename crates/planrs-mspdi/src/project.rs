@@ -32,7 +32,7 @@ pub(crate) struct Built {
 const FALLBACK_CALENDAR: CalendarUid = CalendarUid::new(1);
 
 /// Construit le projet et le planning enregistré.
-pub(crate) fn build(raw: &RawDocument, options: &ReadOptions, sink: &mut Sink<'_>) -> Built {
+pub(crate) fn build(raw: &RawDocument<'_>, options: &ReadOptions, sink: &mut Sink<'_>) -> Built {
     let f = Fields::new(raw.fields.iter(), "", Some(Subject::Project), raw.root_at);
     let save_version = f.int("SaveVersion", sink).map(|(v, _)| v);
 

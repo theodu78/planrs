@@ -9,6 +9,8 @@ repository.workspace = true
 
 [dependencies]
 chrono.workspace = true
+csv.workspace = true
+encoding_rs.workspace = true
 planrs-core.workspace = true
 planrs-mspdi.workspace = true
 planrs-render.workspace = true

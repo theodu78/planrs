@@ -4,18 +4,17 @@
 //! - [`model`] : modèle stocké (plages, jours, base ou dérivé, exceptions,
 //!   récurrences, semaines datées), validé ;
 //! - [`builtin`] : Standard, 24 heures, Équipe de nuit ;
-//! - [`resolve`] : chaîne d'héritage ([`resolve::chain`], R-015 pour la
-//!   détection des erreurs).
+//! - [`recurrence`] : dépliage des récurrences (R-018) ;
+//! - [`resolve`] : chaîne d'héritage ([`resolve::chain`], R-015) et
+//!   résolution d'un jour ([`resolve::resolve_day`], R-016, R-017, R-019),
+//!   chemin froid.
 //!
-//! À compléter avec les calendriers (agent suivant, ADR-0008 § 6.3 à 6.6,
-//! règles R-015 à R-031) : `recurrence` (dépliage), `resolve::resolve_day` et
-//! `resolve::expand_exception`, `compiled` (forme compilée et conversions
-//! ouvrées, `CalendarSet`), `scale` (`TimeScale`, placement),
-//! `Calendar::add_exception`, et le contrôle des exceptions qui se
-//! chevauchent dans `Project::validate`.
+//! À venir : `compiled` (forme compilée et conversions ouvrées,
+//! `CalendarSet`), `scale` (`TimeScale`, placement).
 
 pub mod builtin;
 pub mod model;
+pub mod recurrence;
 pub mod resolve;
 
 use serde::{Deserialize, Serialize};
@@ -44,4 +43,5 @@ pub use model::{
     Calendar, CalendarException, CalendarKind, DayHours, DayRule, DaySetting, MonthItem, MonthPosition,
     Recurrence, TimeRange, WorkWeek,
 };
-pub use resolve::{CalendarChain, chain};
+pub use recurrence::expand_exception;
+pub use resolve::{CalendarChain, DaySource, ResolvedDay, chain, resolve_day};

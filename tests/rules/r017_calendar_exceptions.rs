@@ -1,0 +1,100 @@
+//! R-017 — Exceptions datées : période en jours entiers, bornes incluses ;
+//! l'exception remplace la journée entière (chômée ou avec ses propres
+//! plages) ; chevauchement dans un même calendrier refusé par une commande, et
+//! à l'import la première (par date de début, puis ordre de stockage)
+//! l'emporte avec un avertissement. Cas au niveau du jour.
+
+use planrs_core::calendar::{Calendar, DaySetting};
+use planrs_core::{
+    BuiltinCalendarNames, CalendarModelError, CalendarUid, Diagnostic, Project, ProjectInit, ScheduleAnchor,
+};
+use planrs_tests::{calendars, day_minutes, exception, moment, standard, working};
+
+#[test]
+fn r017_exception_replaces_whole_day() {
+    let mut c = standard();
+    // Samedi 24/10/2026 ouvré [08:00,12:00) : 240 au lieu de 0.
+    c.add_exception(exception(
+        "2026-10-24",
+        "2026-10-24",
+        working(&[("08:00", "12:00")]),
+    ))
+    .unwrap();
+    // Jeudi 24/12/2026 ouvré [08:00,12:00) : 240 au lieu de 480 (l'après-midi
+    // disparaît : la journée entière est remplacée).
+    c.add_exception(exception(
+        "2026-12-24",
+        "2026-12-24",
+        working(&[("08:00", "12:00")]),
+    ))
+    .unwrap();
+    let a = calendars(vec![c]);
+    assert_eq!(day_minutes(&a, 1, "2026-10-24"), 240);
+    assert_eq!(day_minutes(&a, 1, "2026-12-24"), 240);
+    // Lendemains inchangés : dim 25/10 chômé, ven 25/12 480.
+    assert_eq!(day_minutes(&a, 1, "2026-10-25"), 0);
+    assert_eq!(day_minutes(&a, 1, "2026-12-25"), 480);
+}
+
+#[test]
+fn r017_period_bounds_are_inclusive() {
+    let mut c = standard();
+    c.add_exception(exception("2026-12-24", "2026-12-31", DaySetting::NonWorking))
+        .unwrap();
+    let a = calendars(vec![c]);
+    // Mer 23/12 : avant ; jeu 24/12 et jeu 31/12 : bornes incluses ; ven
+    // 01/01/2027 : après.
+    assert_eq!(day_minutes(&a, 1, "2026-12-23"), 480);
+    assert_eq!(day_minutes(&a, 1, "2026-12-24"), 0);
+    assert_eq!(day_minutes(&a, 1, "2026-12-31"), 0);
+    assert_eq!(day_minutes(&a, 1, "2027-01-01"), 480);
+}
+
+#[test]
+fn r017_overlap_refused_by_command() {
+    let mut c = standard();
+    c.add_exception(exception("2026-11-11", "2026-11-11", DaySetting::NonWorking))
+        .unwrap();
+    assert_eq!(
+        c.add_exception(exception(
+            "2026-11-10",
+            "2026-11-12",
+            working(&[("08:00", "12:00")])
+        )),
+        Err(CalendarModelError::OverlappingException { existing: 0 })
+    );
+}
+
+#[test]
+fn r017_overlap_on_import_first_wins_with_warning() {
+    // Deux exceptions sur le 11/11 lues depuis un fichier : chômée (n° 0)
+    // puis ouvrée 8-12 (n° 1). Même début : l'ordre de stockage départage.
+    let mut json = serde_json::to_value(standard()).unwrap();
+    json["exceptions"] = serde_json::to_value(vec![
+        exception("2026-11-11", "2026-11-11", DaySetting::NonWorking),
+        exception("2026-11-11", "2026-11-11", working(&[("08:00", "12:00")])),
+    ])
+    .unwrap();
+    let c: Calendar = serde_json::from_value(json).unwrap();
+    let a = calendars(vec![c.clone()]);
+    // Le 11/11 est chômé.
+    assert_eq!(day_minutes(&a, 1, "2026-11-11"), 0);
+
+    let mut p = Project::new(ProjectInit {
+        name: "P".to_owned(),
+        anchor: ScheduleAnchor::FromStart(moment("2026-11-09T08:00")),
+        current_date: moment("2026-11-09T08:00"),
+        calendar_names: BuiltinCalendarNames::default(),
+    });
+    let mut list: Vec<Calendar> = p.calendars.iter().cloned().collect();
+    list[0] = c;
+    p.calendars = calendars(list);
+    assert_eq!(
+        p.validate().finish(),
+        [Diagnostic::CalendarExceptionsOverlap {
+            calendar: CalendarUid::new(1),
+            kept: 0,
+            ignored: 1
+        }]
+    );
+}

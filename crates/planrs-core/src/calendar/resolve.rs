@@ -1,13 +1,21 @@
 //! Résolution d'un calendrier (ADR-0008, § 6.3), chemin froid.
 //!
-//! État : chaîne d'héritage et détection de ses erreurs (R-015). À compléter
-//! avec les calendriers : `resolve_day` (précédence R-016) et
-//! `expand_exception` (dépliage des récurrences, R-018).
+//! - [`chain`] : chaîne d'héritage et détection de ses erreurs (R-015) ;
+//! - [`resolve_day`] : réglage d'un jour selon la précédence (R-016), avec sa
+//!   source. Sert d'oracle indépendant aux tests de la forme compilée et
+//!   d'explication (« mercredi 11/11 chômé : exception n° 0 du calendrier
+//!   1 ») ;
+//! - [`expand_exception`] (ré-exporté de `recurrence`) : dépliage des
+//!   récurrences (R-018).
+
+use serde::{Deserialize, Serialize};
 
 use crate::arena::Arena;
-use crate::calendar::model::{Calendar, CalendarKind};
+use crate::calendar::model::{Calendar, CalendarException, CalendarKind, DayRule, DaySetting, WorkWeek};
+pub use crate::calendar::recurrence::expand_exception;
 use crate::error::CalendarError;
 use crate::ids::CalendarUid;
+use crate::time::Day;
 
 /// Borne défensive du suivi d'une chaîne de bases dérivées.
 const MAX_CHAIN_STEPS: usize = 8;
@@ -105,19 +113,174 @@ pub fn chain(
     Err(not_base)
 }
 
+/// Réglage résolu d'un jour et sa provenance.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResolvedDay {
+    /// Réglage du jour (chômé ou plages).
+    pub hours: DaySetting,
+    /// Niveau qui l'a donné.
+    pub source: DaySource,
+}
+
+/// Provenance du réglage d'un jour (R-016).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DaySource {
+    /// Exception n° `index` (ordre de stockage) du calendrier `calendar`.
+    Exception {
+        /// Calendrier qui porte l'exception.
+        calendar: CalendarUid,
+        /// Indice de l'exception.
+        index: usize,
+    },
+    /// Semaine datée n° `index` du calendrier `calendar`.
+    WorkWeek {
+        /// Calendrier qui porte la semaine datée.
+        calendar: CalendarUid,
+        /// Indice de la semaine datée.
+        index: usize,
+    },
+    /// Semaine par défaut du calendrier `calendar`.
+    DefaultWeek {
+        /// Calendrier.
+        calendar: CalendarUid,
+    },
+}
+
+/// Exceptions d'un calendrier dans l'ordre de précédence : début de période,
+/// puis ordre de stockage (R-017).
+pub(crate) fn exceptions_in_order(c: &Calendar) -> Vec<(usize, &CalendarException)> {
+    let mut order: Vec<(usize, &CalendarException)> = c.exceptions().iter().enumerate().collect();
+    order.sort_by_key(|(i, e)| (e.period.first(), *i));
+    order
+}
+
+/// Semaines datées d'un calendrier dans l'ordre de précédence (R-019).
+pub(crate) fn work_weeks_in_order(c: &Calendar) -> Vec<(usize, &WorkWeek)> {
+    let mut order: Vec<(usize, &WorkWeek)> = c.work_weeks().iter().enumerate().collect();
+    order.sort_by_key(|(i, w)| (w.period.first(), *i));
+    order
+}
+
+/// Semaine datée qui s'applique au jour `day` : la première, dans l'ordre de
+/// précédence, dont la période contient le jour. Elle possède le jour
+/// entier : un jour `Inherit` y renvoie à la semaine par défaut du même
+/// calendrier, jamais à une autre semaine datée (hypothèse).
+pub(crate) fn work_week_owner(order: &[(usize, &WorkWeek)], day: i32) -> Option<usize> {
+    order
+        .iter()
+        .find(|(_, w)| w.period.first().index() <= day && day <= w.period.last().index())
+        .map(|(i, _)| *i)
+}
+
+/// Exception qui s'applique au jour `day` dans un calendrier (R-017) : la
+/// première, dans l'ordre de précédence, dont les jours dépliés contiennent le
+/// jour.
+fn exception_for(c: &Calendar, day: Day) -> Result<Option<(usize, &CalendarException)>, CalendarError> {
+    for (index, e) in exceptions_in_order(c) {
+        if e.period.contains(day) && expand_exception(e)?.iter().any(|r| r.contains(day)) {
+            return Ok(Some((index, e)));
+        }
+    }
+    Ok(None)
+}
+
+/// Règle → réglage, `None` pour `Inherit`.
+fn defined(rule: &DayRule) -> Option<DaySetting> {
+    match rule {
+        DayRule::Inherit => None,
+        DayRule::NonWorking => Some(DaySetting::NonWorking),
+        DayRule::Working(h) => Some(DaySetting::Working(h.clone())),
+    }
+}
+
+/// Réglage du jour `day` par les semaines (datées puis par défaut) d'un
+/// niveau ; `None` si ce niveau hérite.
+fn from_weeks(c: &Calendar, day: Day) -> Option<ResolvedDay> {
+    let wd = day.weekday();
+    let calendar = c.uid();
+    let order = work_weeks_in_order(c);
+    if let Some(index) = work_week_owner(&order, day.index())
+        && let Some(hours) = c.work_weeks().get(index).and_then(|w| defined(w.days.get(wd)))
+    {
+        return Some(ResolvedDay {
+            hours,
+            source: DaySource::WorkWeek { calendar, index },
+        });
+    }
+    let hours = match c.kind() {
+        CalendarKind::Base { week } => Some(week.get(wd).clone()),
+        CalendarKind::Derived { week, .. } => defined(week.get(wd)),
+    };
+    hours.map(|hours| ResolvedDay {
+        hours,
+        source: DaySource::DefaultWeek { calendar },
+    })
+}
+
+/// Réglage du jour `day` dans le calendrier `uid` (R-016). Du plus
+/// prioritaire au moins prioritaire, jour de semaine par jour de semaine
+/// (`Inherit` passe au niveau suivant) :
+/// 1. exception du dérivé ;
+/// 2. exception de la base ;
+/// 3. semaine datée du dérivé ;
+/// 4. semaine par défaut du dérivé ;
+/// 5. semaine datée de la base ;
+/// 6. semaine par défaut de la base (toujours définie).
+///
+/// Chemin froid : déplie les exceptions dont la période contient le jour à
+/// chaque appel.
+///
+/// # Errors
+///
+/// Erreurs de [`chain`] ; [`CalendarError::Inconsistent`] si la base ne
+/// donne aucun réglage (impossible : sa semaine est complète).
+pub fn resolve_day(
+    calendars: &Arena<CalendarUid, Calendar>,
+    uid: CalendarUid,
+    day: Day,
+) -> Result<ResolvedDay, CalendarError> {
+    let ch = chain(calendars, uid)?;
+    let derived = match ch {
+        CalendarChain::Base(_) => None,
+        CalendarChain::Derived { calendar, .. } => Some(calendar),
+    };
+    let base = ch.base();
+    for c in derived.into_iter().chain([base]) {
+        if let Some((index, e)) = exception_for(c, day)? {
+            return Ok(ResolvedDay {
+                hours: e.setting.clone(),
+                source: DaySource::Exception {
+                    calendar: c.uid(),
+                    index,
+                },
+            });
+        }
+    }
+    if let Some(r) = derived.and_then(|c| from_weeks(c, day)) {
+        return Ok(r);
+    }
+    from_weeks(base, day).ok_or(CalendarError::Inconsistent { calendar: uid })
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
         clippy::unwrap_used,
+        clippy::indexing_slicing,
         reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
     )]
 
-    use super::{CalendarChain, chain};
+    use super::{CalendarChain, DaySource, chain, resolve_day};
     use crate::arena::Arena;
     use crate::calendar::builtin::standard;
-    use crate::calendar::model::Calendar;
+    use crate::calendar::model::{
+        Calendar, CalendarException, DayHours, DayRule, DaySetting, Recurrence, TimeRange, WorkWeek,
+    };
     use crate::error::CalendarError;
     use crate::ids::CalendarUid;
+    use crate::time::{Day, DayRange, TimeOfDay, Week, Weekday};
 
     fn uid(v: u32) -> CalendarUid {
         CalendarUid::new(v)
@@ -221,6 +384,180 @@ mod tests {
             CalendarError::InheritanceCycle {
                 chain: vec![uid(30), uid(31), uid(32), uid(31)]
             }
+        );
+    }
+
+    fn day(s: &str) -> Day {
+        s.parse().unwrap()
+    }
+
+    fn hours(from: u16, to: u16) -> DayHours {
+        DayHours::new(vec![
+            TimeRange::new(TimeOfDay::hm(from, 0).unwrap(), TimeOfDay::hm(to, 0).unwrap()).unwrap(),
+        ])
+        .unwrap()
+    }
+
+    fn holiday(d: &str) -> CalendarException {
+        CalendarException {
+            name: String::new(),
+            period: DayRange::single(day(d)),
+            setting: DaySetting::NonWorking,
+            recurrence: Recurrence::Period,
+            occurrences: None,
+        }
+    }
+
+    /// (minutes du jour, source).
+    fn resolved(a: &Arena<CalendarUid, Calendar>, c: u32, d: &str) -> (i64, DaySource) {
+        let r = resolve_day(a, uid(c), day(d)).unwrap();
+        (r.hours.total().get(), r.source)
+    }
+
+    #[test]
+    fn resolve_day_sources() {
+        let mut base = standard(uid(1), "Standard".to_owned());
+        base.add_exception(holiday("2026-12-25")).unwrap();
+        base.add_work_week(WorkWeek {
+            name: "été".to_owned(),
+            period: DayRange::new(day("2027-07-01"), day("2027-08-31")).unwrap(),
+            days: Week::from_fn(|d| match d {
+                Weekday::Saturday | Weekday::Sunday => DayRule::Inherit,
+                _ => DayRule::Working(hours(8, 15)),
+            }),
+        })
+        .unwrap();
+        let mut paul = derived(4, 1);
+        paul.set_day(Weekday::Friday, DayRule::Working(hours(8, 12)))
+            .unwrap();
+        paul.add_exception(holiday("2026-12-31")).unwrap();
+        paul.add_work_week(WorkWeek {
+            name: "inventaire".to_owned(),
+            period: DayRange::new(day("2027-01-04"), day("2027-01-08")).unwrap(),
+            days: Week::from_fn(|d| match d {
+                Weekday::Monday => DayRule::NonWorking,
+                _ => DayRule::Inherit,
+            }),
+        })
+        .unwrap();
+        let a = arena(vec![base, paul]);
+        let default = |c| DaySource::DefaultWeek { calendar: uid(c) };
+        // Base : semaine par défaut, exception, semaine datée.
+        assert_eq!(resolved(&a, 1, "2026-12-21"), (480, default(1)));
+        assert_eq!(
+            resolved(&a, 1, "2026-12-25"),
+            (
+                0,
+                DaySource::Exception {
+                    calendar: uid(1),
+                    index: 0
+                }
+            )
+        );
+        assert_eq!(
+            resolved(&a, 1, "2027-07-05"),
+            (
+                420,
+                DaySource::WorkWeek {
+                    calendar: uid(1),
+                    index: 0
+                }
+            )
+        );
+        // Samedi de la semaine datée : `Inherit` → semaine par défaut.
+        assert_eq!(resolved(&a, 1, "2027-07-03"), (0, default(1)));
+        // Dérivé : son vendredi, la base pour le lundi.
+        assert_eq!(resolved(&a, 4, "2026-12-18"), (240, default(4)));
+        assert_eq!(resolved(&a, 4, "2026-12-21"), (480, default(1)));
+        // Exception de la base contre jour redéfini du dérivé : l'exception.
+        assert_eq!(
+            resolved(&a, 4, "2026-12-25"),
+            (
+                0,
+                DaySource::Exception {
+                    calendar: uid(1),
+                    index: 0
+                }
+            )
+        );
+        assert_eq!(
+            resolved(&a, 4, "2026-12-31"),
+            (
+                0,
+                DaySource::Exception {
+                    calendar: uid(4),
+                    index: 0
+                }
+            )
+        );
+        // Semaine datée du dérivé : lundi chômé ; mardi hérité → base.
+        assert_eq!(
+            resolved(&a, 4, "2027-01-04"),
+            (
+                0,
+                DaySource::WorkWeek {
+                    calendar: uid(4),
+                    index: 0
+                }
+            )
+        );
+        assert_eq!(resolved(&a, 4, "2027-01-05"), (480, default(1)));
+        // Semaine par défaut du dérivé contre semaine datée de la base.
+        assert_eq!(resolved(&a, 4, "2027-07-02"), (240, default(4)));
+        assert_eq!(
+            resolved(&a, 4, "2027-07-05"),
+            (
+                420,
+                DaySource::WorkWeek {
+                    calendar: uid(1),
+                    index: 0
+                }
+            )
+        );
+        assert_eq!(
+            resolve_day(&a, uid(9), day("2027-07-05")),
+            Err(CalendarError::UnknownCalendar { calendar: uid(9) })
+        );
+    }
+
+    #[test]
+    fn resolve_day_overlapping_work_weeks() {
+        // Lecture d'un fichier : deux semaines datées qui se chevauchent. La
+        // première par date de début possède les jours communs, y compris ses
+        // jours `Inherit` (renvoyés à la semaine par défaut).
+        let ww = |from: &str, to: &str, rule: DayRule| WorkWeek {
+            name: String::new(),
+            period: DayRange::new(day(from), day(to)).unwrap(),
+            days: Week::from_fn(|d| {
+                if d == Weekday::Monday {
+                    rule.clone()
+                } else {
+                    DayRule::Inherit
+                }
+            }),
+        };
+        let mut json = serde_json::to_value(standard(uid(1), "Standard".to_owned())).unwrap();
+        json["work_weeks"] = serde_json::to_value(vec![
+            ww("2026-11-09", "2026-11-30", DayRule::Working(hours(8, 10))),
+            ww("2026-11-01", "2026-11-15", DayRule::Inherit),
+        ])
+        .unwrap();
+        let a = arena(vec![serde_json::from_value(json).unwrap()]);
+        // Lun 09/11 : semaine n° 1 (début 01/11), lundi hérité → 480.
+        assert_eq!(
+            resolved(&a, 1, "2026-11-09"),
+            (480, DaySource::DefaultWeek { calendar: uid(1) })
+        );
+        // Lun 16/11 : seule la n° 0 couvre → 120.
+        assert_eq!(
+            resolved(&a, 1, "2026-11-16"),
+            (
+                120,
+                DaySource::WorkWeek {
+                    calendar: uid(1),
+                    index: 0
+                }
+            )
         );
     }
 }

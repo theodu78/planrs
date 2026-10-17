@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::arena::HasUid;
+use crate::calendar::recurrence::{expand_exception, runs_overlap};
 use crate::duration::Minutes;
 use crate::error::CalendarModelError;
 use crate::ids::{CalendarUid, Guid};
@@ -577,9 +578,28 @@ impl Calendar {
         Ok(self.work_weeks.remove(index))
     }
 
-    // À compléter avec les calendriers (agent suivant, ADR-0008 § 6.1) :
-    // `add_exception`, dont le refus des chevauchements se juge sur les jours
-    // dépliés des récurrences (`calendar::recurrence`).
+    /// Ajoute une exception et rend son indice.
+    ///
+    /// Le chevauchement se juge sur les jours dépliés des récurrences
+    /// (R-017, R-018), pas sur les périodes brutes : deux exceptions
+    /// hebdomadaires sur la même période, l'une le lundi et l'autre le
+    /// vendredi, coexistent.
+    ///
+    /// # Errors
+    ///
+    /// [`CalendarModelError::InvalidRecurrence`] (récurrence invalide) ;
+    /// [`CalendarModelError::OverlappingException`] si un jour déplié est déjà
+    /// couvert par une exception existante.
+    pub fn add_exception(&mut self, e: CalendarException) -> Result<usize, CalendarModelError> {
+        let runs = expand_exception(&e)?;
+        for (existing, other) in self.exceptions.iter().enumerate() {
+            if other.period.overlaps(e.period) && runs_overlap(&runs, &expand_exception(other)?) {
+                return Err(CalendarModelError::OverlappingException { existing });
+            }
+        }
+        self.exceptions.push(e);
+        Ok(self.exceptions.len().saturating_sub(1))
+    }
 }
 
 #[cfg(test)]
@@ -764,6 +784,40 @@ mod tests {
             c.remove_exception(0),
             Err(CalendarModelError::IndexOutOfRange { index: 0 })
         );
+
+        // Commandes : chevauchement jugé sur les jours dépliés.
+        let weekly = |d: Weekday| CalendarException {
+            name: String::new(),
+            period: DayRange::new(day("2026-11-01"), day("2026-11-30")).unwrap(),
+            setting: DaySetting::NonWorking,
+            recurrence: Recurrence::Weekly {
+                every: 1,
+                days: Week::from_fn(|x| x == d),
+            },
+            occurrences: None,
+        };
+        assert_eq!(c.add_exception(weekly(Weekday::Monday)), Ok(0));
+        assert_eq!(c.add_exception(weekly(Weekday::Friday)), Ok(1));
+        let mut armistice = weekly(Weekday::Monday);
+        armistice.period = DayRange::single(day("2026-11-11"));
+        armistice.recurrence = Recurrence::Period;
+        assert_eq!(c.add_exception(armistice.clone()), Ok(2));
+        // Lundi 16/11 : déjà couvert par l'exception n° 0.
+        armistice.period = DayRange::single(day("2026-11-16"));
+        assert_eq!(
+            c.add_exception(armistice.clone()),
+            Err(CalendarModelError::OverlappingException { existing: 0 })
+        );
+        armistice.recurrence = Recurrence::Daily { every: 0 };
+        assert_eq!(
+            c.add_exception(armistice),
+            Err(CalendarModelError::InvalidRecurrence)
+        );
+        assert_eq!(c.remove_exception(1).unwrap(), weekly(Weekday::Friday));
+        assert_eq!(c.exceptions().len(), 2);
+        while !c.exceptions().is_empty() {
+            c.remove_exception(0).unwrap();
+        }
 
         // Des exceptions qui se chevauchent se lisent (fichier importé).
         let ex = CalendarException {

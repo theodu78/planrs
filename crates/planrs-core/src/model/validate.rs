@@ -9,16 +9,16 @@
 //! 7. références de calendrier (projet, tâches, ressources) ;
 //! 8. calendrier du projet qui n'est pas un calendrier de base ;
 //! 9. pour chaque calendrier : héritage, semaines datées qui se chevauchent,
-//!    récurrences non prises en charge.
+//!    exceptions qui se chevauchent (jugées sur les jours dépliés des
+//!    récurrences), récurrences non prises en charge.
 //!
-//! À compléter avec les calendriers (agent suivant) : exceptions qui se
-//! chevauchent (`CalendarExceptionsOverlap`), jugées sur les jours dépliés
-//! des récurrences ; `CalendarSet::compile` ajoute `CalendarNoWorkingTime`.
+//! `CalendarSet::compile` ajoute ensuite `CalendarNoWorkingTime`.
 
 use std::collections::BTreeSet;
 
 use crate::calendar::model::Calendar;
-use crate::calendar::resolve::chain;
+use crate::calendar::recurrence::{DayClaims, expand_exception};
+use crate::calendar::resolve::{chain, exceptions_in_order, work_weeks_in_order};
 use crate::diagnostic::{Diagnostic, Diagnostics, Subject};
 use crate::error::CalendarError;
 use crate::ids::{CalendarUid, TaskUid};
@@ -171,8 +171,8 @@ impl Project {
         }
     }
 
-    /// Contrôle 9 : un calendrier : héritage, semaines datées qui se chevauchent,
-    /// récurrences non prises en charge.
+    /// Contrôle 9 : un calendrier : héritage, semaines datées et exceptions
+    /// qui se chevauchent, récurrences non prises en charge.
     fn check_calendar(&self, calendar: &Calendar, out: &mut Diagnostics) {
         let uid = calendar.uid();
         if let Err(error) = chain(&self.calendars, uid) {
@@ -193,9 +193,7 @@ impl Project {
 
         // Semaines datées (non récurrentes : les jours sont ceux de la
         // période). La première par (début, indice) l'emporte (R-017, R-019).
-        let mut order: Vec<(usize, &crate::calendar::model::WorkWeek)> =
-            calendar.work_weeks().iter().enumerate().collect();
-        order.sort_by_key(|(i, w)| (w.period.first(), *i));
+        let order = work_weeks_in_order(calendar);
         for (pos, (kept, a)) in order.iter().enumerate() {
             for (ignored, b) in order.iter().skip(pos.saturating_add(1)) {
                 if a.period.overlaps(b.period) {
@@ -205,6 +203,32 @@ impl Project {
                         ignored: *ignored,
                     });
                 }
+            }
+        }
+
+        // Exceptions : chevauchement jugé sur les jours dépliés (R-017,
+        // R-018). Elles sont posées dans l'ordre (début, indice) ; chacune ne
+        // prend que les jours libres. `kept` est l'exception qui s'applique
+        // sur les jours communs.
+        let mut claims: DayClaims<usize> = DayClaims::new();
+        for (ignored, e) in exceptions_in_order(calendar) {
+            // Une récurrence invalide ne peut pas être stockée dans un
+            // calendrier (lecture et commandes la refusent).
+            let runs = expand_exception(e).unwrap_or_default();
+            let mut kept_by: Vec<usize> = Vec::new();
+            for run in runs {
+                for kept in claims.claim(run.first().index(), run.last().index(), ignored) {
+                    if !kept_by.contains(&kept) {
+                        kept_by.push(kept);
+                    }
+                }
+            }
+            for kept in kept_by {
+                out.push(Diagnostic::CalendarExceptionsOverlap {
+                    calendar: uid,
+                    kept,
+                    ignored,
+                });
             }
         }
 
@@ -599,7 +623,10 @@ mod tests {
         assert_eq!(
             diagnostics(&p),
             [
-                // La n° 1 commence la première : elle l'emporte sur la n° 0.
+                // Trois exceptions sur le 11/11 : la n° 0 l'emporte ; les
+                // n° 1 et 2 (récurrences ignorées) ne couvrent aucun jour.
+                // La n° 1 des semaines commence la première : elle l'emporte
+                // sur la n° 0.
                 Diagnostic::CalendarWorkWeeksOverlap {
                     calendar: uid,
                     kept: 1,
@@ -614,6 +641,57 @@ mod tests {
                     exception: 2
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn calendar_exceptions_overlap() {
+        let mut p = project();
+        let day = |s: &str| s.parse::<Day>().unwrap();
+        let ex = |from: &str, to: &str, recurrence| CalendarException {
+            name: String::new(),
+            period: DayRange::new(day(from), day(to)).unwrap(),
+            setting: DaySetting::NonWorking,
+            recurrence,
+            occurrences: None,
+        };
+        let mondays = Recurrence::Weekly {
+            every: 1,
+            days: Week::from_fn(|d| d == crate::time::Weekday::Monday),
+        };
+        let fridays = Recurrence::Weekly {
+            every: 1,
+            days: Week::from_fn(|d| d == crate::time::Weekday::Friday),
+        };
+        let mut c = serde_json::to_value(Calendar::new_derived(
+            CalendarUid::new(4),
+            "Paul".to_owned(),
+            CalendarUid::new(1),
+        ))
+        .unwrap();
+        // n° 0 : 11/11 ; n° 1 : lundis de novembre ; n° 2 : vendredis de
+        // novembre (aucun jour commun avec les lundis) ; n° 3 : du 10 au 16/11 ;
+        // n° 4 : le 11/11 encore. Ordre de pose (début, indice) : 1, 2 (01/11),
+        // 3 (10/11), 0, 4 (11/11). La n° 3 bute sur le lundi 16 (n° 1) et le
+        // vendredi 13 (n° 2) et prend le 11 ; les n° 0 et 4 butent sur elle.
+        c["exceptions"] = serde_json::to_value(vec![
+            ex("2026-11-11", "2026-11-11", Recurrence::Period),
+            ex("2026-11-01", "2026-11-30", mondays),
+            ex("2026-11-01", "2026-11-30", fridays),
+            ex("2026-11-10", "2026-11-16", Recurrence::Period),
+            ex("2026-11-11", "2026-11-11", Recurrence::Period),
+        ])
+        .unwrap();
+        with_calendars(&mut p, vec![c]);
+        let uid = CalendarUid::new(4);
+        let overlap = |kept, ignored| Diagnostic::CalendarExceptionsOverlap {
+            calendar: uid,
+            kept,
+            ignored,
+        };
+        assert_eq!(
+            diagnostics(&p),
+            [overlap(1, 3), overlap(2, 3), overlap(3, 0), overlap(3, 4)]
         );
     }
 }

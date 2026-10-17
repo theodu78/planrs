@@ -20,7 +20,6 @@ use crate::calendar::model::Calendar;
 use crate::calendar::recurrence::{DayClaims, expand_exception};
 use crate::calendar::resolve::{chain, exceptions_in_order, work_weeks_in_order};
 use crate::diagnostic::{Diagnostic, Diagnostics, Subject};
-use crate::error::CalendarError;
 use crate::ids::{CalendarUid, TaskUid};
 use crate::model::Project;
 
@@ -175,20 +174,12 @@ impl Project {
     /// qui se chevauchent, récurrences non prises en charge.
     fn check_calendar(&self, calendar: &Calendar, out: &mut Diagnostics) {
         let uid = calendar.uid();
-        if let Err(error) = chain(&self.calendars, uid) {
-            match error {
-                CalendarError::BaseMissing { calendar, base } => {
-                    out.push(Diagnostic::CalendarBaseMissing { calendar, base });
-                }
-                CalendarError::BaseNotBase { calendar, base } => {
-                    out.push(Diagnostic::CalendarBaseNotBase { calendar, base });
-                }
-                CalendarError::InheritanceCycle { chain } => {
-                    out.push(Diagnostic::CalendarInheritanceCycle { chain });
-                }
-                // `chain` ne rend pas d'autre erreur pour un calendrier présent.
-                _ => {}
-            }
+        // `chain` ne rend, pour un calendrier présent, que des erreurs
+        // d'héritage.
+        if let Err(error) = chain(&self.calendars, uid)
+            && let Some(d) = Diagnostic::from_calendar_error(&error)
+        {
+            out.push(d);
         }
 
         // Semaines datées (non récurrentes : les jours sont ceux de la

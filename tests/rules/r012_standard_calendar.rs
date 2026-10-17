@@ -1,6 +1,5 @@
 //! R-012 — Calendrier Standard : lun-ven 08:00-12:00 et 13:00-17:00, sam et
-//! dim chômés. Cas au niveau du jour et de la semaine ; les cas de conversion
-//! s'ajoutent avec les calendriers compilés.
+//! dim chômés.
 
 use planrs_core::calendar::{CalendarKind, DaySetting, standard};
 use planrs_core::{CalendarUid, Weekday};
@@ -26,4 +25,20 @@ fn r012_standard_week() {
     // Semaine : 5 × 480 = 2 400.
     let total: i64 = Weekday::ALL.iter().map(|d| week.get(*d).total().get()).sum();
     assert_eq!(total, 2_400);
+}
+
+#[test]
+fn r012_standard_conversions() {
+    use planrs_tests::{compile_one, mins, moment, standard};
+    let c = compile_one(standard());
+    // Lun 19/10 08:00 → ven 23/10 17:00 : 5 × 480 = 2 400.
+    assert_eq!(
+        c.working_between(moment("2026-10-19T08:00"), moment("2026-10-23T17:00")),
+        Ok(mins(2_400))
+    );
+    // Samedi 24/10 entier : 0.
+    assert_eq!(
+        c.working_between(moment("2026-10-24T00:00"), moment("2026-10-25T00:00")),
+        Ok(mins(0))
+    );
 }

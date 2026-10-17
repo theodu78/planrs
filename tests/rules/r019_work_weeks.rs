@@ -1,7 +1,6 @@
 //! R-019 — Semaines de travail datées : sur leur période (jours inclus),
 //! elles remplacent la semaine par défaut du même calendrier pour les jours
 //! qu'elles définissent ; `Inherit` renvoie à la semaine par défaut.
-//! Cas au niveau du jour.
 
 use planrs_core::calendar::{Calendar, DayRule, WorkWeek};
 use planrs_core::{Week, Weekday};
@@ -61,4 +60,29 @@ fn r019_inherit_falls_back_to_default_week() {
     .map(|d| day_minutes(&a, 1, d))
     .sum();
     assert_eq!(week, 2_160);
+}
+
+#[test]
+fn r019_work_week_conversions() {
+    use planrs_tests::{compile_one, mins, moment};
+    // Été 2026, lun-ven [08:00,15:00) : lun 06/07 08:00 + 480 → lundi 420,
+    // mar 07/07 08:00-09:00 (60) → mar 07/07 09:00.
+    let c = with_work_week("2026-07-01", "2026-08-31", |d| match d {
+        Weekday::Saturday | Weekday::Sunday => DayRule::Inherit,
+        _ => DayRule::Working(hours(&[("08:00", "15:00")])),
+    });
+    assert_eq!(
+        compile_one(c).add_working(moment("2026-07-06T08:00"), mins(480)),
+        Ok(moment("2026-07-07T09:00"))
+    );
+    // Été 2027, vendredi [08:00,12:00) seul : dim 04/07 → dim 11/07/2027 =
+    // 4 × 480 + 240 = 2 160.
+    let c = with_work_week("2027-07-01", "2027-08-31", |d| match d {
+        Weekday::Friday => DayRule::Working(hours(&[("08:00", "12:00")])),
+        _ => DayRule::Inherit,
+    });
+    assert_eq!(
+        compile_one(c).working_between(moment("2027-07-04T00:00"), moment("2027-07-11T00:00")),
+        Ok(mins(2_160))
+    );
 }

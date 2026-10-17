@@ -1,6 +1,4 @@
-//! R-013 — Calendrier 24 heures : tous les jours 00:00-24:00. Cas au niveau du
-//! jour et de la semaine ; les cas de conversion s'ajoutent avec les
-//! calendriers compilés.
+//! R-013 — Calendrier 24 heures : tous les jours 00:00-24:00.
 
 use planrs_core::calendar::{CalendarKind, twenty_four_hours};
 use planrs_core::{CalendarUid, Weekday};
@@ -17,4 +15,25 @@ fn r013_24_hours_week() {
     }
     let total: i64 = Weekday::ALL.iter().map(|d| week.get(*d).total().get()).sum();
     assert_eq!(total, 10_080);
+}
+
+#[test]
+fn r013_24_hours_conversions() {
+    use planrs_core::{ConversionFactors, Decimal, DurationUnit, TimeBasis};
+    use planrs_tests::{compile_one, mins, moment};
+    let c = compile_one(twenty_four_hours(CalendarUid::new(2), "24 heures".to_owned()));
+    // Sam 24/10 10:00 → dim 25/10 10:00 : 24 h ouvrées = 1 440.
+    assert_eq!(
+        c.working_between(moment("2026-10-24T10:00"), moment("2026-10-25T10:00")),
+        Ok(mins(1_440))
+    );
+    // 1 j = 480 minutes (R-026), même sur un calendrier de 24 h : sam 10:00
+    // + 480 → sam 18:00.
+    let one_day = ConversionFactors::default()
+        .to_minutes(Decimal::integer(1), DurationUnit::Day, TimeBasis::Working)
+        .unwrap();
+    assert_eq!(
+        c.add_working(moment("2026-10-24T10:00"), one_day),
+        Ok(moment("2026-10-24T18:00"))
+    );
 }

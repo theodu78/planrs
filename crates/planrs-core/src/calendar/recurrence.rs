@@ -261,6 +261,20 @@ impl<T: Copy + PartialEq> DayClaims<T> {
         }
         conflicts
     }
+
+    /// Propriétaire du jour `day`, s'il est pris.
+    pub(crate) fn owner(&self, day: i32) -> Option<T> {
+        self.runs
+            .range(..=day)
+            .next_back()
+            .filter(|(_, (l, _))| *l >= day)
+            .map(|(_, (_, o))| *o)
+    }
+
+    /// Séries posées, triées : `(first, last, owner)`.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (i32, i32, T)> + '_ {
+        self.runs.iter().map(|(f, (l, o))| (*f, *l, *o))
+    }
 }
 
 #[cfg(test)]
@@ -548,7 +562,7 @@ mod tests {
         assert_eq!(c.claim(30, 30, 3), [] as [u8; 0]);
         assert_eq!(c.claim(0, 40, 4), [2, 1, 3]);
         assert_eq!(
-            c.runs.iter().map(|(f, (l, o))| (*f, *l, *o)).collect::<Vec<_>>(),
+            c.iter().collect::<Vec<_>>(),
             [
                 (0, 4, 4),
                 (5, 9, 2),
@@ -559,6 +573,8 @@ mod tests {
                 (31, 40, 4)
             ]
         );
+        assert_eq!(c.owner(9), Some(2));
+        assert_eq!(c.owner(41), None);
         assert_eq!(c.claim(12, 12, 5), [1]);
     }
 }

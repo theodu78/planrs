@@ -187,7 +187,7 @@ fn exception_for(c: &Calendar, day: Day) -> Result<Option<(usize, &CalendarExcep
 }
 
 /// Règle → réglage, `None` pour `Inherit`.
-fn defined(rule: &DayRule) -> Option<DaySetting> {
+pub(crate) fn defined(rule: &DayRule) -> Option<DaySetting> {
     match rule {
         DayRule::Inherit => None,
         DayRule::NonWorking => Some(DaySetting::NonWorking),

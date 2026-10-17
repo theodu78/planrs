@@ -79,3 +79,16 @@ fn r015_inheritance_errors() {
         }
     );
 }
+
+#[test]
+fn r015_derived_conversion() {
+    use planrs_tests::{compiled, mins, moment};
+    let a = calendars(vec![standard(), paul()]);
+    let c = compiled(&a, 4);
+    // Ven 23/10 08:00 + 480 sur Paul : ven 08-12 (240), lun 26 08-12 (240)
+    // → lun 26/10 12:00.
+    assert_eq!(
+        c.add_working(moment("2026-10-23T08:00"), mins(480)),
+        Ok(moment("2026-10-26T12:00"))
+    );
+}

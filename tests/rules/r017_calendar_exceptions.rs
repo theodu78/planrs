@@ -2,7 +2,7 @@
 //! l'exception remplace la journée entière (chômée ou avec ses propres
 //! plages) ; chevauchement dans un même calendrier refusé par une commande, et
 //! à l'import la première (par date de début, puis ordre de stockage)
-//! l'emporte avec un avertissement. Cas au niveau du jour.
+//! l'emporte avec un avertissement.
 
 use planrs_core::calendar::{Calendar, DaySetting};
 use planrs_core::{
@@ -96,5 +96,77 @@ fn r017_overlap_on_import_first_wins_with_warning() {
             kept: 0,
             ignored: 1
         }]
+    );
+}
+
+#[test]
+fn r017_working_saturday_conversions() {
+    use planrs_tests::{compile_one, mins};
+    // Samedi 24/10/2026 ouvré [08:00,12:00).
+    let mut c = standard();
+    c.add_exception(exception(
+        "2026-10-24",
+        "2026-10-24",
+        working(&[("08:00", "12:00")]),
+    ))
+    .unwrap();
+    let c = compile_one(c);
+    // Ven 23/10 17:00 → lun 26/10 08:00 : le samedi matin, 240.
+    assert_eq!(
+        c.working_between(moment("2026-10-23T17:00"), moment("2026-10-26T08:00")),
+        Ok(mins(240))
+    );
+    // Ven 13:00 + 480 : ven 13-17 (240), sam 08-12 (240) → sam 24/10 12:00.
+    assert_eq!(
+        c.add_working(moment("2026-10-23T13:00"), mins(480)),
+        Ok(moment("2026-10-24T12:00"))
+    );
+}
+
+#[test]
+fn r017_christmas_eve_conversions() {
+    use planrs_tests::{compile_one, mins};
+    // Jeu 24/12 ouvré [08:00,12:00) : 08:00 + 480 → jeu 08-12 (240), ven
+    // 25/12 08-12 (240) → ven 25/12 12:00.
+    let mut c = standard();
+    c.add_exception(exception(
+        "2026-12-24",
+        "2026-12-24",
+        working(&[("08:00", "12:00")]),
+    ))
+    .unwrap();
+    assert_eq!(
+        compile_one(c.clone()).add_working(moment("2026-12-24T08:00"), mins(480)),
+        Ok(moment("2026-12-25T12:00"))
+    );
+    // Si le 25/12 est aussi chômé : jeu 240, lun 28/12 08-12 (240) → lun
+    // 28/12 12:00.
+    c.add_exception(exception("2026-12-25", "2026-12-25", DaySetting::NonWorking))
+        .unwrap();
+    assert_eq!(
+        compile_one(c).add_working(moment("2026-12-24T08:00"), mins(480)),
+        Ok(moment("2026-12-28T12:00"))
+    );
+}
+
+#[test]
+fn r017_year_end_closure_conversions() {
+    use planrs_tests::{compile_one, mins};
+    // Fermeture du 24/12/2026 au 31/12/2026 : mer 23/12 16:00 + 480 → mer
+    // 16-17 (60), fermeture puis ven 01/01/2027 08-12 (240) + 13-16 (180) →
+    // ven 01/01/2027 16:00.
+    let mut c = standard();
+    c.add_exception(exception("2026-12-24", "2026-12-31", DaySetting::NonWorking))
+        .unwrap();
+    assert_eq!(
+        compile_one(c.clone()).add_working(moment("2026-12-23T16:00"), mins(480)),
+        Ok(moment("2027-01-01T16:00"))
+    );
+    // Si le 01/01/2027 est aussi chômé : week-end, puis lun 04/01 → 16:00.
+    c.add_exception(exception("2027-01-01", "2027-01-01", DaySetting::NonWorking))
+        .unwrap();
+    assert_eq!(
+        compile_one(c).add_working(moment("2026-12-23T16:00"), mins(480)),
+        Ok(moment("2027-01-04T16:00"))
     );
 }

@@ -83,3 +83,16 @@ fn r016_derived_default_week_beats_base_work_week() {
     // La base elle-même : 420 le vendredi.
     assert_eq!(day_minutes(&a, 1, "2027-07-02"), 420);
 }
+
+#[test]
+fn r016_derived_conversion_skips_base_holiday() {
+    use planrs_tests::{compiled, mins, moment};
+    let a = calendars(vec![base_with_christmas(), paul()]);
+    let c = compiled(&a, 4);
+    // Jeu 24/12 08:00 + 720 sur Paul : jeudi 480, ven 25/12 férié (exception
+    // de la base), lun 28/12 08-12 (240) → lun 28/12 12:00.
+    assert_eq!(
+        c.add_working(moment("2026-12-24T08:00"), mins(720)),
+        Ok(moment("2026-12-28T12:00"))
+    );
+}

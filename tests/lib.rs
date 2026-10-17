@@ -165,3 +165,36 @@ pub fn day_minutes(
         Err(e) => panic!("résolution du {d} impossible : {e}"),
     }
 }
+
+/// Calendrier `uid` compilé.
+///
+/// # Panics
+///
+/// Si la compilation échoue.
+#[must_use]
+pub fn compiled(
+    calendars: &planrs_core::Arena<planrs_core::CalendarUid, planrs_core::calendar::Calendar>,
+    uid: u32,
+) -> planrs_core::calendar::CompiledCalendar {
+    match planrs_core::calendar::CompiledCalendar::compile(calendars, planrs_core::CalendarUid::new(uid)) {
+        Ok(c) => c,
+        Err(e) => panic!("compilation du calendrier {uid} impossible : {e}"),
+    }
+}
+
+/// Calendrier compilé depuis un seul calendrier.
+///
+/// # Panics
+///
+/// Si la compilation échoue.
+#[must_use]
+pub fn compile_one(c: planrs_core::calendar::Calendar) -> planrs_core::calendar::CompiledCalendar {
+    let uid = c.uid().get();
+    compiled(&calendars(vec![c]), uid)
+}
+
+/// Minutes signées.
+#[must_use]
+pub const fn mins(v: i64) -> planrs_core::Minutes {
+    planrs_core::Minutes::new(v)
+}

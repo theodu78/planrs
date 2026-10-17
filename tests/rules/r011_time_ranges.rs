@@ -1,6 +1,6 @@
 //! R-011 — Plages horaires d'un jour : [début, fin) à la minute, 1 à 5 par
-//! jour ouvré, triées, sans chevauchement ; contiguës admises. Cas au niveau
-//! du jour ; les cas de conversion s'ajoutent avec les calendriers compilés.
+//! jour ouvré, triées, sans chevauchement ; contiguës admises (fusionnées à
+//! la compilation).
 
 use planrs_core::calendar::{DayHours, TimeRange};
 use planrs_core::{CalendarModelError, Minutes, TimeOfDay};
@@ -52,4 +52,29 @@ fn r011_full_day_until_midnight() {
     // [00:00,24:00) = 24 × 60 = 1 440 min.
     let full = TimeRange::new(TimeOfDay::MIDNIGHT, TimeOfDay::END_OF_DAY).unwrap();
     assert_eq!(DayHours::new(vec![full]).unwrap().total(), Minutes::new(1_440));
+}
+
+#[test]
+fn r011_contiguous_ranges_merge() {
+    use planrs_core::calendar::{Calendar, DaySetting};
+    use planrs_core::{CalendarUid, Week, Weekday};
+    use planrs_tests::{compile_one, day, moment, working};
+    // Lun-ven [08:00,12:00) + [12:00,17:00) : 540 par jour, une seule plage
+    // après fusion ; 12:00 est ouvré, l'instant ouvré suivant est lui-même.
+    let c = compile_one(Calendar::new_base(
+        CalendarUid::new(7),
+        "Contigu".to_owned(),
+        Week::from_fn(|d| match d {
+            Weekday::Saturday | Weekday::Sunday => DaySetting::NonWorking,
+            _ => working(&[("08:00", "12:00"), ("12:00", "17:00")]),
+        }),
+    ));
+    let noon = moment("2026-10-19T12:00");
+    assert_eq!(c.next_working_moment(noon), Ok(noon));
+    assert_eq!(
+        c.working_between(moment("2026-10-19T00:00"), moment("2026-10-20T00:00")),
+        Ok(Minutes::new(540))
+    );
+    let merged = TimeRange::new(TimeOfDay::hm(8, 0).unwrap(), TimeOfDay::hm(17, 0).unwrap()).unwrap();
+    assert_eq!(c.day_ranges(day("2026-10-19")).unwrap(), [merged]);
 }

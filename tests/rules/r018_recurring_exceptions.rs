@@ -1,6 +1,6 @@
 //! R-018 — Exceptions récurrentes : dépliées en jours explicites, restreintes
 //! à la période et limitées à `occurrences` (ordre chronologique) ; jamais
-//! lues comme une période continue. Cas au niveau du jour.
+//! lues comme une période continue.
 
 use planrs_core::calendar::{
     Calendar, CalendarException, DaySetting, MonthItem, MonthPosition, Recurrence, expand_exception,
@@ -195,5 +195,24 @@ fn r018_unsupported_recurrence_ignored_with_warning() {
             calendar: CalendarUid::new(1),
             exception: 0
         }]
+    );
+}
+
+#[test]
+fn r018_daily_every_two_days_conversion() {
+    use planrs_tests::{compile_one, mins};
+    let mut c = standard();
+    c.add_exception(recurring(
+        "2026-11-02",
+        "2026-11-06",
+        Recurrence::Daily { every: 2 },
+        None,
+    ))
+    .unwrap();
+    // Lun 02/11 00:00 → sam 07/11 00:00 : seuls mar 3 et jeu 5 sont ouvrés,
+    // 2 × 480 = 960.
+    assert_eq!(
+        compile_one(c).working_between(moment("2026-11-02T00:00"), moment("2026-11-07T00:00")),
+        Ok(mins(960))
     );
 }

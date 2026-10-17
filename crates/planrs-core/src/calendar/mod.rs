@@ -7,12 +7,14 @@
 //! - [`recurrence`] : dépliage des récurrences (R-018) ;
 //! - [`resolve`] : chaîne d'héritage ([`resolve::chain`], R-015) et
 //!   résolution d'un jour ([`resolve::resolve_day`], R-016, R-017, R-019),
-//!   chemin froid.
+//!   chemin froid ;
+//! - [`compiled`] : forme compilée (fonction cumulée W), conversions ouvrées
+//!   (R-020 à R-029) et [`CalendarSet`].
 //!
-//! À venir : `compiled` (forme compilée et conversions ouvrées,
-//! `CalendarSet`), `scale` (`TimeScale`, placement).
+//! À venir : `scale` (`TimeScale`, placement).
 
 pub mod builtin;
+pub mod compiled;
 pub mod model;
 pub mod recurrence;
 pub mod resolve;
@@ -39,6 +41,7 @@ impl std::fmt::Display for Direction {
 }
 
 pub use builtin::{BuiltinCalendarNames, night_shift, standard, twenty_four_hours};
+pub use compiled::{CalendarSet, CompiledCalendar};
 pub use model::{
     Calendar, CalendarException, CalendarKind, DayHours, DayRule, DaySetting, MonthItem, MonthPosition,
     Recurrence, TimeRange, WorkWeek,

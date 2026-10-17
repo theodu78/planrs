@@ -18,6 +18,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::duration::Minutes;
+use crate::error::CalendarError;
 use crate::ids::{AssignmentUid, CalendarUid, ResourceUid, TaskUid};
 use crate::time::Moment;
 
@@ -220,6 +221,36 @@ pub enum Diagnostic {
 }
 
 impl Diagnostic {
+    /// Diagnostic d'un calendrier qui ne se compile pas (héritage) ou n'a
+    /// aucun temps ouvré. `None` pour les autres erreurs : un calendrier
+    /// inconnu n'a de sens qu'avec l'élément qui le référence
+    /// ([`Diagnostic::CalendarUnknown`]), et les erreurs de conversion sont
+    /// rapportées par l'appelant avec leur contexte.
+    #[must_use]
+    pub fn from_calendar_error(e: &CalendarError) -> Option<Self> {
+        match e {
+            CalendarError::BaseMissing { calendar, base } => Some(Self::CalendarBaseMissing {
+                calendar: *calendar,
+                base: *base,
+            }),
+            CalendarError::BaseNotBase { calendar, base } => Some(Self::CalendarBaseNotBase {
+                calendar: *calendar,
+                base: *base,
+            }),
+            CalendarError::InheritanceCycle { chain } => {
+                Some(Self::CalendarInheritanceCycle { chain: chain.clone() })
+            }
+            CalendarError::NoWorkingTime { calendar } => {
+                Some(Self::CalendarNoWorkingTime { calendar: *calendar })
+            }
+            CalendarError::UnknownCalendar { .. }
+            | CalendarError::OutOfDomain { .. }
+            | CalendarError::NegativeSpan
+            | CalendarError::Inconsistent { .. }
+            | CalendarError::Model(_) => None,
+        }
+    }
+
     /// Gravité, déduite de la variante.
     #[must_use]
     pub const fn severity(&self) -> Severity {

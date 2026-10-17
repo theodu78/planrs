@@ -22,7 +22,7 @@ edition = "2024"
 # eframe/egui 0.37 exigent Rust 1.95.
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
-# Provisoire : le dépôt GitHub n'existe pas encore (voir docs/rename.md).
+# Nom provisoire (voir docs/rename.md).
 repository = "https://github.com/theodu78/planrs"
 
 [workspace.dependencies]

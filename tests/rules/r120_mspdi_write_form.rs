@@ -100,10 +100,11 @@ fn r120_durations_and_lags() {
 
 #[test]
 fn r120_indentation_and_newlines() {
-    use planrs_mspdi::write::{Indent, Newline, WriteOptions, write};
+    use planrs_mspdi::write::{Computed, Indent, Newline, WriteOptions, write};
     let proj = new_project("2026-10-19T08:00");
     let crlf = write(
         &proj,
+        Computed::Omit,
         &WriteOptions {
             newline: Newline::Crlf,
             indent: Indent::Spaces(2),
@@ -114,6 +115,7 @@ fn r120_indentation_and_newlines() {
     assert!(xml.contains("\r\n  <SaveVersion>14</SaveVersion>\r\n"));
     let none = write(
         &proj,
+        Computed::Omit,
         &WriteOptions {
             indent: Indent::None,
             ..WriteOptions::default()

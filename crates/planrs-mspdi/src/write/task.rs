@@ -1,8 +1,11 @@
 //! Tâches (R-120, R-127, R-129, R-132) : champs modélisés, liens, mode
 //! manuel ; ID, numéro hiérarchique et drapeau `Summary` déduits.
 
-use planrs_core::{Constraint, Duration, Lag, LagValue, Link, Project, SchedulingMode, Subject, Task};
+use planrs_core::{
+    Constraint, Duration, Lag, LagValue, Link, Project, SchedulingMode, Subject, Task, TaskUid,
+};
 
+use super::computed::{TaskValues, Values};
 use super::emit::Emitter;
 use super::{OrderProfile, WriteCode, entity, max_len, percent};
 use crate::codes;
@@ -20,10 +23,13 @@ struct Row<'p> {
     level: u16,
     /// `OutlineNumber`.
     outline_number: String,
+    /// Valeurs calculées à écrire (R-122).
+    values: Option<&'p TaskValues>,
 }
 
 /// Écrit la récapitulative du projet puis les tâches, dans l'ordre des ID.
-pub(crate) fn write_all(em: &mut Emitter, p: &Project, profile: OrderProfile) {
+pub(crate) fn write_all(em: &mut Emitter, p: &Project, values: Option<&Values>, profile: OrderProfile) {
+    let of = |uid: TaskUid| values.and_then(|v| v.tasks.get(&uid));
     if let Some(summary) = &p.summary_task {
         let row = Row {
             task: summary,
@@ -31,6 +37,7 @@ pub(crate) fn write_all(em: &mut Emitter, p: &Project, profile: OrderProfile) {
             summary: true,
             level: 0,
             outline_number: "0".to_owned(),
+            values: of(TaskUid::PROJECT_SUMMARY),
         };
         write(em, &row, profile);
     }
@@ -49,6 +56,7 @@ pub(crate) fn write_all(em: &mut Emitter, p: &Project, profile: OrderProfile) {
             summary,
             level: task.outline_level.get(),
             outline_number: number,
+            values: of(task.uid()),
         };
         write(em, &row, profile);
     }
@@ -132,6 +140,7 @@ fn field(
     profile: OrderProfile,
 ) {
     let t = row.task;
+    let computed = row.values;
     let date = |d: Option<planrs_core::Moment>| d.map(format_datetime);
     match name {
         "UID" => em.leaf(name, &t.uid().get().to_string()),
@@ -156,8 +165,27 @@ fn field(
         "Duration" => {
             if !row.summary || manual.is_some() {
                 em.leaf(name, &format_iso_duration(t.duration.minutes().get()));
+            } else {
+                em.opt_leaf(name, computed.and_then(|v| v.duration).map(format_iso_duration));
             }
         }
+        // R-122 : valeurs calculées.
+        "Start" => em.opt_leaf(name, date(computed.and_then(|v| v.start))),
+        "Finish" => em.opt_leaf(name, date(computed.and_then(|v| v.finish))),
+        "EarlyStart" => em.opt_leaf(name, date(computed.and_then(|v| v.early_start))),
+        "EarlyFinish" => em.opt_leaf(name, date(computed.and_then(|v| v.early_finish))),
+        "LateStart" => em.opt_leaf(name, date(computed.and_then(|v| v.late_start))),
+        "LateFinish" => em.opt_leaf(name, date(computed.and_then(|v| v.late_finish))),
+        "TotalSlack" => em.opt_leaf(name, computed.and_then(|v| v.total_slack).map(|n| n.to_string())),
+        "FreeSlack" => em.opt_leaf(name, computed.and_then(|v| v.free_slack).map(|n| n.to_string())),
+        "StartSlack" => em.opt_leaf(name, computed.and_then(|v| v.start_slack).map(|n| n.to_string())),
+        "FinishSlack" => em.opt_leaf(name, computed.and_then(|v| v.finish_slack).map(|n| n.to_string())),
+        "Critical" => em.opt_leaf(
+            name,
+            computed
+                .and_then(|v| v.critical)
+                .map(|b| format_bool(b).to_owned()),
+        ),
         // R-129 : toujours écrits pour une tâche manuelle, vides si absents.
         "ManualStart" | "ManualFinish" | "ManualDuration" => {
             if let Some((start, finish, duration)) = manual {

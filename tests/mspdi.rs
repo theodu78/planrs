@@ -1,7 +1,7 @@
 //! Aides des tests MSPDI (écriture, relecture, ordre des éléments).
 
 use planrs_core::{BuiltinCalendarNames, Project, ProjectInit, ScheduleAnchor};
-use planrs_mspdi::write::{WriteOptions, Written, write};
+use planrs_mspdi::write::{Computed, WriteOptions, Written, write};
 use planrs_mspdi::{MspdiDocument, ReadOptions, read};
 use quick_xml::Reader;
 use quick_xml::events::Event;
@@ -22,7 +22,7 @@ pub fn new_project(start: &str) -> Project {
 /// Écrit avec les options par défaut.
 #[must_use]
 pub fn written(p: &Project) -> Written {
-    write(p, &WriteOptions::default())
+    write(p, Computed::Omit, &WriteOptions::default())
 }
 
 /// Texte écrit (UTF-8).

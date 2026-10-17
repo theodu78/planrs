@@ -13,6 +13,7 @@
 //! Aucune E/S : la sortie est en octets (UTF-8 sans BOM).
 
 mod calendar;
+mod computed;
 mod emit;
 mod project;
 mod task;
@@ -21,6 +22,7 @@ use planrs_core::{Percent, Project, Subject, round_div};
 
 pub use crate::schema::Profile as OrderProfile;
 use crate::schema::{Parent, sequence};
+pub use computed::{Computed, ScheduleGap, choose_computed, schedule_gaps};
 use emit::Emitter;
 
 /// Fin de ligne.
@@ -107,6 +109,15 @@ pub enum WriteCode {
     },
     /// Caractère interdit par XML 1.0 remplacé par U+FFFD.
     InvalidChar,
+    /// Le `Schedule` ne correspond pas aux tâches du projet (autre projet,
+    /// projet modifié) : aucune valeur calculée écrite.
+    ScheduleMismatch,
+    /// Planning de planrs incomplet pour ce projet et aucune valeur relue :
+    /// valeurs calculées omises (R-122).
+    ScheduleIncomplete {
+        /// Manques.
+        gaps: Vec<ScheduleGap>,
+    },
 }
 
 impl WriteCode {
@@ -117,17 +128,29 @@ impl WriteCode {
             Self::Rounded => "mspdi.write.rounded",
             Self::Truncated { .. } => "mspdi.write.truncated",
             Self::InvalidChar => "mspdi.write.invalid_char",
+            Self::ScheduleMismatch => "mspdi.write.schedule_mismatch",
+            Self::ScheduleIncomplete { .. } => "mspdi.write.schedule_incomplete",
         }
     }
 }
 
-/// Écrit un projet en MSPDI. Infaillible : toute anomalie devient un
-/// diagnostic.
+/// Écrit un projet en MSPDI, avec les valeurs calculées de `computed`
+/// (R-122 ; [`choose_computed`] choisit la source). Infaillible : toute
+/// anomalie devient un diagnostic.
 #[must_use]
-pub fn write(project: &Project, options: &WriteOptions) -> Written {
+pub fn write(project: &Project, computed: Computed<'_>, options: &WriteOptions) -> Written {
     let mut em = Emitter::new(options.newline, options.indent);
+    let values = match computed {
+        Computed::Schedule(s) if computed::matches(project, s) => Some(computed::from_schedule(project, s)),
+        Computed::Schedule(_) => {
+            em.report(WriteCode::ScheduleMismatch, "Tasks", None);
+            None
+        }
+        Computed::Recorded(r) => Some(computed::from_recorded(r)),
+        Computed::Omit => None,
+    };
     em.root(&[]);
-    project::write(&mut em, project, options);
+    project::write(&mut em, project, values.as_ref(), options);
     em.end_root();
     let (xml, diagnostics) = em.finish();
     Written { xml, diagnostics }

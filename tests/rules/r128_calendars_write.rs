@@ -4,7 +4,7 @@ use planrs_core::calendar::{
     Calendar, CalendarException, DayHours, DaySetting, Recurrence, TimeRange, WorkWeek,
 };
 use planrs_core::{CalendarSet, CalendarUid, DayRange, Month, TimeOfDay, Week, Weekday};
-use planrs_mspdi::write::{OrderProfile, WriteOptions, write};
+use planrs_mspdi::write::{Computed, OrderProfile, WriteOptions, write};
 use planrs_tests::mspdi::{compact, new_project, reread, text, written};
 use planrs_tests::{day, time};
 
@@ -134,6 +134,7 @@ fn r128_strict_work_week_form() {
         .unwrap();
     let out = write(
         &proj,
+        Computed::Omit,
         &WriteOptions {
             profile: OrderProfile::Strict,
             ..WriteOptions::default()

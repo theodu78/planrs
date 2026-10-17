@@ -3,6 +3,7 @@
 
 use planrs_core::{Project, ScheduleAnchor};
 
+use super::computed::Values;
 use super::emit::Emitter;
 use super::{WriteOptions, calendar, max_len, task};
 use crate::codes;
@@ -11,7 +12,7 @@ use crate::scalar::{format_bool, format_datetime, format_time};
 use crate::schema::Parent;
 
 /// Écrit les enfants de `Project`.
-pub(crate) fn write(em: &mut Emitter, p: &Project, options: &WriteOptions) {
+pub(crate) fn write(em: &mut Emitter, p: &Project, values: Option<&Values>, options: &WriteOptions) {
     // Les enfants de `Project` s'écrivent sous la racine déjà ouverte : le
     // pilote d'entité n'ouvre pas d'élément ici.
     let profile = options.profile;
@@ -37,16 +38,22 @@ pub(crate) fn write(em: &mut Emitter, p: &Project, options: &WriteOptions) {
             ),
             // R-132 : l'ancre est une entrée ; l'autre borne est calculée
             // (R-122).
-            "StartDate" => {
-                if let ScheduleAnchor::FromStart(s) = p.anchor {
-                    em.leaf(name, &format_datetime(s));
+            "StartDate" => em.opt_leaf(
+                name,
+                match p.anchor {
+                    ScheduleAnchor::FromStart(s) => Some(s),
+                    ScheduleAnchor::FromFinish(_) => values.and_then(|v| v.project_start),
                 }
-            }
-            "FinishDate" => {
-                if let ScheduleAnchor::FromFinish(f) = p.anchor {
-                    em.leaf(name, &format_datetime(f));
+                .map(format_datetime),
+            ),
+            "FinishDate" => em.opt_leaf(
+                name,
+                match p.anchor {
+                    ScheduleAnchor::FromFinish(f) => Some(f),
+                    ScheduleAnchor::FromStart(_) => values.and_then(|v| v.project_finish),
                 }
-            }
+                .map(format_datetime),
+            ),
             "CriticalSlackLimit" => em.leaf(name, &o.critical_slack_limit_days.to_string()),
             // R-130 : obligatoire ; celui relu (P), sinon celui des options.
             "CurrencyCode" => {
@@ -91,7 +98,7 @@ pub(crate) fn write(em: &mut Emitter, p: &Project, options: &WriteOptions) {
             }
             "Tasks" => {
                 em.open(name);
-                task::write_all(em, p, profile);
+                task::write_all(em, p, values, profile);
                 em.close();
             }
             _ => {}

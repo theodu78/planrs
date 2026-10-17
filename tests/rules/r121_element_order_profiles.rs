@@ -2,7 +2,7 @@
 
 use planrs_core::{Guid, Task, TaskUid};
 use planrs_mspdi::ReadOptions;
-use planrs_mspdi::write::{OrderProfile, WriteOptions, write};
+use planrs_mspdi::write::{Computed, OrderProfile, WriteOptions, write};
 use planrs_tests::mspdi::{entity_children, new_project, order_agrees, text};
 use planrs_tests::{moment, tests_path};
 
@@ -21,7 +21,7 @@ fn r121_observed_and_strict_task_order() {
     let mut t = Task::new(TaskUid::new(1), "A".to_owned(), &opts);
     t.guid = Some("6C0BB28C-F383-EF11-BD95-6245B5077038".parse::<Guid>().unwrap());
     proj.tasks.push(t).unwrap();
-    let observed = text(&write(&proj, &WriteOptions::default()));
+    let observed = text(&write(&proj, Computed::Omit, &WriteOptions::default()));
     let names = task_children(&observed);
     assert_eq!(
         names[..8],
@@ -30,6 +30,7 @@ fn r121_observed_and_strict_task_order() {
     let strict = String::from_utf8(
         write(
             &proj,
+            Computed::Omit,
             &WriteOptions {
                 profile: OrderProfile::Strict,
                 ..WriteOptions::default()
@@ -44,7 +45,7 @@ fn r121_observed_and_strict_task_order() {
     assert!(!names.iter().any(|n| n == "GUID"));
     // Projet : `GUID` après `Name` dans le profil observé seulement.
     proj.info.guid = Some("6C0BB28C-F383-EF11-BD95-6245B5077038".parse::<Guid>().unwrap());
-    let observed = text(&write(&proj, &WriteOptions::default()));
+    let observed = text(&write(&proj, Computed::Omit, &WriteOptions::default()));
     let root = &entity_children(&observed)[0].1;
     let i = root.iter().position(|n| n == "Name").unwrap();
     assert_eq!(root[i + 1], "GUID");
@@ -67,7 +68,11 @@ fn r121_corpus_order_agrees_with_the_source() {
         let source = std::fs::read_to_string(&path).unwrap();
         let doc =
             planrs_mspdi::read(source.as_bytes(), &ReadOptions::new(moment("2026-01-01T00:00"))).unwrap();
-        let out = text(&write(&doc.project, &WriteOptions::default()));
+        let out = text(&write(
+            &doc.project,
+            Computed::Recorded(&doc.recorded),
+            &WriteOptions::default(),
+        ));
         let before = entity_children(source.trim_start_matches('\u{feff}'));
         let after = entity_children(&out);
         let of = |list: &[(String, Vec<String>)], wanted: &str| -> Vec<Vec<String>> {

@@ -153,6 +153,192 @@ impl DurationError {
     }
 }
 
+/// Erreur du modèle stocké d'un calendrier (`calendar/model.rs`).
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error, Serialize)]
+#[serde(tag = "code")]
+pub enum CalendarModelError {
+    /// Plage horaire vide ou inversée (`from >= to`).
+    #[serde(rename = "calendar_model.empty_range")]
+    #[error("plage horaire vide : le début doit précéder la fin")]
+    EmptyRange,
+    /// Jour ouvré sans aucune plage.
+    #[serde(rename = "calendar_model.no_ranges")]
+    #[error("un jour ouvré doit avoir au moins une plage horaire")]
+    NoRanges,
+    /// Plus de 5 plages dans un jour.
+    #[serde(rename = "calendar_model.too_many_ranges")]
+    #[error("{count} plages horaires dans un jour : au plus 5")]
+    TooManyRanges {
+        /// Nombre de plages refusé.
+        count: usize,
+    },
+    /// Plages qui se chevauchent dans un jour.
+    #[serde(rename = "calendar_model.overlapping_ranges")]
+    #[error("plages horaires qui se chevauchent")]
+    OverlappingRanges,
+    /// Jour « hérité » sur un calendrier de base, qui n'a pas de parent.
+    #[serde(rename = "calendar_model.inherit_on_base")]
+    #[error("un calendrier de base n'hérite d'aucun calendrier : jour « hérité » impossible")]
+    InheritOnBase,
+    /// Récurrence invalide (pas nul, jour du mois hors de 1 à 31).
+    #[serde(rename = "calendar_model.invalid_recurrence")]
+    #[error("récurrence invalide : intervalle d'au moins 1, jour du mois de 1 à 31")]
+    InvalidRecurrence,
+    /// Exception qui chevauche une exception existante du même calendrier.
+    #[serde(rename = "calendar_model.overlapping_exception")]
+    #[error("l'exception chevauche l'exception n° {existing} du calendrier")]
+    OverlappingException {
+        /// Indice de l'exception existante.
+        existing: usize,
+    },
+    /// Semaine datée qui chevauche une semaine datée existante.
+    #[serde(rename = "calendar_model.overlapping_work_week")]
+    #[error("la semaine de travail chevauche la semaine n° {existing} du calendrier")]
+    OverlappingWorkWeek {
+        /// Indice de la semaine existante.
+        existing: usize,
+    },
+    /// Indice d'exception ou de semaine inexistant.
+    #[serde(rename = "calendar_model.index_out_of_range")]
+    #[error("aucun élément n° {index}")]
+    IndexOutOfRange {
+        /// Indice refusé.
+        index: usize,
+    },
+}
+
+impl CalendarModelError {
+    /// Code stable de l'erreur.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::EmptyRange => "calendar_model.empty_range",
+            Self::NoRanges => "calendar_model.no_ranges",
+            Self::TooManyRanges { .. } => "calendar_model.too_many_ranges",
+            Self::OverlappingRanges => "calendar_model.overlapping_ranges",
+            Self::InheritOnBase => "calendar_model.inherit_on_base",
+            Self::InvalidRecurrence => "calendar_model.invalid_recurrence",
+            Self::OverlappingException { .. } => "calendar_model.overlapping_exception",
+            Self::OverlappingWorkWeek { .. } => "calendar_model.overlapping_work_week",
+            Self::IndexOutOfRange { .. } => "calendar_model.index_out_of_range",
+        }
+    }
+}
+
+/// Type d'entité identifiée par un UID (messages d'erreur).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntityKind {
+    /// Tâche.
+    Task,
+    /// Ressource.
+    Resource,
+    /// Affectation.
+    Assignment,
+    /// Calendrier.
+    Calendar,
+}
+
+impl std::fmt::Display for EntityKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Task => "tâche",
+            Self::Resource => "ressource",
+            Self::Assignment => "affectation",
+            Self::Calendar => "calendrier",
+        })
+    }
+}
+
+/// Erreur du modèle (identifiants, collections, format).
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error, Serialize)]
+#[serde(tag = "code")]
+pub enum ModelError {
+    /// Deux entités du même type portent le même UID.
+    #[serde(rename = "model.duplicate_uid")]
+    #[error("UID {uid} en double ({entity})")]
+    DuplicateUid {
+        /// Type d'entité.
+        entity: EntityKind,
+        /// UID en double.
+        uid: u32,
+    },
+    /// UID réservé (UID 0 de tâche, réservé à la tâche récapitulative du projet).
+    #[serde(rename = "model.reserved_uid")]
+    #[error("l'UID de tâche {uid} est réservé à la tâche récapitulative du projet")]
+    ReservedUid {
+        /// UID refusé.
+        uid: u32,
+    },
+    /// Position d'insertion au-delà de la fin.
+    #[serde(rename = "model.position_out_of_range")]
+    #[error("position {position} hors de la liste")]
+    PositionOutOfRange {
+        /// Position refusée.
+        position: usize,
+    },
+    /// Version du format JSON inconnue.
+    #[serde(rename = "model.unsupported_format_version")]
+    #[error("version de format {version} non prise en charge (attendue : 1)")]
+    UnsupportedFormatVersion {
+        /// Version lue.
+        version: u32,
+    },
+    /// GUID mal écrit.
+    #[serde(rename = "model.invalid_guid")]
+    #[error("GUID invalide : « {input} » (attendu : 8-4-4-4-12 chiffres hexadécimaux)")]
+    InvalidGuid {
+        /// Texte refusé.
+        input: String,
+    },
+    /// Numéro de ligne de base au-delà de 10.
+    #[serde(rename = "model.invalid_baseline_number")]
+    #[error("ligne de base n° {number} : les numéros vont de 0 à 10")]
+    InvalidBaselineNumber {
+        /// Numéro refusé.
+        number: u8,
+    },
+    /// Niveau hiérarchique nul.
+    #[serde(rename = "model.invalid_outline_level")]
+    #[error("niveau hiérarchique {level} : il commence à 1")]
+    InvalidOutlineLevel {
+        /// Niveau refusé.
+        level: u16,
+    },
+    /// Priorité au-delà de 1 000.
+    #[serde(rename = "model.invalid_priority")]
+    #[error("priorité {priority} : elle va de 0 à 1 000")]
+    InvalidPriority {
+        /// Priorité refusée.
+        priority: u16,
+    },
+    /// Tâche récapitulative du projet dont l'UID n'est pas 0.
+    #[serde(rename = "model.summary_task_uid")]
+    #[error("la tâche récapitulative du projet doit avoir l'UID 0 (lu : {uid})")]
+    SummaryTaskUid {
+        /// UID lu.
+        uid: u32,
+    },
+}
+
+impl ModelError {
+    /// Code stable de l'erreur.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::DuplicateUid { .. } => "model.duplicate_uid",
+            Self::ReservedUid { .. } => "model.reserved_uid",
+            Self::PositionOutOfRange { .. } => "model.position_out_of_range",
+            Self::UnsupportedFormatVersion { .. } => "model.unsupported_format_version",
+            Self::InvalidGuid { .. } => "model.invalid_guid",
+            Self::InvalidBaselineNumber { .. } => "model.invalid_baseline_number",
+            Self::InvalidOutlineLevel { .. } => "model.invalid_outline_level",
+            Self::InvalidPriority { .. } => "model.invalid_priority",
+            Self::SummaryTaskUid { .. } => "model.summary_task_uid",
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     #![allow(
@@ -162,7 +348,7 @@ pub(crate) mod tests {
         reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
     )]
 
-    use super::{DurationError, FixedError, TimeError};
+    use super::{CalendarModelError, DurationError, EntityKind, FixedError, ModelError, TimeError};
     use crate::time::Day;
 
     /// Vérifie que l'étiquette serde `code` vaut `code()`.
@@ -225,5 +411,49 @@ pub(crate) mod tests {
             assert!(e.code().starts_with("duration."));
             assert_ne!(e.to_string(), "");
         }
+    }
+
+    #[test]
+    fn calendar_model_error_codes_match_serde_tags() {
+        for e in [
+            CalendarModelError::EmptyRange,
+            CalendarModelError::NoRanges,
+            CalendarModelError::TooManyRanges { count: 6 },
+            CalendarModelError::OverlappingRanges,
+            CalendarModelError::InheritOnBase,
+            CalendarModelError::InvalidRecurrence,
+            CalendarModelError::OverlappingException { existing: 0 },
+            CalendarModelError::OverlappingWorkWeek { existing: 0 },
+            CalendarModelError::IndexOutOfRange { index: 3 },
+        ] {
+            assert_tag(&e, e.code());
+            assert!(e.code().starts_with("calendar_model."));
+            assert_ne!(e.to_string(), "");
+        }
+    }
+
+    #[test]
+    fn model_error_codes_match_serde_tags() {
+        for e in [
+            ModelError::DuplicateUid {
+                entity: EntityKind::Task,
+                uid: 1,
+            },
+            ModelError::ReservedUid { uid: 0 },
+            ModelError::PositionOutOfRange { position: 9 },
+            ModelError::UnsupportedFormatVersion { version: 2 },
+            ModelError::InvalidGuid {
+                input: "x".to_owned(),
+            },
+            ModelError::InvalidBaselineNumber { number: 11 },
+            ModelError::InvalidOutlineLevel { level: 0 },
+            ModelError::InvalidPriority { priority: 1001 },
+            ModelError::SummaryTaskUid { uid: 3 },
+        ] {
+            assert_tag(&e, e.code());
+            assert!(e.code().starts_with("model."));
+            assert_ne!(e.to_string(), "");
+        }
+        assert_eq!(EntityKind::Calendar.to_string(), "calendrier");
     }
 }

@@ -25,6 +25,10 @@ mod r007_elapsed_unit_factors;
 mod r008_duration_sign;
 mod r009_stored_minutes_options;
 mod r010_percent_lag_conversion;
+mod r011_time_ranges;
+mod r012_standard_calendar;
+mod r013_24_hours_calendar;
+mod r014_night_shift_calendar;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

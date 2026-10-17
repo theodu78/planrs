@@ -20,6 +20,11 @@
 //! - [`time`] : instants à la minute, jours, heures, semaines (R-003 à R-005) ;
 //! - [`duration`] : minutes, durées, travail, décalages, facteurs de
 //!   conversion des unités (R-006 à R-010) ;
+//! - [`ids`] : UID, ID, GUID, numéros de ligne de base ;
+//! - [`arena`] : collections ordonnées indexées par UID ;
+//! - [`calendar`] : modèle stocké des calendriers et calendriers fournis
+//!   (conversions ouvrées à venir) ;
+//! - [`model`] : modèle V1 ;
 //! - [`error`] : erreurs typées, codes stables.
 
 #![deny(
@@ -29,18 +34,25 @@
     clippy::dbg_macro
 )]
 
+pub mod arena;
+pub mod calendar;
 pub mod duration;
 pub mod error;
 pub mod fixed;
+pub mod ids;
+pub mod model;
 pub mod parity;
 pub mod quantity;
 pub mod time;
 
+pub use arena::{Arena, HasUid};
 pub use duration::{
     ConversionFactors, Duration, DurationUnit, Lag, LagValue, Minutes, TimeBasis, Work, percent_of,
 };
-pub use error::{DurationError, FixedError, TimeError};
+pub use error::{CalendarModelError, DurationError, EntityKind, FixedError, ModelError, TimeError};
 pub use fixed::{Decimal, round_div};
+pub use ids::{AssignmentUid, BaselineNumber, CalendarUid, EntityUid, Guid, ResourceUid, TaskId, TaskUid};
+pub use model::{ExtraEntry, Extras};
 pub use quantity::{Money, Percent, Rate, RateUnit, SignedPercent, Units};
 pub use time::{Day, DayRange, Moment, Month, TimeOfDay, Week, Weekday};
 

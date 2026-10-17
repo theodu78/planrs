@@ -79,3 +79,29 @@ Sources citées (pages Microsoft uniquement ; « Q » = Microsoft Q&A, communaut
 - **Source** : learn.microsoft.com, « DurationFormat Element » (S3 : formats % et e%) ; support.microsoft.com, « Predecessors (task field) » (S15 : « -50% ») ; hypothèse.
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r010_percent_lag_conversion.rs` (`r010_*`).
+
+### Calendriers : modèle et calendriers fournis
+
+## R-011 — Plages horaires d'un jour
+- **Formulation** : plages [début, fin) à la minute, avec 0 ≤ début < fin ≤ 24:00 ; 1 à 5 plages par jour ouvré, triées, sans chevauchement ; deux plages contiguës équivalent à une seule (fusionnées à la compilation). Exemples : [08:00,12:00) + [13:00,17:00) = 480 ; [08:00,12:00) + [12:00,17:00) = 540, et `next_working_moment(12:00)` = 12:00 ; [12:00,08:00) → `EmptyRange` ; [08:00,12:00) + [11:00,13:00) → `OverlappingRanges` ; 6 plages → `TooManyRanges` ; [00:00,24:00) = 1 440.
+- **Source** : learn.microsoft.com, schéma MSPDI, « XML Schema for the Calendars Element » (S1 : au plus cinq plages `WorkingTime`) ; 24:00 et contiguïté : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r011_time_ranges.rs` (`r011_*`), cas au niveau du jour ; le cas `next_working_moment` s'ajoute avec les calendriers compilés.
+
+## R-012 — Calendrier Standard
+- **Formulation** : lundi à vendredi 08:00-12:00 et 13:00-17:00, samedi et dimanche chômés. Exemples : total de la semaine 2 400 ; `working_between(lun 19/10 08:00, ven 23/10 17:00)` = 2 400 ; samedi → 0.
+- **Source** : support.microsoft.com, « Project Information dialog box » (S6) et « Create a new base calendar » (S7).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r012_standard_calendar.rs` (`r012_*`), cas au niveau du jour et de la semaine ; les cas de conversion s'ajoutent avec les calendriers compilés.
+
+## R-013 — Calendrier 24 heures
+- **Formulation** : tous les jours 00:00-24:00. Exemples : total de la semaine 10 080 ; `working_between(sam 24/10 10:00, dim 25/10 10:00)` = 1 440 ; `add_working(sam 24/10 10:00, 480)` = sam 18:00 (1 j vaut 480 et non 1 440, R-026).
+- **Source** : support.microsoft.com, « Project Information dialog box » (S6 : « All time … 12:00 A.M. to 12:00 A.M. »).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r013_24_hours_calendar.rs` (`r013_*`), cas au niveau du jour et de la semaine ; les cas de conversion s'ajoutent avec les calendriers compilés.
+
+## R-014 — Calendrier Équipe de nuit
+- **Formulation** : dimanche chômé ; lundi [23:00,24:00) ; mardi à vendredi [00:00,03:00), [04:00,08:00), [23:00,24:00) ; samedi [00:00,03:00), [04:00,08:00). La plage de 23:00 appartient au jour qui commence. Exemples : total de la semaine 60 + 4 × 480 + 420 = 2 400 ; `add_working(lun 19/10 23:00, 480)` = mar 20/10 08:00 ; `add_working(sam 24/10 08:00, 60)` = mar 27/10 00:00.
+- **Source** : support.microsoft.com, « Project Information dialog box » (S6 : « Monday night through Saturday morning, 11:00 P.M. to 8:00 A.M. … break between 3:00 A.M. and 4:00 A.M. »), « Create a new base calendar » (S7) ; découpage par jour : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r014_night_shift_calendar.rs` (`r014_*`), cas au niveau du jour et de la semaine ; les cas de conversion s'ajoutent avec les calendriers compilés.

@@ -2947,9 +2947,12 @@ dependencies = [
 name = "planrs-mspdi"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "planrs-core",
+ "proptest",
  "quick-xml 0.42.0",
  "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2965,6 +2968,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "planrs-core",
+ "planrs-mspdi",
  "serde",
  "serde_json",
  "toml",

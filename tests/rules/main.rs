@@ -49,6 +49,10 @@ mod r031_milestone_placement;
 mod r032_new_project_defaults;
 mod r033_date_without_time;
 mod r034_effective_status_date;
+mod r070_iso_duration;
+mod r072_link_lag_tenths;
+mod r073_percent_lag_encoding;
+mod r075_datetime_without_timezone;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

@@ -258,3 +258,31 @@ Le placement vit dans `TimeScale::forward_span` et `TimeScale::backward_span` (`
 - **Source** : support.microsoft.com, « Project Information dialog box » (S6 : « If you set the status date to NA, Project uses the current date »).
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r034_effective_status_date.rs` (`r034_*`).
+
+### Import MSPDI (R-070 à R-089)
+
+Bloc réservé à la lecture et à l'écriture MSPDI (`planrs-mspdi`) ; R-087 à R-089 sont réservées (J3). Sources : schéma `mspdi_pj15.xsd` (Project 2013 SDK, https://www.microsoft.com/en-us/download/details.aspx?id=30435, révision 2012-07-18, sha256 `1c208a9732d6ba16f677a9f2fb9d5a629f0c200346b1851998a44765c502eb85`, jamais commité) et pages learn.microsoft.com « XML Schema for the Project / Tasks / Calendars Element » (S1 à S4). Chaque valeur illisible devient un diagnostic d'import (`mspdi.*`) et reçoit la valeur par défaut : la lecture n'échoue jamais pour un champ.
+
+## R-070 — Durée ISO 8601 → minutes
+- **Formulation** : `[-]PnDTnHnMnS` ; un jour vaut 24 h ; décimales admises dans la dernière composante seulement ; secondes arrondies à la minute par R-001 (diagnostic `mspdi.rounded`) ; années et mois non nuls refusés (longueur variable), semaines refusées (hors `xsd:duration`) ; une durée négative se lit signée, et la tâche la refuse (durée 0, diagnostic). Exemples : `PT80H0M0S` → 4 800 ; `PT8H30M0S` → 510 ; `PT0H0M30S` → 1 ; `PT1.5H` → 90 ; `P2D` → 2 880 ; `P1M` → refus ; `-PT8H` → −480 (durée de tâche 0 et diagnostic).
+- **Source** : learn.microsoft.com, « XML Schema for the Tasks Element » (`Duration` de type `xsd:duration`, S4) ; ADR-0005 ; arrondi : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r070_iso_duration.rs` (`r070_*`) ; tests unitaires de `crates/planrs-mspdi/src/scalar.rs`.
+
+## R-072 — `LinkLag` en dixièmes de minute
+- **Formulation** : minutes = `round_div(LinkLag, 10)` (R-001), diagnostic `mspdi.rounded` s'il y a un reste ; base et unité par `LagFormat` (absent : jour ouvré). Exemples : 4 800 + `LagFormat` 7 → 480 ouvré ; −4 800 → −480 ; 28 800 + 8 → 2 880 écoulé ; 25 → 3 et diagnostic.
+- **Source** : learn.microsoft.com, « LinkLag Element » (« in tenths of a minute », S4), « LagFormat Element ».
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r072_link_lag_tenths.rs` (`r072_*`).
+
+## R-073 — Décalage en pourcentage
+- **Formulation** : pour `LagFormat` 19, 20, 51, 52, `LinkLag` vaut le pourcentage × 10, donc `SignedPercent` = `LinkLag` × 10. Diagnostic `mspdi.unsupported` (`percent_lag_encoding`, avertissement) à chaque occurrence, retiré quand un fichier réel l'aura confirmé. Exemples : 500 + 19 → 5 000 (50 %) ; −250 + 19 → −2 500.
+- **Source** : hypothèse pure (aucun fichier du corpus n'a de décalage en pourcentage).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r073_percent_lag_encoding.rs` (`r073_*`).
+
+## R-075 — Dates sans fuseau
+- **Formulation** : `AAAA-MM-JJThh:mm[:ss[.fff]]` en heure locale du projet ; un suffixe `Z` ou `±hh:mm` est ignoré (diagnostic `mspdi.inconsistent`) ; secondes tronquées (R-004, diagnostic `mspdi.rounded` si non nulles) ; `24:00:00` = lendemain 00:00 ; hors du domaine 1984-2149 → aucune date et diagnostic. Exemples : `2009-11-09T08:00:00` → lun 09/11/2009 08:00 ; `2026-08-07T18:18:20` → 18:18, `mspdi.rounded` ; `1983-12-31T08:00:00` → aucune date, diagnostic.
+- **Source** : learn.microsoft.com, schéma MSPDI (`xsd:dateTime`) ; R-003, R-004.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r075_datetime_without_timezone.rs` (`r075_*`).

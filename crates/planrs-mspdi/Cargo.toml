@@ -8,9 +8,14 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+chrono.workspace = true
 planrs-core.workspace = true
 quick-xml.workspace = true
 serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
 
 [lints]
 workspace = true

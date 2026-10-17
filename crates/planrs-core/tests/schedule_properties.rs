@@ -1,8 +1,9 @@
-//! Propriétés du moteur CPM (spécification J2 § 5.2, propriétés P13 à P17).
+//! Propriétés du moteur CPM (spécification J2 § 5.2, propriétés P13 à P17 ;
+//! spécification J3 § 9.1, P13 amendée, P20 à P22).
 //!
 //! Nombre de cas : la variable `PROPTEST_CASES`, lue par proptest (256 par
-//! défaut en local, 10 000 en CI) ; P13 et P14 la suivent, P15 et P16 sont
-//! plafonnées à 1 024 cas, P17 à 2 000 (spécification). Régressions :
+//! défaut en local, 10 000 en CI) ; P13 et P14 la suivent, P15, P16 et P20 à
+//! P22 sont plafonnées à 1 024 cas, P17 à 2 000 (spécification). Régressions :
 //! `schedule_properties.proptest-regressions`, versionné.
 //!
 //! Générateur (graine tirée par proptest, xorshift) : 1 à 40 tâches ; liens
@@ -13,23 +14,54 @@
 //! calendriers Standard, 24 heures, Équipe de nuit ou aléatoire, pour le
 //! projet et 20 % des tâches ; plan hiérarchique valide une fois sur deux,
 //! sans lien entre une récapitulative et sa descendante ; 5 % de tâches
-//! inactives ; ni contrainte ni tâche manuelle ; début du projet en 2026.
+//! inactives ; début du projet en 2026. Forme `CONSTRAINED` (J3) : en plus,
+//! 20 % de contraintes datées (dates de −3 à +40 jours autour du début, à la
+//! minute), 5 % d'ALAP, 5 % d'échéances, sur toutes les tâches
+//! (récapitulatives comprises), option « respecter les contraintes »
+//! inactive 30 % du temps.
 //!
-//! - **P13** (composite) : (a) liens respectés ; (b) `TF ≥ FS ≥ 0` ;
-//!   (c) `ES ≤ EF`, `LS ≤ LF`, récapitulatives = enveloppe de leurs enfants ;
-//!   (d) déterminisme (clone, JSON) et permutation des liens (tout identique
-//!   sauf `driver`) ; (e) point fixe ; (f) `order` topologique ; (g) dates
-//!   au plus tard réalisables : feuilles placées à leurs dates au plus tard,
-//!   aucun lien violé, fin du projet inchangée ; (h) retards sans effet :
-//!   une feuille retardée de sa marge totale ne décale pas la fin du projet,
-//!   de sa marge libre aucune autre feuille (échantillon de deux feuilles par
-//!   sorte de marge).
-//! - **P14** : chaîne de marge nulle (ADR-0005 amendée par l'ADR-0009).
+//! - **P13** (composite, amendée en J3, réseaux `CONSTRAINED`) : (a') liens
+//!   respectés par les dates planifiées, sauf ceux qu'un
+//!   `constraint.override` nomme (lien, ou porte de la récapitulative) ;
+//!   (b') `FS ≥ 0` toujours, `TF ≥ FS` quand `TF ≥ 0`, et hors de la
+//!   fermeture amont des plafonds (SNLT, FNLT, MSO, MFO, échéances) `TF ≥ 0`
+//!   comme en J2 ; (c) `ES ≤ EF`, `LS ≤ LF`, dates planifiées = au plus tôt,
+//!   une épingle a `early == late`, récapitulatives = enveloppe de leurs
+//!   enfants ; (d) déterminisme (clone, JSON) et permutation des liens (tout
+//!   identique sauf `driver`) ; (e) point fixe sur les feuilles non
+//!   contraintes ; (f) `order` topologique ; (g) dates au plus tard
+//!   réalisables : feuilles placées à leurs dates au plus tard, aucun lien
+//!   violé sauf ceux qui partent d'une épingle (ou d'une récapitulative qui
+//!   en contient une), fin du projet jamais retardée (inchangée sans
+//!   plafond) ; (h) retards sans effet : une feuille non contrainte retardée
+//!   de sa marge totale ne décale pas la fin du projet, de sa marge libre
+//!   aucune autre feuille (échantillon de deux feuilles par sorte de marge).
+//!   (e) et (h) ne s'appliquent pas après une épingle ALAP qui déplace une
+//!   tâche : la repasse fige `K(S)` et R-051 sur la passe principale
+//!   (R-092).
+//! - **P14** : chaîne de marge nulle (ADR-0005 amendée par l'ADR-0009), sans
+//!   contrainte.
 //! - **P15** : oracle indépendant en temps ouvré (plus long chemin entier),
 //!   sur un réseau sans jalon (un jalon lit sa borne en brut, R-031, R-047).
-//! - **P16** : monotonie de la fin du projet (liens FS et SS).
-//! - **P17** : chaos, aucune panique, cycles signalés, (a) et (b) hors des
-//!   tâches dégradées et des composantes qui contiennent une manuelle.
+//! - **P16** : monotonie de la fin du projet (liens FS et SS), avec des
+//!   contraintes de début (MSO, SNET, SNLT), des ALAP, des échéances et
+//!   l'option tirées. Les contraintes de fin (MFO, FNET, FNLT) en sont
+//!   exclues : allonger la tâche recule son début, et un successeur SS avec
+//!   lui, si bien que la fin du projet peut avancer.
+//! - **P17** : chaos (contraintes partout, récapitulatives et manuelles
+//!   comprises, dates aux bornes du domaine), aucune panique, cycles
+//!   signalés, (a') et (b') hors des tâches dégradées et des composantes qui
+//!   contiennent une manuelle.
+//! - **P20** : contrainte tenue ou signalée : plancher tenu en temps ouvré ;
+//!   plafond tenu, ou `constraint.not_honored` (et marge négative s'il est
+//!   dépassé en temps ouvré) ; serrage tenu ; épingle exacte ;
+//!   `task.deadline_missed` ⇔ fin planifiée après l'échéance.
+//! - **P21** : oracle de P15 étendu (planchers, serrages, épingles,
+//!   plafonds, fenêtres, échéances, ALAP) en minutes ouvrées, sans jalon, un
+//!   seul calendrier.
+//! - **P22** : ALAP : feuilles ALAP de marge ≥ 0 planifiées sur leurs dates
+//!   au plus tard ; aucun lien violé ; fin du projet égale à celle du même
+//!   réseau tout en ASAP.
 
 #![allow(
     clippy::unwrap_used,
@@ -54,9 +86,10 @@ use planrs_core::calendar::{
     BuiltinCalendarNames, Calendar, CalendarSet, CompiledCalendar, DayHours, DaySetting, TimeRange, TimeScale,
 };
 use planrs_core::{
-    CalendarUid, Diagnostic, Driver, Duration, DurationUnit, Lag, LagValue, Link, LinkType, Minutes, Moment,
-    OutlineLevel, Project, ProjectInit, Schedule, ScheduleAnchor, SchedulingMode, SignedPercent, Task,
-    TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis, TimeOfDay, Week, percent_of, schedule,
+    CalendarUid, Constraint, ConstraintKind, Diagnostic, Driver, Duration, DurationUnit, Lag, LagValue, Link,
+    LinkType, Minutes, Moment, OutlineLevel, OverriddenBound, Project, ProjectInit, Schedule, ScheduleAnchor,
+    SchedulingMode, SignedPercent, Task, TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis, TimeOfDay,
+    Week, percent_of, schedule,
 };
 use proptest::prelude::*;
 
@@ -112,6 +145,25 @@ struct Shape {
     /// Jalons (10 % des tâches) : exclus pour P15, dont l'oracle raisonne
     /// en temps ouvré, alors qu'un jalon lit sa borne en brut (R-031, R-047).
     milestones: bool,
+    /// Contraintes, échéances et option « respecter les contraintes » tirées
+    /// (J3, générateur `CONSTRAINED`).
+    constraints: Draw,
+}
+
+/// Contraintes tirées par le générateur (spécification J3 § 9.1) : 20 % de
+/// contraintes datées, 5 % d'ALAP, 5 % d'échéances, option « respecter les
+/// contraintes » inactive 30 % du temps ; dates de −3 à +40 jours autour du
+/// début du projet, à la minute.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Draw {
+    /// Aucune contrainte (J2).
+    None,
+    /// Les six types datés, ALAP et échéances.
+    All,
+    /// Contraintes de début seulement (MSO, SNET, SNLT), ALAP et
+    /// échéances : P16 (une contrainte de fin recule le début quand la
+    /// durée s'allonge, et un successeur SS avec lui).
+    StartSide,
 }
 
 const ALL_KINDS: &[LinkType] = &[
@@ -134,6 +186,14 @@ const GENERAL: Shape = Shape {
     percent_from_summary: true,
     cpm_options: true,
     milestones: true,
+    constraints: Draw::None,
+};
+
+/// P13 (amendée), P20, P22 : comme [`GENERAL`], avec des contraintes, des
+/// échéances et l'option tirées.
+const CONSTRAINED: Shape = Shape {
+    constraints: Draw::All,
+    ..GENERAL
 };
 
 /// P14 : réseau plat, un seul calendrier ouvré, décalages ouvrés.
@@ -147,6 +207,7 @@ const FLAT: Shape = Shape {
     percent_from_summary: true,
     cpm_options: false,
     milestones: true,
+    constraints: Draw::None,
 };
 
 /// P15 : comme [`FLAT`], sans jalon.
@@ -155,7 +216,14 @@ const FLAT_NO_MILESTONE: Shape = Shape {
     ..FLAT
 };
 
-/// P16 : liens FS et SS, pourcentages positifs.
+/// P21 : comme [`FLAT_NO_MILESTONE`], avec des contraintes et des échéances.
+const FLAT_CONSTRAINED_NO_MILESTONE: Shape = Shape {
+    constraints: Draw::All,
+    ..FLAT_NO_MILESTONE
+};
+
+/// P16 : liens FS et SS, pourcentages positifs ; contraintes de début,
+/// ALAP, échéances et option tirées.
 const MONOTONE: Shape = Shape {
     hierarchy: true,
     kinds: &[LinkType::FinishToStart, LinkType::StartToStart],
@@ -166,6 +234,7 @@ const MONOTONE: Shape = Shape {
     percent_from_summary: false,
     cpm_options: false,
     milestones: true,
+    constraints: Draw::StartSide,
 };
 
 /// Calendrier de base aléatoire (UID 4) : chaque jour chômé une fois sur
@@ -339,7 +408,50 @@ fn generate(seed: u64, shape: Shape) -> Project {
         }
         p.tasks.get_mut(uids[s]).unwrap().predecessors = links;
     }
+    if shape.constraints != Draw::None {
+        add_constraints(&mut p, &mut r, shape.constraints, start, (-3 * 1_440, 40 * 1_440));
+    }
     p
+}
+
+/// Tire contraintes, échéances et option (générateur `CONSTRAINED`) sur
+/// toutes les tâches, récapitulatives et manuelles comprises ; dates à
+/// `start + [lo, hi]` minutes, bornées au domaine.
+fn add_constraints(p: &mut Project, r: &mut Rng, draw: Draw, start: Moment, (lo, hi): (i64, i64)) {
+    p.options.honor_constraints = !r.chance(30);
+    let uids: Vec<TaskUid> = p.tasks.iter().map(Task::uid).collect();
+    let date = |r: &mut Rng| {
+        let m = (start.minutes() + r.range(lo, hi)).clamp(Moment::MIN.minutes(), Moment::MAX.minutes());
+        Moment::from_minutes(m).unwrap()
+    };
+    for uid in uids {
+        let t = p.tasks.get_mut(uid).unwrap();
+        if r.chance(20) {
+            let d = date(r);
+            let kinds: &[fn(Moment) -> Constraint] = match draw {
+                Draw::StartSide => &[
+                    |date| Constraint::MustStartOn { date },
+                    |date| Constraint::StartNoEarlierThan { date },
+                    |date| Constraint::StartNoLaterThan { date },
+                ],
+                Draw::All | Draw::None => &[
+                    |date| Constraint::MustStartOn { date },
+                    |date| Constraint::MustFinishOn { date },
+                    |date| Constraint::StartNoEarlierThan { date },
+                    |date| Constraint::StartNoLaterThan { date },
+                    |date| Constraint::FinishNoEarlierThan { date },
+                    |date| Constraint::FinishNoLaterThan { date },
+                ],
+            };
+            let k = usize::try_from(r.range(0, i64::try_from(kinds.len()).unwrap() - 1)).unwrap();
+            t.constraint = kinds[k](d);
+        } else if r.chance(6) {
+            t.constraint = Constraint::AsLateAsPossible;
+        }
+        if r.chance(5) {
+            t.deadline = Some(date(r));
+        }
+    }
 }
 
 /// Réseau chaotique : tout ce qui peut mal tourner.
@@ -418,6 +530,23 @@ fn chaos(seed: u64) -> Project {
             }
         }
     }
+    // Contraintes partout (récapitulatives, manuelles comprises) et dates
+    // aux bornes du domaine (J3).
+    add_constraints(&mut p, &mut r, Draw::All, start, (-30_000, 30_000));
+    for uid in p.tasks.iter().map(Task::uid).collect::<Vec<_>>() {
+        let t = p.tasks.get_mut(uid).unwrap();
+        if r.chance(5) {
+            let date = if r.chance(50) { Moment::MIN } else { Moment::MAX };
+            t.constraint = if r.chance(50) {
+                Constraint::MustFinishOn { date }
+            } else {
+                Constraint::StartNoEarlierThan { date }
+            };
+        }
+        if r.chance(3) {
+            t.deadline = Some(if r.chance(50) { Moment::MIN } else { Moment::MAX });
+        }
+    }
     p
 }
 
@@ -476,11 +605,121 @@ fn check_shape(p: &Project, s: &Schedule) {
     assert_eq!(*s, schedule(&p.clone()));
 }
 
-/// (a), (b), (c) et (f) sur les tâches planifiées non dégradées hors de
-/// `skip`.
+/// Règle d'une contrainte de feuille automatique active depuis le début
+/// (table de la spécification J3 § 3.5, recopiée).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rule {
+    None,
+    Opposite,
+    Floor,
+    Cap,
+    Window,
+    Clamped,
+    Pin,
+}
+
+fn rule(kind: ConstraintKind, honor: bool) -> Rule {
+    match kind {
+        ConstraintKind::AsSoonAsPossible => Rule::None,
+        ConstraintKind::AsLateAsPossible => Rule::Opposite,
+        ConstraintKind::StartNoEarlierThan | ConstraintKind::FinishNoEarlierThan => Rule::Floor,
+        ConstraintKind::StartNoLaterThan | ConstraintKind::FinishNoLaterThan if honor => Rule::Clamped,
+        ConstraintKind::StartNoLaterThan | ConstraintKind::FinishNoLaterThan => Rule::Cap,
+        ConstraintKind::MustStartOn | ConstraintKind::MustFinishOn if honor => Rule::Pin,
+        ConstraintKind::MustStartOn | ConstraintKind::MustFinishOn => Rule::Window,
+    }
+}
+
+/// Positions des tâches épinglées par MSO ou MFO (option active) : feuille
+/// automatique active.
+fn pinned_tasks(p: &Project) -> BTreeSet<TaskUid> {
+    let par = parents(p);
+    p.tasks
+        .iter()
+        .enumerate()
+        .filter(|(i, t)| {
+            !is_summary(&par, *i)
+                && !t.is_null
+                && t.active
+                && t.mode == SchedulingMode::Auto
+                && rule(t.constraint.kind(), p.options.honor_constraints) == Rule::Pin
+        })
+        .map(|(_, t)| t.uid())
+        .collect()
+}
+
+/// Fermeture amont des plafonds (P13 b') : tâches dont les dates au plus
+/// tard peuvent dépendre d'un plafond (SNLT, FNLT, MSO, MFO, échéance), par
+/// les liens (prédécesseur → successeur) et la hiérarchie (dans les deux
+/// sens). Hors de cette fermeture, la marge totale est ≥ 0 comme en J2.
+fn cap_closure(p: &Project) -> BTreeSet<TaskUid> {
+    let n = p.tasks.len();
+    let par = parents(p);
+    // Arêtes inversées : de la tâche plafonnée vers celles qui en dépendent.
+    let mut rev: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (si, t) in p.tasks.iter().enumerate() {
+        for l in &t.predecessors {
+            if let Some(pi) = p.tasks.position(l.predecessor) {
+                rev[si].push(pi);
+            }
+        }
+        if let Some(pp) = par[si] {
+            rev[si].push(pp);
+            rev[pp].push(si);
+        }
+    }
+    let capped = |t: &Task| {
+        t.deadline.is_some()
+            || matches!(
+                t.constraint.kind(),
+                ConstraintKind::StartNoLaterThan
+                    | ConstraintKind::FinishNoLaterThan
+                    | ConstraintKind::MustStartOn
+                    | ConstraintKind::MustFinishOn
+            )
+    };
+    let mut seen = vec![false; n];
+    let mut stack: Vec<usize> = (0..n).filter(|&i| capped(p.tasks.at(i).unwrap())).collect();
+    for &i in &stack {
+        seen[i] = true;
+    }
+    while let Some(x) = stack.pop() {
+        for &y in &rev[x] {
+            if !seen[y] {
+                seen[y] = true;
+                stack.push(y);
+            }
+        }
+    }
+    (0..n)
+        .filter(|&i| seen[i])
+        .map(|i| p.tasks.at(i).unwrap().uid())
+        .collect()
+}
+
+/// (a'), (b'), (c) et (f) sur les tâches planifiées non dégradées hors de
+/// `skip`. (a') : un lien violé par les dates planifiées doit être nommé par
+/// un `constraint.override` (lien ou porte de la récapitulative).
 fn check_network(p: &Project, s: &Schedule, skip: &BTreeSet<TaskUid>, check_order: bool) {
     let cals = Cals::new(p);
     let par = parents(p);
+    let closure = cap_closure(p);
+    let pins = pinned_tasks(p);
+    let mut overridden: BTreeSet<(TaskUid, TaskUid)> = BTreeSet::new();
+    let mut gate_overridden: BTreeSet<TaskUid> = BTreeSet::new();
+    for d in &s.diagnostics {
+        if let Diagnostic::ConstraintOverride { task, bound, .. } = d {
+            match bound {
+                OverriddenBound::Predecessor { predecessor, .. } => {
+                    overridden.insert((*predecessor, *task));
+                }
+                OverriddenBound::SummaryGate { .. } => {
+                    gate_overridden.insert(*task);
+                }
+                _ => {}
+            }
+        }
+    }
     let cut: BTreeSet<(TaskUid, TaskUid)> = s
         .diagnostics
         .iter()
@@ -500,8 +739,30 @@ fn check_network(p: &Project, s: &Schedule, skip: &BTreeSet<TaskUid>, check_orde
         let Some(ts) = ok(t.uid()) else { continue };
         assert!(ts.early.start <= ts.early.finish, "{}: ES > EF", t.uid());
         assert!(ts.late.start <= ts.late.finish, "{}: LS > LF", t.uid());
-        assert!(ts.total_slack >= ts.free_slack, "{}: TF < FS {ts:?}", t.uid());
+        // (b') FS ≥ 0 toujours ; TF ≥ FS quand TF ≥ 0 ; hors de la fermeture
+        // amont des plafonds, TF ≥ 0 (donc TF ≥ FS ≥ 0) comme en J2.
         assert!(ts.free_slack >= Minutes::ZERO, "{}: FS < 0 {ts:?}", t.uid());
+        if ts.total_slack >= Minutes::ZERO {
+            assert!(ts.total_slack >= ts.free_slack, "{}: TF < FS {ts:?}", t.uid());
+        }
+        if !closure.contains(&t.uid()) {
+            assert!(
+                ts.total_slack >= Minutes::ZERO,
+                "{}: TF < 0 hors plafond {ts:?}",
+                t.uid()
+            );
+        }
+        // (c) Dates planifiées = au plus tôt depuis le début ; une épingle a
+        // `early == late`.
+        assert_eq!(
+            (ts.start, ts.finish),
+            (ts.early.start, ts.early.finish),
+            "{}",
+            t.uid()
+        );
+        if pins.contains(&t.uid()) {
+            assert_eq!(ts.early, ts.late, "{}: épingle", t.uid());
+        }
         if ts.role == TaskRole::Summary && !ts.manual {
             let mut span: Option<(Moment, Moment)> = None;
             for (q, c) in p.tasks.iter().enumerate() {
@@ -590,6 +851,13 @@ fn check_network(p: &Project, s: &Schedule, skip: &BTreeSet<TaskUid>, check_orde
                 }
                 let Some(qe) = ok(qt.uid()) else { continue };
                 let Some(place) = cals.place(p, qt) else { continue };
+                // (a') Lien violé par une contrainte respectée de force :
+                // signalé, pas vérifié.
+                if overridden.contains(&(pt.uid(), qt.uid()))
+                    || (qt.uid() != st.uid() && gate_overridden.contains(&qt.uid()))
+                {
+                    continue;
+                }
                 let w = |a: Moment, b: Moment| place.between(a, b).unwrap_or(Minutes::ZERO);
                 match l.kind {
                     LinkType::FinishToStart => assert!(
@@ -658,14 +926,27 @@ fn p13(p: &Project) {
     assert_eq!(without_drivers(&schedule(&permuted)), without_drivers(&s));
     // (a), (b), (c), (f).
     check_network(p, &s, &BTreeSet::new(), true);
-    // (e) Point fixe : feuilles actives automatiques → manuelles à leurs
-    // dates au plus tôt.
+    // (e) Point fixe : feuilles actives automatiques non contraintes (ASAP)
+    // → manuelles à leurs dates au plus tôt ; les feuilles contraintes
+    // restent automatiques (une manuelle ignore sa contrainte, R-104). Pas
+    // de point fixe exact après une épingle ALAP qui déplace une tâche : la
+    // repasse fige `K(S)` et R-051 sur les dates de la passe principale
+    // (R-092), que les dates rejouées ne reproduisent pas.
+    let alap_moved = s.tasks.values().any(|o| {
+        matches!(
+            o,
+            TaskOutcome::Scheduled(ts) if ts.driver == Driver::Constraint {
+                kind: ConstraintKind::AsLateAsPossible
+            }
+        )
+    });
     let mut fixed = p.clone();
     for uid in uids {
         let t = fixed.tasks.get_mut(uid).unwrap();
         if let Some(TaskOutcome::Scheduled(ts)) = s.get(t.uid())
             && ts.role == TaskRole::Leaf
             && t.active
+            && t.constraint == Constraint::AsSoonAsPossible
         {
             t.mode = SchedulingMode::Manual {
                 start: Some(ts.early.start),
@@ -675,7 +956,7 @@ fn p13(p: &Project) {
         }
     }
     let f = schedule(&fixed);
-    for (uid, o) in &s.tasks {
+    for (uid, o) in s.tasks.iter().filter(|_| !alap_moved) {
         if let (TaskOutcome::Scheduled(a), Some(TaskOutcome::Scheduled(b))) = (o, f.tasks.get(uid)) {
             assert_eq!(a.early, b.early, "point fixe {uid}");
             assert_eq!(a.late, b.late, "point fixe {uid}");
@@ -684,9 +965,11 @@ fn p13(p: &Project) {
         }
     }
     assert!(
-        !f.diagnostics
-            .iter()
-            .any(|d| d.code() == "link.manual_not_honored"),
+        alap_moved
+            || !f
+                .diagnostics
+                .iter()
+                .any(|d| d.code() == "link.manual_not_honored"),
         "point fixe : {:?}",
         f.diagnostics
     );
@@ -729,6 +1012,20 @@ fn p13(p: &Project) {
         })
         .map(|(lk, s)| (lk.predecessor, s))
         .collect();
+    // Une épingle (MSO, MFO) n'est pas plafonnée par ses successeurs ni par
+    // les plafonds hérités de ses récapitulatives : seuls ses liens sortants
+    // et ceux de ses récapitulatives ancêtres peuvent être violés par les
+    // dates au plus tard.
+    let mut pins = pinned_tasks(p);
+    for (i, t) in p.tasks.iter().enumerate() {
+        if pins.contains(&t.uid()) {
+            let mut q = i;
+            while let Some(a) = par[q] {
+                pins.insert(p.tasks.at(a).unwrap().uid());
+                q = a;
+            }
+        }
+    }
     let broken: Vec<&Diagnostic> = l
         .diagnostics
         .iter()
@@ -736,20 +1033,32 @@ fn p13(p: &Project) {
             Diagnostic::LinkManualNotHonored {
                 predecessor,
                 successor,
-            } => !summary_percent.contains(&(*predecessor, *successor)),
+            } => !summary_percent.contains(&(*predecessor, *successor)) && !pins.contains(predecessor),
             _ => false,
         })
         .collect();
     assert!(broken.is_empty(), "dates au plus tard : {broken:?}");
-    assert_eq!(
-        l.project_finish, s.project_finish,
+    // Fin du projet : jamais décalée ; égale sans plafond (un plafond peut
+    // ramener toutes les fins au plus tard avant elle).
+    assert!(
+        l.project_finish <= s.project_finish,
         "dates au plus tard : fin du projet"
     );
+    if cap_closure(p).is_empty() {
+        assert_eq!(
+            l.project_finish, s.project_finish,
+            "dates au plus tard : fin du projet"
+        );
+    }
     // (h) Retards sans effet (S16, S17) : une feuille retardée de sa marge
     // totale ne décale pas la fin du projet ; retardée de sa marge libre,
     // elle ne décale aucune autre feuille. Échantillon : la plus grande marge
     // de chaque sorte, et une feuille tirée par la taille du réseau.
-    if summary_percent.is_empty() {
+    // Même limite qu'en (e) : après une épingle ALAP qui déplace une tâche,
+    // retarder un prédécesseur dans sa marge déplace la date au plus tôt de
+    // la passe principale de l'ALAP, donc l'application de `K(S)` (R-057) à
+    // ses dates au plus tard, figée sur la passe principale (R-092).
+    if summary_percent.is_empty() && !alap_moved {
         delays(p, &s, &par);
     }
 }
@@ -764,8 +1073,16 @@ fn delays(p: &Project, s: &Schedule, par: &[Option<usize>]) {
             .iter()
             .enumerate()
             .filter_map(|(i, t)| match s.get(t.uid()) {
+                // Feuilles non contraintes seulement : la feuille retardée
+                // devient manuelle et perdrait sa contrainte (R-104), ce qui
+                // changerait les dates au plus tard de ses prédécesseurs (et
+                // l'épingle d'une ALAP).
                 Some(TaskOutcome::Scheduled(ts))
-                    if ts.role == TaskRole::Leaf && t.active && !ts.manual && slack(ts) > Minutes::ZERO =>
+                    if ts.role == TaskRole::Leaf
+                        && t.active
+                        && !ts.manual
+                        && t.constraint == Constraint::AsSoonAsPossible
+                        && slack(ts) > Minutes::ZERO =>
                 {
                     Some((i, *ts))
                 }
@@ -996,6 +1313,314 @@ fn p16(p: &Project, seed: u64) {
 }
 
 // ---------------------------------------------------------------------------
+// P20 : contrainte tenue ou signalée
+// ---------------------------------------------------------------------------
+
+/// Ancrage R-090 recalculé à partir des primitives publiques de
+/// `TimeScale`.
+fn anchor_of(
+    scale: TimeScale<'_>,
+    kind: ConstraintKind,
+    date: Moment,
+    d: Minutes,
+) -> Option<planrs_core::Span> {
+    if kind.is_start_side() {
+        return scale.forward_span(date, d).ok();
+    }
+    let f = scale.backward_span(date, Minutes::ZERO).ok()?.finish;
+    let start = scale.add(f, Minutes::new(-d.get())).ok()?;
+    Some(planrs_core::Span { start, finish: f })
+}
+
+/// P20 : plancher toujours tenu (en temps ouvré) ; plafond tenu, ou
+/// `constraint.not_honored` présent (et marge totale négative s'il est
+/// dépassé en temps ouvré) ; serrage tenu ; épingle exacte (`early == late
+/// == A`) ; `task.deadline_missed` ⇔ fin planifiée après l'échéance en temps
+/// ouvré de l'échelle de placement.
+fn p20(p: &Project) {
+    let s = schedule(p);
+    let cals = Cals::new(p);
+    let par = parents(p);
+    let honor = p.options.honor_constraints;
+    let has = |code: &str, uid: TaskUid| {
+        s.diagnostics
+            .iter()
+            .any(|d| d.code() == code && d.subject() == planrs_core::Subject::Task(uid))
+    };
+    for (i, t) in p.tasks.iter().enumerate() {
+        let uid = t.uid();
+        let Some(ts) = planned(&s, uid) else { continue };
+        let summary = is_summary(&par, i);
+        let place = if summary {
+            cals.of(p, t).map(TimeScale::Working)
+        } else {
+            cals.place(p, t)
+        };
+        let Some(place) = place else { continue };
+        let w = |a: Moment, b: Moment| place.between(a, b).unwrap().get();
+        if let Some(dl) = t.deadline {
+            assert_eq!(
+                w(dl, ts.finish) > 0,
+                has("task.deadline_missed", uid),
+                "échéance de {uid} : {ts:?}"
+            );
+        }
+        let kind = t.constraint.kind();
+        let Some(date) = t.constraint.date() else { continue };
+        if t.mode != SchedulingMode::Auto {
+            continue;
+        }
+        if summary {
+            // R-103 : FNLT d'une récapitulative, tenu ou signalé.
+            if kind == ConstraintKind::FinishNoLaterThan {
+                let f = place.backward_span(date, Minutes::ZERO).unwrap().finish;
+                assert!(
+                    w(f, ts.finish) <= 0 || has("constraint.not_honored", uid),
+                    "FNLT de la récapitulative {uid}"
+                );
+            }
+            continue;
+        }
+        let Some(a) = anchor_of(place, kind, date, ts.duration) else {
+            continue;
+        };
+        let start = kind.is_start_side();
+        // Dépassements de l'ancrage par les dates au plus tôt : brut (début)
+        // et en temps ouvré.
+        let (above_raw, above_wt, below_wt) = if start {
+            (
+                ts.early.start > a.start,
+                w(a.start, ts.early.start) > 0,
+                w(ts.early.start, a.start) > 0,
+            )
+        } else {
+            let above = w(a.finish, ts.early.finish) > 0;
+            (above, above, w(ts.early.finish, a.finish) > 0)
+        };
+        match rule(kind, honor) {
+            Rule::None | Rule::Opposite => {}
+            Rule::Floor => assert!(!below_wt, "plancher de {uid} : {ts:?} {a:?}"),
+            Rule::Window | Rule::Cap => {
+                if rule(kind, honor) == Rule::Window {
+                    assert!(!below_wt, "fenêtre de {uid} : {ts:?} {a:?}");
+                }
+                if above_raw {
+                    assert!(has("constraint.not_honored", uid), "plafond de {uid} non signalé");
+                }
+                if above_wt {
+                    assert!(ts.total_slack < Minutes::ZERO, "plafond de {uid} : TF {ts:?}");
+                }
+            }
+            Rule::Clamped => assert!(!above_raw, "serrage de {uid} : {ts:?} {a:?}"),
+            Rule::Pin => {
+                assert_eq!(ts.early, a, "épingle de {uid}");
+                assert_eq!(ts.late, a, "épingle de {uid}");
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P21 : oracle indépendant avec contraintes
+// ---------------------------------------------------------------------------
+
+/// P21 : oracle de P15 étendu aux contraintes (planchers, serrages,
+/// épingles, plafonds, fenêtres), aux échéances et à l'épingle ALAP, en
+/// minutes ouvrées (réseau plat, un seul calendrier, décalages ouvrés, sans
+/// jalon). En temps ouvré, une date de contrainte `c` vaut `W(c)` des deux
+/// côtés (R-090 : `s*` et `f*` ont le temps ouvré de `c`).
+fn oracle_constrained(p: &Project, w_start: i64, w: &dyn Fn(Moment) -> i64) -> Oracle {
+    let n = p.tasks.len();
+    let honor = p.options.honor_constraints;
+    let d: Vec<i64> = p.tasks.iter().map(|t| t.duration.minutes().get()).collect();
+    let rules: Vec<(Rule, bool, i64)> = p
+        .tasks
+        .iter()
+        .map(|t| {
+            let kind = t.constraint.kind();
+            (
+                rule(kind, honor),
+                kind.is_start_side(),
+                t.constraint.date().map_or(0, w),
+            )
+        })
+        .collect();
+    let deadlines: Vec<Option<i64>> = p.tasks.iter().map(|t| t.deadline.map(w)).collect();
+    let mut links = Vec::new();
+    for (si, t) in p.tasks.iter().enumerate() {
+        for l in &t.predecessors {
+            let pi = p.tasks.position(l.predecessor).unwrap();
+            let lag = match l.lag.value {
+                LagValue::Time { minutes, .. } => minutes.get(),
+                LagValue::Percent { percent } => percent_of(Minutes::new(d[pi]), percent).unwrap().get(),
+            };
+            links.push((pi, si, l.kind, lag));
+        }
+    }
+    // Début au plus tôt d'une tâche depuis son début « naturel ».
+    let place = |i: usize, nat: i64| {
+        let (r, start, c) = rules[i];
+        let a = if start { c } else { c - d[i] };
+        match r {
+            Rule::Floor | Rule::Window => nat.max(a),
+            Rule::Clamped => nat.min(a),
+            Rule::Pin => a,
+            Rule::None | Rule::Opposite | Rule::Cap => nat,
+        }
+    };
+    let forward = |pins: &[Option<i64>]| {
+        let mut es: Vec<i64> = (0..n)
+            .map(|i| pins[i].unwrap_or_else(|| place(i, w_start)))
+            .collect();
+        loop {
+            let mut nat: Vec<i64> = vec![w_start; n];
+            for &(pi, si, kind, lag) in &links {
+                let c = match kind {
+                    LinkType::FinishToStart => es[pi] + d[pi] + lag,
+                    LinkType::StartToStart => es[pi] + lag,
+                    LinkType::FinishToFinish => es[pi] + d[pi] + lag - d[si],
+                    LinkType::StartToFinish => es[pi] + lag - d[si],
+                };
+                nat[si] = nat[si].max(c);
+            }
+            let next: Vec<i64> = (0..n)
+                .map(|i| pins[i].unwrap_or_else(|| place(i, nat[i])))
+                .collect();
+            if next == es {
+                return es;
+            }
+            es = next;
+        }
+    };
+    let mut es = forward(&vec![None; n]);
+    let ef: Vec<i64> = (0..n).map(|i| es[i] + d[i]).collect();
+    let finish = ef.iter().copied().max().unwrap_or(w_start);
+    // Plafond propre de chaque tâche (contrainte, échéance) ; épingle MSO/MFO.
+    let own_cap = |i: usize| {
+        let (r, start, c) = rules[i];
+        let a_finish = if start { c + d[i] } else { c };
+        let mut cap = i64::MAX;
+        if matches!(r, Rule::Cap | Rule::Window | Rule::Clamped | Rule::Pin) {
+            cap = a_finish;
+        }
+        if let Some(dl) = deadlines[i]
+            && r != Rule::Pin
+        {
+            cap = cap.min(dl);
+        }
+        cap
+    };
+    let mut lf: Vec<i64> = (0..n).map(|i| finish.min(own_cap(i))).collect();
+    loop {
+        let mut next: Vec<i64> = (0..n).map(|i| finish.min(own_cap(i))).collect();
+        for &(pi, si, kind, lag) in &links {
+            if rules[pi].0 == Rule::Pin {
+                continue;
+            }
+            let ls_s = lf[si] - d[si];
+            let c = match kind {
+                LinkType::FinishToStart => ls_s - lag,
+                LinkType::StartToStart => ls_s - lag + d[pi],
+                LinkType::FinishToFinish => lf[si] - lag,
+                LinkType::StartToFinish => lf[si] - lag + d[pi],
+            };
+            next[pi] = next[pi].min(c);
+        }
+        if next == lf {
+            break;
+        }
+        lf = next;
+    }
+    let ls: Vec<i64> = (0..n).map(|i| lf[i] - d[i]).collect();
+    // R-092 : ALAP de marge ≥ 0 épinglées sur leurs dates au plus tard,
+    // puis une repasse avant.
+    let pins: Vec<Option<i64>> = (0..n)
+        .map(|i| (rules[i].0 == Rule::Opposite && lf[i] - ef[i] >= 0 && ls[i] != es[i]).then_some(ls[i]))
+        .collect();
+    if pins.iter().any(Option::is_some) {
+        es = forward(&pins);
+    }
+    let ef: Vec<i64> = (0..n).map(|i| es[i] + d[i]).collect();
+    let mut free: Vec<i64> = (0..n).map(|i| lf[i] - ef[i]).collect();
+    for &(pi, si, kind, lag) in &links {
+        let gap = match kind {
+            LinkType::FinishToStart => es[si] - lag - ef[pi],
+            LinkType::StartToStart => es[si] - lag - es[pi],
+            LinkType::FinishToFinish => ef[si] - lag - ef[pi],
+            LinkType::StartToFinish => ef[si] - lag - es[pi],
+        };
+        free[pi] = free[pi].min(gap);
+    }
+    let free = free.into_iter().map(|f| f.max(0)).collect();
+    Oracle { es, ef, ls, lf, free }
+}
+
+fn p21(p: &Project) {
+    let s = schedule(p);
+    let (set, _) = CalendarSet::compile(p);
+    let cal = set.get(p.calendar).unwrap();
+    let origin: Moment = "2025-01-01T00:00".parse().unwrap();
+    let w = |m: Moment| cal.working_between(origin, m).unwrap().get();
+    let ScheduleAnchor::FromStart(start) = p.anchor else {
+        panic!("ancre")
+    };
+    let o = oracle_constrained(p, w(start), &w);
+    for (i, t) in p.tasks.iter().enumerate() {
+        let ts = s.scheduled(t.uid()).unwrap();
+        let got = (
+            w(ts.early.start),
+            w(ts.early.finish),
+            w(ts.late.start),
+            w(ts.late.finish),
+            ts.total_slack.get(),
+            ts.free_slack.get(),
+        );
+        let want = (o.es[i], o.ef[i], o.ls[i], o.lf[i], o.lf[i] - o.ef[i], o.free[i]);
+        assert_eq!(got, want, "tâche {} (ES, EF, LS, LF, TF, FS)", t.uid());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P22 : ALAP
+// ---------------------------------------------------------------------------
+
+/// P22 : les feuilles ALAP de marge totale ≥ 0 sont planifiées sur leurs
+/// dates au plus tard ; aucun lien n'est violé par les dates planifiées
+/// (P13 a') ; la fin du projet est celle du même réseau tout en ASAP.
+fn p22(p: &Project) {
+    let s = schedule(p);
+    let mut asap = p.clone();
+    for uid in asap.tasks.iter().map(Task::uid).collect::<Vec<_>>() {
+        let t = asap.tasks.get_mut(uid).unwrap();
+        if t.constraint == Constraint::AsLateAsPossible {
+            t.constraint = Constraint::AsSoonAsPossible;
+        }
+    }
+    assert_eq!(schedule(&asap).project_finish, s.project_finish, "fin du projet");
+    let cals = Cals::new(p);
+    let par = parents(p);
+    for (i, t) in p.tasks.iter().enumerate() {
+        if is_summary(&par, i)
+            || t.constraint != Constraint::AsLateAsPossible
+            || t.mode != SchedulingMode::Auto
+        {
+            continue;
+        }
+        let Some(ts) = planned(&s, t.uid()) else { continue };
+        let Some(place) = cals.place(p, t) else { continue };
+        if ts.total_slack >= Minutes::ZERO {
+            assert_eq!(
+                place.between(ts.start, ts.late.start).unwrap(),
+                Minutes::ZERO,
+                "ALAP {} : {ts:?}",
+                t.uid()
+            );
+        }
+    }
+    check_network(p, &s, &BTreeSet::new(), false);
+}
+
+// ---------------------------------------------------------------------------
 // P17 : chaos
 // ---------------------------------------------------------------------------
 
@@ -1138,7 +1763,7 @@ proptest! {
 
     #[test]
     fn p13_cpm_composite(seed in any::<u64>()) {
-        p13(&generate(seed, GENERAL));
+        p13(&generate(seed, CONSTRAINED));
     }
 
     #[test]
@@ -1164,6 +1789,21 @@ proptest! {
     fn p16_project_finish_is_monotonic(seed in any::<u64>()) {
         p16(&generate(seed, MONOTONE), seed);
     }
+
+    #[test]
+    fn p20_constraint_held_or_reported(seed in any::<u64>()) {
+        p20(&generate(seed, CONSTRAINED));
+    }
+
+    #[test]
+    fn p21_matches_constrained_oracle(seed in any::<u64>()) {
+        p21(&generate(seed, FLAT_CONSTRAINED_NO_MILESTONE));
+    }
+
+    #[test]
+    fn p22_alap_on_late_dates(seed in any::<u64>()) {
+        p22(&generate(seed, CONSTRAINED));
+    }
 }
 
 proptest! {
@@ -1180,10 +1820,14 @@ proptest! {
 fn fixed_seeds() {
     for seed in 0..100 {
         p13(&generate(seed, GENERAL));
+        p13(&generate(seed, CONSTRAINED));
         p14(&generate(seed, FLAT));
         p15(&generate(seed, FLAT_NO_MILESTONE));
         p16(&generate(seed, MONOTONE), seed);
         p17(&chaos(seed));
+        p20(&generate(seed, CONSTRAINED));
+        p21(&generate(seed, FLAT_CONSTRAINED_NO_MILESTONE));
+        p22(&generate(seed, CONSTRAINED));
     }
 }
 

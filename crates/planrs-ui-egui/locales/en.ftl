@@ -1,14 +1,15 @@
 # Traductions anglaises de l'interface (repli sur fr.ftl pour une clé absente).
 # Chaque clé correspond à une variante de `TextId` (src/i18n.rs) ; un test
 # vérifie que fr.ftl et en.ftl déclarent exactement les mêmes clés.
-# Ni U+202F ni points de suspension U+2026 (glyphes absents des polices d'egui).
+# Pas de U+202F (absente des polices d'egui) ; points de suspension U+2026
+# « … » (présents dans les polices d'egui, qui s'en servent pour tronquer).
 
 ## Écran d'accueil
 
 welcome-title = Welcome to { $product }
 welcome-subtitle = Free MS Project clone — read-only for now
 welcome-open-demo = Open the sample: house construction
-welcome-open-file = Open an MSPDI file (.xml)...
+welcome-open-file = Open an MSPDI file (.xml)…
 welcome-web-note = The file stays in your browser; nothing is uploaded.
 welcome-language = Language
 welcome-theme = Theme
@@ -16,7 +17,7 @@ welcome-theme = Theme
 ## Menus
 
 menu-file = File
-menu-open = Open...
+menu-open = Open an MSPDI file (.xml)…
 menu-open-demo = Open the sample
 menu-close = Close
 menu-view = View
@@ -26,6 +27,7 @@ menu-language = Language
 
 ## Barre d'outils et zoom
 
+toolbar-open = Open…
 toolbar-fit = Fit
 zoom-day = Day
 zoom-week = Week
@@ -92,6 +94,9 @@ fmt-decimal-sep = {"."}
 fmt-list-sep = ,
 fmt-date-order = mdy
 fmt-unknown = ?
+# Règle de pluriel des unités : below-two (singulier si |v| < 2) ou
+# exactly-one (singulier si |v| = 1).
+fmt-plural-rule = exactly-one
 
 ## Mois
 
@@ -140,6 +145,7 @@ weekday-sun-initial = S
 ## Échelle de temps
 
 tier-quarter = Q
+tier-week = W
 
 ## Barre d'état
 
@@ -165,10 +171,15 @@ status-no-document = No document open
 
 ## Ouverture de fichiers
 
-open-in-progress = Opening...
+open-in-progress = Opening…
 open-error-title = Could not open the file
 open-error-read = Could not read the file: { $detail }
 open-error-mspdi = Unreadable MSPDI file: { $detail }
+
+## Bandeau de messages
+
+message-dismiss = Dismiss
+range-truncated = Display range limited to 20 years
 
 ## Accessibilité et divers
 
@@ -176,6 +187,6 @@ row-label = Row { $id }: { $name }
 splitter-label = Splitter between the table and the Gantt chart
 gantt-scroll-label = Gantt chart horizontal scroll
 demo-file-name = Sample: house construction
-file-filter-mspdi = MSPDI project (XML)
-dialog-open-title = Open an MSPDI project
+file-filter-mspdi = MSPDI file (XML)
+dialog-open-title = Open an MSPDI file
 state-load-warning = Display preferences ignored: { $detail }

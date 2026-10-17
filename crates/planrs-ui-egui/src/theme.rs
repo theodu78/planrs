@@ -42,11 +42,15 @@ pub struct Palette {
     /// Séparateur table / Gantt.
     pub splitter: Color32,
     /// Fond des jours chômés (week-ends, jours fériés) dans le Gantt.
+    /// Réservé au lot L7 (jours chômés, ADR-0011 décision 5) : pas encore
+    /// dessiné, gardé pour que la palette soit validée d'avance.
     pub non_working: Color32,
     /// Barre à crochets d'une récapitulative critique.
     pub summary_critical: Color32,
-    /// Barre d'une tâche exclue du calcul (inactive, placée pour l'affichage).
-    pub inactive: Color32,
+    /// Fond du bandeau d'un message d'erreur (texte en `text_strong`).
+    pub message_error_bg: Color32,
+    /// Fond du bandeau d'un avertissement (texte en `text_strong`).
+    pub message_warning_bg: Color32,
 }
 
 impl Palette {
@@ -70,7 +74,8 @@ impl Palette {
         splitter: Color32::from_rgb(0xC4, 0xC8, 0xCE),
         non_working: Color32::from_rgb(0xED, 0xEF, 0xF2),
         summary_critical: Color32::from_rgb(0x8E, 0x1F, 0x1C),
-        inactive: Color32::from_rgb(0x85, 0x8A, 0x91),
+        message_error_bg: Color32::from_rgb(0xFD, 0xEC, 0xEA),
+        message_warning_bg: Color32::from_rgb(0xFF, 0xF4, 0xD6),
     };
 
     /// Palette sombre.
@@ -93,7 +98,8 @@ impl Palette {
         splitter: Color32::from_rgb(0x4A, 0x4E, 0x56),
         non_working: Color32::from_rgb(0x2A, 0x2C, 0x31),
         summary_critical: Color32::from_rgb(0xFF, 0x8A, 0x85),
-        inactive: Color32::from_rgb(0x7E, 0x83, 0x8B),
+        message_error_bg: Color32::from_rgb(0x3A, 0x14, 0x14),
+        message_warning_bg: Color32::from_rgb(0x3A, 0x30, 0x12),
     };
 
     /// Palette du thème résolu.
@@ -169,6 +175,36 @@ mod tests {
         }
     }
 
+    /// Bandeau de messages (D-fix-9) : texte fort et texte courant lisibles
+    /// (WCAG AA, 4,5:1) sur les fonds teintés d'erreur et d'avertissement,
+    /// dans les deux thèmes ; le liseré critique se distingue du fond.
+    #[test]
+    fn palette_message_banner_contrast() {
+        for (name, p) in palettes() {
+            for (label, bg) in [
+                ("erreur", p.message_error_bg),
+                ("avertissement", p.message_warning_bg),
+            ] {
+                for (text_label, text) in [("texte fort", p.text_strong), ("texte", p.text)] {
+                    let ratio = contrast(text, bg);
+                    assert!(
+                        ratio >= 4.5,
+                        "{name} : {text_label} sur bandeau {label} = {ratio:.2}"
+                    );
+                }
+                assert_ne!(bg, p.background, "{name} : bandeau {label} non teinté");
+            }
+            let accent = contrast(p.critical, p.message_error_bg);
+            assert!(
+                accent >= 3.0,
+                "{name} : liseré critique sur bandeau = {accent:.2}"
+            );
+            // Erreur rougeâtre, avertissement jaunâtre.
+            assert!(p.message_error_bg.r() > p.message_error_bg.b(), "{name}");
+            assert!(p.message_warning_bg.g() > p.message_warning_bg.b(), "{name}");
+        }
+    }
+
     #[test]
     fn palette_graphics_contrast() {
         for (name, p) in palettes() {
@@ -180,7 +216,6 @@ mod tests {
                 ("récapitulative critique", p.summary_critical),
                 ("lien", p.link),
                 ("date d'état", p.status_date),
-                ("inactive", p.inactive),
             ] {
                 let ratio = contrast(color, p.background);
                 assert!(ratio >= 3.0, "{name} : {label} sur fond = {ratio:.2}");
@@ -229,7 +264,8 @@ mod tests {
                 p.splitter,
                 p.non_working,
                 p.summary_critical,
-                p.inactive,
+                p.message_error_bg,
+                p.message_warning_bg,
             ] {
                 assert_eq!(color.a(), 255, "{name} : {color:?}");
             }

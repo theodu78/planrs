@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use fluent_bundle::{FluentArgs, FluentBundle, FluentResource, FluentValue};
 use unic_langid::{LanguageIdentifier, langid};
 
-use crate::format::{DateOrder, FormatLabels, UnitLabel, UnitLabels};
+use crate::format::{DateOrder, FormatLabels, PluralRule, UnitLabel, UnitLabels};
 use crate::state::LanguagePref;
 
 /// Source fluent française (langue de repli).
@@ -130,6 +130,7 @@ text_ids! {
     // Menus.
     MenuFile => "menu-file",
     MenuOpen => "menu-open",
+    ToolbarOpen => "toolbar-open",
     MenuOpenDemo => "menu-open-demo",
     MenuClose => "menu-close",
     MenuView => "menu-view",
@@ -191,6 +192,7 @@ text_ids! {
     FmtListSep => "fmt-list-sep",
     FmtDateOrder => "fmt-date-order",
     FmtUnknown => "fmt-unknown",
+    FmtPluralRule => "fmt-plural-rule",
     // Mois.
     Month1Long => "month-1-long",
     Month1Short => "month-1-short",
@@ -233,6 +235,7 @@ text_ids! {
     WeekdaySunInitial => "weekday-sun-initial",
     // Échelle de temps.
     TierQuarter => "tier-quarter",
+    TierWeek => "tier-week",
     // Barre d'état.
     StatusTasks => "status-tasks",
     StatusRange => "status-range",
@@ -244,6 +247,9 @@ text_ids! {
     OpenErrorTitle => "open-error-title",
     OpenErrorRead => "open-error-read",
     OpenErrorMspdi => "open-error-mspdi",
+    // Bandeau de messages.
+    MessageDismiss => "message-dismiss",
+    RangeTruncated => "range-truncated",
     // Accessibilité et divers.
     RowLabel => "row-label",
     SplitterLabel => "splitter-label",
@@ -327,6 +333,8 @@ pub struct Texts {
     fallback: Option<FluentBundle<FluentResource>>,
     /// Identifiants déjà signalés comme manquants (journalisés une fois).
     missing: RefCell<BTreeSet<TextId>>,
+    /// Libellés des formateurs, résolus une fois à la construction.
+    labels: FormatLabels,
 }
 
 impl std::fmt::Debug for Texts {
@@ -365,23 +373,35 @@ impl Texts {
     #[must_use]
     pub fn new(language: Language) -> Self {
         let fallback = (language != Language::Fr).then(|| build_bundle(Language::Fr, FTL_FR));
-        Self {
-            language,
-            bundle: build_bundle(language, language.source()),
-            fallback,
-            missing: RefCell::new(BTreeSet::new()),
-        }
+        Self::assemble(language, build_bundle(language, language.source()), fallback)
     }
 
     /// Recueil construit sur des sources arbitraires (tests du repli).
     #[cfg(test)]
     fn from_sources(language: Language, source: &str, fallback: Option<&str>) -> Self {
-        Self {
+        Self::assemble(
             language,
-            bundle: build_bundle(language, source),
-            fallback: fallback.map(|fr| build_bundle(Language::Fr, fr)),
+            build_bundle(language, source),
+            fallback.map(|fr| build_bundle(Language::Fr, fr)),
+        )
+    }
+
+    /// Assemble les recueils puis résout une fois les libellés des
+    /// formateurs (lus ensuite par référence à chaque image).
+    fn assemble(
+        language: Language,
+        bundle: FluentBundle<FluentResource>,
+        fallback: Option<FluentBundle<FluentResource>>,
+    ) -> Self {
+        let mut texts = Self {
+            language,
+            bundle,
+            fallback,
             missing: RefCell::new(BTreeSet::new()),
-        }
+            labels: FormatLabels::default(),
+        };
+        texts.labels = texts.build_format_labels();
+        texts
     }
 
     /// Langue des messages.
@@ -437,15 +457,28 @@ impl Texts {
         }
     }
 
-    /// Libellés et conventions des formateurs, résolus une fois pour la
-    /// langue.
+    /// Libellés et conventions des formateurs de la langue, résolus une fois
+    /// à la construction de `Texts` (aucun travail fluent par image).
     #[must_use]
-    pub fn format_labels(&self) -> FormatLabels {
+    pub const fn format_labels(&self) -> &FormatLabels {
+        &self.labels
+    }
+
+    /// Résout les libellés et conventions des formateurs depuis les `.ftl`.
+    fn build_format_labels(&self) -> FormatLabels {
         let date_order = if self.get(TextId::FmtDateOrder).trim() == "mdy" {
             DateOrder::MonthDayYear
         } else {
             DateOrder::DayMonthYear
         };
+        let plural_key = self.get(TextId::FmtPluralRule);
+        let plural = PluralRule::from_key(&plural_key).unwrap_or_else(|| {
+            log::warn!(
+                "traductions {:?} : règle de pluriel inconnue « {plural_key} », repli « exactly-one »",
+                self.language
+            );
+            PluralRule::ExactlyOne
+        });
         FormatLabels {
             decimal_sep: self.get(TextId::FmtDecimalSep).chars().next().unwrap_or(','),
             list_sep: self.get(TextId::FmtListSep),
@@ -466,6 +499,7 @@ impl Texts {
             link_ff: self.get(TextId::LinkFf),
             link_sf: self.get(TextId::LinkSf),
             date_order,
+            plural,
             yes: self.get(TextId::Yes),
             no: self.get(TextId::No),
             unknown: self.get(TextId::FmtUnknown),
@@ -474,6 +508,7 @@ impl Texts {
             weekdays_short: WEEKDAYS_SHORT.map(|id| self.get(id)),
             weekday_initials: WEEKDAY_INITIALS.map(|id| self.get(id)),
             quarter_prefix: self.get(TextId::TierQuarter),
+            week_prefix: self.get(TextId::TierWeek),
         }
     }
 }
@@ -492,7 +527,7 @@ mod tests {
     use fluent_syntax::ast::{Entry, Expression, InlineExpression, Pattern, PatternElement};
 
     use super::{Arg, FTL_EN, FTL_FR, Language, TextId, Texts};
-    use crate::format::DateOrder;
+    use crate::format::{DateOrder, PluralRule};
     use crate::state::LanguagePref;
     use fluent_bundle::{FluentArgs, FluentValue};
 
@@ -602,7 +637,7 @@ mod tests {
 
     #[test]
     fn i18n_format_labels() {
-        let fr = Texts::new(Language::Fr).format_labels();
+        let fr = Texts::new(Language::Fr).format_labels().clone();
         assert_eq!(fr.decimal_sep, ',');
         assert_eq!(fr.list_sep, ";");
         assert_eq!(fr.date_order, DateOrder::DayMonthYear);
@@ -610,13 +645,50 @@ mod tests {
         assert_eq!(fr.months_short[0], "janv.");
         assert_eq!(fr.weekdays_short[1], "lun");
         assert_eq!(fr.units.day.other, "jours");
-        let en = Texts::new(Language::En).format_labels();
+        let en = Texts::new(Language::En).format_labels().clone();
         assert_eq!(en.decimal_sep, '.');
         assert_eq!(en.list_sep, ",");
         assert_eq!(en.date_order, DateOrder::MonthDayYear);
         assert_eq!(en.link_sf, "SF");
         assert_eq!(en.months_short[1], "Feb");
         assert_eq!(en.weekdays_short[0], "Sun");
+    }
+
+    /// La règle de pluriel et le préfixe de semaine viennent des clés
+    /// `fmt-plural-rule` et `tier-week`, pas de l'ordre des dates.
+    #[test]
+    fn i18n_plural_rule_and_week_prefix_from_keys() {
+        let fr = Texts::new(Language::Fr);
+        assert_eq!(fr.format_labels().plural, PluralRule::BelowTwo);
+        assert_eq!(fr.format_labels().week_prefix, "S");
+        let en = Texts::new(Language::En);
+        assert_eq!(en.format_labels().plural, PluralRule::ExactlyOne);
+        assert_eq!(en.format_labels().week_prefix, "W");
+        // Ordre des dates français, règle anglaise : la clé l'emporte.
+        let texts = Texts::from_sources(
+            Language::Fr,
+            "fmt-date-order = dmy\nfmt-plural-rule = exactly-one\n",
+            None,
+        );
+        assert_eq!(texts.format_labels().date_order, DateOrder::DayMonthYear);
+        assert_eq!(texts.format_labels().plural, PluralRule::ExactlyOne);
+        let texts = Texts::from_sources(
+            Language::En,
+            "fmt-date-order = mdy\nfmt-plural-rule = below-two\n",
+            None,
+        );
+        assert_eq!(texts.format_labels().plural, PluralRule::BelowTwo);
+        // Valeur inconnue : repli « exactement un », sans panique.
+        let texts = Texts::from_sources(Language::En, "fmt-plural-rule = dual\n", None);
+        assert_eq!(texts.format_labels().plural, PluralRule::ExactlyOne);
+    }
+
+    /// Les libellés sont calculés une fois : deux appels rendent la même
+    /// référence.
+    #[test]
+    fn i18n_format_labels_cached() {
+        let texts = Texts::new(Language::Fr);
+        assert!(std::ptr::eq(texts.format_labels(), texts.format_labels()));
     }
 
     /// Variables `$x` référencées par une expression en ligne.
@@ -769,11 +841,17 @@ mod tests {
             texts.get_args(TextId::StatusTasks, &[("count", Arg::Count(2))]),
             "status-tasks"
         );
+        // Les libellés des formateurs, résolus à la construction, ont aussi
+        // signalé leurs clés absentes ; les clés présentes ne le sont pas.
         let missing = texts.missing.borrow();
-        assert_eq!(
-            missing.iter().copied().collect::<Vec<_>>(),
-            [TextId::MenuClose, TextId::StatusTasks]
-        );
+        for id in [TextId::MenuClose, TextId::StatusTasks, TextId::FmtPluralRule] {
+            assert!(missing.contains(&id), "{id:?} non signalé");
+        }
+        for id in [TextId::MenuFile, TextId::MenuView, TextId::MenuOpen] {
+            assert!(!missing.contains(&id), "{id:?} signalé à tort");
+        }
+        // Règle de pluriel absente : repli « exactement un ».
+        assert_eq!(texts.format_labels().plural, PluralRule::ExactlyOne);
     }
 
     #[test]
@@ -786,7 +864,7 @@ mod tests {
 
     #[test]
     fn i18n_calendar_names() {
-        let fr = Texts::new(Language::Fr).format_labels();
+        let fr = Texts::new(Language::Fr).format_labels().clone();
         assert_eq!(
             fr.months_short,
             [
@@ -802,7 +880,7 @@ mod tests {
         assert_eq!(fr.weekday_initials, ["D", "L", "M", "M", "J", "V", "S"]);
         assert_eq!(fr.quarter_prefix, "T");
         assert_eq!(fr.months_long[7], "août");
-        let en = Texts::new(Language::En).format_labels();
+        let en = Texts::new(Language::En).format_labels().clone();
         assert_eq!(
             en.months_short,
             [
@@ -841,10 +919,7 @@ mod tests {
     #[test]
     fn language_system_none_is_fr() {
         assert_eq!(Language::resolve(LanguagePref::System, None), Language::Fr);
-        assert_eq!(
-            Language::from_tag("de-DE").map_or(Language::Fr, |l| l),
-            Language::Fr
-        );
+        assert_eq!(Language::from_tag("de-DE").unwrap_or(Language::Fr), Language::Fr);
         assert_eq!(
             Language::resolve(LanguagePref::System, Language::from_tag("de-DE")),
             Language::Fr

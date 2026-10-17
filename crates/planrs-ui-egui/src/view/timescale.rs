@@ -45,7 +45,7 @@ pub fn paint_header(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, axis: &TimeAxis, r
     ];
     let mut texts = Vec::new();
     for (band, unit, line_color) in bands {
-        let cells = tier_cells(axis, unit, week_start, (band.left(), band.right()), &labels);
+        let cells = tier_cells(axis, unit, week_start, (band.left(), band.right()), labels);
         band_shapes(band, &cells, line_color, &mut shapes);
         collect_labels(band, cells, &mut texts);
     }

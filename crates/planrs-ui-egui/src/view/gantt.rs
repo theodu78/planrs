@@ -347,13 +347,19 @@ fn bar_shapes(b: &BarGeom, palette: &Palette, m: &LinkMetrics, out: &mut Vec<Sha
             let top = b.yc - h;
             let thick = (2.0 * h / 3.0).max(2.0);
             let rect = Rect::from_min_max(pos2(b.x0, top), pos2(b.x1, top + thick));
-            out.push(Shape::rect_filled(rect, 0.0, palette.summary));
+            // Récapitulative critique : rouge sombre (hypothèse H-UI).
+            let summary = if b.critical {
+                palette.summary_critical
+            } else {
+                palette.summary
+            };
+            out.push(Shape::rect_filled(rect, 0.0, summary));
             let w = h.min((b.x1 - b.x0) / 2.0).max(1.0);
             let depth = 1.6 * h;
             let left = vec![pos2(b.x0, top), pos2(b.x0 + w, top), pos2(b.x0, top + depth)];
             let right = vec![pos2(b.x1 - w, top), pos2(b.x1, top), pos2(b.x1, top + depth)];
-            out.push(Shape::convex_polygon(left, palette.summary, Stroke::NONE));
-            out.push(Shape::convex_polygon(right, palette.summary, Stroke::NONE));
+            out.push(Shape::convex_polygon(left, summary, Stroke::NONE));
+            out.push(Shape::convex_polygon(right, summary, Stroke::NONE));
         }
         RowKind::Milestone => {
             let color = if b.critical {
@@ -739,7 +745,7 @@ mod tests {
             generation: 1,
         };
         let texts = Texts::new(Language::Fr);
-        let rows = RowModel::build(&doc, &texts.format_labels());
+        let rows = RowModel::build(&doc, texts.format_labels());
         let palette = Palette::LIGHT;
         let metrics = Metrics::default();
         let selection = rows.row(2).map(|r| r.uid);
@@ -759,6 +765,7 @@ mod tests {
                     texts: &texts,
                     palette: &palette,
                     metrics: &metrics,
+                    diagnostics: &crate::view::DiagnosticsView::default(),
                     selection,
                     actions: &mut actions,
                     stats: &mut stats,

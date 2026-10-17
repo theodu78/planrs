@@ -105,10 +105,11 @@ pub enum TierUnit {
     Year,
 }
 
-/// Plage de jours affichée, fin exclusive (minuit du jour suivant le dernier
-/// jour).
+/// Plage de jours affichée par l'échelle de temps, fin **exclusive** (minuit
+/// du jour suivant le dernier jour). À ne pas confondre avec
+/// `planrs_core::DayRange`, plage du modèle à fin inclusive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DayRange {
+pub struct ViewSpan {
     /// Premier jour (x = 0 au minuit de ce jour).
     pub start: Day,
     /// Jour suivant le dernier jour affiché.
@@ -155,59 +156,108 @@ fn align_to_week_start(d: Day, week_start: Weekday) -> Day {
     day
 }
 
+/// Distance maximale, en jours, entre la date d'état et la plage du projet
+/// pour que la plage par défaut soit étendue jusqu'à elle.
+pub const STATUS_REACH_DAYS: i32 = 90;
+
+/// Plage par défaut d'un document et signal de troncature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DefaultRange {
+    /// Plage affichée.
+    pub span: ViewSpan,
+    /// Le projet dépasse à lui seul [`MAX_RANGE_DAYS`] : la fin de la plage
+    /// est tronquée (l'interface le signale par un message).
+    pub truncated: bool,
+}
+
+/// Nombre de jours de `from` à `to` (négatif si `to` précède `from`).
+fn days_between(from: Day, to: Day) -> i64 {
+    i64::from(to.index()).saturating_sub(i64::from(from.index()))
+}
+
 /// Plage par défaut d'un document (calculée à l'ouverture, entiers
 /// seulement).
 ///
-/// Début : jour de début du projet − 7 jours, reculé au
-/// `week_start_day` du projet. Fin (exclusive) : jour de fin du projet + 21
-/// jours. La plage est étendue pour contenir le jour de la date d'état
-/// effective, puis plafonnée à [`MAX_RANGE_DAYS`] jours après le début (la fin
-/// est tronquée). Toute sortie du domaine des `Day` se replie sur la borne du
-/// domaine : jamais de panique. Hypothèse d'affichage H-UI (ADR-0011).
+/// Le projet d'abord : début = jour de début du projet − 7 jours, fin
+/// (exclusive) = jour de fin du projet + 21 jours. La plage n'est étendue
+/// jusqu'à la date d'état effective que si celle-ci est à moins de
+/// [`STATUS_REACH_DAYS`] jours de la plage du projet et que l'extension
+/// reste sous [`MAX_RANGE_DAYS`] ; sinon la date d'état est hors champ (sa
+/// ligne n'est pas dessinée), ce qui couvre aussi une horloge système en
+/// panne repliée sur `Moment::MIN`. Le début est ensuite reculé au
+/// `week_start_day` du projet. Si le projet dépasse à lui seul
+/// [`MAX_RANGE_DAYS`] jours, la fin est tronquée et `truncated` vaut vrai.
+/// Toute sortie du domaine des `Day` se replie sur la borne du domaine :
+/// jamais de panique. Hypothèse d'affichage H-UI (ADR-0011).
 #[must_use]
-pub fn default_range(project: &Project, schedule: &Schedule) -> DayRange {
+pub fn default_range(project: &Project, schedule: &Schedule) -> DefaultRange {
     let week_start = project.options.week_start_day;
     let first = schedule.project_start.day();
     let last = schedule.project_finish.day().max(first);
-    let mut start = first.checked_add_days(-LEAD_DAYS).unwrap_or(Day::MIN);
-    let mut end = last.checked_add_days(TRAIL_DAYS).unwrap_or(Day::MAX);
+    let start = first.checked_add_days(-LEAD_DAYS).unwrap_or(Day::MIN);
+    let end = last.checked_add_days(TRAIL_DAYS).unwrap_or(Day::MAX);
 
+    // Extension vers la date d'état, seulement si elle est proche.
     let status = project.effective_status_date().day();
-    if status < start {
-        start = status;
-    }
     let status_end = status.checked_add_days(1).unwrap_or(Day::MAX);
-    if status_end > end {
-        end = status_end;
+    let reach = i64::from(STATUS_REACH_DAYS);
+    let mut ext_start = start;
+    let mut ext_end = end;
+    if status < start && days_between(status, start) <= reach {
+        ext_start = status;
     }
-    start = align_to_week_start(start, week_start);
+    if status_end > end && days_between(end, status_end) <= reach {
+        ext_end = status_end;
+    }
+    let max_days = i64::from(MAX_RANGE_DAYS);
+    let (start, end) = if days_between(align_to_week_start(ext_start, week_start), ext_end) <= max_days {
+        (ext_start, ext_end)
+    } else {
+        (start, end)
+    };
+    let start = align_to_week_start(start, week_start);
 
     let min_end = start.checked_add_days(1).unwrap_or(Day::MAX);
     let max_end = start.checked_add_days(MAX_RANGE_DAYS).unwrap_or(Day::MAX);
-    if end > max_end {
+    let truncated = end > max_end;
+    if truncated {
         log::warn!("plage d'affichage tronquée à {MAX_RANGE_DAYS} jours");
     }
-    DayRange {
-        start,
-        end: end.max(min_end).min(max_end),
+    DefaultRange {
+        span: ViewSpan {
+            start,
+            end: end.max(min_end).min(max_end),
+        },
+        truncated,
     }
 }
 
 /// Nombre de jours d'une plage (0 si elle est vide ou inversée).
-fn range_days(range: DayRange) -> i64 {
-    i64::from(range.end.index())
-        .saturating_sub(i64::from(range.start.index()))
-        .max(0)
+fn range_days(range: ViewSpan) -> i64 {
+    days_between(range.start, range.end).max(0)
 }
 
-/// Zoom ajusté à l'ouverture : `Week` si toute la plage tient dans
-/// `gantt_width_px` (`jours × 12 ≤ largeur`), sinon `Month` (ADR-0011,
-/// décision 4). Une largeur non finie donne `Month`.
+/// Facteur au-delà duquel « Ajuster » passe en Trimestre : la plage au zoom
+/// Mois doit dépasser 1,5 × la largeur disponible.
+const QUARTER_FIT_FACTOR: f32 = 1.5;
+
+/// Zoom ajusté (ouverture, bouton « Ajuster ») : `Week` si toute la plage
+/// tient dans `gantt_width_px` (`jours × 12 ≤ largeur`) ; sinon `Month`,
+/// sauf si la plage au zoom Mois dépasse 1,5 × la largeur (`jours × 3,5 >
+/// 1,5 × largeur`), auquel cas `Quarter`. Hypothèse d'affichage H-UI : entre
+/// 1 et 1,5 fois la largeur, on garde Mois (barres lisibles, on défile un
+/// peu) plutôt que Trimestre (tout visible mais illisible). Une largeur non
+/// finie ou nulle donne `Month`.
 #[must_use]
-pub fn fit_zoom(range: DayRange, gantt_width_px: f32) -> TimeScaleZoom {
-    let needed = i64_to_f32(range_days(range)) * TimeScaleZoom::Week.px_per_day();
-    if gantt_width_px.is_finite() && needed <= gantt_width_px {
+pub fn fit_zoom(range: ViewSpan, gantt_width_px: f32) -> TimeScaleZoom {
+    if !gantt_width_px.is_finite() || gantt_width_px <= 0.0 {
+        return TimeScaleZoom::Month;
+    }
+    let days = i64_to_f32(range_days(range));
+    if days * TimeScaleZoom::Week.px_per_day() <= gantt_width_px {
         TimeScaleZoom::Week
+    } else if days * TimeScaleZoom::Month.px_per_day() > QUARTER_FIT_FACTOR * gantt_width_px {
+        TimeScaleZoom::Quarter
     } else {
         TimeScaleZoom::Month
     }
@@ -242,7 +292,7 @@ impl TimeAxis {
     /// Axe de la plage `range` au zoom `zoom`, le début de la plage étant à
     /// l'abscisse écran `left` (0 si `left` n'est pas fini).
     #[must_use]
-    pub fn new(range: DayRange, zoom: TimeScaleZoom, left: f32) -> Self {
+    pub fn new(range: ViewSpan, zoom: TimeScaleZoom, left: f32) -> Self {
         let end = range.end.max(range.start);
         let origin_minutes = day_minutes(range.start);
         let end_minutes = day_minutes(end);
@@ -300,6 +350,11 @@ impl TimeAxis {
     /// Plus grand indice `k` de `0..n` tel que le minuit du jour
     /// `start + k` soit à gauche de `x` (ou 0) : dichotomie sur des jours
     /// entiers, abscisses calculées dans le sens direct seulement.
+    ///
+    /// Seule exception documentée à la règle « aucune date née d'un pixel »
+    /// (ADR-0011, décision 4) : le jour obtenu sert uniquement au culling
+    /// de l'en-tête et de la grille (première cellule à dessiner), jamais à
+    /// une donnée, une action ou un texte. La fonction reste privée.
     fn first_day_at_or_before(&self, x: f32) -> Day {
         let n = self.end.index().saturating_sub(self.start.index());
         let (mut lo, mut hi) = (0_i32, n);
@@ -449,7 +504,12 @@ fn label_variants(day: Day, unit: TierUnit, l: &FormatLabels) -> Vec<String> {
             } else {
                 format!("{dom} {short}")
             };
-            vec![full, dom.to_string()]
+            // Numéro de semaine ISO du jeudi suivant le début de cellule
+            // (hypothèse H-UI : semaine ISO, quel que soit le premier jour
+            // de semaine du projet), préfixé « S » / « W ».
+            let iso_day = day.checked_add_days(3).unwrap_or(day).to_naive();
+            let numbered = format!("{}{}", l.week_prefix, iso_day.iso_week().week());
+            vec![full, numbered, dom.to_string()]
         }
         TierUnit::Month => {
             let yy = year.rem_euclid(100);
@@ -613,6 +673,7 @@ mod tests {
             weekday_initials: ["D", "L", "M", "M", "J", "V", "S"].map(String::from),
             weekdays_short: ["dim", "lun", "mar", "mer", "jeu", "ven", "sam"].map(String::from),
             quarter_prefix: "T".to_owned(),
+            week_prefix: "S".to_owned(),
             date_order: DateOrder::DayMonthYear,
             ..FormatLabels::default()
         }
@@ -641,16 +702,19 @@ mod tests {
             months_short: months_short.map(String::from),
             weekday_initials: ["S", "M", "T", "W", "T", "F", "S"].map(String::from),
             quarter_prefix: "Q".to_owned(),
+            week_prefix: "W".to_owned(),
             date_order: DateOrder::MonthDayYear,
             ..FormatLabels::default()
         }
     }
 
-    fn demo_range() -> DayRange {
+    fn demo_range() -> ViewSpan {
         let now = moment(2027, 1, 15, 8);
         let doc = planrs_mspdi::read(crate::DEMO_MSPDI, &planrs_mspdi::ReadOptions::new(now)).unwrap();
         let schedule = planrs_core::schedule(&doc.project);
-        default_range(&doc.project, &schedule)
+        let range = default_range(&doc.project, &schedule);
+        assert!(!range.truncated);
+        range.span
     }
 
     #[test]
@@ -665,7 +729,7 @@ mod tests {
 
     #[test]
     fn timescale_x_monotonic() {
-        let range = DayRange {
+        let range = ViewSpan {
             start: day(2026, 10, 26),
             end: day(2027, 6, 7),
         };
@@ -694,7 +758,7 @@ mod tests {
     /// finie, du bon côté du contenu ; un `left` non fini est remplacé par 0.
     #[test]
     fn timescale_x_clamped_to_range() {
-        let range = DayRange {
+        let range = ViewSpan {
             start: day(2026, 10, 26),
             end: day(2027, 6, 7),
         };
@@ -710,7 +774,7 @@ mod tests {
         assert_eq!(nan_axis.x_day(range.start), 0.0);
         // Plage inversée : largeur nulle, rien d'infini.
         let empty = TimeAxis::new(
-            DayRange {
+            ViewSpan {
                 start: range.end,
                 end: range.start,
             },
@@ -718,7 +782,10 @@ mod tests {
             0.0,
         );
         assert_eq!(empty.content_width(), 0.0);
-        assert!(tier_cells(&empty, TierUnit::Day, Weekday::Monday, (0.0, 500.0), &labels_fr()).is_empty());
+        assert_eq!(
+            tier_cells(&empty, TierUnit::Day, Weekday::Monday, (0.0, 500.0), &labels_fr()).len(),
+            0
+        );
     }
 
     /// house.xml : début du projet 2026-11-02 (lundi) − 7 j = 2026-10-26, déjà
@@ -736,42 +803,98 @@ mod tests {
     }
 
     #[test]
-    fn default_range_extends_to_status_date_and_caps() {
+    fn default_range_extends_to_near_status_date() {
         let now = moment(2027, 1, 15, 8);
         let mut doc = planrs_mspdi::read(crate::DEMO_MSPDI, &planrs_mspdi::ReadOptions::new(now)).unwrap();
-        // Date d'état après la fin : la plage s'étend jusqu'à son lendemain.
-        doc.project.status_date = Some(moment(2027, 9, 1, 17));
         let schedule = planrs_core::schedule(&doc.project);
+        // Date d'état après la fin, à moins de 90 jours de la plage (fin
+        // exclusive 2027-06-07) : la plage s'étend jusqu'à son lendemain.
+        doc.project.status_date = Some(moment(2027, 9, 1, 17));
         let range = default_range(&doc.project, &schedule);
-        assert_eq!(range.end, day(2027, 9, 2));
-        // Date d'état avant le début : début reculé puis aligné au lundi.
-        doc.project.status_date = Some(moment(2026, 9, 3, 17)); // jeudi
+        assert_eq!(range.span.end, day(2027, 9, 2));
+        assert!(!range.truncated);
+        // Date d'état avant le début (jeudi), à moins de 90 jours : début
+        // reculé puis aligné au lundi.
+        doc.project.status_date = Some(moment(2026, 9, 3, 17));
         let range = default_range(&doc.project, &schedule);
-        assert_eq!(range.start, day(2026, 8, 31));
-        // Date d'état très lointaine : plage plafonnée à 20 ans.
-        doc.project.status_date = Some(moment(2120, 1, 1, 8));
-        let range = default_range(&doc.project, &schedule);
-        assert_eq!(range_days(range), i64::from(MAX_RANGE_DAYS));
+        assert_eq!(range.span.start, day(2026, 8, 31));
         // Début de semaine dimanche.
         doc.project.status_date = None;
         doc.project.options.week_start_day = Weekday::Sunday;
         let range = default_range(&doc.project, &schedule);
-        assert_eq!(range.start, day(2026, 10, 25));
+        assert_eq!(range.span.start, day(2026, 10, 25));
+    }
+
+    /// Relecture A, B1 : une date d'état lointaine (ou une horloge en panne
+    /// repliée sur `Moment::MIN`) ne sort jamais le projet de la plage.
+    #[test]
+    fn default_range_ignores_far_status_date() {
+        let now = moment(2027, 1, 15, 8);
+        let mut doc = planrs_mspdi::read(crate::DEMO_MSPDI, &planrs_mspdi::ReadOptions::new(now)).unwrap();
+        let schedule = planrs_core::schedule(&doc.project);
+        let project_start = schedule.project_start.day();
+        let project_finish = schedule.project_finish.day();
+        for status in [
+            moment(1985, 1, 7, 8),
+            Moment::MIN,
+            Moment::MAX,
+            moment(2120, 1, 1, 8),
+            moment(2027, 9, 6, 8), // lendemain à 92 jours de la fin exclusive
+        ] {
+            doc.project.status_date = Some(status);
+            let range = default_range(&doc.project, &schedule);
+            assert!(!range.truncated, "{status}");
+            assert!(range.span.start <= project_start, "{status}");
+            assert!(range.span.end > project_finish, "{status}");
+            assert_eq!(range.span, demo_range(), "{status}");
+        }
+    }
+
+    /// Un projet de plus de 20 ans est tronqué, et la troncature signalée.
+    #[test]
+    fn default_range_truncates_long_project() {
+        let now = moment(2027, 1, 15, 8);
+        let doc = planrs_mspdi::read(crate::DEMO_MSPDI, &planrs_mspdi::ReadOptions::new(now)).unwrap();
+        let mut schedule = planrs_core::schedule(&doc.project);
+        schedule.project_finish = moment(2060, 1, 1, 17);
+        let range = default_range(&doc.project, &schedule);
+        assert!(range.truncated);
+        assert_eq!(range_days(range.span), i64::from(MAX_RANGE_DAYS));
+        assert_eq!(range.span.start, demo_range().start);
     }
 
     #[test]
     fn fit_zoom_demo_is_month() {
         let range = demo_range();
-        // 224 × 12 = 2 688 px > 900 px.
+        // 224 × 12 = 2 688 px > 900 px ; 224 × 3,5 = 784 px ≤ 1,5 × 900.
         assert_eq!(fit_zoom(range, 900.0), TimeScaleZoom::Month);
         assert_eq!(fit_zoom(range, f32::NAN), TimeScaleZoom::Month);
+        assert_eq!(fit_zoom(range, 0.0), TimeScaleZoom::Month);
         assert_eq!(fit_zoom(range, 2_688.0), TimeScaleZoom::Week);
+        // 784 ≤ 1,5 × 523 = 784,5 : on reste en Mois (on défile un peu).
+        assert_eq!(fit_zoom(range, 523.0), TimeScaleZoom::Month);
+    }
+
+    /// Relecture B, I1 : Trimestre seulement si la plage en Mois dépasse
+    /// 1,5 × la largeur (fenêtre étroite).
+    #[test]
+    fn fit_zoom_narrow_is_quarter() {
+        let range = demo_range();
+        // 784 > 1,5 × 522 = 783.
+        assert_eq!(fit_zoom(range, 522.0), TimeScaleZoom::Quarter);
+        assert_eq!(fit_zoom(range, 200.0), TimeScaleZoom::Quarter);
+        // Projet de 3 ans sur 1 000 px : 1 096 × 3,5 > 1 500.
+        let long = ViewSpan {
+            start: day(2026, 1, 5),
+            end: day(2029, 1, 5),
+        };
+        assert_eq!(fit_zoom(long, 1_000.0), TimeScaleZoom::Quarter);
     }
 
     #[test]
     fn fit_zoom_short_project_is_week() {
         // 6 semaines : 42 × 12 = 504 px ≤ 900 px.
-        let range = DayRange {
+        let range = ViewSpan {
             start: day(2026, 11, 2),
             end: day(2026, 12, 14),
         };
@@ -779,9 +902,98 @@ mod tests {
         assert_eq!(fit_zoom(range, 503.0), TimeScaleZoom::Month);
     }
 
+    /// Relecture C, T9 : mois et trimestres en anglais, aucune étiquette
+    /// française.
+    #[test]
+    fn tier_cells_month_quarter_labels_en() {
+        let range = ViewSpan {
+            start: day(2026, 10, 26),
+            end: day(2027, 6, 7),
+        };
+        let fr_only = ["janv", "févr", "T1", "T2", "T4", "novembre", "décembre"];
+        let assert_en = |cells: &[TierCell]| {
+            for cell in cells {
+                assert!(
+                    !fr_only.iter().any(|fr| cell.label.contains(fr)),
+                    "étiquette française : {cell:?}"
+                );
+            }
+        };
+        // Mois en haut (zoom Semaine) : forme longue avec l'année.
+        let w = TimeAxis::new(range, TimeScaleZoom::Week, 0.0);
+        let months = tier_cells(
+            &w,
+            TierUnit::Month,
+            Weekday::Monday,
+            (0.0, w.content_width()),
+            &labels_en(),
+        );
+        let got: Vec<&str> = months.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(
+            got,
+            [
+                "October 2026",
+                "November 2026",
+                "December 2026",
+                "January 2027",
+                "February 2027",
+                "March 2027",
+                "April 2027",
+                "May 2027",
+                "June 2027"
+            ]
+        );
+        // Mois en bas (zoom Mois, ≈ 98 px) et trimestres en haut.
+        let m = TimeAxis::new(range, TimeScaleZoom::Month, 0.0);
+        let months = tier_cells(
+            &m,
+            TierUnit::Month,
+            Weekday::Monday,
+            (0.0, m.content_width()),
+            &labels_en(),
+        );
+        assert_en(&months);
+        assert!(months.iter().all(|c| !c.label.is_empty()), "{months:?}");
+        assert_eq!(months[3].x0, m.x_day(day(2027, 1, 1)));
+        assert!(months[3].label.starts_with("Jan"), "{months:?}");
+        let quarters = tier_cells(
+            &m,
+            TierUnit::Quarter,
+            Weekday::Monday,
+            (0.0, m.content_width()),
+            &labels_en(),
+        );
+        let got: Vec<&str> = quarters.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(got, ["Q4 2026", "Q1 2027", "Q2 2027"]);
+        // Zoom Trimestre (≈ 34 px par mois) : les abréviations anglaises de
+        // trois lettres tiennent encore (le français passe à l'initiale).
+        let q = TimeAxis::new(range, TimeScaleZoom::Quarter, 0.0);
+        let narrow = tier_cells(
+            &q,
+            TierUnit::Month,
+            Weekday::Monday,
+            (0.0, q.content_width()),
+            &labels_en(),
+        );
+        let got: Vec<&str> = narrow.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(
+            got,
+            ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun"]
+        );
+        let quarters = tier_cells(
+            &q,
+            TierUnit::Quarter,
+            Weekday::Monday,
+            (0.0, q.content_width()),
+            &labels_en(),
+        );
+        assert_en(&quarters);
+        assert_eq!(quarters[1].label, "Q1 2027");
+    }
+
     #[test]
     fn tier_cells_month_boundaries() {
-        let range = DayRange {
+        let range = ViewSpan {
             start: day(2026, 10, 26),
             end: day(2027, 6, 7),
         };
@@ -839,7 +1051,7 @@ mod tests {
 
     #[test]
     fn tier_cells_quarter_labels_fr() {
-        let range = DayRange {
+        let range = ViewSpan {
             start: day(2026, 10, 26),
             end: day(2027, 6, 7),
         };
@@ -889,6 +1101,9 @@ mod tests {
         assert_eq!(days.len(), 3);
         let en_weeks = tier_cells(&axis, TierUnit::Week, Weekday::Monday, (0.0, 30.0), &labels_en());
         assert_eq!(en_weeks[0].label, "26");
+        // Semaine numérotée : variante intermédiaire, quand elle tient.
+        let w44 = label_variants(day(2026, 10, 26), TierUnit::Week, &labels_en());
+        assert_eq!(w44, ["Oct 26", "W44", "26"]);
         let w = TimeAxis::new(range, TimeScaleZoom::Week, 0.0);
         let en_weeks = tier_cells(&w, TierUnit::Week, Weekday::Monday, (0.0, 30.0), &labels_en());
         assert_eq!(en_weeks[0].label, "Oct 26");

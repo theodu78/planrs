@@ -366,7 +366,7 @@ mod tests {
     #[test]
     fn rows_demo_fr() {
         let doc = demo();
-        let model = RowModel::build(&doc, &Texts::new(Language::Fr).format_labels());
+        let model = RowModel::build(&doc, Texts::new(Language::Fr).format_labels());
         assert_eq!(model.len(), 49);
         assert!(!model.is_empty());
 
@@ -424,6 +424,15 @@ mod tests {
             };
             assert_eq!(row.bar, Some((s.start, s.finish)));
         }
+        // Jours fériés du calendrier de l'exemple, importés jusqu'à
+        // l'affichage : la tâche 11 (3 jours) commence le jeudi 24/12 et
+        // saute Noël et le week-end ; la tâche 3 (10 jours) saute le 11/11.
+        assert_eq!(model.text(10, Column::Duration), "3 jours");
+        assert_eq!(model.text(10, Column::Start), "jeu 24/12/26");
+        assert_eq!(model.text(10, Column::Finish), "mar 29/12/26");
+        assert_eq!(model.text(2, Column::Duration), "10 jours");
+        assert_eq!(model.text(2, Column::Start), "lun 09/11/26");
+        assert_eq!(model.text(2, Column::Finish), "lun 23/11/26");
         // Hors bornes : chaîne vide.
         assert_eq!(model.text(49, Column::Id), "");
         assert_eq!(model.text(usize::MAX, Column::Critical), "");
@@ -432,7 +441,7 @@ mod tests {
 
     #[test]
     fn rows_demo_en() {
-        let model = RowModel::build(&demo(), &Texts::new(Language::En).format_labels());
+        let model = RowModel::build(&demo(), Texts::new(Language::En).format_labels());
         assert_eq!(
             row_texts(&model, 1),
             [
@@ -454,7 +463,7 @@ mod tests {
     #[test]
     fn rows_links_sorted() {
         let doc = demo();
-        let model = RowModel::build(&doc, &Texts::new(Language::Fr).format_labels());
+        let model = RowModel::build(&doc, Texts::new(Language::Fr).format_labels());
         let links = model.links();
         let total: usize = doc.project.tasks.iter().map(|t| t.predecessors.len()).sum();
         assert_eq!(links.len(), total);
@@ -484,7 +493,7 @@ mod tests {
 
     #[test]
     fn rows_links_touching_window() {
-        let model = RowModel::build(&demo(), &Texts::new(Language::Fr).format_labels());
+        let model = RowModel::build(&demo(), Texts::new(Language::Fr).format_labels());
         let brute = |rows: std::ops::Range<usize>| -> Vec<_> {
             model
                 .links()

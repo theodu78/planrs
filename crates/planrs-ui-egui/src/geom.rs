@@ -122,7 +122,9 @@ pub fn clamp_table_width(table_width: f32, avail_w: f32, splitter_w: f32) -> f32
 
 /// Mise en page de la vue principale dans `avail` : en-tête de la table, en-tête
 /// du Gantt et séparateur sur `header_h`, puis le corps commun, puis la barre
-/// horizontale du Gantt sur `hbar_h`. La table, de largeur `table_width`, est
+/// horizontale du Gantt sur `hbar_h`. Le corps occupe toute la largeur ; le
+/// Gantt (en-tête, découpe, barre horizontale) s'arrête `vbar_w` avant le
+/// bord droit, place de la barre verticale pleine. La table, de largeur `table_width`, est
 /// bornée par [`clamp_table_width`]. Un `avail` non fini donne des rectangles
 /// vides à l'origine (jamais de NaN dans un `Rect`).
 #[must_use]
@@ -139,13 +141,15 @@ pub fn main_layout(avail: Rect, table_width: f32, m: &Metrics) -> MainLayout {
     let split_right = (split_left + splitter_w).min(avail.right());
     let header_bottom = (avail.top() + finite(m.header_h)).min(avail.bottom());
     let hbar_top = (avail.bottom() - finite(m.hbar_h)).max(header_bottom);
+    // Le Gantt s'arrête avant la barre verticale pleine du corps.
+    let gantt_right = (avail.right() - finite(m.vbar_w)).max(split_right);
     let table_header = Rect::from_min_max(avail.min, pos2(split_left, header_bottom));
-    let gantt_header = Rect::from_min_max(pos2(split_right, avail.top()), pos2(avail.right(), header_bottom));
+    let gantt_header = Rect::from_min_max(pos2(split_right, avail.top()), pos2(gantt_right, header_bottom));
     let splitter = Rect::from_min_max(pos2(split_left, avail.top()), pos2(split_right, avail.bottom()));
     let body = Rect::from_min_max(pos2(avail.left(), header_bottom), pos2(avail.right(), hbar_top));
     let table_clip = Rect::from_min_max(body.min, pos2(split_left, body.bottom()));
-    let gantt_clip = Rect::from_min_max(pos2(split_right, body.top()), body.max);
-    let gantt_hbar = Rect::from_min_max(pos2(split_right, hbar_top), avail.max);
+    let gantt_clip = Rect::from_min_max(pos2(split_right, body.top()), pos2(gantt_right, body.bottom()));
+    let gantt_hbar = Rect::from_min_max(pos2(split_right, hbar_top), pos2(gantt_right, avail.bottom()));
     MainLayout {
         table_header,
         gantt_header,
@@ -258,7 +262,12 @@ mod tests {
         assert_eq!(l.splitter.width(), m.splitter_w);
         assert_eq!(l.gantt_clip.left(), l.splitter.right());
         assert_eq!(l.gantt_header.left(), l.gantt_clip.left());
-        assert_eq!(l.gantt_header.right(), avail.right());
+        // Le Gantt s'arrête avant la barre verticale pleine ; le corps non.
+        assert_eq!(l.gantt_header.right(), avail.right() - m.vbar_w);
+        assert_eq!(l.gantt_clip.right(), avail.right() - m.vbar_w);
+        assert_eq!(l.gantt_hbar.right(), avail.right() - m.vbar_w);
+        assert_eq!(l.body.right(), avail.right());
+        assert!(m.vbar_w > 0.0);
         // En-têtes sur `header_h`, corps entre l'en-tête et la barre.
         assert_eq!(l.table_header.height(), m.header_h);
         assert_eq!(l.gantt_header.height(), m.header_h);

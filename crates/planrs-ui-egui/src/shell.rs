@@ -4,6 +4,10 @@
 //! (clé [`STATE_KEY`]). La mémoire interne d'egui n'est jamais persistée :
 //! notre état est la seule source. Le stockage n'existe que si l'application
 //! active la feature `persistence` d'eframe (desktop et web).
+//!
+//! Les entrées brutes passent par [`sanitize_raw_input`] : un pilote qui
+//! émet une molette, un zoom ou une position non finis ferait échouer une
+//! assertion d'egui avant tout code planrs (relecture A, M1).
 
 use crate::app::{App, Env};
 use crate::state::{STATE_KEY, UiState};
@@ -38,7 +42,24 @@ impl PlanrsApp {
     }
 }
 
+/// Retire des entrées brutes tout événement de pointeur, de molette, de zoom
+/// ou de rotation portant une composante non finie (NaN, infini).
+pub fn sanitize_raw_input(raw: &mut egui::RawInput) {
+    raw.events.retain(|event| match event {
+        egui::Event::PointerMoved(p) => p.is_finite(),
+        egui::Event::MouseMoved(v) => v.is_finite(),
+        egui::Event::MouseWheel { delta, .. } => delta.is_finite(),
+        egui::Event::Zoom(factor) | egui::Event::Rotate(factor) => factor.is_finite(),
+        egui::Event::Touch { pos, force, .. } => pos.is_finite() && force.is_none_or(f32::is_finite),
+        _ => true,
+    });
+}
+
 impl eframe::App for PlanrsApp {
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        sanitize_raw_input(raw_input);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         crate::ui(ui, &mut self.app);
     }
@@ -52,5 +73,67 @@ impl eframe::App for PlanrsApp {
 
     fn persist_egui_memory(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::indexing_slicing,
+    reason = "tests : un échec doit s'arrêter net et lisiblement"
+)]
+mod tests {
+    use egui::{Event, Modifiers, MouseWheelSource, MouseWheelUnit, RawInput, TouchPhase, pos2, vec2};
+
+    use super::sanitize_raw_input;
+
+    fn wheel(x: f32, y: f32) -> Event {
+        Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: vec2(x, y),
+            phase: TouchPhase::Move,
+            source: MouseWheelSource::Wheel,
+            modifiers: Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn sanitize_drops_non_finite_events() {
+        let mut raw = RawInput {
+            events: vec![
+                wheel(f32::NAN, 0.0),
+                wheel(0.0, -40.0),
+                wheel(f32::INFINITY, 0.0),
+                Event::Zoom(f32::NAN),
+                Event::Zoom(1.1),
+                Event::PointerMoved(pos2(f32::NEG_INFINITY, 3.0)),
+                Event::PointerMoved(pos2(10.0, 3.0)),
+                Event::MouseMoved(vec2(f32::NAN, 0.0)),
+                Event::Rotate(f32::INFINITY),
+            ],
+            ..RawInput::default()
+        };
+        sanitize_raw_input(&mut raw);
+        assert_eq!(raw.events.len(), 3, "{:?}", raw.events);
+        assert_eq!(raw.events[0], wheel(0.0, -40.0));
+        assert_eq!(raw.events[1], Event::Zoom(1.1));
+        assert_eq!(raw.events[2], Event::PointerMoved(pos2(10.0, 3.0)));
+    }
+
+    /// Une molette non finie filtrée ne fait plus échouer egui.
+    #[test]
+    fn sanitized_nan_wheel_runs_frame() {
+        let ctx = egui::Context::default();
+        let mut raw = RawInput {
+            events: vec![
+                Event::PointerMoved(pos2(10.0, 10.0)),
+                wheel(f32::NAN, f32::INFINITY),
+            ],
+            ..RawInput::default()
+        };
+        sanitize_raw_input(&mut raw);
+        let mut output = ctx.run_ui(raw, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| ui.add_space(1.0));
+        });
+        output.textures_delta.clear();
     }
 }

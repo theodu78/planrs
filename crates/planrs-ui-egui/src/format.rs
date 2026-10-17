@@ -10,7 +10,7 @@
 
 use std::fmt::Write as _;
 
-use chrono::{Datelike as _, Timelike as _};
+use chrono::Datelike as _;
 use planrs_core::{
     ConversionFactors, Decimal, Duration, DurationUnit, Lag, LagValue, Link, LinkType, Minutes, Moment,
     Project, TimeBasis, Weekday,
@@ -19,8 +19,7 @@ use planrs_core::{
 /// Libellé d'une unité au singulier et au pluriel (« jour » / « jours »).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UnitLabel {
-    /// Forme singulière (règle de pluriel : voir `PluralRule`, français
-    /// |v| < 2, anglais |v| = 1).
+    /// Forme singulière (règle de pluriel : [`FormatLabels::plural`]).
     pub one: String,
     /// Forme employée sinon.
     pub other: String,
@@ -103,6 +102,8 @@ pub struct FormatLabels {
     pub link_sf: String,
     /// Ordre des composantes d'une date.
     pub date_order: DateOrder,
+    /// Règle de pluriel des unités (clé `fmt-plural-rule`).
+    pub plural: PluralRule,
     /// « Oui ».
     pub yes: String,
     /// « Non ».
@@ -119,6 +120,8 @@ pub struct FormatLabels {
     pub weekday_initials: [String; 7],
     /// Préfixe de trimestre (FR `T` ; EN `Q`).
     pub quarter_prefix: String,
+    /// Préfixe d'une semaine numérotée (clé `tier-week` : FR `S` ; EN `W`).
+    pub week_prefix: String,
 }
 
 /// Suffixe d'une durée estimée (« 1 jour? »), identique en français et en
@@ -126,32 +129,36 @@ pub struct FormatLabels {
 /// traduite).
 pub const ESTIMATED_SUFFIX: char = '?';
 
-/// Règle de pluriel des unités.
+/// Règle de pluriel des unités, lue dans la clé `.ftl` `fmt-plural-rule`
+/// (`Texts::format_labels`).
 ///
 /// Hypothèse H-UI : en français, singulier si |valeur| < 2 (« 0 jour »,
 /// « 1,5 jour », « -1 jour ») ; en anglais, singulier si |valeur| = 1
-/// exactement (« 1 day », « 0 days », « 1.5 days »). `FormatLabels` ne porte
-/// pas encore la langue : la règle est déduite de l'ordre des dates
-/// (`DayMonthYear` → règle française), en attendant une clé dédiée.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PluralRule {
-    /// Singulier si |v| < 2.
+/// exactement (« 1 day », « 0 days », « 1.5 days »).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PluralRule {
+    /// Singulier si |v| < 2 (clé `below-two`, français).
     BelowTwo,
-    /// Singulier si |v| = 1.
+    /// Singulier si |v| = 1 (clé `exactly-one`, anglais ; repli).
+    #[default]
     ExactlyOne,
 }
 
 impl PluralRule {
-    /// Règle de la langue des libellés.
-    const fn of(l: &FormatLabels) -> Self {
-        match l.date_order {
-            DateOrder::DayMonthYear => Self::BelowTwo,
-            DateOrder::MonthDayYear => Self::ExactlyOne,
+    /// Règle désignée par une valeur de `fmt-plural-rule` (`below-two`,
+    /// `exactly-one`) ; `None` pour une valeur inconnue.
+    #[must_use]
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.trim() {
+            "below-two" => Some(Self::BelowTwo),
+            "exactly-one" => Some(Self::ExactlyOne),
+            _ => None,
         }
     }
 
     /// Vrai si la valeur prend la forme singulière.
-    fn is_one(self, d: Decimal) -> bool {
+    #[must_use]
+    pub fn is_one(self, d: Decimal) -> bool {
         let d = d.normalized();
         let abs = d.mantissa().unsigned_abs();
         match self {
@@ -198,7 +205,7 @@ fn write_value_unit(
 ) {
     write_decimal(out, value, l.decimal_sep);
     let label = l.units.get(unit, basis);
-    let word = if PluralRule::of(l).is_one(value) {
+    let word = if l.plural.is_one(value) {
         &label.one
     } else {
         &label.other
@@ -372,16 +379,6 @@ pub fn format_date(m: Moment, l: &FormatLabels) -> String {
     out
 }
 
-/// Date courte suivie de l'heure (« lun 02/11/26 08:00 »), pour la barre
-/// d'état.
-#[must_use]
-pub fn format_date_time(m: Moment, l: &FormatLabels) -> String {
-    let mut out = format_date(m, l);
-    let time = m.to_naive().time();
-    let _ = write!(out, " {:02}:{:02}", time.hour(), time.minute());
-    out
-}
-
 /// Marge en jours ouvrés, signée (« 0 jour », « -2 jours »), hypothèse
 /// H-UI-09.
 #[must_use]
@@ -406,7 +403,7 @@ mod tests {
     };
 
     use super::{
-        DateOrder, FormatLabels, UnitLabel, UnitLabels, format_date, format_date_time, format_duration,
+        DateOrder, FormatLabels, PluralRule, UnitLabel, UnitLabels, format_date, format_duration,
         format_minutes_as, format_predecessors, format_slack, write_decimal,
     };
 
@@ -443,6 +440,7 @@ mod tests {
             link_ff: "FF".to_owned(),
             link_sf: "DF".to_owned(),
             date_order: DateOrder::DayMonthYear,
+            plural: PluralRule::BelowTwo,
             yes: "Oui".to_owned(),
             no: "Non".to_owned(),
             unknown: "?".to_owned(),
@@ -473,6 +471,7 @@ mod tests {
             link_ff: "FF".to_owned(),
             link_sf: "SF".to_owned(),
             date_order: DateOrder::MonthDayYear,
+            plural: PluralRule::ExactlyOne,
             yes: "Yes".to_owned(),
             no: "No".to_owned(),
             unknown: "?".to_owned(),
@@ -834,18 +833,10 @@ mod tests {
     }
 
     #[test]
-    fn fmt_date_time_and_extremes() {
-        assert_eq!(
-            format_date_time(moment("2026-11-02T08:00"), &fr()),
-            "lun 02/11/26 08:00"
-        );
-        assert_eq!(
-            format_date_time(moment("2026-11-02T17:30"), &en()),
-            "Mon 11/2/26 17:30"
-        );
+    fn fmt_date_extremes() {
         // Bornes du domaine des dates : aucune panique.
         let first = Moment::from_minutes(0).unwrap();
-        assert!(!format_date(first, &fr()).is_empty());
+        assert_ne!(format_date(first, &fr()), "");
         // Libellés vides : date seule.
         assert_eq!(
             format_date(moment("2026-11-02T08:00"), &FormatLabels::default()),
@@ -855,18 +846,69 @@ mod tests {
 
     #[test]
     fn fmt_labels_from_ftl_match_hand_built() {
-        let fr_ftl = crate::i18n::Texts::new(crate::i18n::Language::Fr).format_labels();
+        let fr_texts = crate::i18n::Texts::new(crate::i18n::Language::Fr);
+        let fr_ftl = fr_texts.format_labels();
         let f = factors();
         assert_eq!(
-            format_duration(&days(2_400, TimeBasis::Working, false), &f, &fr_ftl),
+            format_duration(&days(2_400, TimeBasis::Working, false), &f, fr_ftl),
             "5 jours"
         );
-        assert_eq!(format_date(moment("2026-11-02T08:00"), &fr_ftl), "lun 02/11/26");
-        let en_ftl = crate::i18n::Texts::new(crate::i18n::Language::En).format_labels();
-        assert_eq!(format_date(moment("2026-11-02T08:00"), &en_ftl), "Mon 11/2/26");
+        assert_eq!(format_date(moment("2026-11-02T08:00"), fr_ftl), "lun 02/11/26");
+        let en_texts = crate::i18n::Texts::new(crate::i18n::Language::En);
+        let en_ftl = en_texts.format_labels();
+        assert_eq!(format_date(moment("2026-11-02T08:00"), en_ftl), "Mon 11/2/26");
         assert_eq!(
-            format_duration(&days(2_400, TimeBasis::Working, false), &f, &en_ftl),
+            format_duration(&days(2_400, TimeBasis::Working, false), &f, en_ftl),
             "5 days"
+        );
+    }
+
+    /// Pluriel piloté par `FormatLabels::plural` (clé `fmt-plural-rule`),
+    /// indépendamment de l'ordre des dates.
+    #[test]
+    fn fmt_plural_rule_from_labels_not_date_order() {
+        let f = factors();
+        let one_and_half = days(720, TimeBasis::Working, false);
+        // Règle française avec un ordre de dates anglais.
+        let below_two = FormatLabels {
+            date_order: DateOrder::MonthDayYear,
+            plural: PluralRule::BelowTwo,
+            ..fr()
+        };
+        assert_eq!(format_duration(&one_and_half, &f, &below_two), "1,5 jour");
+        // Règle anglaise avec un ordre de dates français.
+        let exactly_one = FormatLabels {
+            date_order: DateOrder::DayMonthYear,
+            plural: PluralRule::ExactlyOne,
+            ..fr()
+        };
+        assert_eq!(format_duration(&one_and_half, &f, &exactly_one), "1,5 jours");
+        assert_eq!(
+            format_duration(&days(0, TimeBasis::Working, false), &f, &exactly_one),
+            "0 jours"
+        );
+        assert_eq!(PluralRule::from_key(" below-two "), Some(PluralRule::BelowTwo));
+        assert_eq!(PluralRule::from_key("exactly-one"), Some(PluralRule::ExactlyOne));
+        assert_eq!(PluralRule::from_key("dual"), None);
+    }
+
+    /// Pluriel lu dans les `.ftl` réels : « 1,5 jour » en français,
+    /// « 1.5 days » en anglais.
+    #[test]
+    fn fmt_plural_rule_via_ftl_key() {
+        let f = factors();
+        let one_and_half = days(720, TimeBasis::Working, false);
+        let fr_texts = crate::i18n::Texts::new(crate::i18n::Language::Fr);
+        assert_eq!(fr_texts.format_labels().plural, PluralRule::BelowTwo);
+        assert_eq!(
+            format_duration(&one_and_half, &f, fr_texts.format_labels()),
+            "1,5 jour"
+        );
+        let en_texts = crate::i18n::Texts::new(crate::i18n::Language::En);
+        assert_eq!(en_texts.format_labels().plural, PluralRule::ExactlyOne);
+        assert_eq!(
+            format_duration(&one_and_half, &f, en_texts.format_labels()),
+            "1.5 days"
         );
     }
 }

@@ -62,7 +62,7 @@ eframe (desktop/web)            kittest / perf / snapshot
          `-- CentralPanel
                |-- document ouvert : view::main_view::show(ui, fc, &mut ViewTransient)
                |      geom::main_layout -> MainLayout
-               |      TimeAxis::new(range, zoom, gantt_left - gantt_scroll_x)
+               |      TimeAxis::new(range, zoom, last_gantt_left - gantt_scroll_x)
                |      table::paint_header, timescale::paint_header
                |      ScrollArea::vertical().show_viewport
                |          geom::visible_rows(viewport, ROW_H, len, OVERSCAN)

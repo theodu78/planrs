@@ -4,19 +4,20 @@
 //! revient par un canal `std::sync::mpsc`, relevé (`try_recv`) au début de
 //! l'image suivante. Natif : `rfd::FileDialog` synchrone sur le fil
 //! d'interface (motif sûr sur macOS ; l'image est gelée pendant la boîte
-//! modale), puis `std::fs::read` et [`document::load`]. Web :
+//! modale), puis `std::fs::read` et [`document::load`] ; `FileHandle::read`
+//! de rfd n'est jamais utilisé (il fait `unwrap` en interne). Web :
 //! `rfd::AsyncFileDialog` (téléversement par un `<input type=file>` généré
-//! par rfd) lancé par `wasm_bindgen_futures::spawn_local`. Jamais de
-//! `std::thread::spawn` (panique en wasm32).
+//! par rfd) lancé par `wasm_bindgen_futures::spawn_local`, puis lecture par
+//! `Blob::arrayBuffer` (promesse rejetée → erreur traduite). Tout chemin qui
+//! se termine envoie un [`OpenEvent`]. Jamais de `std::thread::spawn`
+//! (panique en wasm32).
 
 use std::sync::mpsc::Sender;
 
 use planrs_core::Moment;
 
 use crate::app::DocOrigin;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::document::OpenError;
-use crate::document::{self, LoadedDocument};
+use crate::document::{self, LoadedDocument, OpenError};
 
 /// Résultat d'une demande d'ouverture.
 #[derive(Debug)]
@@ -78,6 +79,7 @@ impl FileService for RfdFileService {
         filter: String,
         tx: Sender<OpenEvent>,
     ) {
+        // Chemin lu par `std::fs::read`, jamais par `FileHandle::read`.
         let picked = rfd::FileDialog::new()
             .set_title(title)
             .add_filter(filter, &["xml"])
@@ -113,12 +115,19 @@ impl FileService for RfdFileService {
         tx: Sender<OpenEvent>,
     ) {
         let ctx = ctx.clone();
-        // Lancé dans la même image que le clic : l'activation transitoire du
-        // navigateur est encore valide pour ouvrir le sélecteur.
+        // Le réducteur s'exécute en fin d'image (dans `requestAnimationFrame`,
+        // pas dans le gestionnaire du clic) et `pick_file` ne crée le
+        // `<input type=file>` que dans le futur : le navigateur l'accepte grâce
+        // à la fenêtre d'activation transitoire qui suit le clic (environ 5 s
+        // dans Chromium). Hypothèse, à vérifier sur Safari.
         let dialog = rfd::AsyncFileDialog::new()
             .set_title(title)
             .add_filter(filter, &["xml"]);
         wasm_bindgen_futures::spawn_local(async move {
+            // Annulation : rfd résout la promesse à `None` sur l'événement
+            // `cancel` du sélecteur. Un navigateur qui n'émet pas `cancel`
+            // (Safari < 16.4) ne résout jamais : aucun événement n'arrive,
+            // et `App` relance une ouverture demandée pendant l'attente.
             let event = match dialog.pick_file().await {
                 None => OpenEvent::Cancelled,
                 Some(handle) => {
@@ -127,18 +136,46 @@ impl FileService for RfdFileService {
                         path: None,
                         demo: false,
                     };
-                    // `read` rend un vecteur vide en cas d'échec : le lecteur
-                    // MSPDI le refuse proprement (« document vide »).
-                    let bytes = handle.read().await;
-                    OpenEvent::Opened {
-                        origin,
-                        result: document::load(&bytes, now),
-                    }
+                    // Lecture par `Blob::arrayBuffer` : un échec (fichier
+                    // supprimé, permission retirée) rejette la promesse et
+                    // devient `OpenError::Read` ; un contenu vide est refusé
+                    // par le lecteur MSPDI (`OpenError::Mspdi`). Jamais
+                    // `FileHandle::read`, qui n'écoute que `onload` (promesse
+                    // jamais résolue en cas d'échec).
+                    let result = read_web_file(&handle)
+                        .await
+                        .and_then(|bytes| document::load(&bytes, now));
+                    OpenEvent::Opened { origin, result }
                 }
             };
             deliver(&tx, &ctx, event);
         });
     }
+}
+
+/// Lit le contenu d'un fichier choisi dans le navigateur
+/// (`Blob::arrayBuffer`). Toute exception JavaScript devient
+/// `OpenError::Read` avec son message.
+#[cfg(target_arch = "wasm32")]
+async fn read_web_file(handle: &rfd::FileHandle) -> Result<Vec<u8>, OpenError> {
+    // `inner` rend le `web_sys::File` d'un descripteur obtenu par
+    // `pick_file` (toujours lisible).
+    let promise = handle.inner().array_buffer();
+    match wasm_bindgen_futures::JsFuture::from(promise).await {
+        Ok(buffer) => Ok(js_sys::Uint8Array::new(&buffer).to_vec()),
+        Err(error) => Err(OpenError::Read(js_error_text(&error))),
+    }
+}
+
+/// Message d'une exception JavaScript (`error.message`), sinon sa forme de
+/// débogage.
+#[cfg(target_arch = "wasm32")]
+fn js_error_text(error: &wasm_bindgen_futures::wasm_bindgen::JsValue) -> String {
+    js_sys::Reflect::get(error, &js_sys::JsString::from("message"))
+        .ok()
+        .and_then(|message| message.as_string())
+        .filter(|message| !message.is_empty())
+        .unwrap_or_else(|| format!("{error:?}"))
 }
 
 impl FileService for NoFileService {

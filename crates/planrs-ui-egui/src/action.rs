@@ -24,17 +24,21 @@ pub enum Action {
     SetLanguage(LanguagePref),
     /// Change la préférence de thème.
     SetTheme(ThemePref),
-    /// Change le zoom de l'échelle de temps.
+    /// Change le zoom de l'échelle de temps, ancré au centre du Gantt
+    /// visible (la zone affichée reste à l'écran).
     SetZoom(TimeScaleZoom),
-    /// Réapplique le zoom ajusté à la plage du document.
+    /// Réapplique le zoom ajusté à la plage du document, ancré au centre du
+    /// Gantt visible.
     FitZoom,
-    /// Pas de zoom (Ctrl/Cmd + molette), ancré à l'abscisse écran
-    /// `anchor_x` ; arithmétique en pixels seulement.
+    /// Pas de zoom (Ctrl/Cmd + molette), qui garde sous le pointeur le même
+    /// point du contenu ; arithmétique en pixels seulement.
     ZoomStep {
         /// Nombre de pas : positif vers le plus fin, négatif vers le plus
         /// grossier.
         steps: i8,
-        /// Abscisse écran du pointeur.
+        /// Abscisse du pointeur **relative au bord gauche du Gantt**
+        /// visible (0 = bord gauche), bornée par le réducteur à la largeur
+        /// du Gantt ; une valeur non finie vaut 0.
         anchor_x: f32,
     },
     /// Largeur de la table (séparateur déplacé), en points logiques.

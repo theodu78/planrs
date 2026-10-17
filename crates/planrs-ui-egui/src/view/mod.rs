@@ -6,7 +6,7 @@
 
 use std::ops::Range;
 
-use planrs_core::TaskUid;
+use planrs_core::{Severity, TaskUid};
 
 use crate::action::Action;
 use crate::app::OpenDocument;
@@ -46,6 +46,9 @@ pub struct Metrics {
     pub splitter_w: f32,
     /// Hauteur de la barre de défilement horizontale du Gantt.
     pub hbar_h: f32,
+    /// Largeur réservée à droite du corps par la barre de défilement
+    /// verticale pleine (`ScrollStyle::solid`) : le Gantt s'arrête avant.
+    pub vbar_w: f32,
 }
 
 impl Default for Metrics {
@@ -57,6 +60,7 @@ impl Default for Metrics {
             indent: 14.0,
             splitter_w: 5.0,
             hbar_h: 10.0,
+            vbar_w: egui::style::ScrollStyle::solid().allocated_width(),
         }
     }
 }
@@ -73,21 +77,88 @@ pub struct ViewTransient {
     pub zoom_accum: f32,
     /// Ajuster le zoom à la prochaine image (après une ouverture).
     pub needs_fit: bool,
-    /// Largeur du Gantt à l'image précédente.
+    /// Largeur du Gantt à l'image précédente : référence des ancres de
+    /// zoom (centre du Gantt) et de la borne du défilement horizontal.
     pub last_gantt_width: f32,
+    /// Abscisse écran du bord gauche du Gantt à l'image précédente (relevé
+    /// pour les tests ; le réducteur ne travaille qu'en abscisses relatives
+    /// au Gantt).
+    pub last_gantt_left: f32,
 }
 
 /// Relevé d'une image (tests de synchronisation et de performance).
+///
+/// Chaque volet écrit son propre champ (`table::paint_body` pour
+/// `table_rows`, `gantt::paint_body` pour `gantt_rows`) : comparer les deux
+/// compare deux chemins de dessin distincts.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FrameStats {
-    /// Lignes dessinées dans la table.
+    /// Lignes dessinées dans la table (écrit par `table::paint_body`).
     pub table_rows: Range<usize>,
-    /// Lignes dessinées dans le Gantt.
+    /// Lignes dessinées dans le Gantt (écrit par `gantt::paint_body`).
     pub gantt_rows: Range<usize>,
     /// Liens dessinés.
     pub links_painted: usize,
     /// Formes émises par la vue principale.
     pub shapes: usize,
+}
+
+/// Diagnostics du document prêts à afficher : triés par gravité et mis en
+/// texte **une fois** par document et par langue (cache d'`App`), comptés
+/// une fois. Aucune image ne refait ce travail proportionnel au nombre de
+/// diagnostics (ADR-0011, décision 3).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DiagnosticsView {
+    /// Gravité et texte affiché, la plus grave d'abord (ordre d'émission à
+    /// gravité égale : diagnostics d'import, puis de calcul).
+    pub entries: Vec<(Severity, String)>,
+    /// Nombre d'erreurs.
+    pub errors: usize,
+    /// Nombre d'avertissements.
+    pub warnings: usize,
+}
+
+/// Rang d'affichage d'une gravité (la plus grave d'abord).
+const fn severity_rank(severity: Severity) -> u8 {
+    match severity {
+        Severity::Error => 0,
+        Severity::Warning => 1,
+        Severity::Info => 2,
+    }
+}
+
+/// Texte affichable d'un diagnostic : « → » (U+2192), absent des polices
+/// d'egui, devient « -> » (voir `docs/ui-needs.md`, N5 : diagnostics non
+/// traduits, mis en forme par le cœur).
+fn displayable(text: &str) -> String {
+    text.replace('\u{2192}', "->")
+}
+
+impl DiagnosticsView {
+    /// Construit la vue des diagnostics d'import et de calcul d'un document
+    /// (tri stable par gravité).
+    #[must_use]
+    pub fn build(doc: &OpenDocument) -> Self {
+        let mut entries: Vec<(Severity, String)> = doc
+            .import_diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.severity, displayable(&diagnostic.to_string())))
+            .chain(
+                doc.schedule
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| (diagnostic.severity(), displayable(&diagnostic.to_string()))),
+            )
+            .collect();
+        entries.sort_by_key(|(severity, _)| severity_rank(*severity));
+        let count = |wanted: Severity| entries.iter().filter(|(severity, _)| *severity == wanted).count();
+        let (errors, warnings) = (count(Severity::Error), count(Severity::Warning));
+        Self {
+            entries,
+            errors,
+            warnings,
+        }
+    }
 }
 
 /// Contexte d'une image : lectures partagées, file d'actions et relevé.
@@ -104,6 +175,8 @@ pub struct FrameCtx<'a> {
     pub palette: &'a Palette,
     /// Mesures.
     pub metrics: &'a Metrics,
+    /// Diagnostics du document, triés et mis en texte (vide sans document).
+    pub diagnostics: &'a DiagnosticsView,
     /// Tâche sélectionnée.
     pub selection: Option<TaskUid>,
     /// File des actions de l'image.

@@ -8,10 +8,11 @@
 use planrs_core::Severity;
 
 use crate::action::Action;
-use crate::app::UserMessage;
+use crate::app::{MAX_MESSAGES, UserMessage};
 use crate::format::format_date;
 use crate::i18n::{Arg, Language, TextId};
 use crate::state::{LanguagePref, ThemePref};
+use crate::theme::Palette;
 use crate::timescale::TimeScaleZoom;
 
 use super::FrameCtx;
@@ -79,12 +80,19 @@ pub fn toolbar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
             if ui.button(texts.get(TextId::MenuOpenDemo)).clicked() {
                 fc.actions.push(Action::OpenDemo);
             }
-            if ui.button(texts.get(TextId::MenuOpen)).clicked() {
+            // Libellé court (le menu et l'accueil portent le libellé long) :
+            // la barre d'outils reste sur une ligne, et le nom accessible ne
+            // double pas le bouton de l'accueil.
+            if ui.button(texts.get(TextId::ToolbarOpen)).clicked() {
                 fc.actions.push(Action::OpenDialog);
             }
             ui.separator();
             ui.add_enabled_ui(has_doc, |ui| {
                 zoom_choices(ui, fc);
+                // « Ajuster » est une action, pas un choix exclusif : séparé
+                // des étiquettes de zoom pour ne pas passer pour une bascule
+                // enfoncée.
+                ui.separator();
                 if ui.button(texts.get(TextId::ToolbarFit)).clicked() {
                     fc.actions.push(Action::FitZoom);
                 }
@@ -115,10 +123,12 @@ fn choice(ui: &mut egui::Ui, selected: bool, text: &str) -> bool {
     response.clicked()
 }
 
-/// Zoom exclusif Jour / Semaine / Mois / Trimestre.
+/// Zoom exclusif Jour / Semaine / Mois / Trimestre ; aucun n'est surligné
+/// sans document (l'ouverture choisira le zoom ajusté).
 fn zoom_choices(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    let has_doc = fc.doc.is_some();
     for zoom in TimeScaleZoom::ALL {
-        if choice(ui, fc.state.zoom == zoom, &fc.texts.get(zoom.label())) {
+        if choice(ui, has_doc && fc.state.zoom == zoom, &fc.texts.get(zoom.label())) {
             fc.actions.push(Action::SetZoom(zoom));
         }
     }
@@ -208,33 +218,6 @@ fn centered_row(ui: &mut egui::Ui, labels: &[String], add_contents: impl FnOnce(
     });
 }
 
-/// Nombre de diagnostics (import et calcul) par gravité : (erreurs,
-/// avertissements).
-fn diagnostic_counts(fc: &FrameCtx<'_>) -> (i64, i64) {
-    let Some(doc) = fc.doc else {
-        return (0, 0);
-    };
-    let severities = doc
-        .import_diagnostics
-        .iter()
-        .map(|diagnostic| diagnostic.severity)
-        .chain(
-            doc.schedule
-                .diagnostics
-                .iter()
-                .map(planrs_core::Diagnostic::severity),
-        );
-    let (mut errors, mut warnings) = (0_i64, 0_i64);
-    for severity in severities {
-        match severity {
-            Severity::Error => errors = errors.saturating_add(1),
-            Severity::Warning => warnings = warnings.saturating_add(1),
-            Severity::Info => {}
-        }
-    }
-    (errors, warnings)
-}
-
 /// Barre d'état (nom, nombre de tâches, plage, diagnostics) et bandeau des
 /// messages (sous la barre d'outils).
 pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMessage]) {
@@ -261,18 +244,20 @@ pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
                 &[
                     (
                         "start",
-                        Arg::Str(format_date(doc.schedule.project_start, &labels).into()),
+                        Arg::Str(format_date(doc.schedule.project_start, labels).into()),
                     ),
                     (
                         "finish",
-                        Arg::Str(format_date(doc.schedule.project_finish, &labels).into()),
+                        Arg::Str(format_date(doc.schedule.project_finish, labels).into()),
                     ),
                 ],
             ));
             ui.separator();
             // Cliquer sur un compteur ouvre ou referme le panneau des
-            // diagnostics.
-            let (errors, warnings) = diagnostic_counts(fc);
+            // diagnostics. Compteurs calculés une fois par document (cache
+            // d'`App`, `DiagnosticsView`).
+            let errors = i64::try_from(fc.diagnostics.errors).unwrap_or(i64::MAX);
+            let warnings = i64::try_from(fc.diagnostics.warnings).unwrap_or(i64::MAX);
             let counters = [
                 (TextId::StatusErrors, errors, ui.visuals().error_fg_color),
                 (TextId::StatusWarnings, warnings, ui.visuals().warn_fg_color),
@@ -291,32 +276,60 @@ pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
     message_banner(ui, fc, messages);
 }
 
-/// Bandeau des messages (erreur en rouge), refermable ; jamais de modale.
+/// Les [`MAX_MESSAGES`] messages les plus récents (fin de la liste) : `App`
+/// borne déjà sa liste, le bandeau la borne aussi à l'affichage pour ne
+/// jamais manger la vue (D-fix-9).
+fn recent_messages(messages: &[UserMessage]) -> &[UserMessage] {
+    let skip = messages.len().saturating_sub(MAX_MESSAGES);
+    messages.get(skip..).unwrap_or(messages)
+}
+
+/// Fond et liseré du bandeau selon la gravité la plus haute affichée.
+fn banner_colors(
+    has_error: bool,
+    palette: &Palette,
+    visuals: &egui::Visuals,
+) -> (egui::Color32, egui::Color32) {
+    if has_error {
+        (palette.message_error_bg, palette.critical)
+    } else {
+        (palette.message_warning_bg, visuals.warn_fg_color)
+    }
+}
+
+/// Bandeau des messages, refermable ; jamais de modale. Texte fort
+/// (`text_strong`) sur fond teinté (contraste ≥ 4,5:1, testé dans `theme`),
+/// liseré gauche coloré selon la gravité ; au plus [`MAX_MESSAGES`]
+/// messages, les plus récents.
 fn message_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMessage]) {
+    let messages = recent_messages(messages);
     if messages.is_empty() {
         return;
     }
     let texts = fc.texts;
+    let palette = fc.palette;
     let has_error = messages.iter().any(|message| message.severity == Severity::Error);
-    let visuals = ui.visuals();
-    let (fill, fg) = if has_error {
-        (
-            visuals.error_fg_color.gamma_multiply(0.18),
-            visuals.error_fg_color,
-        )
-    } else {
-        (visuals.warn_fg_color.gamma_multiply(0.18), visuals.text_color())
-    };
+    let (fill, accent) = banner_colors(has_error, palette, ui.visuals());
+    let fg = palette.text_strong;
     let frame = egui::Frame::side_top_panel(ui.style()).fill(fill);
     egui::Panel::top("planrs_message_banner")
         .frame(frame)
         .show(ui, |ui| {
+            let rect = ui.max_rect();
+            if rect.is_finite() {
+                let bar =
+                    egui::Rect::from_min_max(rect.left_top(), egui::pos2(rect.left() + 3.0, rect.bottom()));
+                ui.painter()
+                    .rect_filled(bar.expand2(egui::vec2(0.0, 2.0)), 0.0, accent);
+            }
             ui.horizontal(|ui| {
+                ui.add_space(6.0);
                 ui.vertical(|ui| {
                     if has_error {
                         ui.label(
                             egui::RichText::new(texts.get(TextId::OpenErrorTitle))
                                 .strong()
+                                .size(15.0)
                                 .color(fg),
                         );
                     }
@@ -325,10 +338,43 @@ fn message_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
                     }
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(texts.get(TextId::MenuClose)).clicked() {
+                    if ui.button(texts.get(TextId::MessageDismiss)).clicked() {
                         fc.actions.push(Action::DismissMessage);
                     }
                 });
             });
         });
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::arithmetic_side_effects,
+    reason = "tests : un échec doit s'arrêter net et lisiblement"
+)]
+mod tests {
+    use planrs_core::Severity;
+
+    use super::recent_messages;
+    use crate::app::{MAX_MESSAGES, UserMessage};
+
+    fn message(n: usize) -> UserMessage {
+        UserMessage {
+            severity: Severity::Warning,
+            text: n.to_string(),
+        }
+    }
+
+    #[test]
+    fn banner_keeps_most_recent_messages() {
+        let none: Vec<UserMessage> = Vec::new();
+        assert_eq!(recent_messages(&none).len(), 0);
+        let two: Vec<UserMessage> = (0..2).map(message).collect();
+        assert_eq!(recent_messages(&two), two.as_slice());
+        let forty: Vec<UserMessage> = (0..40).map(message).collect();
+        let shown = recent_messages(&forty);
+        assert_eq!(shown.len(), MAX_MESSAGES);
+        assert_eq!(shown.first().unwrap().text, (40 - MAX_MESSAGES).to_string());
+        assert_eq!(shown.last().unwrap().text, "39");
+    }
 }

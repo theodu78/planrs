@@ -19,8 +19,11 @@ use crate::io::{FileService, NoFileService, OpenEvent};
 use crate::rows::RowModel;
 use crate::state::{StateLoadError, TABLE_WIDTH_MAX, TABLE_WIDTH_MIN, ThemePref, UiState};
 use crate::theme::Palette;
-use crate::timescale::{DayRange, TimeAxis, fit_zoom, zoom_anchor};
-use crate::view::{self, FrameCtx, FrameStats, Metrics, ViewTransient};
+use crate::timescale::{TimeAxis, TimeScaleZoom, ViewSpan, fit_zoom, zoom_anchor};
+use crate::view::{self, DiagnosticsView, FrameCtx, FrameStats, Metrics, ViewTransient};
+
+/// Nombre maximal de messages conservés dans le bandeau (les plus récents).
+pub const MAX_MESSAGES: usize = 3;
 
 /// Provenance d'un document ouvert.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -44,7 +47,7 @@ pub struct OpenDocument {
     /// Diagnostics d'import.
     pub import_diagnostics: Vec<ImportDiagnostic>,
     /// Plage de jours de l'échelle de temps.
-    pub range: DayRange,
+    pub range: ViewSpan,
     /// Provenance.
     pub origin: DocOrigin,
     /// Numéro d'ouverture : clé d'invalidation des caches.
@@ -115,14 +118,12 @@ pub struct App {
     applied_theme: Option<ThemePref>,
     /// Génération du prochain document ouvert.
     next_generation: u64,
-    /// Une ouverture par le sélecteur est en cours (une seule à la fois).
+    /// Une ouverture par le sélecteur est en cours : indicateur seulement,
+    /// une nouvelle demande relance le sélecteur.
     opening: bool,
-    /// Abscisse écran du bord gauche du Gantt à la dernière image (ancre du
-    /// zoom à la molette).
-    gantt_left: f32,
-    /// Largeur du Gantt à la dernière image, d'après la mise en page
-    /// partagée (repli quand la vue n'a pas encore mesuré).
-    gantt_width: f32,
+    /// Diagnostics du document triés et mis en texte (cache invalidé à
+    /// l'ouverture et au changement de langue).
+    diagnostics: DiagnosticsView,
 }
 
 impl App {
@@ -148,8 +149,7 @@ impl App {
             applied_theme: None,
             next_generation: 1,
             opening: false,
-            gantt_left: 0.0,
-            gantt_width: 0.0,
+            diagnostics: DiagnosticsView::default(),
         }
     }
 
@@ -210,16 +210,32 @@ impl App {
         self.opening
     }
 
+    /// Diagnostics du document ouvert, triés par gravité et mis en texte une
+    /// fois par document et par langue, avec leurs compteurs (vide sans
+    /// document).
+    #[must_use]
+    pub const fn diagnostics_view(&self) -> &DiagnosticsView {
+        &self.diagnostics
+    }
+
+    /// Ajoute un message au bandeau : un texte déjà affiché n'est pas
+    /// répété, et seuls les [`MAX_MESSAGES`] plus récents sont gardés.
+    fn push_message(&mut self, severity: Severity, text: String) {
+        self.messages.retain(|message| message.text != text);
+        self.messages.push(UserMessage { severity, text });
+        let excess = self.messages.len().saturating_sub(MAX_MESSAGES);
+        if excess > 0 {
+            self.messages.drain(..excess);
+        }
+    }
+
     /// Signale (une fois) un état d'interface illisible ou trop récent.
     pub fn report_state_load(&mut self, error: &StateLoadError) {
         let text = self.texts.get_args(
             TextId::StateLoadWarning,
             &[("detail", Arg::Str(error.to_string().into()))],
         );
-        self.messages.push(UserMessage {
-            severity: Severity::Warning,
-            text,
-        });
+        self.push_message(Severity::Warning, text);
     }
 
     /// Vue remise à zéro pour un nouveau document (ou aucun), en gardant la
@@ -231,6 +247,7 @@ impl App {
             zoom_accum: 0.0,
             needs_fit,
             last_gantt_width: self.view.last_gantt_width,
+            last_gantt_left: self.view.last_gantt_left,
         }
     }
 
@@ -246,14 +263,19 @@ impl App {
             origin,
             generation,
         };
-        self.rows = Some(RowModel::build(&document, &self.texts.format_labels()));
+        self.rows = Some(RowModel::build(&document, self.texts.format_labels()));
+        self.diagnostics = DiagnosticsView::build(&document);
         self.document = Some(document);
         self.selection = None;
         self.view = self.fresh_view(true);
-        // Une ouverture réussie rend caduques les erreurs d'ouverture
-        // précédentes.
+        // Une ouverture réussie rend caduques les erreurs et avertissements
+        // d'ouverture précédents.
+        let truncated = self.texts.get(TextId::RangeTruncated);
         self.messages
-            .retain(|message| message.severity != Severity::Error);
+            .retain(|message| message.severity != Severity::Error && message.text != truncated);
+        if loaded.range_truncated {
+            self.push_message(Severity::Warning, truncated);
+        }
     }
 
     /// Transforme une erreur d'ouverture en message traduit (le titre
@@ -264,13 +286,12 @@ impl App {
             OpenError::Mspdi(error) => (TextId::OpenErrorMspdi, error.to_string()),
         };
         let text = self.texts.get_args(id, &[("detail", Arg::Str(detail.into()))]);
-        self.messages.push(UserMessage {
-            severity: Severity::Error,
-            text,
-        });
+        self.push_message(Severity::Error, text);
     }
 
     /// Relève les résultats d'ouverture arrivés depuis l'image précédente.
+    /// Seule la demande en cours peut répondre : une demande abandonnée
+    /// (voir [`App::open_dialog`]) écrit dans un canal fermé.
     fn poll_io(&mut self) {
         while let Ok(event) = self.rx.try_recv() {
             self.opening = false;
@@ -309,17 +330,19 @@ impl App {
             if document.origin.demo {
                 document.origin.name = self.texts.get(TextId::DemoFileName);
             }
-            self.rows = Some(RowModel::build(document, &self.texts.format_labels()));
+            self.rows = Some(RowModel::build(document, self.texts.format_labels()));
+            self.diagnostics = DiagnosticsView::build(document);
         }
     }
 
-    /// Largeur courante du Gantt : mesure de la vue, sinon mise en page.
+    /// Largeur du Gantt mesurée par la vue à la dernière image (0 tant
+    /// qu'aucune image n'a été dessinée).
     fn current_gantt_width(&self) -> f32 {
         let measured = self.view.last_gantt_width;
         if measured.is_finite() && measured > 0.0 {
             measured
         } else {
-            self.gantt_width
+            0.0
         }
     }
 
@@ -341,7 +364,10 @@ impl App {
     }
 
     /// Ajuste le zoom à la plage du document si c'est demandé et que la
-    /// largeur du Gantt est connue. Rend `true` si le zoom a été ajusté.
+    /// largeur du Gantt est connue. Après une ouverture (défilement nul),
+    /// le défilement est seulement borné ; pour le bouton « Ajuster »,
+    /// [`App::apply`] ancre ensuite au centre. Rend `true` si le zoom a
+    /// changé.
     fn fit_if_needed(&mut self) -> bool {
         if !self.view.needs_fit {
             return false;
@@ -362,6 +388,31 @@ impl App {
         changed
     }
 
+    /// Change le zoom en gardant à la même place le point du contenu situé
+    /// à `anchor` pixels du bord gauche du Gantt (borné à la largeur du
+    /// Gantt ; une ancre non finie vaut 0). Arithmétique en pixels
+    /// seulement.
+    fn zoom_to(&mut self, to: TimeScaleZoom, anchor: f32) {
+        let from = self.state.zoom;
+        self.view.needs_fit = false;
+        if to == from {
+            return;
+        }
+        let anchor = if anchor.is_finite() {
+            anchor.clamp(0.0, self.current_gantt_width())
+        } else {
+            0.0
+        };
+        self.view.gantt_scroll_x = zoom_anchor(self.view.gantt_scroll_x, anchor, from, to);
+        self.state.zoom = to;
+        self.clamp_gantt_scroll();
+    }
+
+    /// Centre du Gantt visible, ancre des boutons de zoom et d'« Ajuster ».
+    fn gantt_center(&self) -> f32 {
+        self.current_gantt_width() / 2.0
+    }
+
     /// Réducteur : applique une action.
     fn apply(&mut self, action: Action, ctx: &egui::Context) {
         match action {
@@ -370,6 +421,7 @@ impl App {
             Action::CloseDocument => {
                 self.document = None;
                 self.rows = None;
+                self.diagnostics = DiagnosticsView::default();
                 self.selection = None;
                 self.view = self.fresh_view(false);
             }
@@ -382,14 +434,21 @@ impl App {
                 self.state.theme = theme;
                 self.apply_theme(ctx);
             }
-            Action::SetZoom(zoom) => {
-                self.state.zoom = zoom;
-                self.view.needs_fit = false;
-                self.clamp_gantt_scroll();
-            }
+            // Boutons et menu de zoom : ancrés au centre du Gantt (la zone
+            // affichée reste à l'écran, comme dans MS Project).
+            Action::SetZoom(zoom) => self.zoom_to(zoom, self.gantt_center()),
             Action::FitZoom => {
-                self.view.needs_fit = self.document.is_some();
-                self.fit_if_needed();
+                if let Some(document) = &self.document {
+                    let width = self.current_gantt_width();
+                    if width > 0.0 {
+                        let zoom = fit_zoom(document.range, width);
+                        self.zoom_to(zoom, self.gantt_center());
+                    } else {
+                        // Largeur encore inconnue : ajustement à la
+                        // prochaine image.
+                        self.view.needs_fit = true;
+                    }
+                }
             }
             Action::ZoomStep { steps, anchor_x } => self.zoom_step(steps, anchor_x),
             Action::SetTableWidth(width) => {
@@ -411,17 +470,18 @@ impl App {
         }
     }
 
-    /// Lance le sélecteur de fichiers (une seule ouverture à la fois).
+    /// Lance le sélecteur de fichiers. Si une demande précédente n'a jamais
+    /// répondu (sélecteur web sans événement d'annulation, lecture
+    /// `FileReader` bloquée), elle est abandonnée : un nouveau canal la
+    /// remplace, si bien que son résultat éventuel, envoyé dans l'ancien
+    /// canal fermé, est ignoré. Jamais de blocage de « Ouvrir » (relecture
+    /// A, I3).
     fn open_dialog(&mut self, ctx: &egui::Context) {
         if self.opening {
-            let text = self.texts.get(TextId::OpenInProgress);
-            if !self.messages.iter().any(|message| message.text == text) {
-                self.messages.push(UserMessage {
-                    severity: Severity::Info,
-                    text,
-                });
-            }
-            return;
+            log::warn!("ouverture précédente sans réponse : abandonnée, sélecteur relancé");
+            let (tx, rx) = mpsc::channel();
+            self.tx = tx;
+            self.rx = rx;
         }
         self.opening = true;
         let now = (self.env.now)();
@@ -432,26 +492,16 @@ impl App {
             .pick_and_open(ctx, now, title, filter, self.tx.clone());
     }
 
-    /// Pas de zoom ancré sous le pointeur (abscisse écran `anchor_x`).
+    /// Pas de zoom (Ctrl/Cmd + molette) ancré sous le pointeur, `anchor_x`
+    /// étant relatif au bord gauche du Gantt.
     fn zoom_step(&mut self, steps: i8, anchor_x: f32) {
-        let from = self.state.zoom;
-        let mut to = from;
+        let mut to = self.state.zoom;
         for _ in 0..steps.unsigned_abs() {
             to = if steps > 0 { to.finer() } else { to.coarser() };
         }
-        if to == from {
-            return;
+        if to != self.state.zoom {
+            self.zoom_to(to, anchor_x);
         }
-        let offset = anchor_x - self.gantt_left;
-        let offset = if offset.is_finite() {
-            offset.clamp(0.0, self.current_gantt_width().max(0.0))
-        } else {
-            0.0
-        };
-        self.view.gantt_scroll_x = zoom_anchor(self.view.gantt_scroll_x, offset, from, to);
-        self.state.zoom = to;
-        self.view.needs_fit = false;
-        self.clamp_gantt_scroll();
     }
 
     /// Une image complète dans `ui` (appelée par [`crate::ui`]) : relève des
@@ -465,7 +515,6 @@ impl App {
         let metrics = Metrics::default();
         let mut actions = std::mem::take(&mut self.actions);
         let mut stats = FrameStats::default();
-        let mut layout_gantt: Option<(f32, f32)> = None;
         {
             // Champs disjoints : le contexte d'image emprunte l'état en
             // lecture, la vue transitoire est empruntée à part.
@@ -476,6 +525,7 @@ impl App {
                 texts: &self.texts,
                 palette: &palette,
                 metrics: &metrics,
+                diagnostics: &self.diagnostics,
                 selection: self.selection,
                 actions: &mut actions,
                 stats: &mut stats,
@@ -490,9 +540,6 @@ impl App {
             if fc.doc.is_some() {
                 let frame = egui::Frame::central_panel(ui.style()).inner_margin(0.0);
                 egui::CentralPanel::default().frame(frame).show(ui, |ui| {
-                    let avail = ui.available_rect_before_wrap();
-                    let layout = geom::main_layout(avail, f32::from(fc.state.table_width), fc.metrics);
-                    layout_gantt = Some((layout.gantt_clip.left(), layout.gantt_clip.width()));
                     view::main_view::show(ui, &mut fc, view_state);
                 });
             } else {
@@ -502,13 +549,6 @@ impl App {
             }
         }
         self.last_frame = stats;
-        if let Some((left, width)) = layout_gantt
-            && left.is_finite()
-            && width.is_finite()
-        {
-            self.gantt_left = left;
-            self.gantt_width = width.max(0.0);
-        }
         // Les actions sont appliquées après le dessin : une image de plus
         // montre leur effet (langue, zoom, document…).
         let applied = !actions.is_empty();
@@ -529,14 +569,17 @@ impl App {
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
+    clippy::indexing_slicing,
     reason = "tests : un échec doit s'arrêter net et lisiblement"
 )]
 mod tests {
     use planrs_core::Moment;
 
+    use planrs_core::Severity;
+
     use super::{App, Env};
     use crate::action::Action;
-    use crate::i18n::Language;
+    use crate::i18n::{Language, TextId};
     use crate::state::{LanguagePref, ThemePref, UiState};
 
     /// Application de test : date fixe, français, thème clair.
@@ -572,6 +615,99 @@ mod tests {
         app.open_bytes(b"pas du MSPDI", super::DocOrigin::default());
         assert!(app.document.is_none());
         assert_eq!(app.messages().len(), 1);
+    }
+
+    /// Ouverture synchrone réussie après un échec : nouvelle génération,
+    /// erreur purgée, sélection remise à zéro, diagnostics recalculés.
+    #[test]
+    fn open_bytes_success_installs_new_generation() {
+        let mut app = test_app();
+        app.open_demo();
+        app.selection = app.rows().and_then(|rows| rows.row(2)).map(|row| row.uid);
+        app.open_bytes(b"pas du MSPDI", super::DocOrigin::default());
+        assert_eq!(app.messages().len(), 1);
+        assert_eq!(app.document.as_ref().unwrap().generation, 1);
+        app.open_bytes(crate::DEMO_MSPDI, super::DocOrigin::default());
+        assert_eq!(app.document.as_ref().unwrap().generation, 2);
+        assert!(app.messages().is_empty(), "{:?}", app.messages());
+        assert!(app.selection.is_none());
+        assert!(app.view().needs_fit);
+        assert_eq!(app.diagnostics_view(), &crate::view::DiagnosticsView::default());
+    }
+
+    /// Relecture A, B1 : une plage tronquée à 20 ans est signalée par un
+    /// avertissement traduit, une seule fois.
+    #[test]
+    fn truncated_range_warns_once() {
+        let mut app = test_app();
+        for _ in 0..2 {
+            let mut loaded =
+                crate::document::load(crate::DEMO_MSPDI, "2027-01-15T08:00".parse().unwrap()).unwrap();
+            loaded.range_truncated = true;
+            app.install(loaded, super::DocOrigin::default());
+        }
+        let expected = app.texts().get(TextId::RangeTruncated);
+        assert_eq!(app.messages().len(), 1, "{:?}", app.messages());
+        assert_eq!(app.messages()[0].severity, Severity::Warning);
+        assert_eq!(app.messages()[0].text, expected);
+        // Un document non tronqué retire l'avertissement.
+        app.open_demo();
+        assert!(app.messages().is_empty(), "{:?}", app.messages());
+    }
+
+    /// Le bandeau garde au plus `MAX_MESSAGES` messages, sans doublon.
+    #[test]
+    fn messages_are_capped_and_deduplicated() {
+        let mut app = test_app();
+        for i in 0..10 {
+            app.push_message(Severity::Error, format!("m{i}"));
+            app.push_message(Severity::Error, format!("m{i}"));
+        }
+        let texts: Vec<&str> = app.messages().iter().map(|m| m.text.as_str()).collect();
+        assert_eq!(texts, ["m7", "m8", "m9"]);
+        assert_eq!(texts.len(), super::MAX_MESSAGES);
+        // Le même échec répété n'empile pas de lignes.
+        let mut app = test_app();
+        for _ in 0..40 {
+            app.open_bytes(b"<x", super::DocOrigin::default());
+        }
+        assert_eq!(app.messages().len(), 1);
+    }
+
+    /// Diagnostics triés et comptés une fois : cache recalculé au changement
+    /// de langue, vidé à la fermeture ; « → » rendu en « -> ».
+    #[test]
+    fn diagnostics_view_is_cached_per_document() {
+        let xml = std::str::from_utf8(crate::DEMO_MSPDI).unwrap().replacen(
+            "<PredecessorUID>",
+            "<PredecessorUID>777",
+            1,
+        );
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        app.open_bytes(xml.as_bytes(), super::DocOrigin::default());
+        assert!(app.document.is_some(), "{:?}", app.messages());
+        let view = app.diagnostics_view().clone();
+        assert!(!view.entries.is_empty(), "un lien pendant doit être signalé");
+        assert!(view.entries.iter().all(|(_, text)| !text.contains('\u{2192}')));
+        let ranks: Vec<u8> = view
+            .entries
+            .iter()
+            .map(|(severity, _)| match severity {
+                Severity::Error => 0,
+                Severity::Warning => 1,
+                Severity::Info => 2,
+            })
+            .collect();
+        assert!(ranks.windows(2).all(|w| w[0] <= w[1]), "{ranks:?}");
+        let errors = view.entries.iter().filter(|(s, _)| *s == Severity::Error).count();
+        assert_eq!(view.errors, errors);
+        app.dispatch(Action::SetLanguage(LanguagePref::En));
+        frame(&ctx, &mut app);
+        assert_eq!(app.diagnostics_view().entries.len(), view.entries.len());
+        app.dispatch(Action::CloseDocument);
+        frame(&ctx, &mut app);
+        assert_eq!(app.diagnostics_view().entries.len(), 0);
     }
 
     #[test]

@@ -2,14 +2,15 @@
 # Chaque clé correspond à une variante de `TextId` (src/i18n.rs) ; un test
 # vérifie que fr.ftl et en.ftl déclarent exactement les mêmes clés.
 # Typographie : espace insécable U+00A0 avant « : ; ? ! », jamais U+202F
-# (absente des polices d'egui) ; pas de points de suspension U+2026.
+# (absente des polices d'egui) ; points de suspension U+2026 « … » (présents
+# dans les polices d'egui, qui s'en servent pour tronquer).
 
 ## Écran d'accueil
 
 welcome-title = Bienvenue dans { $product }
 welcome-subtitle = Clone libre de MS Project — lecture seule pour l'instant
 welcome-open-demo = Ouvrir l'exemple : construction d'une maison
-welcome-open-file = Ouvrir un fichier MSPDI (.xml)...
+welcome-open-file = Ouvrir un fichier MSPDI (.xml)…
 welcome-web-note = Le fichier reste dans votre navigateur ; rien n'est envoyé.
 welcome-language = Langue
 welcome-theme = Thème
@@ -17,7 +18,7 @@ welcome-theme = Thème
 ## Menus
 
 menu-file = Fichier
-menu-open = Ouvrir...
+menu-open = Ouvrir un fichier MSPDI (.xml)…
 menu-open-demo = Ouvrir l'exemple
 menu-close = Fermer
 menu-view = Affichage
@@ -27,6 +28,7 @@ menu-language = Langue
 
 ## Barre d'outils et zoom
 
+toolbar-open = Ouvrir…
 toolbar-fit = Ajuster
 zoom-day = Jour
 zoom-week = Semaine
@@ -91,6 +93,9 @@ fmt-decimal-sep = ,
 fmt-list-sep = ;
 fmt-date-order = dmy
 fmt-unknown = ?
+# Règle de pluriel des unités : below-two (singulier si |v| < 2) ou
+# exactly-one (singulier si |v| = 1).
+fmt-plural-rule = below-two
 
 ## Mois
 
@@ -139,6 +144,7 @@ weekday-sun-initial = D
 ## Échelle de temps
 
 tier-quarter = T
+tier-week = S
 
 ## Barre d'état
 
@@ -164,10 +170,15 @@ status-no-document = Aucun document ouvert
 
 ## Ouverture de fichiers
 
-open-in-progress = Ouverture en cours...
+open-in-progress = Ouverture en cours…
 open-error-title = Impossible d'ouvrir le fichier
 open-error-read = Lecture du fichier impossible : { $detail }
 open-error-mspdi = Fichier MSPDI illisible : { $detail }
+
+## Bandeau de messages
+
+message-dismiss = Fermer le message
+range-truncated = Plage d'affichage limitée à 20 ans
 
 ## Accessibilité et divers
 
@@ -175,6 +186,6 @@ row-label = Ligne { $id } : { $name }
 splitter-label = Séparateur entre la table et le Gantt
 gantt-scroll-label = Défilement horizontal du Gantt
 demo-file-name = Exemple : construction d'une maison
-file-filter-mspdi = Projet MSPDI (XML)
-dialog-open-title = Ouvrir un projet MSPDI
+file-filter-mspdi = Fichier MSPDI (XML)
+dialog-open-title = Ouvrir un fichier MSPDI
 state-load-warning = Préférences d'affichage ignorées : { $detail }

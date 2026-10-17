@@ -64,6 +64,7 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
     };
     let gantt_w = layout.gantt_clip.width();
     view.last_gantt_width = gantt_w;
+    view.last_gantt_left = layout.gantt_clip.left();
     let content_w = TimeAxis::new(doc.range, fc.state.zoom, 0.0).content_width();
     let max_scroll = max_scroll_x(content_w, gantt_w);
     let scroll_x = clamp_scroll(view.gantt_scroll_x, max_scroll);
@@ -80,6 +81,7 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
 
     table::paint_header(ui, fc, layout.table_header);
     timescale::paint_header(ui, fc, &axis, layout.gantt_header);
+    paint_corners(ui, fc, &layout, avail);
 
     let mut delta_x = paint_rows(ui, fc, view, &layout, &axis);
 
@@ -133,9 +135,17 @@ fn paint_rows(
     if let Some(y) = view.pending_scroll_y.take()
         && y.is_finite()
     {
-        area = area.vertical_scroll_offset(y.max(0.0));
+        // Borné au défilement maximal : un décalage au-delà ferait revenir
+        // la zone par un rebond animé sur une dizaine d'images.
+        let max_y = (content_h - layout.body.height()).max(0.0);
+        let max_y = if max_y.is_finite() { max_y } else { 0.0 };
+        area = area.vertical_scroll_offset(y.clamp(0.0, max_y));
     }
     let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(layout.body));
+    // Barre verticale pleine, toujours visible (relecture B, I4) : elle
+    // occupe `Metrics::vbar_w` à droite du corps, que la mise en page
+    // retire au Gantt.
+    body_ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
     let table_clip = layout.table_clip;
     let gantt_clip = layout.gantt_clip;
     let out = area.show_viewport(&mut body_ui, |ui, viewport| {
@@ -150,7 +160,7 @@ fn paint_rows(
             Sense::click_and_drag(),
         );
         table::paint_body(ui, fc, origin, range.clone(), table_clip);
-        gantt::paint_body(ui, fc, axis, origin, range.clone(), gantt_clip);
+        gantt::paint_body(ui, fc, axis, origin, range, gantt_clip);
 
         let mut dx = 0.0;
         if background.clicked()
@@ -175,12 +185,31 @@ fn paint_rows(
             }
             ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
         }
-        (range, dx)
+        dx
     });
-    let (range, dx) = out.inner;
-    fc.stats.table_rows = range.clone();
-    fc.stats.gantt_rows = range;
-    dx
+    // Les plages dessinées sont relevées par chaque volet lui-même.
+    out.inner
+}
+
+/// Coins à droite de l'en-tête et de la barre horizontale du Gantt, au-dessus
+/// et au-dessous de la barre verticale : même fond que l'en-tête.
+fn paint_corners(ui: &egui::Ui, fc: &mut FrameCtx<'_>, layout: &MainLayout, avail: Rect) {
+    let corners = [
+        Rect::from_min_max(
+            pos2(layout.gantt_header.right(), layout.gantt_header.top()),
+            pos2(avail.right(), layout.gantt_header.bottom()),
+        ),
+        Rect::from_min_max(
+            pos2(layout.gantt_hbar.right(), layout.gantt_hbar.top()),
+            pos2(avail.right(), layout.gantt_hbar.bottom()),
+        ),
+    ];
+    for corner in corners {
+        if corner.is_finite() && corner.is_positive() {
+            ui.painter().rect_filled(corner, 0.0, fc.palette.header_bg);
+            fc.stats.shapes = fc.stats.shapes.saturating_add(1);
+        }
+    }
 }
 
 /// Ctrl/Cmd + molette au-dessus du Gantt : cumule `ln(zoom_delta)` et émet un
@@ -348,7 +377,7 @@ mod tests {
     use crate::i18n::{Language, Texts};
     use crate::state::{LanguagePref, ThemePref, UiState};
     use crate::theme::Palette;
-    use crate::view::{FrameCtx, FrameStats, Metrics, ViewTransient};
+    use crate::view::{DiagnosticsView, FrameCtx, FrameStats, Metrics, ViewTransient};
 
     fn now() -> Moment {
         "2027-01-15T08:00".parse().unwrap()
@@ -394,14 +423,16 @@ mod tests {
         let metrics = Metrics::default();
         let mut actions = Vec::new();
         let mut stats = FrameStats::default();
+        let diagnostics = DiagnosticsView::default();
         let mut output = ctx.run_ui(raw, |ui| {
             let mut fc = FrameCtx {
                 state: &app.state,
                 doc: app.document.as_ref(),
-                rows: None,
+                rows: app.rows(),
                 texts: &texts,
                 palette: &palette,
                 metrics: &metrics,
+                diagnostics: &diagnostics,
                 selection: None,
                 actions: &mut actions,
                 stats: &mut stats,
@@ -480,53 +511,34 @@ mod tests {
             let (actions, _) = frame(&ctx, &app, &mut view, input(events, Modifiers::COMMAND));
             got.extend(actions);
         }
+        // Ancre relative au bord gauche du Gantt (relecture B, I2).
+        let expected = over_gantt.x - view.last_gantt_left;
+        assert!(expected > 0.0 && expected < view.last_gantt_width);
         assert!(
             got.iter()
-                .any(|a| matches!(a, Action::ZoomStep { steps: 1, anchor_x } if *anchor_x > 0.0)),
+                .any(|a| matches!(a, Action::ZoomStep { steps: 1, anchor_x }
+                if (*anchor_x - expected).abs() < 0.5)),
             "{got:?}"
         );
     }
 
-    /// Les deux volets reçoivent toujours la même plage de lignes.
+    /// Les deux volets, qui relèvent chacun leur plage, dessinent les mêmes
+    /// lignes (modèle de lignes réel de l'exemple), en haut puis après un
+    /// défilement imposé.
     #[test]
     fn panes_share_row_range() {
         let ctx = egui::Context::default();
         let app = demo_app();
         let mut view = ViewTransient::default();
         let (_, stats) = frame(&ctx, &app, &mut view, input(Vec::new(), Modifiers::NONE));
+        assert!(!stats.gantt_rows.is_empty(), "{stats:?}");
+        assert_eq!(stats.gantt_rows.start, 0);
         assert_eq!(stats.table_rows, stats.gantt_rows);
         assert!(view.last_gantt_width > 0.0);
-    }
-
-    /// Alignement après une molette, dans l'application complète (kittest).
-    #[test]
-
-    fn kittest_wheel_scroll_keeps_panes_aligned() {
-        let mut app = App::new(state(), Env::fixed(now()));
-        app.open_demo();
-        let mut harness = egui_kittest::Harness::builder()
-            .with_size(vec2(1280.0, 720.0))
-            .with_pixels_per_point(1.0)
-            .with_theme(egui::Theme::Light)
-            .with_os(egui::os::OperatingSystem::Nix)
-            .with_max_steps(8)
-            .build_ui_state(|ui, app: &mut App| crate::ui(ui, app), app);
-        harness.run();
-        assert!(!harness.state().last_frame.table_rows.is_empty());
-        harness
-            .input_mut()
-            .events
-            .push(Event::PointerMoved(pos2(1000.0, 400.0)));
-        for _ in 0..20 {
-            harness
-                .input_mut()
-                .events
-                .push(wheel(vec2(0.0, -300.0), Modifiers::NONE));
-            harness.step();
-        }
-        let _ = harness.try_run();
-        let stats = &harness.state().last_frame;
+        view.pending_scroll_y = Some(20.0 * crate::view::ROW_H);
+        let _ = frame(&ctx, &app, &mut view, input(Vec::new(), Modifiers::NONE));
+        let (_, stats) = frame(&ctx, &app, &mut view, input(Vec::new(), Modifiers::NONE));
+        assert!(stats.gantt_rows.start > 0, "{stats:?}");
         assert_eq!(stats.table_rows, stats.gantt_rows);
-        assert!(stats.table_rows.start > 0, "{stats:?}");
     }
 }

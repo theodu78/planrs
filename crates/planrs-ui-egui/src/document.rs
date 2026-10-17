@@ -7,7 +7,7 @@
 use planrs_core::{Moment, Project, Schedule};
 use planrs_mspdi::{ImportDiagnostic, MspdiError, ReadOptions};
 
-use crate::timescale::{DayRange, default_range};
+use crate::timescale::{ViewSpan, default_range};
 
 /// Résultat de [`load`] : devient un `OpenDocument` quand l'application lui
 /// attribue une origine et une génération.
@@ -20,7 +20,10 @@ pub struct LoadedDocument {
     /// Diagnostics d'import (ceux du calcul sont dans `schedule`).
     pub import_diagnostics: Vec<ImportDiagnostic>,
     /// Plage de jours affichée par l'échelle de temps.
-    pub range: DayRange,
+    pub range: ViewSpan,
+    /// La plage a été tronquée à 20 ans (projet trop long) : l'application
+    /// le signale par un message traduit.
+    pub range_truncated: bool,
 }
 
 /// Échec d'ouverture d'un document.
@@ -51,7 +54,8 @@ pub fn load(bytes: &[u8], now: Moment) -> Result<LoadedDocument, OpenError> {
         project: document.project,
         schedule,
         import_diagnostics: document.diagnostics,
-        range,
+        range: range.span,
+        range_truncated: range.truncated,
     })
 }
 
@@ -85,6 +89,7 @@ mod tests {
         assert_eq!(links, 46);
         assert!(doc.range.start <= doc.schedule.project_start.day());
         assert!(doc.range.end > doc.schedule.project_finish.day());
+        assert!(!doc.range_truncated);
     }
 
     #[test]
@@ -93,7 +98,7 @@ mod tests {
             panic!("un document illisible doit être refusé");
         };
         assert!(matches!(err, OpenError::Mspdi(_)));
-        assert!(!err.to_string().is_empty());
+        assert_ne!(err.to_string(), "");
         let read = OpenError::Read("accès refusé".to_owned());
         assert_eq!(read.to_string(), "lecture impossible : accès refusé");
     }

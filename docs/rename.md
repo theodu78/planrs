@@ -16,5 +16,6 @@ Le nom est provisoire. Endroits où il apparaît (à tenir à jour) :
 - `tools/oracle/generate.bas` : nom du module `PlanrsOracle`, en-tête, titres des boîtes de dialogue et chemin d'exemple `C:\planrs\...`
 - `LICENSE-MIT` (« The planrs contributors »), `README.md`, `CLAUDE.md`, `docs/`, READMEs de `tests/`
 - fichier compagnon `<nom>.planrs.json`, répertoire d'état utilisateur, fichier de rendez-vous du canal de contrôle
+- nom d'application passé à `eframe::run_native` (`apps/planrs/src/main.rs`, `PRODUCT_NAME`) : il fixe le dossier de stockage des préférences sur le desktop (un renommage perd l'état d'interface sauvegardé) ; variable d'environnement `PLANRS_UI_SNAPSHOTS` (tests de capture, `crates/planrs-ui-egui/tests/ui/common.rs`, job CI `ui`) ; exemple `cargo run -p planrs-ui-egui --example snapshot` (fichiers `planrs-snapshot-<vue>.png`) ; workflow `desktop-build.yml` (noms des archives `planrs-desktop-*`, `planrs-web-dist`)
 - clé de persistance de l'état d'interface `planrs.ui_state` (`STATE_KEY` dans `crates/planrs-ui-egui/src/state.rs`, stockage eframe : fichier sur le desktop, localStorage sur le web)
 - `.github/workflows/*`

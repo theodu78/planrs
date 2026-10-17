@@ -13,6 +13,7 @@
 pub mod compare;
 pub mod manifest;
 pub mod report;
+pub mod roundtrip;
 pub mod verdict;
 
 use std::path::Path;

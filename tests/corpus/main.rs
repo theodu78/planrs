@@ -27,6 +27,7 @@ use planrs_core::parity::{CORPUS_FLOOR, FLOOR, ORACLE_FLOOR};
 use planrs_tests::corpus::compare::{CaseKind, Cause, Excluded, Field};
 use planrs_tests::corpus::manifest::{self, Entry, Producer};
 use planrs_tests::corpus::report::{self, Floors};
+use planrs_tests::corpus::roundtrip::{self, RoundTrip};
 use planrs_tests::corpus::verdict::{self, AbsentReason, FileResult, FileStatus};
 use planrs_tests::corpus::{self, FileRun};
 
@@ -71,8 +72,20 @@ fn corpus_parity() {
     let runs = corpus::run(&m.file, &planrs_tests::tests_path("corpus/files"));
     let results: Vec<FileResult> = runs.iter().map(FileRun::result).collect();
     let required = std::env::var("PLANRS_CORPUS").is_ok_and(|v| v == "required");
-    let v = verdict::decide(&results, CORPUS_FLOOR, required);
-    let r = report::build(&runs, floors(), v.clone());
+    let mut v = verdict::decide(&results, CORPUS_FLOOR, required);
+    // P25 : aller-retour MSPDI des fichiers présents.
+    let files = planrs_tests::tests_path("corpus/files");
+    let round_trips: Vec<RoundTrip> = runs
+        .iter()
+        .filter_map(|run| {
+            let doc = run.document.as_ref()?;
+            let source = std::fs::read_to_string(files.join(&run.entry.name)).ok()?;
+            Some(roundtrip::round_trip(&run.entry, doc, &source))
+        })
+        .collect();
+    v.failures.extend(roundtrip::failures(&round_trips));
+    let mut r = report::build(&runs, floors(), v.clone());
+    r.round_trips = round_trips;
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
     report::write(dir, &r).expect("écriture du rapport");
     print!("{}", report::summary(&r));
@@ -527,4 +540,35 @@ fn hash_mismatch_and_missing_files_are_absent() {
     let e = entry("bad.xml", b"<Projet/>", 0);
     let run = corpus::run_bytes(&e, b"<Projet/>");
     assert!(matches!(run.status, FileStatus::ReadError(_)), "{:?}", run.status);
+}
+
+// --- Aller-retour MSPDI (P25) ----------------------------------------------
+
+#[test]
+fn p25_round_trip_of_a_sample_and_verdict() {
+    // Document écrit à la main (ordre pj15, pas celui de MS Project) :
+    // projet identique avec les valeurs relues comme avec celles du moteur ;
+    // un fichier `msproject` non identique fait échouer le verdict.
+    let xml = sample("2026-10-20T17:00:00");
+    let mut e = entry("rt.xml", xml.as_bytes(), 0);
+    let run = corpus::run_bytes(&e, xml.as_bytes());
+    let doc = run.document.as_ref().unwrap();
+    let rt = roundtrip::round_trip(&e, doc, &xml);
+    assert!(rt.project_identical_recorded, "{rt:#?}");
+    assert!(rt.project_identical_schedule, "{rt:#?}");
+    let mut bad = rt;
+    bad.msproject = true;
+    bad.recorded_identical = false;
+    assert_eq!(
+        roundtrip::failures(&[bad.clone()]),
+        ["rt.xml : aller-retour MSPDI non identique"]
+    );
+    bad.msproject = false;
+    assert_eq!(roundtrip::failures(&[bad]), Vec::<String>::new());
+    e.producer = Producer::Msproject;
+    let md = roundtrip::markdown(&[roundtrip::round_trip(&e, doc, &xml)]);
+    assert!(
+        md.contains("## Aller-retour MSPDI") && md.contains("| rt.xml | oui |"),
+        "{md}"
+    );
 }

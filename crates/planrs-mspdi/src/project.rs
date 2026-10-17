@@ -7,16 +7,18 @@
 use std::collections::BTreeMap;
 
 use planrs_core::{
-    Arena, BuiltinCalendarNames, CalendarUid, ConversionFactors, Guid, Project, ProjectInfo, ProjectInit,
-    ProjectOptions, ScheduleAnchor, Subject, TaskType,
+    Arena, BuiltinCalendarNames, CalendarUid, ConversionFactors, ExtraEntry, Extras, Guid, Project,
+    ProjectInfo, ProjectInit, ProjectOptions, ScheduleAnchor, Subject, TaskType,
 };
 
 use crate::ReadOptions;
 use crate::calendar;
 use crate::codes::{self, DurationCode};
 use crate::diag::{ImportCode, Sink};
+use crate::extras::{self, ORIGIN};
 use crate::fields::Fields;
 use crate::recorded::RecordedSchedule;
+use crate::schema::Parent;
 use crate::task;
 use crate::xml::RawDocument;
 
@@ -71,6 +73,7 @@ pub(crate) fn build(raw: &RawDocument<'_>, options: &ReadOptions, sink: &mut Sin
     project.options = project_options(&f, sink);
     project.calendar = project_calendar(&f, sink);
     project.calendars = calendar::import(&raw.calendars, project.calendar, sink);
+    project.extras = project_extras(raw);
     let mut recorded = RecordedSchedule {
         project_start: recorded_start,
         project_finish: recorded_finish,
@@ -84,6 +87,24 @@ pub(crate) fn build(raw: &RawDocument<'_>, options: &ReadOptions, sink: &mut Sin
         recorded,
         save_version,
     }
+}
+
+/// `Extras` du projet (R-087) : déclarations `xmlns:préfixe` de la racine,
+/// puis enfants capturés de `Project`, dans l'ordre canonique.
+fn project_extras(raw: &RawDocument<'_>) -> Extras {
+    let mut out: Vec<ExtraEntry> = raw
+        .prefixes
+        .iter()
+        .map(|(prefix, uri)| ExtraEntry {
+            origin: ORIGIN.to_owned(),
+            key: format!("@xmlns:{prefix}"),
+            payload: uri.clone(),
+        })
+        .collect();
+    out.extend(extras::collect(&raw.fields, Parent::Project, None));
+    let mut extras = Extras(out);
+    extras::canonical_order(&mut extras, Parent::Project);
+    extras
 }
 
 /// Informations descriptives.

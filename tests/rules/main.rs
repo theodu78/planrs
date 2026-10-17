@@ -101,6 +101,7 @@ mod r083_recorded_slack_tenths;
 mod r084_project_summary_and_task_identity;
 mod r085_manual_tasks_import;
 mod r086_cpm_options_import;
+mod r087_extras_capture;
 mod r090_constraint_date_normalization;
 mod r091_as_soon_as_possible;
 mod r093_start_no_earlier_than;

@@ -11,8 +11,10 @@ use planrs_core::{Arena, CalendarUid, DayRange, Moment, Subject, TimeOfDay, Week
 
 use crate::codes::{self, DayType, ExceptionType};
 use crate::diag::{ImportCode, Sink};
+use crate::extras;
 use crate::fields::Fields;
 use crate::project::{code, guid};
+use crate::schema::Parent;
 use crate::xml::Element;
 
 /// Chemin des éléments d'un calendrier.
@@ -87,7 +89,9 @@ pub(crate) fn import(
             h.element.at,
         );
         let kind = kind(h, &f, project_calendar, &declared_base, sink);
-        let calendar = build(h.uid, kind, &f, sink);
+        let mut calendar = build(h.uid, kind, &f, sink);
+        calendar.extras = planrs_core::Extras(extras::collect(&h.element.children, Parent::Calendar, None));
+        extras::canonical_order(&mut calendar.extras, Parent::Calendar);
         // UID uniques (premier passage) : l'ajout ne peut pas échouer.
         let _ = out.push(calendar);
     }

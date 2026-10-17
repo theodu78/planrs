@@ -11,10 +11,12 @@ use planrs_core::{
 
 use crate::codes::{self, ConstraintKind, DurationCode};
 use crate::diag::{ImportCode, LinkIgnoredReason, Sink};
+use crate::extras;
 use crate::fields::Fields;
 use crate::project::{code, guid};
 use crate::recorded::{RecordedSchedule, RecordedTask, Tenths};
 use crate::scalar::{percent_lag_from_link_lag, tenths_to_minutes};
+use crate::schema::Parent;
 use crate::xml::Element;
 
 /// Chemin d'une tâche.
@@ -60,7 +62,9 @@ pub(crate) fn import(
         f.set_subject(Some(Subject::Task(uid)));
         let rec = recorded_task(&f, sink);
         let position = rows.len();
-        let (task, duration) = task(uid, &f, &rec, &options, position, sink);
+        let (mut task, duration) = task(uid, &f, &rec, &options, position, sink);
+        task.extras = planrs_core::Extras(extras::collect(&element.children, Parent::Task, None));
+        extras::canonical_order(&mut task.extras, Parent::Task);
         recorded.tasks.insert(uid, rec);
         if uid == TaskUid::PROJECT_SUMMARY {
             project.summary_task = Some(task);

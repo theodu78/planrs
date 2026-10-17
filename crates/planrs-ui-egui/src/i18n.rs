@@ -337,12 +337,13 @@ impl std::fmt::Debug for Texts {
     }
 }
 
-/// Construit le recueil fluent d'une langue. Ne rate jamais : les erreurs
-/// d'analyse sont journalisées et la ressource partielle est utilisée.
-fn build_bundle(language: Language) -> FluentBundle<FluentResource> {
+/// Construit le recueil fluent d'une langue à partir de sa source. Ne rate
+/// jamais : les erreurs d'analyse sont journalisées et la ressource partielle
+/// est utilisée.
+fn build_bundle(language: Language, source: &str) -> FluentBundle<FluentResource> {
     let mut bundle = FluentBundle::new(vec![language.langid()]);
     bundle.set_use_isolating(false);
-    let resource = match FluentResource::try_new(language.source().to_owned()) {
+    let resource = match FluentResource::try_new(source.to_owned()) {
         Ok(resource) => resource,
         Err((resource, errors)) => {
             for error in errors {
@@ -363,11 +364,22 @@ impl Texts {
     /// Charge les messages d'une langue (et le français en repli).
     #[must_use]
     pub fn new(language: Language) -> Self {
-        let fallback = (language != Language::Fr).then(|| build_bundle(Language::Fr));
+        let fallback = (language != Language::Fr).then(|| build_bundle(Language::Fr, FTL_FR));
         Self {
             language,
-            bundle: build_bundle(language),
+            bundle: build_bundle(language, language.source()),
             fallback,
+            missing: RefCell::new(BTreeSet::new()),
+        }
+    }
+
+    /// Recueil construit sur des sources arbitraires (tests du repli).
+    #[cfg(test)]
+    fn from_sources(language: Language, source: &str, fallback: Option<&str>) -> Self {
+        Self {
+            language,
+            bundle: build_bundle(language, source),
+            fallback: fallback.map(|fr| build_bundle(Language::Fr, fr)),
             missing: RefCell::new(BTreeSet::new()),
         }
     }
@@ -475,13 +487,14 @@ impl Texts {
     reason = "tests : un échec doit s'arrêter net et lisiblement"
 )]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
-    use fluent_syntax::ast::Entry;
+    use fluent_syntax::ast::{Entry, Expression, InlineExpression, Pattern, PatternElement};
 
     use super::{Arg, FTL_EN, FTL_FR, Language, TextId, Texts};
     use crate::format::DateOrder;
     use crate::state::LanguagePref;
+    use fluent_bundle::{FluentArgs, FluentValue};
 
     /// Clés des messages d'une source fluent ; échoue sur toute erreur
     /// d'analyse.
@@ -604,6 +617,238 @@ mod tests {
         assert_eq!(en.link_sf, "SF");
         assert_eq!(en.months_short[1], "Feb");
         assert_eq!(en.weekdays_short[0], "Sun");
+    }
+
+    /// Variables `$x` référencées par une expression en ligne.
+    fn inline_vars(expression: &InlineExpression<&str>, out: &mut BTreeSet<String>) {
+        match expression {
+            InlineExpression::VariableReference { id } => {
+                out.insert(id.name.to_owned());
+            }
+            InlineExpression::FunctionReference { arguments, .. } => {
+                for arg in &arguments.positional {
+                    inline_vars(arg, out);
+                }
+                for named in &arguments.named {
+                    inline_vars(&named.value, out);
+                }
+            }
+            InlineExpression::TermReference { arguments, .. } => {
+                if let Some(arguments) = arguments {
+                    for arg in &arguments.positional {
+                        inline_vars(arg, out);
+                    }
+                    for named in &arguments.named {
+                        inline_vars(&named.value, out);
+                    }
+                }
+            }
+            InlineExpression::Placeable { expression } => expression_vars(expression, out),
+            InlineExpression::StringLiteral { .. }
+            | InlineExpression::NumberLiteral { .. }
+            | InlineExpression::MessageReference { .. } => {}
+        }
+    }
+
+    /// Variables d'une expression (sélecteur et variantes compris).
+    fn expression_vars(expression: &Expression<&str>, out: &mut BTreeSet<String>) {
+        match expression {
+            Expression::Select { selector, variants } => {
+                inline_vars(selector, out);
+                for variant in variants {
+                    pattern_vars(&variant.value, out);
+                }
+            }
+            Expression::Inline(inline) => inline_vars(inline, out),
+        }
+    }
+
+    /// Variables d'un motif.
+    fn pattern_vars(pattern: &Pattern<&str>, out: &mut BTreeSet<String>) {
+        for element in &pattern.elements {
+            if let PatternElement::Placeable { expression } = element {
+                expression_vars(expression, out);
+            }
+        }
+    }
+
+    /// Variables de chaque message d'une source fluent.
+    fn message_vars(source: &str) -> BTreeMap<String, BTreeSet<String>> {
+        let resource = fluent_syntax::parser::parse(source).expect("analyse fluent");
+        let mut map = BTreeMap::new();
+        for entry in &resource.body {
+            if let Entry::Message(message) = entry {
+                let mut vars = BTreeSet::new();
+                if let Some(value) = &message.value {
+                    pattern_vars(value, &mut vars);
+                }
+                for attribute in &message.attributes {
+                    pattern_vars(&attribute.value, &mut vars);
+                }
+                map.insert(message.id.name.to_owned(), vars);
+            }
+        }
+        map
+    }
+
+    #[test]
+    fn i18n_same_variables() {
+        let fr = message_vars(FTL_FR);
+        let en = message_vars(FTL_EN);
+        assert_eq!(
+            fr.keys().collect::<Vec<_>>(),
+            en.keys().collect::<Vec<_>>(),
+            "clés FR ≠ EN"
+        );
+        for (key, fr_vars) in &fr {
+            assert_eq!(Some(fr_vars), en.get(key), "variables différentes pour « {key} »");
+        }
+        // Les arguments d'exemple couvrent toutes les variables utilisées.
+        let known: BTreeSet<&str> = sample_args().iter().map(|(name, _)| *name).collect();
+        for (key, vars) in &fr {
+            for var in vars {
+                assert!(
+                    known.contains(var.as_str()),
+                    "« {key} » : ${var} sans argument d'exemple"
+                );
+            }
+        }
+        // Les messages pluriels attendus utilisent bien `$count`.
+        for key in ["status-tasks", "status-errors", "status-warnings"] {
+            assert!(fr[key].contains("count"), "{key}");
+        }
+    }
+
+    #[test]
+    fn i18n_all_messages_format() {
+        for language in Language::ALL {
+            let texts = Texts::new(language);
+            for count in [0_i64, 1, 2, 49] {
+                let mut args = FluentArgs::new();
+                for (name, arg) in sample_args() {
+                    let value = match arg {
+                        Arg::Str(text) => FluentValue::from(text.into_owned()),
+                        Arg::Count(_) => FluentValue::from(count),
+                    };
+                    args.set(name, value);
+                }
+                for &id in TextId::ALL {
+                    // Chaque message existe dans sa propre langue (sans repli).
+                    let pattern = texts
+                        .bundle
+                        .get_message(id.key())
+                        .and_then(|message| message.value())
+                        .unwrap_or_else(|| panic!("{language:?} : « {} » absent", id.key()));
+                    let mut errors = Vec::new();
+                    let text = texts.bundle.format_pattern(pattern, Some(&args), &mut errors);
+                    assert!(errors.is_empty(), "{language:?} {id:?} : {errors:?}");
+                    assert!(!text.trim().is_empty(), "{language:?} {id:?} vide");
+                    assert!(!text.contains('{'), "{language:?} {id:?} : {text:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn i18n_missing_key_falls_back_then_raw_key() {
+        let texts = Texts::from_sources(
+            Language::En,
+            "menu-file = File\n!!! erreur de syntaxe\nmenu-view = View\n",
+            Some("menu-file = Fichier\nmenu-open = Ouvrir...\n"),
+        );
+        assert_eq!(texts.get(TextId::MenuFile), "File");
+        // Ressource partielle utilisée malgré l'erreur d'analyse.
+        assert_eq!(texts.get(TextId::MenuView), "View");
+        // Repli français.
+        assert_eq!(texts.get(TextId::MenuOpen), "Ouvrir...");
+        // Clé brute, signalée une seule fois.
+        for _ in 0..3 {
+            assert_eq!(texts.get(TextId::MenuClose), "menu-close");
+        }
+        assert_eq!(
+            texts.get_args(TextId::StatusTasks, &[("count", Arg::Count(2))]),
+            "status-tasks"
+        );
+        let missing = texts.missing.borrow();
+        assert_eq!(
+            missing.iter().copied().collect::<Vec<_>>(),
+            [TextId::MenuClose, TextId::StatusTasks]
+        );
+    }
+
+    #[test]
+    fn i18n_missing_variable_does_not_panic() {
+        let fr = Texts::new(Language::Fr);
+        // Variable absente : fluent rend un repère, l'erreur est journalisée.
+        let text = fr.get(TextId::RowLabel);
+        assert!(text.starts_with("Ligne"), "{text:?}");
+    }
+
+    #[test]
+    fn i18n_calendar_names() {
+        let fr = Texts::new(Language::Fr).format_labels();
+        assert_eq!(
+            fr.months_short,
+            [
+                "janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.",
+                "déc."
+            ]
+        );
+        // Dimanche d'abord (ordre de `Weekday::ALL`).
+        assert_eq!(
+            fr.weekdays_short,
+            ["dim", "lun", "mar", "mer", "jeu", "ven", "sam"]
+        );
+        assert_eq!(fr.weekday_initials, ["D", "L", "M", "M", "J", "V", "S"]);
+        assert_eq!(fr.quarter_prefix, "T");
+        assert_eq!(fr.months_long[7], "août");
+        let en = Texts::new(Language::En).format_labels();
+        assert_eq!(
+            en.months_short,
+            [
+                "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+            ]
+        );
+        assert_eq!(
+            en.weekdays_short,
+            ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        );
+        assert_eq!(en.weekday_initials, ["S", "M", "T", "W", "T", "F", "S"]);
+        assert_eq!(en.quarter_prefix, "Q");
+    }
+
+    #[test]
+    fn i18n_french_typography() {
+        // Espace insécable U+00A0 (et non une espace ordinaire) avant « : ; ? ! »
+        // dans les valeurs françaises ; les codes isolés (« ; », « ? ») sont
+        // des conventions de formatage, pas du texte.
+        for line in FTL_FR.lines() {
+            let Some((key, value)) = line.split_once(" = ") else {
+                continue;
+            };
+            if line.starts_with('#') || key.starts_with("fmt-") {
+                continue;
+            }
+            for mark in [" :", " ;", " ?", " !"] {
+                assert!(
+                    !value.contains(mark),
+                    "« {key} » : espace ordinaire avant ponctuation"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn language_system_none_is_fr() {
+        assert_eq!(Language::resolve(LanguagePref::System, None), Language::Fr);
+        assert_eq!(
+            Language::from_tag("de-DE").map_or(Language::Fr, |l| l),
+            Language::Fr
+        );
+        assert_eq!(
+            Language::resolve(LanguagePref::System, Language::from_tag("de-DE")),
+            Language::Fr
+        );
     }
 
     #[test]

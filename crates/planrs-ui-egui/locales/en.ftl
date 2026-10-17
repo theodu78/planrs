@@ -54,7 +54,8 @@ col-critical = Critical
 yes = Yes
 no = No
 
-## Unités de durée (forme longue, hypothèse H-UI-04 : « 5 days », « 1 day? »)
+## Unités de durée (forme longue, hypothèse H-UI-04 : « 5 days », « 1 day? » ;
+## écoulé avec le préfixe « e » de MS Project : « 5 edays », ADR-0011 décision 9)
 
 unit-minute-one = minute
 unit-minute-other = minutes
@@ -66,16 +67,16 @@ unit-week-one = week
 unit-week-other = weeks
 unit-month-one = month
 unit-month-other = months
-unit-minute-elapsed-one = elapsed minute
-unit-minute-elapsed-other = elapsed minutes
-unit-hour-elapsed-one = elapsed hour
-unit-hour-elapsed-other = elapsed hours
-unit-day-elapsed-one = elapsed day
-unit-day-elapsed-other = elapsed days
-unit-week-elapsed-one = elapsed week
-unit-week-elapsed-other = elapsed weeks
-unit-month-elapsed-one = elapsed month
-unit-month-elapsed-other = elapsed months
+unit-minute-elapsed-one = eminute
+unit-minute-elapsed-other = eminutes
+unit-hour-elapsed-one = ehour
+unit-hour-elapsed-other = ehours
+unit-day-elapsed-one = eday
+unit-day-elapsed-other = edays
+unit-week-elapsed-one = eweek
+unit-week-elapsed-other = eweeks
+unit-month-elapsed-one = emonth
+unit-month-elapsed-other = emonths
 
 ## Types de liens
 

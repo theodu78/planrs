@@ -88,7 +88,7 @@ impl Column {
             Self::Duration | Self::TotalSlack => 80,
             Self::Start | Self::Finish => 96,
             Self::Predecessors => 110,
-            Self::Critical => 64,
+            Self::Critical => 60,
         }
     }
 
@@ -98,18 +98,21 @@ impl Column {
         !matches!(self, Self::TotalSlack | Self::Critical)
     }
 
-    /// Alignement du texte des cellules.
+    /// La colonne peut-elle être masquée ? L'ID et le Nom restent toujours
+    /// visibles (hypothèse d'affichage H-UI-12).
+    #[must_use]
+    pub const fn hideable(self) -> bool {
+        !matches!(self, Self::Id | Self::Name)
+    }
+
+    /// Alignement du texte des cellules : nombres à droite (ID, durée,
+    /// marge), indicateur « Critique » centré, le reste à gauche.
     #[must_use]
     pub const fn align(self) -> CellAlign {
         match self {
-            Self::Id => CellAlign::Right,
+            Self::Id | Self::Duration | Self::TotalSlack => CellAlign::Right,
             Self::Critical => CellAlign::Center,
-            Self::Name
-            | Self::Duration
-            | Self::Start
-            | Self::Finish
-            | Self::Predecessors
-            | Self::TotalSlack => CellAlign::Left,
+            Self::Name | Self::Start | Self::Finish | Self::Predecessors => CellAlign::Left,
         }
     }
 
@@ -150,5 +153,82 @@ impl ColumnState {
             visible: column.default_visible(),
             width: column.default_width(),
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "tests : un échec doit s'arrêter net et lisiblement"
+)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::{CellAlign, Column, ColumnState};
+    use crate::i18n::TextId;
+
+    #[test]
+    fn column_ordinal_matches_all() {
+        assert_eq!(Column::COUNT, 8);
+        for (index, column) in Column::ALL.iter().enumerate() {
+            assert_eq!(column.ordinal(), index, "{column:?}");
+        }
+    }
+
+    #[test]
+    fn column_default_widths() {
+        let widths: Vec<u16> = Column::ALL.iter().map(|c| c.default_width()).collect();
+        assert_eq!(widths, [40, 220, 80, 96, 96, 110, 80, 60]);
+        for column in Column::ALL {
+            let width = column.default_width();
+            assert!((Column::MIN_WIDTH..=Column::MAX_WIDTH).contains(&width));
+        }
+    }
+
+    #[test]
+    fn column_default_visibility_and_hideable() {
+        let hidden: Vec<Column> = Column::ALL.into_iter().filter(|c| !c.default_visible()).collect();
+        assert_eq!(hidden, [Column::TotalSlack, Column::Critical]);
+        assert!(!Column::Id.hideable());
+        assert!(!Column::Name.hideable());
+        assert!(Column::Duration.hideable());
+        assert!(Column::Critical.hideable());
+    }
+
+    #[test]
+    fn column_align() {
+        assert_eq!(Column::Id.align(), CellAlign::Right);
+        assert_eq!(Column::Duration.align(), CellAlign::Right);
+        assert_eq!(Column::TotalSlack.align(), CellAlign::Right);
+        assert_eq!(Column::Critical.align(), CellAlign::Center);
+        for column in [Column::Name, Column::Start, Column::Finish, Column::Predecessors] {
+            assert_eq!(column.align(), CellAlign::Left, "{column:?}");
+        }
+    }
+
+    #[test]
+    fn column_titles_distinct() {
+        let titles: BTreeSet<TextId> = Column::ALL.iter().map(|c| c.title()).collect();
+        assert_eq!(titles.len(), Column::COUNT);
+        assert_eq!(Column::Name.title(), TextId::ColName);
+    }
+
+    #[test]
+    fn column_state_default_for() {
+        let state = ColumnState::default_for(Column::Critical);
+        assert_eq!(
+            state,
+            ColumnState {
+                column: Column::Critical,
+                visible: false,
+                width: 60
+            }
+        );
+        let state = ColumnState::default_for(Column::Name);
+        assert!(state.visible);
+        assert_eq!(state.width, 220);
     }
 }

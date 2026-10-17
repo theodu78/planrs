@@ -10,7 +10,8 @@ Le nom est provisoire. Endroits où il apparaît (à tenir à jour) :
 - `xtask/src/layers.rs` : liste `GUI_ALLOWED` des crates autorisées à dépendre d'egui ; `xtask/src/panics.rs` : liste `EXEMPT_PACKAGES` (`planrs-tests`)
 - `deny.toml` (commentaire d'en-tête, crates internes `planrs-tests` et `planrs-web` dans `[licenses.private]`)
 - `.gitignore` (`/apps/planrs-web/dist/`)
-- `tests/corpus/manifest.toml` (commentaire `planrs_core::parity::FLOOR`)
+- `tests/corpus/manifest.toml` (commentaire `planrs_core::parity::CORPUS_FLOOR`)
+- variable d'environnement `PLANRS_CORPUS` : harnais du corpus (`tests/corpus/main.rs`, `tests/corpus/verdict.rs`), job CI `corpus` (`.github/workflows/ci.yml`), `tests/corpus/README.md`
 - `apps/planrs-web/index.html` (titre initial, `data-bin`, id du canevas `planrs_canvas`) et `apps/planrs-web/src/main.rs` (`CANVAS_ID`)
 - `tools/oracle/generate.bas` : nom du module `PlanrsOracle`, en-tête, titres des boîtes de dialogue et chemin d'exemple `C:\planrs\...`
 - `LICENSE-MIT` (« The planrs contributors »), `README.md`, `CLAUDE.md`, `docs/`, READMEs de `tests/`

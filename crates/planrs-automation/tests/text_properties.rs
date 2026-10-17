@@ -1,5 +1,5 @@
-//! P29 — Texte : `parse(format(x)) == x` pour les durées et les décalages,
-//! en français et en anglais, avec des facteurs de projet quelconques ; une
+//! P29 — Texte : `parse(format(x)) == x` pour les durées, les décalages,
+//! les listes de prédécesseurs et les dates, en français et en anglais, avec des facteurs de projet quelconques ; une
 //! chaîne arbitraire donne un `Result`, jamais une panique (règle 10).
 //!
 //! Nombre de cas fixé ici (2 048) : la variable `PROPTEST_CASES` de la CI
@@ -12,11 +12,13 @@
 )]
 
 use planrs_automation::text::{
-    Language, MAX_INPUT_CHARS, TextContext, TextError, format_duration, format_lag, parse_duration, parse_lag,
+    DateRole, Language, MAX_INPUT_CHARS, PredecessorRef, TextContext, TextError, format_date,
+    format_duration, format_lag, format_predecessor, parse_date, parse_duration, parse_lag,
+    parse_predecessors,
 };
 use planrs_core::{
-    ConversionFactors, Duration, DurationUnit, Lag, LagValue, Minutes, ProjectOptions, SignedPercent,
-    TimeBasis,
+    ConversionFactors, Duration, DurationUnit, Lag, LagValue, LinkType, Minutes, Moment, ProjectOptions,
+    SignedPercent, TimeBasis,
 };
 use proptest::prelude::*;
 
@@ -48,6 +50,33 @@ fn language() -> impl Strategy<Value = Language> {
 
 fn minutes() -> impl Strategy<Value = i64> {
     prop_oneof![0_i64..=10_000, 0_i64..=Duration::MAX_MINUTES]
+}
+
+fn lag() -> impl Strategy<Value = Lag> {
+    prop_oneof![
+        Just(Lag::ZERO),
+        (minutes(), any::<bool>(), unit(), basis()).prop_map(|(m, neg, u, b)| {
+            let minutes = Minutes::new(if neg { -m } else { m });
+            Lag::new(b, LagValue::Time { minutes, unit: u }).unwrap()
+        }),
+        (-1_000_000_i64..=1_000_000, basis()).prop_map(|(p, b)| {
+            let percent = SignedPercent::new(p).unwrap();
+            Lag::new(b, LagValue::Percent { percent }).unwrap()
+        }),
+    ]
+}
+
+fn link_type() -> impl Strategy<Value = LinkType> {
+    prop_oneof![
+        Just(LinkType::FinishToStart),
+        Just(LinkType::StartToStart),
+        Just(LinkType::FinishToFinish),
+        Just(LinkType::StartToFinish),
+    ]
+}
+
+fn predecessor() -> impl Strategy<Value = PredecessorRef> {
+    (0_u32..=u32::MAX, link_type(), lag()).prop_map(|(id, kind, lag)| PredecessorRef { id, kind, lag })
 }
 
 fn context(f: ConversionFactors, language: Language) -> TextContext {
@@ -93,10 +122,48 @@ proptest! {
     }
 
     #[test]
+    fn p29_predecessors_round_trip(
+        f in factors(), lang in language(), refs in prop::collection::vec(predecessor(), 0..6),
+    ) {
+        let ctx = context(f, lang);
+        let text = refs
+            .iter()
+            .map(|r| format_predecessor(r, &ctx))
+            .collect::<Vec<_>>()
+            .join(&ctx.list_separator.to_string());
+        prop_assert_eq!(parse_predecessors(&text, &ctx), (refs, vec![]), "{}", text);
+    }
+
+    #[test]
+    fn p29_dates_round_trip(m in 0_i64..=Moment::MAX.minutes(), lang in language()) {
+        let ctx = context(ConversionFactors::default(), lang);
+        let m = Moment::from_minutes(m).unwrap();
+        let text = format_date(m, &ctx);
+        prop_assert_eq!(parse_date(&text, DateRole::Start, &ctx), Ok(m), "{}", &text);
+        prop_assert_eq!(parse_date(&text, DateRole::Finish, &ctx), Ok(m), "{}", &text);
+    }
+
+    #[test]
     fn p29_arbitrary_text_never_panics(s in "\\PC{0,40}", lang in language()) {
         let ctx = context(ConversionFactors::default(), lang);
         let _ = parse_duration(&s, &ctx);
         let _ = parse_lag(&s, &ctx);
+        let _ = parse_predecessors(&s, &ctx);
+        let _ = parse_date(&s, DateRole::Start, &ctx);
+    }
+
+    #[test]
+    fn p29_list_and_date_like_input_never_panics(
+        s in "[ 0-9;,.:/\\-+%FSDfsdTjhAPMamp?]{0,30}", lang in language(),
+    ) {
+        let ctx = context(ConversionFactors::default(), lang);
+        let (refs, _) = parse_predecessors(&s, &ctx);
+        for r in refs {
+            prop_assert_eq!(parse_predecessors(&format_predecessor(&r, &ctx), &ctx), (vec![r], vec![]));
+        }
+        if let Ok(m) = parse_date(&s, DateRole::Start, &ctx) {
+            prop_assert_eq!(parse_date(&format_date(m, &ctx), DateRole::Start, &ctx), Ok(m));
+        }
     }
 
     #[test]
@@ -120,4 +187,9 @@ fn p29_long_input_is_refused() {
     let long = "9".repeat(MAX_INPUT_CHARS + 1);
     assert_eq!(parse_duration(&long, &ctx), Err(TextError::TooLong));
     assert_eq!(parse_lag(&long, &ctx), Err(TextError::TooLong));
+    assert_eq!(parse_date(&long, DateRole::Start, &ctx), Err(TextError::TooLong));
+    assert_eq!(
+        parse_predecessors(&long, &ctx),
+        (vec![], vec![TextError::TooLong])
+    );
 }

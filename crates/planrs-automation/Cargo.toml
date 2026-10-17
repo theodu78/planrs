@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+chrono.workspace = true
 planrs-core.workspace = true
 planrs-mspdi.workspace = true
 planrs-render.workspace = true

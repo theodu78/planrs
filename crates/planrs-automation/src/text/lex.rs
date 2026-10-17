@@ -90,6 +90,28 @@ impl<'a> Cursor<'a> {
         negative
     }
 
+    /// Entier non signé fait de chiffres ASCII seuls (numéro de tâche).
+    ///
+    /// # Errors
+    ///
+    /// [`TextError::BadNumber`] sans chiffre, [`TextError::OutOfRange`] au-delà
+    /// de `u32`.
+    pub(crate) fn integer(&mut self) -> Result<u32, TextError> {
+        let start = self.pos;
+        let mut v: u32 = 0;
+        while let Some(d) = self.peek().and_then(|c| c.to_digit(10)) {
+            v = v
+                .checked_mul(10)
+                .and_then(|v| v.checked_add(d))
+                .ok_or(TextError::OutOfRange)?;
+            self.bump();
+        }
+        if self.pos == start {
+            return Err(TextError::BadNumber { at: start });
+        }
+        Ok(v)
+    }
+
     /// Nombre décimal non signé (R-140) : chiffres, groupes de trois
     /// chiffres précédés d'une espace (séparateur de milliers), puis `,` ou
     /// `.` et 1 à 6 décimales.

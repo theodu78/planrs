@@ -1,7 +1,8 @@
 //! Texte des valeurs de planification, à la manière de MS Project (ADR-0008 :
 //! « parseur du texte : J4 (planrs-automation) », avancé en J3 par
 //! l'ADR-0010) : durées (« 5j », « 1,5 j », « 5ej », « 2j? »), décalages
-//! (« +2j », « -50% »), en français et en anglais.
+//! (« +2j », « -50% »), prédécesseurs (« 3FD+2j;5DD », « 3FS+2d,5SS »),
+//! dates (« 19/10/2026 08:00 »), en français et en anglais.
 //!
 //! Aucune entrée/sortie : du texte en entrée, une valeur du modèle en sortie
 //! (et l'inverse). Aucun flottant : les nombres sont lus en
@@ -9,12 +10,20 @@
 //! dépasse rarement quelques caractères ; elle est bornée à
 //! [`MAX_INPUT_CHARS`] caractères ([`TextError::TooLong`]).
 //!
-//! Règles : R-140 (durée, lecture), R-141 (durée et décalage, écriture).
+//! Règles : R-140 (durée, lecture), R-141 (durée et décalage, écriture),
+//! R-142 (prédécesseurs), R-143 (dates).
 
+mod date;
 mod duration;
-mod lex;
+mod predecessors;
 
+pub(crate) mod lex;
+
+pub use date::{DateRole, format_date, parse_date};
 pub use duration::{format_duration, format_lag, parse_duration, parse_lag};
+pub use predecessors::{
+    PredecessorRef, format_predecessor, format_predecessors, link_code, parse_predecessors,
+};
 
 use planrs_core::{ConversionFactors, DurationUnit, Project, ProjectOptions, TimeOfDay};
 use serde::Serialize;

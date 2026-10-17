@@ -3039,6 +3039,7 @@ dependencies = [
 name = "planrs-automation"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "planrs-core",
  "planrs-mspdi",
  "planrs-render",

@@ -73,6 +73,25 @@ impl fmt::Display for Subject {
     }
 }
 
+/// Passe du calcul où une conversion a échoué (`task.unschedulable`, R-069).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Pass {
+    /// Passe avant (dates au plus tôt).
+    Forward,
+    /// Passe arrière (dates au plus tard).
+    Backward,
+}
+
+impl fmt::Display for Pass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Forward => "passe avant",
+            Self::Backward => "passe arrière",
+        })
+    }
+}
+
 /// Diagnostic. Les identifiants cités sont des UID.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "code")]
@@ -226,6 +245,116 @@ pub enum Diagnostic {
         /// Minutes à ajouter.
         minutes: Minutes,
     },
+    /// Liens circulaires entre ces tâches (erreur, R-065) : un diagnostic par
+    /// composante fortement connexe du réseau.
+    #[serde(rename = "link.cycle")]
+    LinkCycle {
+        /// Tâches de la composante, triées.
+        tasks: Vec<TaskUid>,
+    },
+    /// Lien ignoré pour rompre un cycle (avertissement, R-065).
+    #[serde(rename = "link.ignored_in_cycle")]
+    LinkIgnoredInCycle {
+        /// Prédécesseur.
+        predecessor: TaskUid,
+        /// Successeur.
+        successor: TaskUid,
+    },
+    /// Lien entre une récapitulative et l'une de ses descendantes, ignoré
+    /// (erreur, R-059).
+    #[serde(rename = "link.summary_descendant")]
+    LinkSummaryDescendant {
+        /// Prédécesseur.
+        predecessor: TaskUid,
+        /// Successeur.
+        successor: TaskUid,
+    },
+    /// Lien FF ou SF vers une récapitulative, déplié sur ses sous-tâches
+    /// (avertissement, R-058).
+    #[serde(rename = "link.finish_to_summary")]
+    LinkFinishToSummary {
+        /// Prédécesseur.
+        predecessor: TaskUid,
+        /// Successeur (récapitulative).
+        successor: TaskUid,
+    },
+    /// Lien dont le prédécesseur est inactif : sans effet (info, R-062).
+    #[serde(rename = "link.inactive")]
+    LinkInactive {
+        /// Prédécesseur.
+        predecessor: TaskUid,
+        /// Successeur.
+        successor: TaskUid,
+    },
+    /// Lien dont une extrémité n'est pas planifiée (ligne vide, tâche
+    /// manuelle sans date, récapitulative vide, tâche non planifiable) :
+    /// ignoré (info, R-063, R-069).
+    #[serde(rename = "link.excluded_endpoint")]
+    LinkExcludedEndpoint {
+        /// Prédécesseur.
+        predecessor: TaskUid,
+        /// Successeur.
+        successor: TaskUid,
+    },
+    /// Lien vers une tâche manuelle que ses dates saisies ne respectent pas
+    /// (avertissement, R-063).
+    #[serde(rename = "link.manual_not_honored")]
+    LinkManualNotHonored {
+        /// Prédécesseur.
+        predecessor: TaskUid,
+        /// Successeur (tâche manuelle).
+        successor: TaskUid,
+    },
+    /// Tâche manuelle sans début ni fin : non planifiée (info, R-063).
+    #[serde(rename = "task.manual_undated")]
+    TaskManualUndated {
+        /// Tâche.
+        task: TaskUid,
+    },
+    /// Tâche manuelle dont la fin saisie précède le début : fin ramenée au
+    /// début (erreur, R-063).
+    #[serde(rename = "task.manual_dates_inverted")]
+    TaskManualDatesInverted {
+        /// Tâche.
+        task: TaskUid,
+    },
+    /// Calendrier propre d'une tâche inutilisable : calendrier du projet
+    /// utilisé (avertissement, R-066).
+    #[serde(rename = "task.calendar_fallback")]
+    TaskCalendarFallback {
+        /// Tâche.
+        task: TaskUid,
+        /// Calendrier inutilisable.
+        calendar: CalendarUid,
+    },
+    /// Calendrier du projet inutilisable : calendrier Standard intégré
+    /// utilisé (erreur, R-066).
+    #[serde(rename = "project.calendar_fallback")]
+    ProjectCalendarFallback {
+        /// Calendrier inutilisable.
+        calendar: CalendarUid,
+    },
+    /// Conversion impossible pendant le calcul d'une tâche (erreur, R-069).
+    #[serde(rename = "task.unschedulable")]
+    TaskUnschedulable {
+        /// Tâche.
+        task: TaskUid,
+        /// Passe du calcul.
+        pass: Pass,
+        /// Code stable de l'erreur de conversion (`CalendarError::code`).
+        cause: String,
+    },
+    /// Planification à rebours non prise en charge (J3) : aucune tâche
+    /// planifiée (erreur).
+    #[serde(rename = "schedule.from_finish_unsupported")]
+    ScheduleFromFinishUnsupported,
+    /// Invariant interne du calcul violé : jamais attendu, anomalie à
+    /// signaler (erreur).
+    #[serde(rename = "schedule.internal")]
+    ScheduleInternal {
+        /// Description.
+        detail: String,
+    },
 }
 
 impl Diagnostic {
@@ -278,12 +407,26 @@ impl Diagnostic {
             | Self::LinkUnknownTask { .. }
             | Self::AssignmentUnknownTask { .. }
             | Self::AssignmentUnknownResource { .. }
-            | Self::ConversionOutOfDomain { .. } => Severity::Error,
+            | Self::ConversionOutOfDomain { .. }
+            | Self::LinkCycle { .. }
+            | Self::LinkSummaryDescendant { .. }
+            | Self::TaskManualDatesInverted { .. }
+            | Self::ProjectCalendarFallback { .. }
+            | Self::TaskUnschedulable { .. }
+            | Self::ScheduleFromFinishUnsupported
+            | Self::ScheduleInternal { .. } => Severity::Error,
             Self::CalendarExceptionsOverlap { .. }
             | Self::CalendarWorkWeeksOverlap { .. }
             | Self::CalendarRecurrenceUnsupported { .. }
             | Self::ProjectCalendarNotBase { .. }
-            | Self::TaskNullWithData { .. } => Severity::Warning,
+            | Self::TaskNullWithData { .. }
+            | Self::LinkIgnoredInCycle { .. }
+            | Self::LinkFinishToSummary { .. }
+            | Self::LinkManualNotHonored { .. }
+            | Self::TaskCalendarFallback { .. } => Severity::Warning,
+            Self::LinkInactive { .. }
+            | Self::LinkExcludedEndpoint { .. }
+            | Self::TaskManualUndated { .. } => Severity::Info,
         }
     }
 
@@ -303,11 +446,19 @@ impl Diagnostic {
             Self::CalendarInheritanceCycle { chain } => {
                 chain.first().map_or(Subject::Project, |c| Subject::Calendar(*c))
             }
-            Self::ProjectCalendarNotBase { .. } => Subject::Project,
+            Self::ProjectCalendarNotBase { .. }
+            | Self::ProjectCalendarFallback { .. }
+            | Self::ScheduleFromFinishUnsupported
+            | Self::ScheduleInternal { .. } => Subject::Project,
             Self::TaskReservedUid => Subject::Task(TaskUid::PROJECT_SUMMARY),
             Self::TaskOutlineJump { task }
             | Self::TaskNullWithData { task }
-            | Self::TaskNegativeProgress { task } => Subject::Task(*task),
+            | Self::TaskNegativeProgress { task }
+            | Self::TaskManualUndated { task }
+            | Self::TaskManualDatesInverted { task }
+            | Self::TaskCalendarFallback { task, .. }
+            | Self::TaskUnschedulable { task, .. } => Subject::Task(*task),
+            Self::LinkCycle { tasks } => tasks.iter().min().map_or(Subject::Project, |t| Subject::Task(*t)),
             Self::LinkSelf { task } => Subject::Link {
                 predecessor: *task,
                 successor: *task,
@@ -317,6 +468,30 @@ impl Diagnostic {
                 successor,
             }
             | Self::LinkUnknownTask {
+                predecessor,
+                successor,
+            }
+            | Self::LinkIgnoredInCycle {
+                predecessor,
+                successor,
+            }
+            | Self::LinkSummaryDescendant {
+                predecessor,
+                successor,
+            }
+            | Self::LinkFinishToSummary {
+                predecessor,
+                successor,
+            }
+            | Self::LinkInactive {
+                predecessor,
+                successor,
+            }
+            | Self::LinkExcludedEndpoint {
+                predecessor,
+                successor,
+            }
+            | Self::LinkManualNotHonored {
                 predecessor,
                 successor,
             } => Subject::Link {
@@ -352,6 +527,20 @@ impl Diagnostic {
             Self::AssignmentUnknownTask { .. } => "assignment.unknown_task",
             Self::AssignmentUnknownResource { .. } => "assignment.unknown_resource",
             Self::ConversionOutOfDomain { .. } => "conversion.out_of_domain",
+            Self::LinkCycle { .. } => "link.cycle",
+            Self::LinkIgnoredInCycle { .. } => "link.ignored_in_cycle",
+            Self::LinkSummaryDescendant { .. } => "link.summary_descendant",
+            Self::LinkFinishToSummary { .. } => "link.finish_to_summary",
+            Self::LinkInactive { .. } => "link.inactive",
+            Self::LinkExcludedEndpoint { .. } => "link.excluded_endpoint",
+            Self::LinkManualNotHonored { .. } => "link.manual_not_honored",
+            Self::TaskManualUndated { .. } => "task.manual_undated",
+            Self::TaskManualDatesInverted { .. } => "task.manual_dates_inverted",
+            Self::TaskCalendarFallback { .. } => "task.calendar_fallback",
+            Self::ProjectCalendarFallback { .. } => "project.calendar_fallback",
+            Self::TaskUnschedulable { .. } => "task.unschedulable",
+            Self::ScheduleFromFinishUnsupported => "schedule.from_finish_unsupported",
+            Self::ScheduleInternal { .. } => "schedule.internal",
         }
     }
 }
@@ -468,6 +657,81 @@ impl fmt::Display for Diagnostic {
                 "calendrier {calendar} : {} min à partir du {from} sortent du domaine des dates (1984-2149)",
                 minutes.get()
             ),
+            Self::LinkCycle { tasks } => {
+                let tasks: Vec<String> = tasks.iter().map(ToString::to_string).collect();
+                write!(f, "liens circulaires entre les tâches {}", tasks.join(", "))
+            }
+            Self::LinkIgnoredInCycle {
+                predecessor,
+                successor,
+            } => write!(
+                f,
+                "le lien {predecessor} → {successor} est ignoré pour rompre un cycle"
+            ),
+            Self::LinkSummaryDescendant {
+                predecessor,
+                successor,
+            } => write!(
+                f,
+                "le lien {predecessor} → {successor} relie une récapitulative à l'une de ses sous-tâches : ignoré"
+            ),
+            Self::LinkFinishToSummary {
+                predecessor,
+                successor,
+            } => write!(
+                f,
+                "le lien {predecessor} → {successor} (fin à fin ou début à fin) vers une récapitulative \
+                 s'applique à chacune de ses sous-tâches"
+            ),
+            Self::LinkInactive {
+                predecessor,
+                successor,
+            } => write!(
+                f,
+                "le lien {predecessor} → {successor} part d'une tâche inactive : sans effet"
+            ),
+            Self::LinkExcludedEndpoint {
+                predecessor,
+                successor,
+            } => write!(
+                f,
+                "le lien {predecessor} → {successor} touche une tâche non planifiée : ignoré"
+            ),
+            Self::LinkManualNotHonored {
+                predecessor,
+                successor,
+            } => write!(
+                f,
+                "la tâche manuelle {successor} ne respecte pas son lien avec la tâche {predecessor}"
+            ),
+            Self::TaskManualUndated { task } => {
+                write!(f, "la tâche manuelle {task} n'a ni début ni fin : non planifiée")
+            }
+            Self::TaskManualDatesInverted { task } => write!(
+                f,
+                "la tâche manuelle {task} finit avant de commencer : fin ramenée au début"
+            ),
+            Self::TaskCalendarFallback { task, calendar } => write!(
+                f,
+                "le calendrier {calendar} de la tâche {task} est inutilisable : calendrier du projet utilisé"
+            ),
+            Self::ProjectCalendarFallback { calendar } => write!(
+                f,
+                "le calendrier du projet ({calendar}) est inutilisable : calendrier Standard intégré utilisé"
+            ),
+            Self::TaskUnschedulable { task, pass, cause } => {
+                write!(f, "la tâche {task} ne peut pas être planifiée ({pass} : {cause})")
+            }
+            Self::ScheduleFromFinishUnsupported => f.write_str(
+                "la planification à partir de la date de fin n'est pas encore prise en charge : \
+                 aucune tâche n'est planifiée",
+            ),
+            Self::ScheduleInternal { detail } => {
+                write!(
+                    f,
+                    "incohérence interne du calcul (anomalie à signaler) : {detail}"
+                )
+            }
         }
     }
 }
@@ -542,13 +806,14 @@ mod tests {
         reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
     )]
 
-    use super::{Diagnostic, Diagnostics, Severity, Subject};
+    use super::{Diagnostic, Diagnostics, Pass, Severity, Subject};
     use crate::duration::Minutes;
     use crate::error::tests::assert_tag;
     use crate::ids::{AssignmentUid, CalendarUid, ResourceUid, TaskUid};
     use crate::time::Moment;
 
     /// Un exemple de chaque variante.
+    #[allow(clippy::too_many_lines, reason = "une entrée par variante, rien à factoriser")]
     fn all() -> Vec<Diagnostic> {
         let c = CalendarUid::new(5);
         let t = TaskUid::new(3);
@@ -612,6 +877,47 @@ mod tests {
                 minutes: Minutes::new(61),
             },
             Diagnostic::CalendarInternal { calendar: c },
+            // Diagnostics du calcul (J2), indices 20 à 33.
+            Diagnostic::LinkCycle {
+                tasks: vec![TaskUid::new(2), t],
+            },
+            Diagnostic::LinkIgnoredInCycle {
+                predecessor: t,
+                successor: TaskUid::new(2),
+            },
+            Diagnostic::LinkSummaryDescendant {
+                predecessor: TaskUid::new(1),
+                successor: t,
+            },
+            Diagnostic::LinkFinishToSummary {
+                predecessor: TaskUid::new(1),
+                successor: t,
+            },
+            Diagnostic::LinkInactive {
+                predecessor: TaskUid::new(1),
+                successor: t,
+            },
+            Diagnostic::LinkExcludedEndpoint {
+                predecessor: TaskUid::new(1),
+                successor: t,
+            },
+            Diagnostic::LinkManualNotHonored {
+                predecessor: TaskUid::new(1),
+                successor: t,
+            },
+            Diagnostic::TaskManualUndated { task: t },
+            Diagnostic::TaskManualDatesInverted { task: t },
+            Diagnostic::TaskCalendarFallback { task: t, calendar: c },
+            Diagnostic::ProjectCalendarFallback { calendar: c },
+            Diagnostic::TaskUnschedulable {
+                task: t,
+                pass: Pass::Forward,
+                cause: "calendar.out_of_domain".to_owned(),
+            },
+            Diagnostic::ScheduleFromFinishUnsupported,
+            Diagnostic::ScheduleInternal {
+                detail: "nœud non visité".to_owned(),
+            },
         ]
     }
 
@@ -620,7 +926,18 @@ mod tests {
         for d in all() {
             assert_tag(&d, d.code());
             let prefix = d.code().split('.').next().unwrap();
-            assert!(["calendar", "project", "task", "link", "assignment", "conversion"].contains(&prefix));
+            assert!(
+                [
+                    "calendar",
+                    "project",
+                    "task",
+                    "link",
+                    "assignment",
+                    "conversion",
+                    "schedule"
+                ]
+                .contains(&prefix)
+            );
             let json = serde_json::to_string(&d).unwrap();
             assert_eq!(serde_json::from_str::<Diagnostic>(&json).unwrap(), d);
             assert_ne!(d.to_string(), "");
@@ -642,9 +959,21 @@ mod tests {
                 "calendar.recurrence_unsupported",
                 "project.calendar_not_base",
                 "task.null_with_data",
+                "link.ignored_in_cycle",
+                "link.finish_to_summary",
+                "link.manual_not_honored",
+                "task.calendar_fallback",
             ]
         );
-        assert!(all().iter().all(|d| d.severity() != Severity::Info));
+        let infos: Vec<&str> = all()
+            .iter()
+            .filter(|d| d.severity() == Severity::Info)
+            .map(Diagnostic::code)
+            .collect();
+        assert_eq!(
+            infos,
+            ["link.inactive", "link.excluded_endpoint", "task.manual_undated"]
+        );
         let c = CalendarUid::new(5);
         let t = TaskUid::new(3);
         assert_eq!(all()[0].subject(), Subject::Task(t));
@@ -673,6 +1002,39 @@ mod tests {
         assert_eq!(all()[18].subject(), Subject::Calendar(c));
         assert_eq!(all()[19].subject(), Subject::Calendar(c));
         assert_eq!(all()[19].severity(), Severity::Error);
+        // Diagnostics du calcul : sujet du cycle = plus petit UID.
+        assert_eq!(all()[20].subject(), Subject::Task(TaskUid::new(2)));
+        assert_eq!(
+            Diagnostic::LinkCycle { tasks: vec![] }.subject(),
+            Subject::Project
+        );
+        assert_eq!(
+            all()[21].subject(),
+            Subject::Link {
+                predecessor: t,
+                successor: TaskUid::new(2)
+            }
+        );
+        for i in 22..=26 {
+            assert_eq!(
+                all()[i].subject(),
+                Subject::Link {
+                    predecessor: TaskUid::new(1),
+                    successor: t
+                }
+            );
+        }
+        for i in [27, 28, 29, 31] {
+            assert_eq!(all()[i].subject(), Subject::Task(t));
+        }
+        for i in [30, 32, 33] {
+            assert_eq!(all()[i].subject(), Subject::Project);
+        }
+        assert_eq!(all()[31].severity(), Severity::Error);
+        assert_eq!(
+            all()[31].to_string(),
+            "la tâche 3 ne peut pas être planifiée (passe avant : calendar.out_of_domain)"
+        );
         assert_eq!(
             Subject::Link {
                 predecessor: TaskUid::new(1),

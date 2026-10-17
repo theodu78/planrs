@@ -16,6 +16,10 @@ use crate::time::{Day, Moment, TimeOfDay, Weekday};
 /// Options du projet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "options indépendantes reprises de MSPDI (S2), pas un état"
+)]
 pub struct ProjectOptions {
     /// Facteurs de conversion des unités (R-006).
     pub factors: ConversionFactors,
@@ -37,6 +41,15 @@ pub struct ProjectOptions {
     pub week_start_day: Weekday,
     /// Respecter les contraintes plutôt que les liens.
     pub honor_constraints: bool,
+    /// Seuil de criticité en jours : une tâche est critique si sa marge
+    /// totale est inférieure ou égale à N jours (`CriticalSlackLimit`, S2,
+    /// S19 ; R-050). 0 par défaut. Absent d'un JSON : 0.
+    #[serde(default)]
+    pub critical_slack_limit_days: u32,
+    /// Calculer plusieurs chemins critiques (`MultipleCriticalPaths`, S2,
+    /// S20 ; R-051). Faux par défaut. Absent d'un JSON : faux.
+    #[serde(default)]
+    pub multiple_critical_paths: bool,
 }
 
 impl Default for ProjectOptions {
@@ -44,7 +57,8 @@ impl Default for ProjectOptions {
     /// 20 (S8) ; 08:00 et 17:00 (S8, S9) ; durées en jours (S10), travail en
     /// heures ; unités fixes, sans pilotage par l'effort (hypothèse) ;
     /// estimées (S14) ; semaine commençant le lundi (hypothèse, version
-    /// française) ; contraintes respectées (S2).
+    /// française) ; contraintes respectées (S2) ; seuil de criticité 0 et un
+    /// seul chemin critique (S19, S20).
     fn default() -> Self {
         Self {
             factors: ConversionFactors::default(),
@@ -57,6 +71,8 @@ impl Default for ProjectOptions {
             new_tasks_estimated: true,
             week_start_day: Weekday::Monday,
             honor_constraints: true,
+            critical_slack_limit_days: 0,
+            multiple_critical_paths: false,
         }
     }
 }
@@ -83,5 +99,34 @@ impl ProjectOptions {
     /// [`ProjectOptions::start_of`]).
     pub fn finish_of(&self, day: Day) -> Result<Moment, TimeError> {
         Moment::at(day, self.default_finish_time)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
+    )]
+
+    use super::ProjectOptions;
+
+    #[test]
+    fn cpm_options_default_when_absent() {
+        // Un JSON sans les options CPM (projet écrit avant J2) se lit avec
+        // leurs valeurs par défaut : `FORMAT_VERSION` reste 1.
+        let mut v = serde_json::to_value(ProjectOptions::default()).unwrap();
+        let o = v.as_object_mut().unwrap();
+        assert!(o.remove("critical_slack_limit_days").is_some());
+        assert!(o.remove("multiple_critical_paths").is_some());
+        let read: ProjectOptions = serde_json::from_value(v).unwrap();
+        assert_eq!(read, ProjectOptions::default());
+        let custom = ProjectOptions {
+            critical_slack_limit_days: 2,
+            multiple_critical_paths: true,
+            ..ProjectOptions::default()
+        };
+        let json = serde_json::to_string(&custom).unwrap();
+        assert_eq!(serde_json::from_str::<ProjectOptions>(&json).unwrap(), custom);
     }
 }

@@ -51,7 +51,7 @@ pub mod time;
 
 pub use arena::{Arena, HasUid};
 pub use calendar::{BuiltinCalendarNames, CalendarSet, CompiledCalendar, Direction, Span, TimeScale};
-pub use diagnostic::{Diagnostic, Diagnostics, Severity, Subject};
+pub use diagnostic::{Diagnostic, Diagnostics, Pass, Severity, Subject};
 pub use duration::{
     ConversionFactors, Duration, DurationUnit, Lag, LagValue, Minutes, TimeBasis, Work, percent_of,
 };

@@ -36,6 +36,9 @@ fn r032_default_options() {
     // Semaine commençant le lundi (hypothèse), contraintes respectées (S2).
     assert_eq!(o.week_start_day, Weekday::Monday);
     assert!(o.honor_constraints);
+    // Seuil de criticité 0 jour (S19) et un seul chemin critique (S20).
+    assert_eq!(o.critical_slack_limit_days, 0);
+    assert!(!o.multiple_critical_paths);
 }
 
 #[test]

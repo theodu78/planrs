@@ -31,7 +31,9 @@
     "new_tasks_effort_driven": false,
     "new_tasks_estimated": true,
     "week_start_day": "monday",
-    "honor_constraints": true
+    "honor_constraints": true,
+    "critical_slack_limit_days": 0,
+    "multiple_critical_paths": false
   },
   "calendars": [
     {

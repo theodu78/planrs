@@ -159,3 +159,12 @@ Une entrée par décision, datée, avec le contexte, les options écartées et l
 **Clean-room.** Sources : pages Microsoft et schéma `mspdi_pj15.xsd` (cité par URL et empreinte, jamais commité), données des fichiers du corpus. Incident consigné : les données XML d'un fichier du dépôt `andrewbergsma/msp-export` (analyseur Python) ont été ouvertes avant d'en voir la nature ; ni code ni documentation lus, fichier exclu.
 
 **Conséquences.** Quinze commits, chacun avec ses règles et ses tests ; le dernier relève les planchers au mesuré, met à jour `docs/scorecard.md` et pose le tag `j2`.
+
+**Statut (2026-10-17).** Moteur livré et testé : règles R-035 à R-069, propriétés P13 à P17 (10 000 cas en CI pour P13 et P14), budget de 50 ms en CI (job `perf`, 15 ms mesurées en local, cible de 10 ms pas encore atteinte). Restent pour fermer J2 : passage du harnais du corpus, planchers relevés au mesuré, règles vérifiées, tag `j2`. Écarts à la spécification, tous consignés dans les fiches de règles :
+- R-047, R-049 : ancre FF/SF du successeur reportée au dernier instant de même temps ouvré de son échelle (sinon marge négative sans contrainte avec un décalage écoulé), fin du domaine s'il n'y reste plus de temps ouvré ; liens SS/SF hérités d'une récapitulative comptés pour la marge libre des seules feuilles de même début (comme leur plafond, A11).
+- R-063 : deux dates saisies → durée utilisée = temps ouvré entre elles (exactitude du point fixe) ; `link.manual_not_honored` pour les seuls liens directs.
+- R-064 : les enfants d'une récapitulative manuelle datée n'héritent ni de ses liens sortants ni de ceux de ses ancêtres (ses dates ne dépendent pas d'eux).
+- R-069 : un lien vers une porte qui n'a pas pu se calculer ne plafonne pas son prédécesseur ; une tâche dont un successeur est dégradé ou non planifiable a des dates au plus tard et des marges de repli (`degraded`, propagé vers l'amont). Trouvés par P17, régressions rejouées.
+- P16 : sans décalage en % depuis une récapitulative (sa durée R-054 peut diminuer quand une sous-tâche est retardée : la propriété serait fausse).
+- Générateur de mesure dans `planrs_tests::generate` (et non `gen`, mot réservé en Rust 2024) ; ses liens ne touchent que des feuilles, ce qui exclut tout cycle par la hiérarchie.
+- `[profile.test.package.planrs-core] opt-level = 1` : les propriétés à 10 000 cas passent de 90 s à 42 s en debug (4 cœurs), sous le seuil de 60 s.

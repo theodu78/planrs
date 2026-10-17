@@ -110,6 +110,9 @@ pub struct FileReport {
     pub name: String,
     /// Licence du manifeste.
     pub license: String,
+    /// Note du manifeste (contenu du fichier, divergences connues et leur
+    /// jalon).
+    pub note: String,
     /// Producteur déclaré au manifeste.
     pub producer: &'static str,
     /// État (absent et raison, erreur de lecture, comparé).
@@ -302,6 +305,7 @@ fn file_report(run: &FileRun) -> FileReport {
     FileReport {
         name: run.entry.name.clone(),
         license: run.entry.license.clone(),
+        note: run.entry.note.clone(),
         producer: run.entry.producer.as_str(),
         status: run.status.clone(),
         save_version: run.document.as_ref().and_then(|d| d.source.save_version),
@@ -437,6 +441,7 @@ fn file_markdown(s: &mut String, f: &FileReport) {
             .map_or_else(|| "absent".to_owned(), |v| v.to_string()),
         f.license
     );
+    let _ = writeln!(s, "- Note du manifeste : {}", f.note);
     if let Some(sig) = &f.signature {
         let _ = writeln!(
             s,

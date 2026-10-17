@@ -30,7 +30,7 @@ Le rapport est écrit dans `target/tmp/corpus-report.md` et `target/tmp/corpus-r
 | `sha256` | empreinte SHA-256, 64 hexadécimaux minuscules, unique |
 | `producer` | `msproject`, `msproject-probable` ou `unknown` |
 | `save_version` | `SaveVersion` attendu |
-| `note` | remarque (peut être vide) |
+| `note` | remarque (peut être vide) : contenu du fichier, divergences connues et jalon qui les traitera ; recopiée dans la section du fichier du rapport |
 | `floor` | plancher : nombre minimal de cas identiques sur ce fichier (≥ 0) |
 
 - Le manifeste est **figé** : on ajoute des lignes ; un retrait passe par un ADR et garde le nom. `planrs_core::parity::CORPUS_FLOOR` vaut la somme des `floor` (testé) et `FLOOR = CORPUS_FLOOR + ORACLE_FLOOR`.

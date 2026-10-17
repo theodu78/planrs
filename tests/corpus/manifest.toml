@@ -82,5 +82,5 @@ size = 258373
 sha256 = "aa3869d37ef4fb908e75f783d7b99d2c6dc9b14aca71767e6f79be2a65ee7156"
 producer = "msproject"
 save_version = 14
-note = "25 tâches dont 15 manuelles, 11 FNET, avancement, 1 échéance : surtout J3+."
-floor = 0
+note = "25 tâches dont 15 manuelles, 11 FNET, avancement, 1 échéance. J3 : 8/11 (FNET des UID 15 à 21 et 32, R-090, R-094). Divergents attendus : UID 2 et 3 (FNET avec avancement réel, J6) et UID 0 (dépend de l'UID 2)."
+floor = 8

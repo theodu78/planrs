@@ -1060,7 +1060,9 @@ fn check_cycles(p: &Project, s: &Schedule) {
                 continue;
             };
             let pt = p.tasks.at(pi).unwrap();
-            if pi == si || pt.is_null || t.is_null || undated(pt) || undated(t) || !pt.active {
+            // R-062 : un lien d'une inactive vers une active est ignoré ; entre
+            // deux inactives, il est gardé pour l'affichage (et peut boucler).
+            if pi == si || pt.is_null || t.is_null || undated(pt) || undated(t) || (!pt.active && t.active) {
                 continue;
             }
             adj[pi].push(si);

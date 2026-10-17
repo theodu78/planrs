@@ -109,21 +109,28 @@ pub(crate) fn import(
         if is_summary && matches!(row.task.mode, SchedulingMode::Auto) {
             // Durée d'une récapitulative automatique : valeur calculée, gardée
             // dans `recorded` seulement (ADR-0004, effacement structurel).
-            row.task.duration = Duration::zero(row.duration.unit());
+            row.task.duration = computed_zero(row.duration);
         } else if !row.task.is_null && !f.has("Duration") {
             f.missing("Duration", sink);
         }
         row.task.predecessors = links(uid, &row.element.children, &known, &options, sink);
     }
     if let Some(summary) = &mut project.summary_task {
-        let duration = summary.duration;
-        summary.duration = Duration::zero(duration.unit());
+        summary.duration = computed_zero(summary.duration);
     }
 
     for row in rows {
         // UID uniques (filtrés plus haut) : l'ajout ne peut pas échouer.
         let _ = project.tasks.push(row.task);
     }
+}
+
+/// R-071 : durée d'une récapitulative automatique ou de l'UID 0 (valeur
+/// calculée, gardée dans `RecordedSchedule`) : minutes à 0, unité, base et
+/// estimation gardées (amendement J3, R-133 : l'aller-retour d'une
+/// récapitulative du projet manuelle garde l'estimation de sa durée saisie).
+pub(crate) fn computed_zero(d: Duration) -> Duration {
+    Duration::new(Minutes::ZERO, d.unit(), d.basis(), d.is_estimated()).unwrap_or(Duration::zero(d.unit()))
 }
 
 /// UID d'une tâche ; absent, négatif ou illisible : tâche ignorée.

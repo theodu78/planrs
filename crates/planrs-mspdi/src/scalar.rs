@@ -411,9 +411,48 @@ pub const fn percent_lag_from_link_lag(link_lag: i64) -> Option<i64> {
 }
 
 /// R-120 : date `AAAA-MM-JJThh:mm:00`, sans fuseau (inverse de R-075).
+/// Calcul direct du calendrier civil (l'écriture de 5 000 tâches en formate
+/// plus de 50 000) ; repli sur l'affichage de `Moment` en cas d'échec.
 #[must_use]
 pub fn format_datetime(m: Moment) -> String {
-    format!("{m}:00")
+    civil(m.minutes()).map_or_else(
+        || format!("{m}:00"),
+        |(y, mo, d, h, mi)| format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:00"),
+    )
+}
+
+/// Minutes depuis le 01/01/1984 → (année, mois, jour, heure, minute), par
+/// l'algorithme des jours civils (ère de 400 ans, mars en premier mois).
+pub(crate) fn civil(minutes: i64) -> Option<(i64, i64, i64, i64, i64)> {
+    let days = minutes.checked_div_euclid(1_440)?;
+    let in_day = minutes.checked_rem_euclid(1_440)?;
+    // 01/01/1984 = jour 5 113 depuis le 01/01/1970 ; 719 468 : 01/03/0000.
+    let z = days.checked_add(5_113 + 719_468)?;
+    let era = z.checked_div_euclid(146_097)?;
+    let doe = z.checked_sub(era.checked_mul(146_097)?)?;
+    let yoe = doe
+        .checked_sub(doe.checked_div(1_460)?)?
+        .checked_add(doe.checked_div(36_524)?)?
+        .checked_sub(doe.checked_div(146_096)?)?
+        .checked_div(365)?;
+    let doy = doe.checked_sub(
+        yoe.checked_mul(365)?
+            .checked_add(yoe.checked_div(4)?)?
+            .checked_sub(yoe.checked_div(100)?)?,
+    )?;
+    let mp = doy.checked_mul(5)?.checked_add(2)?.checked_div(153)?;
+    let d = doy
+        .checked_sub(mp.checked_mul(153)?.checked_add(2)?.checked_div(5)?)?
+        .checked_add(1)?;
+    let mo = if mp < 10 {
+        mp.checked_add(3)?
+    } else {
+        mp.checked_sub(9)?
+    };
+    let y = yoe
+        .checked_add(era.checked_mul(400)?)?
+        .checked_add(i64::from(mo <= 2))?;
+    Some((y, mo, d, in_day.checked_div(60)?, in_day.checked_rem(60)?))
 }
 
 /// R-120 : heure `hh:mm:00`. 24:00 s'écrit `00:00:00` pour une fin de
@@ -717,5 +756,21 @@ mod tests {
         assert_eq!(format_decimal(d(200, 2)), "2");
         assert_eq!(format_decimal(d(-415_875, 5)), "-4.15875");
         assert_eq!(format_decimal(d(5, 1)), "0.5");
+    }
+
+    #[test]
+    fn r120_fast_dates_match_the_calendar() {
+        // Tout le domaine, un jour sur 7 et une minute variable : même texte
+        // que l'affichage de `Moment` (chrono).
+        let mut minutes = 0_i64;
+        while minutes <= Moment::MAX.minutes() {
+            let at = Moment::from_minutes(minutes).unwrap();
+            assert_eq!(format_datetime(at), format!("{at}:00"), "{minutes}");
+            minutes += 7 * 1_440 + 37;
+        }
+        assert_eq!(format_datetime(Moment::MAX), "2150-01-01T00:00:00");
+        assert_eq!(format_datetime(Moment::MIN), "1984-01-01T00:00:00");
+        assert_eq!(format_datetime(m("2024-02-29T23:59")), "2024-02-29T23:59:00");
+        assert_eq!(format_datetime(m("2100-03-01T00:00")), "2100-03-01T00:00:00");
     }
 }

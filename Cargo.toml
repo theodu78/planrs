@@ -72,6 +72,9 @@ proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 # `tests/benches/schedule.rs`, exécuté par le job CI `perf`). Sans rayon ni
 # plotters : ni parallélisme ni graphiques, autant de crates en moins.
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+# Validation XSD des documents écrits (P26, ADR-0010 D17) : dépendance de
+# développement de planrs-tests, Rust pur, BSD-2-Clause.
+uppsala = "0.12.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

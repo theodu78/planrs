@@ -32,6 +32,7 @@ pub mod codes;
 pub mod diag;
 pub mod error;
 pub mod extras;
+mod normalize;
 pub mod scalar;
 pub mod schema;
 pub mod write;
@@ -52,6 +53,7 @@ use planrs_core::{Moment, Project};
 
 pub use diag::{ImportCode, ImportDiagnostic, LinkIgnoredReason};
 pub use error::{Location, MspdiError};
+pub use normalize::normalize;
 pub use recorded::{RecordedSchedule, RecordedTask, Tenths};
 
 /// Plafond de la profondeur d'imbrication, quelle que soit

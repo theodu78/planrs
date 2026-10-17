@@ -149,43 +149,43 @@ fn field(
     let computed = row.values;
     let date = |d: Option<planrs_core::Moment>| d.map(format_datetime);
     match name {
-        "UID" => em.leaf(name, &t.uid().get().to_string()),
+        "UID" => em.leaf_int(name, i64::from(t.uid().get())),
         "GUID" => em.opt_leaf(name, t.guid.map(|g| g.to_string())),
-        "ID" => em.leaf(name, &row.id.to_string()),
+        "ID" => em.leaf_int(name, i64::from(row.id)),
         "Name" => em.text(name, &t.name, max_len(Parent::Task, name)),
         "Active" => em.leaf(name, format_bool(t.active)),
         "Manual" => em.leaf(name, format_bool(manual.is_some())),
-        "Type" => em.leaf(name, &codes::task_type_code(t.task_type).to_string()),
+        "Type" => em.leaf_int(name, codes::task_type_code(t.task_type)),
         "IsNull" => em.leaf(name, format_bool(t.is_null)),
-        "CreateDate" => em.opt_leaf(name, date(t.created)),
+        "CreateDate" => em.opt_date(name, t.created),
         "WBS" => {
             if let Some(w) = &t.wbs {
                 em.text(name, w, max_len(Parent::Task, name));
             }
         }
         "OutlineNumber" => em.text(name, &row.outline_number, max_len(Parent::Task, name)),
-        "OutlineLevel" => em.leaf(name, &row.level.to_string()),
-        "Priority" => em.leaf(name, &t.priority.get().to_string()),
+        "OutlineLevel" => em.leaf_int(name, i64::from(row.level)),
+        "Priority" => em.leaf_int(name, i64::from(t.priority.get())),
         // Durée : entrée d'une feuille ou d'une tâche manuelle ; valeur
         // calculée d'une récapitulative automatique (R-071, R-122).
         "Duration" => {
             if !row.summary || manual.is_some() {
-                em.leaf(name, &format_iso_duration(t.duration.minutes().get()));
+                em.leaf_iso(name, t.duration.minutes().get());
             } else {
                 em.opt_leaf(name, computed.and_then(|v| v.duration).map(format_iso_duration));
             }
         }
         // R-122 : valeurs calculées.
-        "Start" => em.opt_leaf(name, date(computed.and_then(|v| v.start))),
-        "Finish" => em.opt_leaf(name, date(computed.and_then(|v| v.finish))),
-        "EarlyStart" => em.opt_leaf(name, date(computed.and_then(|v| v.early_start))),
-        "EarlyFinish" => em.opt_leaf(name, date(computed.and_then(|v| v.early_finish))),
-        "LateStart" => em.opt_leaf(name, date(computed.and_then(|v| v.late_start))),
-        "LateFinish" => em.opt_leaf(name, date(computed.and_then(|v| v.late_finish))),
-        "TotalSlack" => em.opt_leaf(name, computed.and_then(|v| v.total_slack).map(|n| n.to_string())),
-        "FreeSlack" => em.opt_leaf(name, computed.and_then(|v| v.free_slack).map(|n| n.to_string())),
-        "StartSlack" => em.opt_leaf(name, computed.and_then(|v| v.start_slack).map(|n| n.to_string())),
-        "FinishSlack" => em.opt_leaf(name, computed.and_then(|v| v.finish_slack).map(|n| n.to_string())),
+        "Start" => em.opt_date(name, computed.and_then(|v| v.start)),
+        "Finish" => em.opt_date(name, computed.and_then(|v| v.finish)),
+        "EarlyStart" => em.opt_date(name, computed.and_then(|v| v.early_start)),
+        "EarlyFinish" => em.opt_date(name, computed.and_then(|v| v.early_finish)),
+        "LateStart" => em.opt_date(name, computed.and_then(|v| v.late_start)),
+        "LateFinish" => em.opt_date(name, computed.and_then(|v| v.late_finish)),
+        "TotalSlack" => em.opt_int(name, computed.and_then(|v| v.total_slack)),
+        "FreeSlack" => em.opt_int(name, computed.and_then(|v| v.free_slack)),
+        "StartSlack" => em.opt_int(name, computed.and_then(|v| v.start_slack)),
+        "FinishSlack" => em.opt_int(name, computed.and_then(|v| v.finish_slack)),
         "Critical" => em.opt_leaf(
             name,
             computed
@@ -204,7 +204,7 @@ fn field(
             }
         }
         "DurationFormat" => em.leaf(name, &duration_format(&t.duration)),
-        "Work" => em.leaf(name, &format_iso_duration(t.work.minutes().get())),
+        "Work" => em.leaf_iso(name, t.work.minutes().get()),
         "EffortDriven" => em.leaf(name, format_bool(t.effort_driven)),
         "Recurring" => em.leaf(name, format_bool(t.recurring)),
         "Estimated" => em.leaf(name, format_bool(t.duration.is_estimated())),
@@ -213,24 +213,21 @@ fn field(
         "PercentComplete" => percent(em, name, t.progress.percent_complete),
         "PercentWorkComplete" => percent(em, name, t.progress.percent_work_complete),
         "PhysicalPercentComplete" => percent(em, name, t.progress.physical_percent_complete),
-        "ActualStart" => em.opt_leaf(name, date(t.progress.actual_start)),
-        "ActualFinish" => em.opt_leaf(name, date(t.progress.actual_finish)),
-        "ActualDuration" => em.leaf(name, &format_iso_duration(t.progress.actual_duration.get())),
-        "ActualWork" => em.leaf(name, &format_iso_duration(t.progress.actual_work.minutes().get())),
-        "RemainingDuration" => em.leaf(name, &format_iso_duration(t.progress.remaining_duration.get())),
-        "RemainingWork" => em.leaf(
-            name,
-            &format_iso_duration(t.progress.remaining_work.minutes().get()),
-        ),
-        "ConstraintType" => em.leaf(name, &codes::constraint_code(t.constraint.kind()).to_string()),
+        "ActualStart" => em.opt_date(name, t.progress.actual_start),
+        "ActualFinish" => em.opt_date(name, t.progress.actual_finish),
+        "ActualDuration" => em.leaf_iso(name, t.progress.actual_duration.get()),
+        "ActualWork" => em.leaf_iso(name, t.progress.actual_work.minutes().get()),
+        "RemainingDuration" => em.leaf_iso(name, t.progress.remaining_duration.get()),
+        "RemainingWork" => em.leaf_iso(name, t.progress.remaining_work.minutes().get()),
+        "ConstraintType" => em.leaf_int(name, codes::constraint_code(t.constraint.kind())),
         "CalendarUID" => em.leaf(
             name,
             &t.calendar
                 .map_or_else(|| "-1".to_owned(), |c| c.get().to_string()),
         ),
         // R-132 : date écrite pour les types 2 à 7 seulement.
-        "ConstraintDate" => em.opt_leaf(name, date(constraint_date(t.constraint))),
-        "Deadline" => em.opt_leaf(name, date(t.deadline)),
+        "ConstraintDate" => em.opt_date(name, constraint_date(t.constraint)),
+        "Deadline" => em.opt_date(name, t.deadline),
         "IgnoreResourceCalendar" => em.leaf(name, format_bool(t.ignore_resource_calendar)),
         "Notes" => em.text(name, &t.notes, max_len(Parent::Task, name)),
         "PredecessorLink" => {

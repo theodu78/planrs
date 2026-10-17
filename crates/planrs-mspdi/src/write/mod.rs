@@ -27,10 +27,21 @@ use planrs_core::{Extras, Percent, Project, Subject, round_div};
 
 use crate::extras::{self, Anchor, ExtraKey, ORIGIN};
 pub use crate::schema::Profile as OrderProfile;
-use crate::schema::{Parent, sequence};
+use crate::schema::{Class, Parent, sequence};
 pub use computed::{Computed, ScheduleGap, choose_computed, schedule_gaps};
 use emit::Emitter;
 pub(crate) use emit::is_xml_char;
+pub(crate) use resource::hourly_rate_text;
+
+/// Texte échappé tel que l'écrivain l'écrit (R-131).
+pub(crate) fn escape_text(s: &str) -> String {
+    emit::escape(s)
+}
+
+/// Texte sans caractère interdit par XML 1.0 (U+FFFD, R-131).
+pub(crate) fn sanitize_text(s: &str) -> String {
+    emit::sanitize(s).0
+}
 
 /// Fin de ligne.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -262,8 +273,15 @@ pub(crate) fn children(
             Anchor::After(a) => anchored.entry(a.as_str()).or_default().push(p.payload),
         }
     }
-    for name in sequence(parent).names(profile) {
-        field(em, name);
+    for (name, class) in sequence(parent).classed(profile) {
+        // Calculés non recalculés (X) : rien à écrire. Les conservés (P)
+        // passent par `field` (`CurrencyCode` a une valeur par défaut, R-130).
+        if *class != Some(Class::Dropped) {
+            field(em, name);
+        }
+        if extras.is_empty() {
+            continue;
+        }
         for payload in named
             .get(name)
             .into_iter()

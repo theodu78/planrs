@@ -174,10 +174,13 @@ pub struct Sequence {
     pub observed: &'static [&'static str],
 }
 
-/// Index d'une séquence : nom → rang pj15, nom → rang observé.
+/// Index d'une séquence : nom → rang pj15, nom → rang observé, et noms de
+/// chaque profil avec leur classe (écriture sans recherche par nom).
 struct Index {
     strict: BTreeMap<&'static str, usize>,
     observed: BTreeMap<&'static str, usize>,
+    strict_classes: Vec<(&'static str, Option<Class>)>,
+    observed_classes: Vec<(&'static str, Option<Class>)>,
 }
 
 impl Sequence {
@@ -206,6 +209,18 @@ impl Sequence {
         a.into_iter().flatten().chain(b.into_iter().flatten())
     }
 
+    /// Noms du profil avec leur classe (`None` : hors schéma, `GUID`
+    /// compris), dans l'ordre.
+    #[must_use]
+    pub fn classed(&self, profile: Profile) -> &[(&'static str, Option<Class>)] {
+        let index = self.index();
+        if matches!(profile, Profile::Observed) && !self.observed.is_empty() {
+            &index.observed_classes
+        } else {
+            &index.strict_classes
+        }
+    }
+
     /// Rang d'un nom dans le profil ; `None` hors du profil.
     #[must_use]
     pub fn position(&self, profile: Profile, name: &str) -> Option<usize> {
@@ -232,9 +247,18 @@ impl Sequence {
             Parent::Assignment => &INDEXES.0[10],
             Parent::AssignmentBaseline => &INDEXES.0[11],
         };
-        cell.get_or_init(|| Index {
-            strict: self.strict.iter().enumerate().map(|(i, s)| (s.name, i)).collect(),
-            observed: self.observed.iter().enumerate().map(|(i, n)| (*n, i)).collect(),
+        cell.get_or_init(|| {
+            let strict: BTreeMap<&'static str, usize> =
+                self.strict.iter().enumerate().map(|(i, s)| (s.name, i)).collect();
+            let class = |n: &str| strict.get(n).and_then(|i| self.strict.get(*i)).map(|s| s.class);
+            let strict_classes = self.strict.iter().map(|s| (s.name, Some(s.class))).collect();
+            let observed_classes = self.observed.iter().map(|n| (*n, class(n))).collect();
+            Index {
+                observed: self.observed.iter().enumerate().map(|(i, n)| (*n, i)).collect(),
+                strict,
+                strict_classes,
+                observed_classes,
+            }
         })
     }
 }

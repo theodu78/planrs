@@ -58,6 +58,7 @@ toml.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+uppsala.workspace = true
 
 [lints]
 workspace = true

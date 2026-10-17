@@ -6,7 +6,9 @@
 //! et les charges brutes des `Extras` (R-123), réécrites telles quelles à
 //! leur niveau d'indentation, s'écrivent plus simplement à la main.
 
-use planrs_core::Subject;
+use planrs_core::{Moment, Subject};
+
+use crate::scalar::civil;
 
 use super::{Indent, Newline, WriteCode, WriteDiagnostic};
 
@@ -202,6 +204,79 @@ impl Emitter {
         self.line_end();
     }
 
+    /// Ouvre une feuille : indentation et balise ouvrante.
+    fn leaf_open(&mut self, name: &'static str) {
+        self.start_parent();
+        self.pad();
+        self.out.push(b'<');
+        self.push(name);
+        self.out.push(b'>');
+    }
+
+    /// Ferme une feuille ouverte par `leaf_open`.
+    fn leaf_close(&mut self, name: &'static str) {
+        self.push("</");
+        self.push(name);
+        self.out.push(b'>');
+        self.line_end();
+    }
+
+    /// Feuille entière, sans allocation.
+    pub(crate) fn leaf_int(&mut self, name: &'static str, v: i64) {
+        self.leaf_open(name);
+        push_int(&mut self.out, v, 1);
+        self.leaf_close(name);
+    }
+
+    /// Feuille entière facultative.
+    pub(crate) fn opt_int(&mut self, name: &'static str, v: Option<i64>) {
+        if let Some(v) = v {
+            self.leaf_int(name, v);
+        }
+    }
+
+    /// Feuille date `AAAA-MM-JJThh:mm:00` (R-120), sans allocation.
+    pub(crate) fn leaf_date(&mut self, name: &'static str, m: Moment) {
+        let Some((y, mo, d, h, mi)) = civil(m.minutes()) else {
+            self.leaf(name, &crate::scalar::format_datetime(m));
+            return;
+        };
+        self.leaf_open(name);
+        push_int(&mut self.out, y, 4);
+        self.out.push(b'-');
+        push_int(&mut self.out, mo, 2);
+        self.out.push(b'-');
+        push_int(&mut self.out, d, 2);
+        self.out.push(b'T');
+        push_int(&mut self.out, h, 2);
+        self.out.push(b':');
+        push_int(&mut self.out, mi, 2);
+        self.push(":00");
+        self.leaf_close(name);
+    }
+
+    /// Feuille date facultative.
+    pub(crate) fn opt_date(&mut self, name: &'static str, m: Option<Moment>) {
+        if let Some(m) = m {
+            self.leaf_date(name, m);
+        }
+    }
+
+    /// Feuille durée ISO `PT{h}H{m}M0S` (R-120), sans allocation.
+    pub(crate) fn leaf_iso(&mut self, name: &'static str, minutes: i64) {
+        self.leaf_open(name);
+        if minutes < 0 {
+            self.out.push(b'-');
+        }
+        let abs = minutes.unsigned_abs();
+        self.push("PT");
+        push_int(&mut self.out, i64::try_from(abs / 60).unwrap_or(i64::MAX), 1);
+        self.out.push(b'H');
+        push_int(&mut self.out, i64::try_from(abs % 60).unwrap_or(0), 1);
+        self.push("M0S");
+        self.leaf_close(name);
+    }
+
     /// Élément feuille facultatif : écrit seulement s'il a une valeur.
     pub(crate) fn opt_leaf(&mut self, name: &'static str, value: Option<String>) {
         if let Some(v) = value {
@@ -242,6 +317,35 @@ impl Emitter {
         self.pad();
         self.push(payload);
         self.line_end();
+    }
+}
+
+/// Écrit un entier en décimal, complété de zéros à gauche jusqu'à `width`
+/// chiffres.
+fn push_int(out: &mut Vec<u8>, v: i64, width: usize) {
+    let mut digits = [0_u8; 20];
+    let mut n = v.unsigned_abs();
+    let mut len = 0_usize;
+    loop {
+        if let Some(slot) = digits.get_mut(len) {
+            *slot = b'0'.saturating_add(u8::try_from(n % 10).unwrap_or(0));
+        }
+        len = len.saturating_add(1);
+        n /= 10;
+        if n == 0 || len >= digits.len() {
+            break;
+        }
+    }
+    if v < 0 {
+        out.push(b'-');
+    }
+    for _ in len..width {
+        out.push(b'0');
+    }
+    for i in (0..len).rev() {
+        if let Some(d) = digits.get(i) {
+            out.push(*d);
+        }
     }
 }
 

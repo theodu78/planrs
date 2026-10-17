@@ -23,7 +23,7 @@ sha256 = "95fd0ad64af02cf0e725aa8c7bb6caeaeeb92bce4be447d3fa83e6e8f72f4092"
 producer = "msproject"
 save_version = 14
 note = "CPM pur : 50 tâches, 17 récapitulatives, 36 FS, aucune contrainte, aucun avancement."
-floor = 0
+floor = 51
 
 [[file]]
 name = "practicemap.xml"
@@ -38,7 +38,7 @@ sha256 = "7a5292c924c3229de38d063213cd092acd858bedb665643e752340a9b4f05ea4"
 producer = "msproject"
 save_version = 14
 note = "CPM pur : 17 tâches, 2 jalons, 22 FS."
-floor = 0
+floor = 18
 
 [[file]]
 name = "shopmetrics.xml"
@@ -53,7 +53,7 @@ sha256 = "fa066ebe350248171360810271de7747d3267e0535bd6f35a5d4b94199e0fb06"
 producer = "msproject"
 save_version = 14
 note = "41 tâches, 11 récapitulatives, 32 FS ; calendrier du projet dérivé (UID 1, base 2) : marges libres de 2 h attendues en divergence."
-floor = 0
+floor = 22
 
 [[file]]
 name = "takeout-system-zh.xml"

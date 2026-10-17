@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use planrs_core::{
     Arena, BuiltinCalendarNames, CalendarUid, ConversionFactors, ExtraEntry, Extras, Guid, Project,
-    ProjectInfo, ProjectInit, ProjectOptions, ScheduleAnchor, Subject, TaskType, TaskUid,
+    ProjectInfo, ProjectInit, ProjectOptions, ScheduleAnchor, SchedulingMode, Subject, TaskType, TaskUid,
 };
 
 use crate::ReadOptions;
@@ -44,25 +44,25 @@ pub(crate) fn build(raw: &RawDocument<'_>, options: &ReadOptions, sink: &mut Sin
     let f = Fields::new(raw.fields.iter(), "", Some(Subject::Project), raw.root_at);
     let save_version = f.int("SaveVersion", sink).map(|(v, _)| v);
 
+    // R-089 : sens de planification (`ScheduleFromStart`, défaut vrai du
+    // schéma, R-076). Depuis le début, l'ancre est `StartDate` ; à rebours,
+    // `FinishDate` (« Required if ScheduleFromStart is false », S34), sinon
+    // `StartDate`, sinon « maintenant », avec `mspdi.missing_required`.
+    // `StartDate` est toujours gardée dans le planning enregistré (R-083).
+    let from_start = f.bool("ScheduleFromStart", sink).unwrap_or(true);
     let recorded_start = f.datetime("StartDate", sink);
-    if !f.has("StartDate") {
-        f.missing("StartDate", sink);
-    }
-    let start = recorded_start.unwrap_or(options.current_date);
     let recorded_finish = f.datetime("FinishDate", sink);
+    let start = recorded_start.unwrap_or(options.current_date);
     let current_date = f.datetime("CurrentDate", sink).unwrap_or(options.current_date);
-    let anchor = if f.bool("ScheduleFromStart", sink).unwrap_or(true) {
+    let anchor = if from_start {
+        if !f.has("StartDate") {
+            f.missing("StartDate", sink);
+        }
         ScheduleAnchor::FromStart(start)
     } else {
-        f.report(
-            ImportCode::Unsupported {
-                what: "schedule_from_finish".to_owned(),
-            },
-            "ScheduleFromStart",
-            f.at(),
-            None,
-            sink,
-        );
+        if !f.has("FinishDate") {
+            f.missing("FinishDate", sink);
+        }
         ScheduleAnchor::FromFinish(recorded_finish.unwrap_or(start))
     };
 
@@ -87,6 +87,7 @@ pub(crate) fn build(raw: &RawDocument<'_>, options: &ReadOptions, sink: &mut Sin
     };
 
     task::import(&raw.tasks, &mut project, &mut recorded, sink);
+    honor_constraints_off(&f, &project, sink);
     project.resources = resource::import(&raw.resources, &project.options.factors, sink);
     let tasks: BTreeSet<TaskUid> = recorded.tasks.keys().copied().collect();
     let (assignments, dropped_timephased) = assignment::import(&raw.assignments, &tasks, sink);
@@ -107,6 +108,32 @@ pub(crate) fn build(raw: &RawDocument<'_>, options: &ReadOptions, sink: &mut Sin
         recorded,
         save_version,
         dropped_computed,
+    }
+}
+
+/// R-089 : `HonorConstraints` est lu littéralement (S34 : `default="true"`,
+/// « Whether tasks honour their constraint dates ») ; à 0 alors qu'une tâche
+/// automatique active a une contrainte datée, l'option change le calcul de
+/// cette tâche : `mspdi.honor_constraints_off` (info, une fois). Les cinq
+/// fichiers du corpus ont 0 (O15) : un codage inversé reste l'hypothèse
+/// concurrente prioritaire.
+fn honor_constraints_off(f: &Fields<'_>, project: &Project, sink: &mut Sink<'_>) {
+    if project.options.honor_constraints {
+        return;
+    }
+    let dated = project
+        .tasks
+        .iter()
+        .any(|t| !t.is_null && t.active && t.mode == SchedulingMode::Auto && t.constraint.kind().is_dated());
+    if dated {
+        let value = f.raw("HonorConstraints", sink);
+        f.report(
+            ImportCode::HonorConstraintsOff,
+            "HonorConstraints",
+            f.at(),
+            value,
+            sink,
+        );
     }
 }
 

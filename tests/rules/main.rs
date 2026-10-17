@@ -103,6 +103,7 @@ mod r085_manual_tasks_import;
 mod r086_cpm_options_import;
 mod r087_extras_capture;
 mod r088_resources_assignments_baselines_import;
+mod r089_from_finish_and_honor_import;
 mod r090_constraint_date_normalization;
 mod r091_as_soon_as_possible;
 mod r092_as_late_as_possible;

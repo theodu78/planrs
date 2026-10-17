@@ -110,20 +110,23 @@ fn r076_out_of_range_factor_takes_default() {
 }
 
 #[test]
-fn r076_schedule_from_finish_is_unsupported() {
-    // Planification à rebours : ancre sur la date de fin, signalée (J3).
+fn r076_schedule_from_finish_default_and_value() {
+    // `ScheduleFromStart` absent : vrai (défaut du schéma) ; faux :
+    // planification à rebours sur `FinishDate` (R-089), sans diagnostic.
+    let doc = project("");
+    assert!(matches!(doc.project.anchor, ScheduleAnchor::FromStart(_)));
     let doc = project("<ScheduleFromStart>0</ScheduleFromStart>");
     assert_eq!(
         doc.project.anchor,
         ScheduleAnchor::FromFinish(moment("2026-10-30T17:00"))
     );
-    assert!(has(
-        &doc,
-        &ImportCode::Unsupported {
-            what: "schedule_from_finish".to_owned()
-        },
-        "ScheduleFromStart"
-    ));
+    assert!(
+        doc.diagnostics
+            .iter()
+            .all(|d| !d.code.code().starts_with("mspdi.")),
+        "{:?}",
+        doc.diagnostics
+    );
 }
 
 #[test]

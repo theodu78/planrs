@@ -26,6 +26,7 @@
 //!   (conversions ouvrées à venir) ;
 //! - [`model`] : modèle V1 (projet, tâches, liens, ressources, affectations,
 //!   lignes de base), sérialisation validée (R-032 à R-034) ;
+//! - [`diagnostic`] : diagnostics typés, gravité et sujet déduits ;
 //! - [`error`] : erreurs typées, codes stables.
 
 #![deny(
@@ -37,6 +38,7 @@
 
 pub mod arena;
 pub mod calendar;
+pub mod diagnostic;
 pub mod duration;
 pub mod error;
 pub mod fixed;
@@ -47,11 +49,15 @@ pub mod quantity;
 pub mod time;
 
 pub use arena::{Arena, HasUid};
-pub use calendar::BuiltinCalendarNames;
+pub use calendar::{BuiltinCalendarNames, Direction};
+pub use diagnostic::{Diagnostic, Diagnostics, Severity, Subject};
 pub use duration::{
     ConversionFactors, Duration, DurationUnit, Lag, LagValue, Minutes, TimeBasis, Work, percent_of,
 };
-pub use error::{CalendarModelError, DurationError, EntityKind, FixedError, ModelError, TimeError};
+pub use error::{
+    CalendarError, CalendarModelError, CoreError, DurationError, EntityKind, FixedError, ModelError,
+    TimeError,
+};
 pub use fixed::{Decimal, round_div};
 pub use ids::{AssignmentUid, BaselineNumber, CalendarUid, EntityUid, Guid, ResourceUid, TaskId, TaskUid};
 pub use model::{

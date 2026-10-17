@@ -19,6 +19,7 @@ mod link;
 mod options;
 mod resource;
 mod task;
+mod validate;
 
 use serde::de::{Deserializer, Error as _};
 use serde::ser::Serializer;

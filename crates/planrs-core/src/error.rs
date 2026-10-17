@@ -13,6 +13,8 @@
 
 use serde::Serialize;
 
+use crate::calendar::Direction;
+use crate::ids::CalendarUid;
 use crate::time::Day;
 
 /// Erreur du point fixe (`fixed.rs`, `quantity.rs`).
@@ -225,6 +227,114 @@ impl CalendarModelError {
     }
 }
 
+/// Erreur de calendrier : héritage, conversion, invariant interne.
+///
+/// C'est l'erreur du chemin chaud (conversions ouvrées) : la cause (aucun
+/// temps ouvré, sortie du domaine et sa direction) n'est jamais perdue.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error, Serialize)]
+#[serde(tag = "code")]
+pub enum CalendarError {
+    /// Calendrier inexistant.
+    #[serde(rename = "calendar.unknown_calendar")]
+    #[error("calendrier {calendar} inconnu")]
+    UnknownCalendar {
+        /// UID cherché.
+        calendar: CalendarUid,
+    },
+    /// Calendrier dérivé dont la base n'existe pas.
+    #[serde(rename = "calendar.base_missing")]
+    #[error("le calendrier {calendar} hérite du calendrier {base}, qui n'existe pas")]
+    BaseMissing {
+        /// Calendrier dérivé.
+        calendar: CalendarUid,
+        /// Base introuvable.
+        base: CalendarUid,
+    },
+    /// Calendrier dérivé dont la base est elle-même dérivée (un seul niveau
+    /// d'héritage, comme MS Project).
+    #[serde(rename = "calendar.base_not_base")]
+    #[error("le calendrier {calendar} hérite du calendrier {base}, qui n'est pas un calendrier de base")]
+    BaseNotBase {
+        /// Calendrier dérivé.
+        calendar: CalendarUid,
+        /// Base qui n'en est pas une.
+        base: CalendarUid,
+    },
+    /// Boucle d'héritage ; `chain` se termine par le premier UID répété.
+    #[serde(rename = "calendar.inheritance_cycle")]
+    #[error("boucle d'héritage entre calendriers : {}", format_chain(chain))]
+    InheritanceCycle {
+        /// Chemin complet, premier UID répété en fin.
+        chain: Vec<CalendarUid>,
+    },
+    /// Calendrier sans aucune minute ouvrée.
+    #[serde(rename = "calendar.no_working_time")]
+    #[error("le calendrier {calendar} n'a aucun temps ouvré")]
+    NoWorkingTime {
+        /// Calendrier.
+        calendar: CalendarUid,
+    },
+    /// Résultat hors du domaine des dates (1984-2149).
+    #[serde(rename = "calendar.out_of_domain")]
+    #[error("calcul sur le calendrier {calendar} hors du domaine des dates ({direction})")]
+    OutOfDomain {
+        /// Calendrier.
+        calendar: CalendarUid,
+        /// Sens du dépassement.
+        direction: Direction,
+    },
+    /// Placement d'une durée négative.
+    #[serde(rename = "calendar.negative_span")]
+    #[error("une durée à placer ne peut pas être négative")]
+    NegativeSpan,
+    /// Invariant interne violé : jamais attendu.
+    #[serde(rename = "calendar.inconsistent")]
+    #[error("incohérence interne du calendrier {calendar} (anomalie à signaler)")]
+    Inconsistent {
+        /// Calendrier.
+        calendar: CalendarUid,
+    },
+    /// Erreur du modèle stocké (le code est celui de l'erreur portée ;
+    /// variante non étiquetée, donc placée en dernier pour serde).
+    #[serde(untagged)]
+    #[error(transparent)]
+    Model(CalendarModelError),
+}
+
+/// `5 → 6 → 5`.
+fn format_chain(chain: &[CalendarUid]) -> String {
+    chain
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" → ")
+}
+
+impl CalendarError {
+    /// Code stable de l'erreur (celui de l'erreur portée pour
+    /// [`CalendarError::Model`]).
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::UnknownCalendar { .. } => "calendar.unknown_calendar",
+            Self::BaseMissing { .. } => "calendar.base_missing",
+            Self::BaseNotBase { .. } => "calendar.base_not_base",
+            Self::InheritanceCycle { .. } => "calendar.inheritance_cycle",
+            Self::NoWorkingTime { .. } => "calendar.no_working_time",
+            Self::OutOfDomain { .. } => "calendar.out_of_domain",
+            Self::NegativeSpan => "calendar.negative_span",
+            Self::Inconsistent { .. } => "calendar.inconsistent",
+            Self::Model(e) => e.code(),
+        }
+    }
+}
+
+impl From<CalendarModelError> for CalendarError {
+    fn from(e: CalendarModelError) -> Self {
+        Self::Model(e)
+    }
+}
+
 /// Type d'entité identifiée par un UID (messages d'erreur).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -339,6 +449,41 @@ impl ModelError {
     }
 }
 
+/// Toute erreur du cœur. Sérialisée comme l'erreur portée (son champ `code`).
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error, Serialize)]
+#[serde(untagged)]
+pub enum CoreError {
+    /// Point fixe.
+    #[error(transparent)]
+    Fixed(#[from] FixedError),
+    /// Temps.
+    #[error(transparent)]
+    Time(#[from] TimeError),
+    /// Durées.
+    #[error(transparent)]
+    Duration(#[from] DurationError),
+    /// Calendriers.
+    #[error(transparent)]
+    Calendar(#[from] CalendarError),
+    /// Modèle.
+    #[error(transparent)]
+    Model(#[from] ModelError),
+}
+
+impl CoreError {
+    /// Code stable de l'erreur portée.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Fixed(e) => e.code(),
+            Self::Time(e) => e.code(),
+            Self::Duration(e) => e.code(),
+            Self::Calendar(e) => e.code(),
+            Self::Model(e) => e.code(),
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     #![allow(
@@ -348,7 +493,12 @@ pub(crate) mod tests {
         reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
     )]
 
-    use super::{CalendarModelError, DurationError, EntityKind, FixedError, ModelError, TimeError};
+    use super::{
+        CalendarError, CalendarModelError, CoreError, DurationError, EntityKind, FixedError, ModelError,
+        TimeError,
+    };
+    use crate::calendar::Direction;
+    use crate::ids::CalendarUid;
     use crate::time::Day;
 
     /// Vérifie que l'étiquette serde `code` vaut `code()`.
@@ -455,5 +605,56 @@ pub(crate) mod tests {
             assert_ne!(e.to_string(), "");
         }
         assert_eq!(EntityKind::Calendar.to_string(), "calendrier");
+    }
+
+    #[test]
+    fn calendar_error_codes_match_serde_tags() {
+        let c = CalendarUid::new(5);
+        for e in [
+            CalendarError::UnknownCalendar { calendar: c },
+            CalendarError::BaseMissing { calendar: c, base: c },
+            CalendarError::BaseNotBase { calendar: c, base: c },
+            CalendarError::InheritanceCycle {
+                chain: vec![c, CalendarUid::new(6), c],
+            },
+            CalendarError::NoWorkingTime { calendar: c },
+            CalendarError::OutOfDomain {
+                calendar: c,
+                direction: Direction::After,
+            },
+            CalendarError::NegativeSpan,
+            CalendarError::Model(CalendarModelError::TooManyRanges { count: 6 }),
+            CalendarError::Inconsistent { calendar: c },
+        ] {
+            assert_tag(&e, e.code());
+            assert_ne!(e.to_string(), "");
+        }
+        assert_eq!(
+            CalendarError::InheritanceCycle {
+                chain: vec![c, CalendarUid::new(6), c]
+            }
+            .to_string(),
+            "boucle d'héritage entre calendriers : 5 → 6 → 5"
+        );
+        let model = CalendarError::from(CalendarModelError::EmptyRange);
+        assert_eq!(model.code(), "calendar_model.empty_range");
+        assert_eq!(
+            serde_json::to_string(&model).unwrap(),
+            r#"{"code":"calendar_model.empty_range"}"#
+        );
+    }
+
+    #[test]
+    fn core_error_delegates_code() {
+        for e in [
+            CoreError::from(FixedError::Overflow),
+            CoreError::from(TimeError::OutOfDomain),
+            CoreError::from(DurationError::Negative),
+            CoreError::from(CalendarError::NegativeSpan),
+            CoreError::from(ModelError::ReservedUid { uid: 0 }),
+        ] {
+            assert_tag(&e, e.code());
+            assert_ne!(e.to_string(), "");
+        }
     }
 }

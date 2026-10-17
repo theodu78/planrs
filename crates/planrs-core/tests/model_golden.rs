@@ -85,3 +85,9 @@ fn golden_project_writes_back_identically() {
     let written = serde_json::to_string_pretty(&p).unwrap();
     assert_eq!(written, GOLDEN.trim_end());
 }
+
+#[test]
+fn golden_project_is_valid() {
+    let p: Project = serde_json::from_str(GOLDEN).unwrap();
+    assert_eq!(p.validate().finish(), []);
+}

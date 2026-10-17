@@ -4,8 +4,8 @@
 //! `*Slack`, `Critical`, `Summary` et la `Duration` des récapitulatives ne
 //! change pas le projet lu.
 //!
-//! L'égalité porte sur le `Project` entier, entrée unique du moteur : elle
-//! entraîne l'égalité de `schedule(&doc.project)`.
+//! L'égalité porte sur le `Project` entier, entrée unique du moteur, et sur
+//! `schedule(&doc.project)`.
 
 #![allow(
     clippy::unwrap_used,
@@ -19,6 +19,7 @@
 
 use std::path::{Path, PathBuf};
 
+use planrs_core::schedule;
 use planrs_mspdi::{ReadOptions, read};
 
 fn opts() -> ReadOptions {
@@ -139,6 +140,11 @@ fn check(name: &str, xml: &str) {
     assert_eq!(
         full.project, stripped.project,
         "{name} : une valeur calculée a fuité"
+    );
+    assert_eq!(
+        schedule(&full.project),
+        schedule(&stripped.project),
+        "{name} : le planning dépend d'une valeur calculée"
     );
 }
 

@@ -24,7 +24,8 @@
 //! - [`arena`] : collections ordonnées indexées par UID ;
 //! - [`calendar`] : modèle stocké des calendriers et calendriers fournis
 //!   (conversions ouvrées à venir) ;
-//! - [`model`] : modèle V1 ;
+//! - [`model`] : modèle V1 (projet, tâches, liens, ressources, affectations,
+//!   lignes de base), sérialisation validée (R-032 à R-034) ;
 //! - [`error`] : erreurs typées, codes stables.
 
 #![deny(
@@ -46,13 +47,18 @@ pub mod quantity;
 pub mod time;
 
 pub use arena::{Arena, HasUid};
+pub use calendar::BuiltinCalendarNames;
 pub use duration::{
     ConversionFactors, Duration, DurationUnit, Lag, LagValue, Minutes, TimeBasis, Work, percent_of,
 };
 pub use error::{CalendarModelError, DurationError, EntityKind, FixedError, ModelError, TimeError};
 pub use fixed::{Decimal, round_div};
 pub use ids::{AssignmentUid, BaselineNumber, CalendarUid, EntityUid, Guid, ResourceUid, TaskId, TaskUid};
-pub use model::{ExtraEntry, Extras};
+pub use model::{
+    Assignment, AssignmentBaseline, Constraint, ExtraEntry, Extras, Link, LinkType, OutlineLevel, Priority,
+    Progress, Project, ProjectInfo, ProjectInit, ProjectOptions, Resource, ResourceBaseline, ResourceKind,
+    ScheduleAnchor, SchedulingMode, Task, TaskBaseline, TaskType, WorkContour,
+};
 pub use quantity::{Money, Percent, Rate, RateUnit, SignedPercent, Units};
 pub use time::{Day, DayRange, Moment, Month, TimeOfDay, Week, Weekday};
 

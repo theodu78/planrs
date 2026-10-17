@@ -105,3 +105,25 @@ Sources citées (pages Microsoft uniquement ; « Q » = Microsoft Q&A, communaut
 - **Source** : support.microsoft.com, « Project Information dialog box » (S6 : « Monday night through Saturday morning, 11:00 P.M. to 8:00 A.M. … break between 3:00 A.M. and 4:00 A.M. »), « Create a new base calendar » (S7) ; découpage par jour : hypothèse.
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r014_night_shift_calendar.rs` (`r014_*`), cas au niveau du jour et de la semaine ; les cas de conversion s'ajoutent avec les calendriers compilés.
+
+### Projet
+
+Les règles R-015 à R-031 (héritage, exceptions, récurrences, semaines datées, conversions, placement) sont réservées aux calendriers (ADR-0008) et ajoutées avec eux.
+
+## R-032 — Valeurs par défaut d'un projet neuf
+- **Formulation** : 480 min/jour, 2 400 min/semaine, 20 jours/mois ; début 08:00, fin 17:00 ; unité de durée : jour ; unité de travail : heure ; tâche à unités fixes, non pilotée par l'effort, estimée ; planification depuis le début ; respect des contraintes ; semaine commençant le lundi (affichage) ; calendriers Standard (UID 1, calendrier du projet), 24 heures (UID 2), Équipe de nuit (UID 3) ; date de création = date courante injectée. Nouvelle tâche : « 1j? » (une journée de `MinutesPerDay`, soit 480 min, dans l'unité de durée par défaut, estimée), contrainte « le plus tôt possible », priorité 500, mode automatique. Ces valeurs sont celles de l'application ; les valeurs du schéma MSPDI pour un élément absent à l'import (`DefaultTaskType` = durée fixe, `NewTasksEffortDriven` = vrai) relèvent de `planrs-mspdi` (J3).
+- **Source** : support.microsoft.com, « How Project schedules tasks: Behind the scenes » (S8), « Change default times for entered start or finish dates » (S9), « Change the default task duration unit » (S10), « Project Information dialog box » (S6 : planification depuis le début), « Duration (task field) » (S14 : « 1d? ») ; learn.microsoft.com, schéma MSPDI, élément Project (S2). Type de tâche, pilotage par l'effort, UID des calendriers, premier jour de la semaine et durée d'une nouvelle tâche hors unité « jour » : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r032_new_project_defaults.rs` (`r032_*`).
+
+## R-033 — Date saisie sans heure
+- **Formulation** : un début reçoit l'heure de début par défaut, une fin l'heure de fin par défaut ; une heure par défaut de 24:00 donne le lendemain 00:00. L'alignement sur le calendrier se fait ensuite par R-030. Exemples : 2026-10-19 en début → 08:00 ; en fin → 17:00 ; avec un début par défaut à 07:00 → 07:00, puis `forward_span(07:00, 480)` démarre à 08:00 (exemple de S9).
+- **Source** : support.microsoft.com, « Change default times for entered start or finish dates » (S9).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r033_date_without_time.rs` (`r033_*`) ; le cas `forward_span` s'ajoute avec le placement.
+
+## R-034 — Date d'état effective
+- **Formulation** : sans date d'état (NA), la date d'état est la date courante injectée. Exemples : date d'état NA et date courante 2026-10-17 08:00 → 2026-10-17 08:00 ; date d'état 2026-10-15 17:00 → 2026-10-15 17:00.
+- **Source** : support.microsoft.com, « Project Information dialog box » (S6 : « If you set the status date to NA, Project uses the current date »).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r034_effective_status_date.rs` (`r034_*`).

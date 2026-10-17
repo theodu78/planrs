@@ -29,6 +29,9 @@ mod r011_time_ranges;
 mod r012_standard_calendar;
 mod r013_24_hours_calendar;
 mod r014_night_shift_calendar;
+mod r032_new_project_defaults;
+mod r033_date_without_time;
+mod r034_effective_status_date;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

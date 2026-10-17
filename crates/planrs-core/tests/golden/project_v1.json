@@ -1,0 +1,429 @@
+{
+  "format_version": 1,
+  "info": {
+    "guid": "0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0",
+    "name": "Chantier",
+    "title": "Maison individuelle",
+    "subject": "",
+    "author": "Théo",
+    "manager": "",
+    "company": "",
+    "category": "",
+    "creation_date": "2026-10-17T08:00"
+  },
+  "anchor": {
+    "from_start": "2026-10-19T08:00"
+  },
+  "status_date": null,
+  "current_date": "2026-10-17T08:00",
+  "calendar": 1,
+  "options": {
+    "factors": {
+      "minutes_per_day": 480,
+      "minutes_per_week": 2400,
+      "days_per_month": 20
+    },
+    "default_start_time": "08:00",
+    "default_finish_time": "17:00",
+    "default_duration_unit": "day",
+    "default_work_unit": "hour",
+    "default_task_type": "fixed_units",
+    "new_tasks_effort_driven": false,
+    "new_tasks_estimated": true,
+    "week_start_day": "monday",
+    "honor_constraints": true
+  },
+  "calendars": [
+    {
+      "uid": 1,
+      "guid": null,
+      "name": "Standard",
+      "kind": {
+        "base": {
+          "week": {
+            "sunday": "non_working",
+            "monday": {
+              "working": [
+                {
+                  "from": "08:00",
+                  "to": "12:00"
+                },
+                {
+                  "from": "13:00",
+                  "to": "17:00"
+                }
+              ]
+            },
+            "tuesday": {
+              "working": [
+                {
+                  "from": "08:00",
+                  "to": "12:00"
+                },
+                {
+                  "from": "13:00",
+                  "to": "17:00"
+                }
+              ]
+            },
+            "wednesday": {
+              "working": [
+                {
+                  "from": "08:00",
+                  "to": "12:00"
+                },
+                {
+                  "from": "13:00",
+                  "to": "17:00"
+                }
+              ]
+            },
+            "thursday": {
+              "working": [
+                {
+                  "from": "08:00",
+                  "to": "12:00"
+                },
+                {
+                  "from": "13:00",
+                  "to": "17:00"
+                }
+              ]
+            },
+            "friday": {
+              "working": [
+                {
+                  "from": "08:00",
+                  "to": "12:00"
+                },
+                {
+                  "from": "13:00",
+                  "to": "17:00"
+                }
+              ]
+            },
+            "saturday": "non_working"
+          }
+        }
+      },
+      "work_weeks": [],
+      "exceptions": [
+        {
+          "name": "Noël",
+          "period": {
+            "from": "2026-12-25",
+            "to": "2026-12-25"
+          },
+          "setting": "non_working",
+          "recurrence": {
+            "type": "yearly_by_day",
+            "month": "december",
+            "day": 25
+          },
+          "occurrences": null
+        }
+      ],
+      "extras": []
+    },
+    {
+      "uid": 4,
+      "guid": null,
+      "name": "Paul",
+      "kind": {
+        "derived": {
+          "base": 1,
+          "week": {
+            "sunday": "inherit",
+            "monday": "inherit",
+            "tuesday": "inherit",
+            "wednesday": "inherit",
+            "thursday": "inherit",
+            "friday": {
+              "working": [
+                {
+                  "from": "08:00",
+                  "to": "12:00"
+                }
+              ]
+            },
+            "saturday": "inherit"
+          }
+        }
+      },
+      "work_weeks": [
+        {
+          "name": "Été",
+          "period": {
+            "from": "2027-07-01",
+            "to": "2027-08-31"
+          },
+          "days": {
+            "sunday": "inherit",
+            "monday": {
+              "working": [
+                {
+                  "from": "08:00",
+                  "to": "15:00"
+                }
+              ]
+            },
+            "tuesday": "inherit",
+            "wednesday": "inherit",
+            "thursday": "inherit",
+            "friday": "non_working",
+            "saturday": "inherit"
+          }
+        }
+      ],
+      "exceptions": [],
+      "extras": []
+    }
+  ],
+  "summary_task": null,
+  "tasks": [
+    {
+      "uid": 1,
+      "guid": null,
+      "name": "Fondations",
+      "is_null": false,
+      "outline_level": 1,
+      "wbs": "1",
+      "duration": {
+        "minutes": 2400,
+        "unit": "day",
+        "basis": "working",
+        "estimated": false
+      },
+      "work": 2400,
+      "task_type": "fixed_units",
+      "effort_driven": false,
+      "milestone": false,
+      "constraint": {
+        "type": "as_soon_as_possible"
+      },
+      "deadline": null,
+      "calendar": null,
+      "ignore_resource_calendar": false,
+      "priority": 500,
+      "progress": {
+        "percent_complete": 5000,
+        "percent_work_complete": 5000,
+        "physical_percent_complete": 0,
+        "actual_start": "2026-10-19T08:00",
+        "actual_finish": null,
+        "actual_duration": 1200,
+        "remaining_duration": 1200,
+        "actual_work": 1200,
+        "remaining_work": 1200
+      },
+      "predecessors": [],
+      "notes": "Béton dosé à 350 kg/m³.",
+      "mode": "auto",
+      "active": true,
+      "recurring": false,
+      "created": "2026-10-17T08:00",
+      "baselines": {
+        "0": {
+          "start": "2026-10-19T08:00",
+          "finish": "2026-10-23T17:00",
+          "duration": {
+            "minutes": 2400,
+            "unit": "day",
+            "basis": "working",
+            "estimated": false
+          },
+          "work": 2400,
+          "cost": 120000,
+          "fixed_cost": null
+        }
+      },
+      "extras": []
+    },
+    {
+      "uid": 3,
+      "guid": null,
+      "name": "",
+      "is_null": true,
+      "outline_level": 1,
+      "wbs": null,
+      "duration": {
+        "minutes": 0,
+        "unit": "day",
+        "basis": "working",
+        "estimated": false
+      },
+      "work": 0,
+      "task_type": "fixed_units",
+      "effort_driven": false,
+      "milestone": false,
+      "constraint": {
+        "type": "as_soon_as_possible"
+      },
+      "deadline": null,
+      "calendar": null,
+      "ignore_resource_calendar": false,
+      "priority": 500,
+      "progress": {
+        "percent_complete": 0,
+        "percent_work_complete": 0,
+        "physical_percent_complete": 0,
+        "actual_start": null,
+        "actual_finish": null,
+        "actual_duration": 0,
+        "remaining_duration": 0,
+        "actual_work": 0,
+        "remaining_work": 0
+      },
+      "predecessors": [],
+      "notes": "",
+      "mode": "auto",
+      "active": true,
+      "recurring": false,
+      "created": null,
+      "baselines": {},
+      "extras": []
+    },
+    {
+      "uid": 2,
+      "guid": "8F0C1A2B-3C4D-5E6F-7A8B-9C0D1E2F3A4B",
+      "name": "Murs",
+      "is_null": false,
+      "outline_level": 1,
+      "wbs": "2",
+      "duration": {
+        "minutes": 4800,
+        "unit": "week",
+        "basis": "working",
+        "estimated": true
+      },
+      "work": 4800,
+      "task_type": "fixed_work",
+      "effort_driven": true,
+      "milestone": false,
+      "constraint": {
+        "type": "start_no_earlier_than",
+        "date": "2026-10-26T08:00"
+      },
+      "deadline": "2026-11-13T17:00",
+      "calendar": 4,
+      "ignore_resource_calendar": false,
+      "priority": 700,
+      "progress": {
+        "percent_complete": 0,
+        "percent_work_complete": 0,
+        "physical_percent_complete": 0,
+        "actual_start": null,
+        "actual_finish": null,
+        "actual_duration": 0,
+        "remaining_duration": 4800,
+        "actual_work": 0,
+        "remaining_work": 4800
+      },
+      "predecessors": [
+        {
+          "predecessor": 1,
+          "kind": "finish_to_start",
+          "lag": {
+            "basis": "working",
+            "value": {
+              "kind": "time",
+              "minutes": -480,
+              "unit": "day"
+            }
+          }
+        }
+      ],
+      "notes": "",
+      "mode": {
+        "manual": {
+          "start": "2026-10-26T08:00",
+          "finish": null,
+          "duration": null
+        }
+      },
+      "active": true,
+      "recurring": false,
+      "created": null,
+      "baselines": {},
+      "extras": [
+        {
+          "origin": "mspdi",
+          "key": "Hyperlink",
+          "payload": "https://example.org/plans"
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "uid": 1,
+      "guid": null,
+      "name": "Paul",
+      "initials": "P",
+      "group": "Maçons",
+      "kind": {
+        "type": "work"
+      },
+      "max_units": 10000,
+      "calendar": 4,
+      "standard_rate": {
+        "amount": 5000,
+        "per": "hour"
+      },
+      "overtime_rate": {
+        "amount": 7500,
+        "per": "hour"
+      },
+      "cost_per_use": 0,
+      "is_generic": false,
+      "is_inactive": false,
+      "notes": "",
+      "baselines": {},
+      "extras": []
+    },
+    {
+      "uid": 2,
+      "guid": null,
+      "name": "Béton",
+      "initials": "B",
+      "group": "",
+      "kind": {
+        "type": "material",
+        "label": "m³"
+      },
+      "max_units": 10000,
+      "calendar": null,
+      "standard_rate": {
+        "amount": 12000,
+        "per": "material_unit"
+      },
+      "overtime_rate": {
+        "amount": 0,
+        "per": "hour"
+      },
+      "cost_per_use": 0,
+      "is_generic": false,
+      "is_inactive": false,
+      "notes": "",
+      "baselines": {},
+      "extras": []
+    }
+  ],
+  "assignments": [
+    {
+      "uid": 1,
+      "guid": null,
+      "task": 2,
+      "resource": 1,
+      "units": 10000,
+      "work": 4800,
+      "actual_work": 0,
+      "remaining_work": 4800,
+      "delay": 0,
+      "contour": "flat",
+      "baselines": {},
+      "extras": []
+    }
+  ],
+  "extras": []
+}

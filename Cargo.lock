@@ -4744,6 +4744,8 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "cargo_metadata",
+ "proc-macro2",
+ "syn 2.0.119",
 ]
 
 [[package]]

@@ -9,12 +9,12 @@
 //!
 //! État J1 : seul le format du manifeste est vérifié.
 
-// Tests : les interdits de la règle 10 ne s'appliquent pas (un échec doit paniquer).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
-    clippy::indexing_slicing
+    clippy::indexing_slicing,
+    reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
 )]
 
 use std::collections::BTreeSet;

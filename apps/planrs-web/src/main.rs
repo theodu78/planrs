@@ -3,8 +3,9 @@
 //! dossier).
 //!
 //! Aucun JavaScript écrit à la main (règle 8) : trunk génère la colle
-//! wasm-bindgen, `index.html` ne contient que le canevas. Pas encore construit
-//! en CI (trunk n'y est pas installé) ; seul le squelette existe.
+//! wasm-bindgen, `index.html` ne contient que le canevas. La CI vérifie la
+//! compilation en `wasm32-unknown-unknown` (clippy, sans trunk) ; seul
+//! `trunk build` attend le packaging web. Seul le squelette existe.
 //!
 //! Compilée pour une cible native (ce que fait `cargo check --workspace`), le
 //! binaire se contente d'indiquer qu'il faut passer par trunk.

@@ -3,8 +3,9 @@
 
 [graph]
 # Toutes les plateformes sont vérifiées (pas de filtre de cibles) : les
-# dépendances propres à Windows, macOS ou au web comptent aussi.
-all-features = false
+# dépendances propres à Windows, macOS ou au web comptent aussi. Toutes les
+# features aussi : une dépendance optionnelle est vérifiée avant d'être activée.
+all-features = true
 
 [advisories]
 # Base RustSec : toute vulnérabilité connue échoue. Une exception éventuelle
@@ -30,8 +31,6 @@ allow = [
     "Unicode-3.0",
     "CC0-1.0",
     "0BSD",
-    # Polices embarquées (egui)
-    "OFL-1.1",
 ]
 # MPL-2.0 (copyleft faible, au fichier) : cargo-deny ne sait plus émettre un
 # simple avertissement par licence. Elle n'est donc pas autorisée globalement :
@@ -43,10 +42,11 @@ exceptions = [
     # compatible MIT/Apache, pas d'obligation de notice dans les binaires.
     { crate = "clipboard-win", allow = ["BSL-1.0"] },
     { crate = "error-code", allow = ["BSL-1.0"] },
-    # Polices par défaut d'egui (dont Ubuntu-Light). Licence de police
-    # permissive : redistribution libre, contraintes sur le nom des dérivés
-    # uniquement. Ne touche pas le code.
-    { crate = "epaint_default_fonts", allow = ["Ubuntu-font-1.0"] },
+    # Polices par défaut d'egui (dont Ubuntu-Light), sous licences de police
+    # OFL-1.1 et Ubuntu Font Licence : redistribution libre, contraintes sur le
+    # nom des dérivés uniquement. Ne touchent pas le code ; jamais autorisées
+    # globalement, pour qu'une crate de code sous OFL ne passe pas sans revue.
+    { crate = "epaint_default_fonts", allow = ["OFL-1.1", "Ubuntu-font-1.0"] },
 ]
 # Pas d'alerte pour une licence autorisée mais non utilisée aujourd'hui.
 unused-allowed-license = "allow"

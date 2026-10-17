@@ -1,2 +1,5 @@
+# Fins de ligne LF dans le dépôt et à l'extraction, sur toutes les plateformes :
+# les fixtures et le corpus doivent être identiques octet pour octet (règle 5).
+* text=auto eol=lf
 # L'éditeur VBA de MS Project n'importe correctement un module .bas qu'en CRLF.
 *.bas text eol=crlf

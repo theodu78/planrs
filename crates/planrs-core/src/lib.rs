@@ -3,13 +3,25 @@
 //! Cette crate ne fait aucune entrée/sortie : elle ne connaît ni le système de
 //! fichiers, ni l'heure système, ni MCP, ni egui (règles 5 et 6 de `CLAUDE.md`).
 //! « Maintenant » est toujours injecté par l'appelant. Les durées sont en
-//! minutes entières (`i64`) et aucun flottant n'est admis dans le moteur : la
-//! lint `clippy::float_arithmetic` est interdite ici en plus des lints du
-//! workspace. Elle compile en `wasm32-unknown-unknown` (vérifié en CI).
+//! minutes entières (`i64`) et aucun flottant n'est admis dans le moteur.
+//! Elle compile en `wasm32-unknown-unknown` (vérifié en CI).
+//!
+//! Gardes, en plus des lints du workspace :
+//! - les attributs ci-dessous (calcul flottant, sorties console) ;
+//! - `clippy.toml` de cette crate : horloges (`chrono::Utc::now`,
+//!   `SystemTime::now`…), système de fichiers (`std::fs`), variables
+//!   d'environnement, types `f32`/`f64`, `HashMap`/`HashSet`. Il s'applique
+//!   aussi dans un build du workspace, où chrono reçoit la feature `now` par
+//!   rmcp.
 //!
 //! État : squelette du jalon J1, pas encore de modèle.
 
-#![deny(clippy::float_arithmetic)]
+#![deny(
+    clippy::float_arithmetic,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    clippy::dbg_macro
+)]
 
 pub mod parity;
 

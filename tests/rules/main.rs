@@ -8,12 +8,12 @@
 //! Aucune règle n'existe encore (jalon J1, socle) : seul le contrôle de la
 //! convention de nommage tourne.
 
-// Tests : les interdits de la règle 10 ne s'appliquent pas (un échec doit paniquer).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
-    clippy::indexing_slicing
+    clippy::indexing_slicing,
+    reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
 )]
 
 // Modules des règles, un par fichier, dans l'ordre des identifiants.

@@ -1,5 +1,7 @@
 [workspace]
-resolver = "2"
+# Résolveur 3 : tient compte de `rust-version` (MSRV) quand il choisit les
+# versions des dépendances.
+resolver = "3"
 members = [
     "crates/planrs-core",
     "crates/planrs-mspdi",
@@ -32,8 +34,10 @@ planrs-automation = { path = "crates/planrs-automation", version = "0.1.0" }
 planrs-mcp = { path = "crates/planrs-mcp", version = "0.1.0" }
 planrs-ui-egui = { path = "crates/planrs-ui-egui", version = "0.1.0" }
 
-# Dates sans horloge ni fuseau : le moteur travaille en heure locale du projet
-# et ne lit jamais l'heure système (règle 5).
+# Dates en heure locale du projet, sans fuseau. On ne demande pas `clock`, mais
+# cela ne garantit rien : les features s'unifient sur le workspace et rmcp
+# active `chrono/now` (et `clock` en wasm). L'interdiction de lire l'heure dans
+# planrs-core (règle 5) est imposée par `crates/planrs-core/clippy.toml`.
 chrono = { version = "0.4.45", default-features = false, features = ["std", "serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.21"
@@ -47,6 +51,9 @@ log = "0.4.34"
 wasm-bindgen-futures = "0.4.79"
 web-sys = { version = "0.3.106", features = ["Window", "Document", "Element", "HtmlCanvasElement"] }
 cargo_metadata = "0.23.1"
+# `cargo xtask panics` : analyse syntaxique des sources, lignes des jetons.
+syn = { version = "2.0.119", default-features = false, features = ["full", "parsing", "visit"] }
+proc-macro2 = { version = "1.0.107", default-features = false, features = ["span-locations"] }
 toml = "1.1.8"
 
 [workspace.lints.rust]
@@ -64,6 +71,12 @@ unreachable = "deny"
 todo = "deny"
 unimplemented = "deny"
 indexing_slicing = "deny"
+string_slice = "deny"
 arithmetic_side_effects = "deny"
+# Tout `#[allow]` donne sa raison (`reason = "..."`). `cargo xtask panics`
+# refuse en plus qu'un interdit ci-dessus soit levé hors du code de test.
+allow_attributes_without_reason = "deny"
+# Limites connues (ADR-0006) : aucune lint ne couvre l'indexation d'une map
+# (`map[&key]`) ; `assert!` et sa famille sont refusés par `cargo xtask panics`.
 # `float_arithmetic` n'est interdit que dans planrs-core (attribut de crate) :
 # le rendu SVG et l'interface egui calculent nativement en f32/f64.

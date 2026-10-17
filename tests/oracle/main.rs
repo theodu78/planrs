@@ -11,12 +11,12 @@
 //! échoue s'il en trouve, pour qu'un cas déposé ne passe jamais en silence
 //! avant que la comparaison existe.
 
-// Tests : les interdits de la règle 10 ne s'appliquent pas (un échec doit paniquer).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
-    clippy::indexing_slicing
+    clippy::indexing_slicing,
+    reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
 )]
 
 use std::path::{Path, PathBuf};

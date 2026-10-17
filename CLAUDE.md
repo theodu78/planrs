@@ -26,6 +26,6 @@ Langue : documentation, commentaires et messages en français ; identifiants de 
 - Code écrit par des agents (Opus 5.5) en workflow, cadrés par un cahier des charges écrit ; la session principale relit, fait tourner les checks et fusionne.
 - Avant chaque jalon : plan court dans `docs/decisions.md`, choix structurants signalés au propriétaire. Règle MS Project incertaine : hypothèse consignée, on avance.
 - Commits petits et testés. Jamais `git push --force` sur `main`. Chaque jalon finit par `docs/scorecard.md` à jour et un tag `jN`.
-- Checks avant tout commit : `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo deny check`, `cargo check -p planrs-core --target wasm32-unknown-unknown`. Lister les checks exécutés et leur résultat dans chaque compte-rendu.
+- Checks avant tout commit : `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo deny check`, `cargo check -p planrs-core --target wasm32-unknown-unknown`, `cargo xtask layers`, `cargo xtask panics`. Lister les checks exécutés et leur résultat dans chaque compte-rendu.
 - `docs/scorecard.md` distingue « implémenté », « testé » et « vérifié contre MS Project » ; le câblage n'est pas le comportement.
 - Le nom `planrs` est provisoire : les endroits où il apparaît sont listés dans `docs/rename.md`.

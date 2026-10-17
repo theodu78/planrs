@@ -6,6 +6,9 @@
 //!   MS Project, quand une licence sera disponible (ADR-0004) ;
 //! - `corpus` (`tests/corpus/`) : fichiers MSPDI publics, recalculés et
 //!   comparés aux dates enregistrées par MS Project (harnais complet en J2).
+//!
+//! Le module [`net`] construit de petits réseaux nommés pour les tests du
+//! moteur (`Net`, `Run`).
 
 #![allow(
     clippy::panic,
@@ -13,6 +16,8 @@
 )]
 
 use std::path::{Path, PathBuf};
+
+pub mod net;
 
 /// Dossier `tests/` du dépôt, quel que soit le répertoire courant.
 #[must_use]

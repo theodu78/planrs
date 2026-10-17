@@ -14,7 +14,7 @@
 //!   aussi dans un build du workspace, où chrono reçoit la feature `now` par
 //!   rmcp.
 //!
-//! État : jalon J1 en cours (ADR-0008). Modules :
+//! État : jalon J2 en cours (ADR-0009). Modules :
 //! - [`fixed`] : arrondi unique (R-001) et décimal exact ;
 //! - [`quantity`] : unités, pourcentages et coûts en point fixe (R-002) ;
 //! - [`time`] : instants à la minute, jours, heures, semaines (R-003 à R-005) ;
@@ -27,6 +27,8 @@
 //!   placement des durées et des jalons (R-011 à R-031) ;
 //! - [`model`] : modèle V1 (projet, tâches, liens, ressources, affectations,
 //!   lignes de base), sérialisation validée (R-032 à R-034) ;
+//! - [`schedule`] : moteur de planification (chemin critique, liens,
+//!   décalages, marges ; R-035 à R-069, J2) ;
 //! - [`diagnostic`] : diagnostics typés, gravité et sujet déduits ;
 //! - [`error`] : erreurs typées, codes stables.
 
@@ -47,6 +49,7 @@ pub mod ids;
 pub mod model;
 pub mod parity;
 pub mod quantity;
+pub mod schedule;
 pub mod time;
 
 pub use arena::{Arena, HasUid};
@@ -67,6 +70,7 @@ pub use model::{
     ScheduleAnchor, SchedulingMode, Task, TaskBaseline, TaskType, WorkContour,
 };
 pub use quantity::{Money, Percent, Rate, RateUnit, SignedPercent, Units};
+pub use schedule::{Driver, Exclusion, Schedule, TaskOutcome, TaskRole, TaskSchedule, schedule};
 pub use time::{Day, DayRange, Moment, Month, TimeOfDay, Week, Weekday};
 
 /// Nom affiché du produit.

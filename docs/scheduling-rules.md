@@ -14,28 +14,62 @@ Les identifiants ne sont jamais réattribués. Une règle abandonnée garde son 
 
 ## Règles
 
-Sources citées : pages Microsoft uniquement ; « Q » = Microsoft Q&A, communautaire, jamais suffisant pour le statut « vérifié ». Aucune source tierce (MPXJ, ProjectLibre, GanttProject, autres clones) n'a été lue. Les codes S1 à S15 et Q1 à Q3 renvoient à la table ci-dessous ; chaque règle reprend aussi le nom de la page. Repère : 1984-01-01 est un dimanche ; `Moment(2026-10-19T08:00)` = 22 510 560.
+Sources citées : pages Microsoft uniquement ; « Q » = Microsoft Q&A, communautaire, jamais suffisant pour le statut « vérifié ». Aucune source tierce (MPXJ, ProjectLibre, GanttProject, autres clones) n'a été lue. Les codes S1 à S26 et Q1 à Q9 renvoient à la table ci-dessous, les codes O1 à O12 aux observations du corpus (données de fichiers enregistrés par MS Project, lues comme des données) ; chaque règle reprend aussi le nom de la page. Repère : 1984-01-01 est un dimanche ; `Moment(2026-10-19T08:00)` = 22 510 560.
 
 | Réf. | Page | Utilisée pour |
 |---|---|---|
 | S1 | learn.microsoft.com, schéma MSPDI, « XML Schema for the Calendars Element » et « Calendar Element » | WeekDay/DayType (1 = dimanche), `WorkingTimes` (au plus 5), exceptions (`Type` 1 à 9, `Period`, `DaysOfWeek`, `MonthItem`, `MonthPosition`, `Month`, `MonthDay`, `Occurrences`), `WorkWeeks`, `BaseCalendarUID` (« only used if this calendar is not a base calendar »), `IsBaseCalendar`, exemple d'exception sur deux jours |
-| S2 | learn.microsoft.com, schéma MSPDI, « XML Schema for the Project Element », `MinutesPerDay`, `DaysPerMonth` | `MinutesPerDay`, `MinutesPerWeek`, `DaysPerMonth` (entiers), `DefaultStartTime`, `DefaultFinishTime`, `DefaultTaskType` (`default="1"`), `NewTasksEffortDriven` (`default="true"`), `ScheduleFromStart`, `StatusDate`, `CurrentDate`, `CalendarUID`, `WeekStartDay` |
+| S2 | learn.microsoft.com, schéma MSPDI, « XML Schema for the Project Element », `MinutesPerDay`, `DaysPerMonth` | `MinutesPerDay`, `MinutesPerWeek`, `DaysPerMonth` (entiers), `DefaultStartTime`, `DefaultFinishTime`, `DefaultTaskType` (`default="1"`), `NewTasksEffortDriven` (`default="true"`), `ScheduleFromStart`, `StatusDate`, `CurrentDate`, `CalendarUID`, `WeekStartDay` ; `CriticalSlackLimit` (entier, jours), `MultipleCriticalPaths` (défaut faux) |
 | S3 | learn.microsoft.com, schéma MSPDI, « DurationFormat Element » | Codes m/em/h/eh/d/ed/w/ew/mo/emo/%/e% et « ? » ; « Elapsed time counts all time, including non-working time » ; « 7d … 7ed » |
-| S4 | learn.microsoft.com, schéma MSPDI, « Task Element », « PredecessorLink Element », « LinkLag Element » | UID/ID (« UID 4 although the task ID = 3 »), GUID, `IsNull`, exemple Start 2007-11-14 08:00 + PT16H → Finish 2007-11-15 17:00 ; `LinkLag` « in tenths of a minute » |
+| S4 | learn.microsoft.com, schéma MSPDI, « Task Element », « PredecessorLink Element », « LinkLag Element » | UID/ID (« UID 4 although the task ID = 3 »), GUID, `IsNull`, exemple Start 2007-11-14 08:00 + PT16H → Finish 2007-11-15 17:00 ; `LinkLag` « in tenths of a minute » ; `Summary`, `Critical`, `Early*`, `Late*`, `TotalSlack`, `FreeSlack`, `PredecessorLink/Type` (0 = FF, 1 = FS, 2 = SF, 3 = SS), `LagFormat` |
 | S5 | learn.microsoft.com, schéma MSPDI, « Resources Element », « Assignments Element » | Type de ressource, `MaxUnits` (défaut 1.0), taux, `Units`, `Work`, `Delay`, `WorkContour`, lignes de base |
 | S6 | support.microsoft.com, « Project Information dialog box » | Standard (lun-ven 8:00-17:00, pause 12:00-13:00), 24 Hours (« All time … 12:00 A.M. to 12:00 A.M. »), Night Shift (« Monday night through Saturday morning, 11:00 P.M. to 8:00 A.M. … break between 3:00 A.M. and 4:00 A.M. »), date d'état NA → date du jour, planification depuis le début par défaut |
 | S7 | support.microsoft.com, « Create a new base calendar » | Trois calendriers de base fournis ; « the base calendar updates the resource calendar » |
-| S8 | support.microsoft.com, « How Project schedules tasks: Behind the scenes » | 1 jour = 8 h, 1 semaine = 40 h, 1 mois = 20 jours ouvrés ; 8:00 et 17:00 par défaut |
+| S8 | support.microsoft.com, « How Project schedules tasks: Behind the scenes » | 1 jour = 8 h, 1 semaine = 40 h, 1 mois = 20 jours ouvrés ; 8:00 et 17:00 par défaut ; nouvelle tâche au début du projet ; calendrier de la tâche, sinon du projet ; récapitulative à durée fixe ; tâches manuelles et automatiques |
 | S9 | support.microsoft.com, « Change default times for entered start or finish dates » | Date sans heure → heure par défaut ; début par défaut 7:00 sur un calendrier à 8:00 → la tâche commence à 8:00 |
 | S10 | support.microsoft.com, « Change the default task duration unit » | Unité de saisie par défaut : jours |
 | S11 | support.microsoft.com, « Specifications for Microsoft Project » | Dates du 1er janvier 1984 au 31 décembre 2149 ; 11 lignes de base ; unités ≤ 60 000 000 ; travail ≤ 1 666 666 666 h ; coût ≤ 999 999 999 999,99 ; plus de 15 000 exceptions par calendrier |
 | S12 | support.microsoft.com, « Add a holiday to the project calendar » | Fériés de la base valables pour les ressources ; récurrence et « Range of recurrence » |
 | S13 | support.microsoft.com, « Set the general working days and times for a project » | Semaines de travail datées (périodes nommées) |
 | S14 | support.microsoft.com, « Duration (task field) » | Nouvelle tâche automatique : « 1d? » |
-| S15 | support.microsoft.com, « Predecessors (task field) », « Add lead or lag time to a task » | Avance = décalage négatif ; décalage en % (« -50% ») |
+| S15 | support.microsoft.com, « Predecessors (task field) », « Add lead or lag time to a task » | Avance = décalage négatif (nombre ou pourcentage négatif) ; décalage en % (« -50% ») |
+| S16 | support.microsoft.com, « Total Slack (task field) » | TF = min(LF − EF, LS − ES) |
+| S17 | support.microsoft.com, « Free Slack (task field) » | Sans successeur, marge libre = marge totale |
+| S18 | support.microsoft.com, « Start Slack (task field) », « Finish Slack (task field) » | LS − ES, LF − EF |
+| S19 | support.microsoft.com, « Critical fields » | Critique si la marge totale ≤ seuil, seuil 0 par défaut |
+| S20 | support.microsoft.com, « Manage your project's critical path » | Option de seuil ; « multiple critical paths for each independent network or series of tasks » |
+| S21 | support.microsoft.com, « Task Information dialog box, Predecessors tab » | Décalage compté sur le calendrier de tâche du successeur, sinon du projet ; % de la durée du prédécesseur ; « 2ed ». Signe de l'avance inversé sur cette page : erreur de la page, S15 fait foi |
+| S22 | support.microsoft.com, « Early Start », « Late Start », « Late Finish (task field) » | Début au plus tôt depuis les prédécesseurs ; fin au plus tard initiale = fin du projet |
+| S23 | support.microsoft.com, « Indent or outdent tasks in your project » | Récapitulative : début le plus tôt, fin la plus tardive des sous-tâches |
+| S24 | learn.microsoft.com, « Tasks aren't scheduled as expected in Microsoft Project » | Une sous-tâche ne commence pas avant sa récapitulative liée |
+| S25 | support.microsoft.com, « Inactivate a task » | Une tâche inactive n'affecte pas le planning |
+| S26 | support.microsoft.com, « Percent (%) Complete fields », « Actual Duration (task field) » | Durée réelle = durée × % achevé |
 | Q1 | Microsoft Q&A (communautaire), « Quick switch from mons to emons » | emo = 30 jours calendaires |
 | Q2 | Microsoft Q&A (communautaire), « Microsoft Project task duration days not displaying » | Changer les heures par jour réinterprète l'affichage, pas les heures stockées |
 | Q3 | Microsoft Q&A (communautaire), « Project 2016 milestone tasks ignore non-working time » | Une durée nulle ne consomme pas de temps ouvré |
+| Q4 | Microsoft Q&A (communautaire), fil 5110117 | Durée d'une récapitulative = écart début-fin sur son calendrier ; % achevé = Σ durées réelles / Σ durées des feuilles |
+| Q5 | Microsoft Q&A (communautaire), fil f54ec732 | Marge en minutes de l'échelle effective ; tâche à durée écoulée : marge en temps civil (15 h, 63 h) ; seuil en durée (1 j = 8 h) |
+| Q7 | Microsoft Q&A (communautaire), fil 5029993 | Lien entre une récapitulative et sa sous-tâche refusé |
+| Q9 | Microsoft Q&A (communautaire), fil 4877826 | Sans contrainte, fin au plus tard d'une tâche finale = fin du projet |
+
+Q6 et Q8 ne sont pas cités (Q6, « une récapitulative est critique si un enfant l'est », est contredite par le corpus A1 ; Q8 concerne les marges négatives, J3).
+
+Observations du corpus (fichiers du manifeste `tests/corpus/manifest.toml`, ADR-0009 ; données seulement). Elles fondent des hypothèses ; une règle ne passe à `vérifié contre MS Project` que quand le harnais reproduit le cas à l'identique.
+
+| Réf. | Fichier, UID | Observation |
+|---|---|---|
+| O1 | A2 UID 1 | Jalon sans prédécesseur au début du projet (mar 08:00) ; successeur UID 3, LS mar 08:00 → LateStart = LateFinish = mar 08:00, TF 0 : R-031 en passe arrière |
+| O2 | A2 UID 2, 6, 14 | `TotalSlack` en dixièmes (345 600 = 72 j) ; marge libre 0 quand le successeur commence au matin ouvré suivant ; tâche finale : LF = fin du projet |
+| O3 | A1 UID 108 | Récapitulative : LS = min LS des enfants, LF = max LF, TF = min(LS − ES, LF − EF) = 105 600 ; `Critical` 0 alors qu'un enfant (UID 110) est critique |
+| O4 | A1 UID 17, 18, 53, 54, 105 | Récapitulative sans lien sortant : `FreeSlack` = `TotalSlack` |
+| O5 | A6 UID 10, 12, 14 | Récapitulative avec lien sortant : marge libre = écart entre sa fin agrégée et le début du successeur |
+| O6 | A6 UID 9, 11, 35 | Lien FS vers une récapitulative : ses sous-tâches ne commencent pas avant la borne ; lien FS depuis une récapitulative : borne = sa fin agrégée |
+| O7 | A6 UID 37, 38, 44 | FF : début = `backward_span(borne, d).start` |
+| O8 | A7 UID 1, 5, 6 | Récapitulative manuelle : dates saisies, différentes du min/max des enfants |
+| O9 | A7 UID 7, 35 | Feuille manuelle : `EarlyStart`/`EarlyFinish` = dates saisies |
+| O10 | A6 UID 20, 36 | `LevelingDelay` ≠ 0 : `Start` = `EarlyStart` + retard (divergence connue, J5) |
+| O11 | A4 | Calendrier du projet dérivé ; marge libre de 2 h entre une fin à 17:00 et un début le matin ouvré suivant : cause non établie, divergence attendue |
+| O12 | A6 | Calendrier du projet ouvré le samedi, tâches affectées jamais placées le samedi : calendrier de ressource probable (J5), divergence attendue |
 
 ### Point fixe et temps
 
@@ -258,6 +292,168 @@ Le placement vit dans `TimeScale::forward_span` et `TimeScale::backward_span` (`
 - **Source** : support.microsoft.com, « Project Information dialog box » (S6 : « If you set the status date to NA, Project uses the current date »).
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r034_effective_status_date.rs` (`r034_*`).
+
+### Moteur : réseau, liens, passes, marges (R-035 à R-069)
+
+Le moteur (`planrs_core::schedule`, ADR-0009) calcule un `Schedule` hors du modèle. Notations : `P(t)` = échelle de placement d'une feuille (temps écoulé pour une durée écoulée, sinon calendrier de la tâche, sinon du projet) ; `M(t)` = échelle de marge (= `P(t)` ; calendrier pour une récapitulative) ; `σ` = échelle du décalage d'un lien (R-041) ; `L` = minutes du décalage ; `g(x) = x` si `L = 0`, sinon `σ.add(x, L)` ; `h(y) = y` si `L = 0`, sinon `y − L` en temps écoulé et `σ.next_working_moment(σ.add(y, −L))` en temps ouvré (adjoint, R-047). Les dates « brutes » sont comparées en `Moment`. Sauf mention contraire : calendrier Standard, options 480 / 2 400 / 20, début du projet lun 19/10/2026 08:00, `j` = 480 min. Les règles R-053 à R-058, R-060, R-064 et R-068 (récapitulatives) suivent dans un commit à part ; la mécanique des portes et des agrégats est déjà dans le moteur (§ 3 de la spécification J2). Invariants sur réseaux aléatoires (liens respectés, TF ≥ FS ≥ 0, déterminisme, point fixe, ordre, chaos, profondeur) : `crates/planrs-core/tests/schedule_invariants.rs`.
+
+## R-035 — Ordre topologique stable
+- **Formulation** : nœuds numérotés en pré-ordre (porte d'une récapitulative, feuille, agrégat à la fermeture du sous-arbre) ; ordre de Kahn départagé par le plus petit indice ; identité si tout lien va vers l'avant de la liste. L'ordre ne dépend ni de l'ordre de stockage des liens ni d'une table de hachage. `Schedule::order` liste les tâches planifiées (une récapitulative à la place de son agrégat). Exemples : T1 (UID 10, ID 1), T2 (UID 5, ID 2), T3 (UID 7, ID 3), lien T3 → T1 : ordre `[5, 7, 10]` ; sans lien : `[10, 5, 7]`.
+- **Source** : hypothèse (règle 5).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r035_stable_topological_order.rs` (`r035_*`).
+
+## R-036 — Début du projet, plancher de toute tâche automatique
+- **Formulation** : toute borne de début est au moins le début du projet (brut) ; une tâche sans prédécesseur commence au début du projet recalé sur son échelle (R-030, R-031) ; une avance qui ferait commencer avant est tronquée. Le `Schedule` garde le début du projet brut. Exemples : début sam 17/10 00:00, A 2 j sans lien → lun 19/10 08:00 – mar 20/10 17:00 ; jalon sans lien → lun 08:00 ; A 1 j, B 1 j SS −1 j de A : `add(lun 08:00, −480)` = ven 16/10 08:00 → B lun 08:00 – 17:00, pilote « début du projet ».
+- **Source** : support.microsoft.com, « How Project schedules tasks: Behind the scenes » (S8), « Early Start » (S22) ; learn.microsoft.com, « Tasks aren't scheduled as expected » (S24) ; troncature : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r036_project_start_floor.rs` (`r036_*`).
+
+## R-037 — Fin à début (FS)
+- **Formulation** : borne de début du successeur `g(EF_p)`, puis placement (R-030). Exemples : A 2 j (lun 08:00 – mar 17:00) ; B FS 1 j → mer 21/10 08:00 – 17:00 ; B FS+1 j : `add(mar 17:00, 480)` = mer 17:00 → jeu 22/10 08:00 – 17:00.
+- **Source** : S8 ; support.microsoft.com, « Add lead or lag time to a task » (S15).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r037_finish_to_start.rs` (`r037_*`).
+
+## R-038 — Début à début (SS)
+- **Formulation** : borne de début `g(ES_p)`. Exemple : A 2 j lun 08:00 ; B SS+4 h 1 j : `add(lun 08:00, 240)` = lun 12:00 → B lun 13:00 – mar 12:00.
+- **Source** : S8.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r038_start_to_start.rs` (`r038_*`).
+
+## R-039 — Fin à fin (FF)
+- **Formulation** : borne de fin `b = g(EF_p)`, convertie en borne de début `P(s).backward_span(b, d).start`. Exemples : A 2 j (fin mar 17:00) ; B FF 1 j → mar 08:00 – 17:00 ; B FF 3 j : la borne convertie (ven 16/10 08:00) précède le début du projet → B lun 08:00 – mer 21/10 17:00.
+- **Source** : S8 ; conversion : observée (O7, A6 UID 38 : fin du prédécesseur mar 26/11/2024 17:00, 1 j → début 08:00).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r039_finish_to_finish.rs` (`r039_*`).
+
+## R-040 — Début à fin (SF)
+- **Formulation** : borne de fin `b = g(ES_p)`, convertie comme R-039. Exemples : A 2 j (début lun 08:00) ; B SF+3 j 1 j : `add(lun 08:00, 1 440)` = mer 17:00 → B mer 08:00 – 17:00 ; B SF+0 1 j : borne lun 08:00 → `backward_span` = ven 16/10 08:00 – 17:00 → plancher → B lun 08:00 – 17:00.
+- **Source** : S8.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r040_start_to_finish.rs` (`r040_*`).
+
+## R-041 — Calendrier du décalage
+- **Formulation** : un décalage ouvré se compte sur le calendrier de tâche du successeur d'origine s'il en a un (utilisable, R-066), sinon sur le calendrier du projet ; jamais sur celui du prédécesseur, jamais en temps écoulé parce que le successeur a une durée écoulée. Un décalage écoulé (`ed`, `e%`) se compte en temps civil. Exemples : A (Standard) lun 08:00 – 17:00 ; B (24 heures) FS+1 j : `add₂₄(lun 17:00, 480)` = mar 01:00 → B mar 01:00 – 09:00. A (24 heures) 1 j = lun 08:00 – 16:00 ; B (sans calendrier) FS+1 j : `add_std(lun 16:00, 480)` = mar 16:00 → B mar 16:00 – mer 16:00. Début ven 23/10 08:00, A 1 j, B FS+2 ej : dim 25/10 17:00 → B lun 26/10 08:00 – 17:00. B à durée écoulée de 8 h, FS+1 j de A (lun) : `add_std(lun 17:00, 480)` = mar 17:00 → B mar 17:00 – mer 01:00.
+- **Source** : support.microsoft.com, « Task Information dialog box, Predecessors tab » (S21).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r041_lag_calendar.rs` (`r041_*`).
+
+## R-042 — Avance (décalage négatif)
+- **Formulation** : un décalage négatif recule la borne (convention de début, R-022). Exemples : A 2 j (fin mar 17:00) ; B FS −1 j 1 j → mar 08:00 – 17:00 ; B FS −2 h 1 j → mar 15:00 – mer 15:00.
+- **Source** : S15. La page S21 inverse le signe de l'avance : erreur de la page, consignée ; S15 fait foi.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r042_negative_lag.rs` (`r042_*`).
+
+## R-043 — Décalage en pourcentage
+- **Formulation** : `L = percent_of(durée du prédécesseur, pct)` (R-010), consommé sur `σ` (`%` ouvré, `e%` temps civil). Durée du prédécesseur : celle de la feuille ; d'une feuille manuelle, sa durée utilisée (R-063) ; d'une récapitulative, sa durée R-054. Exemples : A 2 j ; B SS+50 % : 480 → lun 17:00 → B mar 08:00 – 17:00 ; B FS −50 % → mar 08:00 – 17:00 ; B SS+50e % : lun 16:00 → B lun 16:00 – mar 16:00 ; A 1 j, B FS+33 % (158) → mar 10:38 – mer 10:38.
+- **Source** : S21, S15 ; base pour une récapitulative : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r043_percent_lag.rs` (`r043_*`).
+
+## R-044 — Plusieurs prédécesseurs et pilote
+- **Formulation** : ES0 = plus grande des bornes en `Moment` brut ; le pilote (`driver`) est la première borne maximale dans l'ordre : début du projet, porte du parent, liens dans l'ordre de stockage (bornes FF/SF converties comprises). Exemples : A 1 j lun, B 2 j lun – mar, C FS de A et de B, 1 j → mer 08:00 – 17:00, pilote `Link { B, FS }` ; A et B de 1 j : pilote = premier lien stocké.
+- **Source** : S22 ; départage : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r044_multiple_predecessors.rs` (`r044_*`).
+
+## R-045 — Fin du projet
+- **Formulation** : max des fins au plus tôt des feuilles actives planifiées (manuelles comprises, inactives exclues) ; sans tâche planifiée : début du projet brut. Exemples : réseau N1 (A 1 j ; B 2 j ; C 1 j FS de A et de B ; D 1 j seul) → mer 21/10 17:00 ; projet vide commençant sam 17/10 10:00 → sam 17/10 10:00.
+- **Source** : S22, S16 ; projet vide : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r045_project_finish.rs` (`r045_*`).
+
+## R-046 — Fin au plus tard sans successeur
+- **Formulation** : plafond commun de toute feuille = fin du projet ; une tâche sans successeur effectif (hérités compris) a donc LF = fin du projet. Exemple : N1, D → LF mer 17:00, LS mer 08:00.
+- **Source** : support.microsoft.com, « Late Finish (task field) » (S22) ; Microsoft Q&A 4877826 (Q9) ; observé O2 (A2 UID 2).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r046_late_finish_without_successor.rs` (`r046_*`).
+
+## R-047 — Passe arrière : transfert adjoint
+- **Formulation** : plafond de fin d'une feuille : FS `h(LS_s)`, FF `h(LF'_s)` ; plafonds de début : SS `h(LS_s)`, SF `h(LF'_s)`, convertis en plafond de fin par `P(t).forward_span(y, d).finish` ; `late = P(t).backward_span(min des plafonds, d)`. `h` est l'adjoint de `g` : le plus grand `x` tel que `W_σ(g(x)) ≤ W_σ(y)`. Pour FF et SF, l'ancre du successeur est d'abord portée au dernier instant de même temps ouvré sur son échelle de placement : `LF'_s = P(s).next_working_moment(LF_s)` (identité en temps écoulé), car la contrainte FF/SF se lit en temps ouvré de `P(s)` (R-039). Exemples : N1 : C mer 08:00 – 17:00 ; B plafond mer 08:00 → lun 08:00 – mar 17:00 ; A mar 08:00 – 17:00. Calendriers mixtes avec avance : début ven 23/10 08:00 ; P (24 heures) 960 min : ven 08:00 → sam 24/10 00:00 ; Q (Standard) 1 j FS −60 min : `add_std(sam 00:00, −60)` = ven 16:00 → Q ven 16:00 – lun 26/10 16:00 = fin du projet ; retour : `h(ven 16:00)` = `next_std(ven 17:00)` = lun 08:00 → LF(P) = lun 08:00, TF(P) = 3 360 (56 h) ; le miroir naïf `add(y, −L)` donnerait LF ven 17:00 et TF −420. FF : A 2 j, B FF 1 j, D 3 j seul → TF(A) = 480. SS : A 1 j, B SS+4 h 1 j tâche finale → plafond de début lun 08:00, A lun 08:00 – 17:00, TF 0 ; avec D 3 j seul → A mar 13:00 – mer 12:00, TF(A) = TF(B) = 720. SF : A 2 j, B SF+3 j 1 j, D 4 j seul → A mar 08:00 – mer 17:00, TF 480. Décalage écoulé : début ven 23/10, A 1 j, B FS+2 ej (lun 26/10) → `h(lun 08:00)` = sam 24/10 08:00 → A ven 08:00 – 17:00, TF 0. FF écoulé vers une feuille ouvrée : A 1 j, B FF+6 em 1 j : borne lun 17:06, B lun 08:00 – 17:00 ; `LF'(B)` = mar 08:00, `h` = mar 07:54 → TF(A) = FS(A) = 0 (sans le report : −6).
+- **Source** : S22 ; adjoint et report de l'ancre FF/SF : hypothèse (aucun décalage dans le corpus). Écart à la spécification J2 : le report `LF'_s` (trouvé par les invariants aléatoires, marge −6 sans contrainte).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r047_backward_transfer.rs` (`r047_*`, un cas par type de lien) ; `crates/planrs-core/tests/schedule_invariants.rs` (TF ≥ FS ≥ 0 sur réseaux aléatoires).
+
+## R-048 — Marge totale
+- **Formulation** : `TF = min(M.between(ES, LS), M.between(EF, LF))`, `M` = échelle de marge : calendrier effectif de la tâche, temps civil pour une durée écoulée (R-067). Exemples : N1 : A 480, B 0, C 0, D 960. A (24 heures) 1 j = lun 08:00 – 16:00 et B 2 j (Standard) : LF(A) = mar 17:00, LS(A) = mar 09:00, TF(A) = 1 500 en temps ouvré de 24 heures.
+- **Source** : support.microsoft.com, « Total Slack (task field) » (S16), « Start Slack », « Finish Slack » (S18) ; Q5 ; dixièmes de minute dans MSPDI : O2.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r048_total_slack.rs` (`r048_*`).
+
+## R-049 — Marge libre
+- **Formulation** : `FS = min(TF, écarts)` ; pour chaque lien sortant effectif (propre, ou hérité d'une récapitulative ancêtre), écart = `M.between(ancre propre, h(ancre au plus tôt du successeur))`, ancre propre EF pour FS/FF, ES pour SS/SF ; ancre du successeur ES pour FS/SS, `EF'` pour FF/SF (report de R-047) ; cible récapitulative : son début agrégé. Un lien SS/SF hérité ne compte que pour une tâche de même début que la récapitulative (comme son plafond, R-057). Sans lien : FS = TF. Aucune troncature : FS ≥ 0 est une propriété vérifiée. Exemples : N1 : A = `between(lun 17:00, mer 08:00)` = 480 ; D = 960. N2 (A 1 j → E 2 h → C ; B 2 j → C ; C 1 j) : E mar 08:00 – 10:00, C mer 08:00 – 17:00 ; E TF 360, FS 360 ; A TF 360, FS 0. A 1 j, B FS+1 j : `h(mer 08:00)` = mar 08:00 → FS(A) = 0.
+- **Source** : support.microsoft.com, « Free Slack (task field) » (S17) ; formule : hypothèse ; observé O2 (A2 UID 6, 14 : FS 0, TF > 0).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r049_free_slack.rs` (`r049_*`) ; invariants aléatoires (TF ≥ FS ≥ 0).
+
+## R-050 — Critique
+- **Formulation** : une tâche est critique si `TF ≤ critical_slack_limit_days × minutes_per_day` (option `CriticalSlackLimit`, 0 par défaut). Exemples : N2, seuil 0 : B et C critiques ; seuil 1 j (480) : A, E, B, C critiques.
+- **Source** : support.microsoft.com, « Critical fields » (S19), « Manage your project's critical path » (S20) ; schéma (S2) ; Q5 (seuil en durée : 1 j = 8 h).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r050_critical_threshold.rs` (`r050_*`).
+
+## R-051 — Plusieurs chemins critiques
+- **Formulation** : si l'option est active, une feuille sans successeur effectif (lien non coupé vers une tâche active, propre ou hérité d'une récapitulative ancêtre) a aussi le plafond `LF = EF`. Exemple : A 1 j → B 1 j (FS), C 3 j seul. Par défaut : TF(A) = TF(B) = 480. Option active : TF(A) = TF(B) = 0 ; A, B, C critiques.
+- **Source** : S20 ; « par tâche finale » : hypothèse. Hypothèse concurrente consignée : « par réseau indépendant » (LF = max EF de la composante faiblement connexe). Aucun fichier du corpus n'active l'option.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r051_multiple_critical_paths.rs` (`r051_*`).
+
+## R-052 — Hiérarchie
+- **Formulation** : le parent d'une tâche est la dernière tâche non vide qui la précède avec un niveau strictement inférieur (sauts de niveau tolérés) ; une tâche est récapitulative si la tâche non vide suivante a un niveau supérieur ; lignes vides ignorées ; le drapeau MSPDI `Summary` n'est pas lu. Exemple : ID 1 (niv. 1), 2 (niv. 2), 3 (vide), 4 (niv. 2), 5 (niv. 3), 6 (niv. 1) : 2 et 4 enfants de 1, 5 enfant de 4, 1 et 4 récapitulatives, 6 de premier niveau ; niveau 1 puis niveau 3 : la seconde est enfant de la première.
+- **Source** : learn.microsoft.com, schéma MSPDI (S4, `OutlineLevel`) ; hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r052_outline_hierarchy.rs` (`r052_*`).
+
+## R-059 — Lien entre une récapitulative et sa descendante
+- **Formulation** : ignoré, dans les deux sens, avec `link.summary_descendant` (erreur). Exemple : S {A 1 j}, lien A FS → S : ignoré, A lun 08:00 – 17:00 ; lien S FS → A : ignoré aussi.
+- **Source** : Microsoft Q&A 5029993 (Q7).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r059_summary_descendant_link.rs` (`r059_*`).
+
+## R-061 — Jalon et durée nulle dans le réseau
+- **Formulation** : une tâche de durée nulle est placée par R-031 dans les deux passes ; l'indicateur `milestone` n'influe pas, seule la durée compte. Exemples : A 1 j ; M FS 0 → lun 17:00 ; N FS de M 1 j → mar 08:00 – 17:00 ; au plus tard, M = `backward_span(mar 08:00, 0)` = mar 08:00, TF 0 ; A LF lun 17:00. Projet commençant mar 20/10 08:00, jalon sans lien, successeur LS mar 08:00 → LF du jalon mar 08:00 (O1). Tâche d'un jour marquée jalon : planifiée comme un jour.
+- **Source** : observé O1 (A2 UID 1) ; A6 UID 4 et 38 (drapeau sur une tâche d'un jour).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r061_milestone_in_network.rs` (`r061_*`).
+
+## R-062 — Tâche inactive
+- **Formulation** : `Excluded { Inactive }`, ses descendants `Excluded { InactiveAncestor }` ; elle est placée pour l'affichage (`display`) par ses prédécesseurs actifs et la porte de son parent, comme une tâche automatique ; ses liens sortants sont ignorés (`link.inactive`), sans pont entre ses prédécesseurs et ses successeurs ; elle reste hors des agrégats actifs, de la fin du projet, de la passe arrière et de la marge libre de ses prédécesseurs. Une récapitulative inactive a pour `display` l'agrégat de ses descendants. Exemples : A 2 j → I (inactive, 1 j) → B 1 j : I `display` mer 08:00 – 17:00 ; B lun 08:00 – 17:00 ; fin du projet mar 17:00 ; TF(A) = 0 ; TF(B) = 480 ; `link.inactive { I → B }`. S inactive {A 1 j} : S et A affichées lun 08:00 – 17:00.
+- **Source** : support.microsoft.com, « Inactivate a task » (S25) ; affichage et absence de pont : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r062_inactive_task.rs` (`r062_*`).
+
+## R-063 — Tâche manuelle (feuille)
+- **Formulation** : les dates saisies sont conservées sans recalage ; une seule saisie : l'autre par `P.add` avec la durée saisie, sinon la durée de la tâche (`fin = add(début, d)`, `début = add(fin, −d)`) ; deux saisies : durée utilisée = `P.between(début, fin)` ; fin < début : `task.manual_dates_inverted` (erreur) et fin ramenée au début ; ni liens entrants ni porte ne la déplacent (`link.manual_not_honored` pour chaque lien dont la borne est violée : début en brut, fin en temps ouvré) ; elle pilote ses successeurs ; ses dates au plus tard, marges et criticité se calculent comme pour une feuille (informatives) ; elle compte dans les agrégats et la fin du projet ; sans aucune date : `Excluded { ManualUndated }` (`task.manual_undated`) et ses liens ignorés (`link.excluded_endpoint`). Exemples : M manuelle mer 21/10 08:00 – jeu 22/10 17:00 (durée utilisée 960) ; B FS de M 1 j → ven 23/10 08:00 – 17:00. A 2 j FS → M manuelle lun 08:00 – 17:00 : M inchangée, avertissement, TF(M) = 480. M manuelle, début mer 08:00 seul, 2 j → fin jeu 17:00 ; fin jeu 17:00 seule → début mer 08:00.
+- **Source** : S8 ; observé O9 (A7) ; reste : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r063_manual_task.rs` (`r063_*`) ; invariants aléatoires (point fixe : feuilles passées en manuelles à leurs dates au plus tôt).
+
+## R-065 — Cycles
+- **Formulation** : après Kahn, les nœuds restants sont découpés en composantes fortement connexes (Tarjan itératif) ; dans chaque composante d'au moins deux nœuds, les liens internes qui remontent la liste (`from ≥ to` dans la numérotation canonique) sont coupés, puis l'ordre est recalculé. Un `link.cycle` (erreur) par composante, avec les UID triés ; un `link.ignored_in_cycle` (avertissement) par lien coupé. Jamais de panique. Exemple : UID = ID, A (1), B (2), C (3), X (4) ; liens A → B, B → A, B → C, X → A (FS, 1 j chacune) : B → A coupé ; X lun, A mar, B mer, C jeu ; `link.cycle { [1, 2] }`, `link.ignored_in_cycle { 2 → 1 }`.
+- **Source** : hypothèse (MS Project refuse les relations circulaires à la saisie).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r065_link_cycle.rs` (`r065_*`) ; chaos des invariants aléatoires.
+
+## R-066 — Calendrier d'une tâche et replis
+- **Formulation** : calendrier propre de la tâche, sinon celui du projet ; calendrier propre inutilisable (inconnu, en échec, sans temps ouvré) → calendrier du projet et `task.calendar_fallback` (avertissement) ; calendrier du projet inutilisable → calendrier Standard intégré, compilé sous l'UID du calendrier du projet, et `project.calendar_fallback` (erreur). Exemples : A, calendrier 99 inexistant, 1 j → lun 08:00 – 17:00, avertissement ; calendrier du projet sans temps ouvré → Standard, erreur, A lun 08:00 – 17:00.
+- **Source** : S8 ; replis : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r066_task_calendar_fallback.rs` (`r066_*`).
+
+## R-067 — Tâche à durée écoulée
+- **Formulation** : placement et marges en temps civil (R-028) ; ses décalages restent régis par R-041. Exemples : A 57 eh (3 420) lun 08:00 → mer 21/10 17:00 ; B FS 1 j → jeu 08:00 – 17:00 ; TF(A) = 900 (15 h) : non critique au seuil 1 j, critique au seuil 2 j. A de 105 eh finissant ven 23/10 17:00, B lun 26/10 08:00 → TF(A) = 3 780 (63 h).
+- **Source** : Microsoft Q&A f54ec732 (Q5).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r067_elapsed_duration_task.rs` (`r067_*`).
+
+## R-069 — Conversion impossible
+- **Formulation** : une conversion qui échoue en passe avant (hors domaine, calendrier sans temps ouvré) exclut la tâche (`Excluded { Unschedulable }`, `task.unschedulable { pass: Forward, cause }`, `cause` = code de l'erreur) ; ses liens sortants sont ignorés (`link.excluded_endpoint`) et ses successeurs, planifiés sans eux, ont `degraded = true` (transitif). En passe arrière : `late = early`, `degraded`, `task.unschedulable { pass: Backward }`. Un invariant interne violé donne `schedule.internal`. Exemple : début mer 31/12/2149 08:00 ; A 2 j → `calendar.out_of_domain` → non planifiable ; B FS de A 1 j → mer 08:00 – 17:00, dégradée ; C FS de B, dégradée.
+- **Source** : hypothèse (règle 10).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r069_unschedulable_task.rs` (`r069_*`) ; chaos des invariants aléatoires (dates près de 1984 et 2149, décalages géants).
+
+Planification à rebours (`FromFinish`) : toutes les tâches non vides sont exclues (`UnsupportedAnchor`) avec `schedule.from_finish_unsupported` (J3, ADR-0009 A13) ; aucune règle de calcul n'est encore posée.
 
 ### Import MSPDI (R-070 à R-089)
 

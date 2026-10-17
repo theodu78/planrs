@@ -8,7 +8,8 @@
 //!   comparés aux dates enregistrées par MS Project (harnais complet en J2).
 //!
 //! Le module [`net`] construit de petits réseaux nommés pour les tests du
-//! moteur (`Net`, `Run`).
+//! moteur (`Net`, `Run`) ; [`generate`] tire de grands réseaux déterministes
+//! pour la mesure (`tests/perf`, `tests/benches`).
 
 #![allow(
     clippy::panic,
@@ -17,6 +18,7 @@
 
 use std::path::{Path, PathBuf};
 
+pub mod generate;
 pub mod net;
 
 /// Dossier `tests/` du dépôt, quel que soit le répertoire courant.

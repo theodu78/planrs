@@ -90,6 +90,25 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
+  # Budget du moteur (ADR-0009 A18) : médiane de `schedule` sur 5 000 tâches
+  # et 10 000 liens, en release ; échec au-delà de 50 ms (cible locale
+  # ≤ 10 ms, marge pour les runners). Benchmark criterion ensuite, informatif.
+  perf:
+    name: budget du moteur (release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Budget 50 ms
+        run: cargo test -p planrs-tests --release --test perf -- --ignored --nocapture
+
+      - name: Benchmark (informatif)
+        run: cargo bench -p planrs-tests --bench schedule -- --warm-up-time 1 --measurement-time 5 --noplot
+
   msrv:
     name: MSRV (Rust 1.95)
     runs-on: ubuntu-latest

@@ -29,6 +29,17 @@ path = "oracle/main.rs"
 name = "corpus"
 path = "corpus/main.rs"
 
+# Budget de performance du moteur (ignoré hors du job CI `perf`, en release).
+[[test]]
+name = "perf"
+path = "perf/main.rs"
+
+# Benchmark informatif du moteur (criterion), exécuté par le job CI `perf`.
+[[bench]]
+name = "schedule"
+path = "benches/schedule.rs"
+harness = false
+
 [dependencies]
 chrono.workspace = true
 planrs-core.workspace = true
@@ -36,6 +47,9 @@ planrs-mspdi.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
 
 [lints]
 workspace = true

@@ -2967,6 +2967,7 @@ name = "planrs-tests"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "criterion",
  "planrs-core",
  "planrs-mspdi",
  "serde",

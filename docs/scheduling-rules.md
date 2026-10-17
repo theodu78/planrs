@@ -286,3 +286,51 @@ Bloc réservé à la lecture et à l'écriture MSPDI (`planrs-mspdi`) ; R-087 à
 - **Source** : learn.microsoft.com, schéma MSPDI (`xsd:dateTime`) ; R-003, R-004.
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r075_datetime_without_timezone.rs` (`r075_*`).
+
+## R-076 — Booléens, éléments absents, défauts du schéma
+- **Formulation** : booléen `1`/`true` ou `0`/`false` (espaces ignorés) ; toute autre écriture → valeur par défaut et diagnostic `mspdi.invalid_value`. Élément absent (ou vide) : valeur `default=` du schéma s'il en a une — `ScheduleFromStart`, `HonorConstraints`, `NewTasksEffortDriven`, `NewTasksEstimated` vrais ; `DefaultTaskType` = durée fixe ; `CriticalSlackLimit` = 0 ; `MultipleCriticalPaths` faux ; `Active` vrai ; `Manual`, `IsNull` faux —, sinon celle du modèle (R-032 : 480 / 2 400 / 20, jour, lundi). `CurrentDate` absent : « maintenant » injecté ; `StartDate` absent : « maintenant » et `mspdi.missing_required` ; `ScheduleFromStart` faux : ancre sur `FinishDate` et `mspdi.unsupported` (`schedule_from_finish`, J3). Facteurs hors bornes (1 à 1 440, 1 à 10 080, 1 à 31) : défaut et diagnostic. Exemples : `SaveVersion` 12 sans `Active` → tâche active ; `<Milestone>2</Milestone>` → faux, diagnostic ; `<HonorConstraints>2</HonorConstraints>` → vrai, diagnostic ; `<MinutesPerDay>0</MinutesPerDay>` → 480, diagnostic.
+- **Source** : learn.microsoft.com, « XML Schema for the Project Element » et « … Tasks Element » (attributs `default=`, S2, S4) ; ADR-0008 ; défauts sans attribut `default=` : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r076_booleans_and_schema_defaults.rs` (`r076_*`), fixtures `tests/fixtures/mspdi/project_defaults.xml` et `project_options.xml`.
+
+## R-077 — Plages horaires
+- **Formulation** : `[FromTime, ToTime)` ; `ToTime` 00:00:00 = 24:00 ; secondes tronquées (`mspdi.rounded`) ; plage vide, inversée ou illisible → ignorée, `mspdi.invalid_value` ; plages triées ; plages qui se chevauchent fusionnées (`mspdi.inconsistent`) ; au-delà de 5 plages (S1), les plages contiguës sont fusionnées, puis seules les 5 premières sont gardées (`mspdi.invalid_value`). Exemples : « 24 Hours » 00:00 → 00:00 = 1 440 ; 18:00-22:00 puis 10:00-18:00 → 720 (contiguës, fusionnées par R-011) ; 08:00-12:00 et 12:00 → 08:00 → 240 et diagnostic ; 08:00-12:00 et 10:00-14:00 → 08:00-14:00 = 360 et diagnostic.
+- **Source** : support.microsoft.com, « Project Information dialog box » (S6 : « 24 Hours … 12:00 A.M. to 12:00 A.M. ») ; schéma MSPDI (S1) ; fusion des chevauchements et troncature à 5 : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r077_working_times.rs` (`r077_*`), fixture `tests/fixtures/mspdi/calendars.xml`.
+
+## R-078 — Jours de la semaine
+- **Formulation** : `DayType` 1 = dimanche … 7 = samedi ; `DayWorking 0` → chômé ; `DayWorking 1` avec plages → ouvré ; `DayWorking 1` sans plage → 08:00-12:00 et 13:00-17:00 et `mspdi.invalid_value` ; `DayWorking` absent → ouvré si des plages sont données, sinon chômé ; jour absent : `Inherit` dans un calendrier dérivé, chômé et `mspdi.missing_required` dans un calendrier de base ; `DayType` inconnu → ignoré (`mspdi.unknown_code`) ; jour en double → le premier gagne (`mspdi.duplicate`). Exemples : Standard → 2 400 par semaine ; Standard plus samedi 08:00-12:00 → 2 640 ; dérivé ne définissant que le samedi → lundi hérité (480).
+- **Source** : schéma MSPDI, « Calendars Element » (S1) ; jours manquants et plages par défaut : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r078_week_days.rs` (`r078_*`).
+
+## R-079 — Calendrier de base ou dérivé
+- **Formulation** : `IsBaseCalendar 1` → base (`BaseCalendarUID` ignoré) ; `0` avec `BaseCalendarUID ≥ 0` → dérivé de ce calendrier (base inexistante : `mspdi.dangling_reference`, et `calendar.base_missing` du cœur) ; `0` avec `BaseCalendarUID < 0` (−1, −65 533, −65 535) ou absent → `mspdi.dangling_reference`, puis dérivé du calendrier du projet s'il est de base et différent, sinon calendrier de base (jours manquants chômés). `IsBaseCalendar` absent : base si `BaseCalendarUID` est absent ou négatif, `mspdi.missing_required`. UID en double : le premier gagne (`mspdi.duplicate`). Exemple : calendrier « IDEA » d'un fichier du corpus (A6), `BaseCalendarUID −65533` → dérivé du calendrier du projet (UID 9) ; fixture : calendrier 5 dérivé du 1, il hérite de Noël.
+- **Source** : schéma MSPDI (`BaseCalendarUID`, S1) ; traitement des valeurs négatives : hypothèse (observé A6).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r079_base_or_derived_calendar.rs` (`r079_*`).
+
+## R-080 — Exceptions
+- **Formulation** : période = [jour(`FromDate`), jour(`ToDate`)], un `ToDate` à 00:00 strictement après `FromDate` comptant pour la veille (`ToDate` absent : un seul jour, `mspdi.missing_required`) ; `Type` 1 `Daily { Period ou 1 }`, 2 `YearlyByDay { Month, MonthDay }`, 3 `YearlyByPosition { Month, MonthPosition, MonthItem }`, 4 `MonthlyByDay { Period, MonthDay }`, 5 `MonthlyByPosition { Period, MonthPosition, MonthItem }`, 6 `Weekly { Period, DaysOfWeek }`, 7 `ByDayCount`, 8 `ByWeekdayCount`, 9 `Period` (`Month` 0 = janvier ; `MonthItem` 0 jour, 1 jour ouvré, 2 week-end, 3 dimanche … 9 samedi ; `MonthPosition` 0 premier … 4 dernier ; `DaysOfWeek` masque, 1 = dimanche … 64 = samedi) ; `occurrences = Some(Occurrences)` seulement si `EnteredByOccurrences 1` ; `DayWorking` et `WorkingTimes` → réglage du jour (comme R-078 ; `DayWorking` absent sans plage → chômé) ; `Type` inconnu ou champ obligatoire manquant → exception ignorée et signalée ; chevauchement avec une exception déjà lue → ignorée, `mspdi.inconsistent`. Exemples : `Type 2`, `Month 3`, `MonthDay 4`, du 04/04/2025 au 06/04/2025 → seul le 04/04/2025 chômé ; `Type 1` du 25/12 00:00 au 25/12 23:59 → un jour ; `Type 9` du 09/11/2026 00:00 au 11/11/2026 00:00 → 9 et 10 chômés ; `Type 6`, `DaysOfWeek` 64, juin 2026 → samedis ouvrés ; `Type 1`, `Period 2`, `Occurrences 3` par occurrences → 02, 04 et 06/03/2026.
+- **Source** : schéma MSPDI, « Exceptions » (S1) ; observé A6 (deux formes d'un même fériés) ; règle du `ToDate` à 00:00 : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r080_calendar_exceptions_import.rs` (`r080_*`).
+
+## R-081 — Ancienne forme des exceptions (`WeekDay` de `DayType 0`)
+- **Formulation** : ignorée si le calendrier a un élément `Exceptions` ; sinon chaque entrée devient une exception `Period` sur sa `TimePeriod` (convention de R-080), avec son `DayWorking` et ses `WorkingTimes`. La comparaison des deux formes (oracle des récurrences) est reportée à J3. Exemples : fixture sans `Exceptions`, `DayType 0` du 01/02/2004 ouvré 08-12 et 13-17 → exception ouvrée de 480 min ; fichiers A6, A7 (deux formes) → seule la forme `Exceptions` est lue.
+- **Source** : schéma MSPDI (S1) ; précédence : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r081_legacy_exceptions.rs` (`r081_*`).
+
+## R-082 — Semaines de travail datées
+- **Formulation** : `WorkWeeks/WorkWeek` : `TimePeriod` → période (convention de R-080), `Name`, `WeekDays/WeekDay` (`DayType` 1 à 7, réglage comme R-078 ; `WorkingTimes` accepté malgré le schéma) ; jour absent → `Inherit` (semaine par défaut du calendrier) ; chevauchement avec une semaine déjà lue → ignorée, `mspdi.inconsistent`. Exemple (fixture écrite à la main) : « Winter Break » du 22/12 au 26/12/2026 23:59, dimanche à vendredi chômés, samedi absent → 22 au 25 chômés, samedi 26 hérité (08:00-12:00).
+- **Source** : schéma MSPDI (S1) ; support.microsoft.com, « Set the general working days and times for a project » (S13).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r082_work_weeks_import.rs` (`r082_*`).
+
+## R-086 — Options du chemin critique
+- **Formulation** : `CriticalSlackLimit` (jours, entier ≥ 0 ; négatif, au-delà de `u32::MAX` ou illisible → 0 et `mspdi.invalid_value`) → `critical_slack_limit_days` ; `MultipleCriticalPaths` → `multiple_critical_paths` ; absents → 0 et faux (R-076). Exemple : 10 → seuil de 4 800 min avec 480 min/jour (R-050).
+- **Source** : learn.microsoft.com, « XML Schema for the Project Element » (S2).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r086_cpm_options_import.rs` (`r086_*`).

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Fixture planrs écrite à la main (licence du dépôt) : projet minimal,
+     tous les booléens et options absents (R-076). -->
+<Project xmlns="http://schemas.microsoft.com/project">
+	<SaveVersion>12</SaveVersion>
+	<Name>defauts.xml</Name>
+	<StartDate>2026-10-19T08:00:00</StartDate>
+	<CalendarUID>1</CalendarUID>
+	<Calendars>
+		<Calendar>
+			<UID>1</UID>
+			<Name>Standard</Name>
+			<IsBaseCalendar>1</IsBaseCalendar>
+			<BaseCalendarUID>-1</BaseCalendarUID>
+			<WeekDays>
+				<WeekDay><DayType>1</DayType><DayWorking>0</DayWorking></WeekDay>
+				<WeekDay><DayType>2</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>
+				<WeekDay><DayType>3</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>
+				<WeekDay><DayType>4</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>
+				<WeekDay><DayType>5</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>
+				<WeekDay><DayType>6</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>
+				<WeekDay><DayType>7</DayType><DayWorking>0</DayWorking></WeekDay>
+			</WeekDays>
+		</Calendar>
+	</Calendars>
+</Project>

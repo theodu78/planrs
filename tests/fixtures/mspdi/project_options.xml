@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Fixture planrs écrite à la main (licence du dépôt) : options du projet
+     toutes renseignées, différentes des valeurs par défaut (R-076, R-086). -->
+<Project xmlns="http://schemas.microsoft.com/project">
+	<SaveVersion>14</SaveVersion>
+	<Name>options.xml</Name>
+	<GUID>0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9</GUID>
+	<Title>Titre</Title>
+	<Subject>Objet</Subject>
+	<Category>Catégorie</Category>
+	<Company>Société</Company>
+	<Manager>Responsable</Manager>
+	<Author>Auteur</Author>
+	<CreationDate>2026-10-01T09:30:00</CreationDate>
+	<ScheduleFromStart>1</ScheduleFromStart>
+	<StartDate>2026-10-19T08:00:00</StartDate>
+	<FinishDate>2026-10-23T17:00:00</FinishDate>
+	<CriticalSlackLimit>10</CriticalSlackLimit>
+	<CalendarUID>1</CalendarUID>
+	<DefaultStartTime>07:30:00</DefaultStartTime>
+	<DefaultFinishTime>16:30:00</DefaultFinishTime>
+	<MinutesPerDay>450</MinutesPerDay>
+	<MinutesPerWeek>2250</MinutesPerWeek>
+	<DaysPerMonth>21</DaysPerMonth>
+	<DefaultTaskType>0</DefaultTaskType>
+	<DurationFormat>5</DurationFormat>
+	<WorkFormat>3</WorkFormat>
+	<HonorConstraints>0</HonorConstraints>
+	<MultipleCriticalPaths>1</MultipleCriticalPaths>
+	<NewTasksEffortDriven>0</NewTasksEffortDriven>
+	<NewTasksEstimated>0</NewTasksEstimated>
+	<WeekStartDay>0</WeekStartDay>
+	<StatusDate>2026-10-21T17:00:00</StatusDate>
+	<CurrentDate>2026-10-20T08:00:00</CurrentDate>
+	<Views><View><Name>&amp;Gantt</Name></View></Views>
+	<Filters/>
+	<Calendars>
+		<Calendar>
+			<UID>1</UID>
+			<Name>Standard</Name>
+			<IsBaseCalendar>1</IsBaseCalendar>
+			<BaseCalendarUID>-1</BaseCalendarUID>
+			<WeekDays>
+				<WeekDay><DayType>1</DayType><DayWorking>0</DayWorking></WeekDay>
+				<WeekDay><DayType>2</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>
+				<WeekDay><DayType>3</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>
+				<WeekDay><DayType>4</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>
+				<WeekDay><DayType>5</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>
+				<WeekDay><DayType>6</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>
+				<WeekDay><DayType>7</DayType><DayWorking>0</DayWorking></WeekDay>
+			</WeekDays>
+		</Calendar>
+	</Calendars>
+</Project>

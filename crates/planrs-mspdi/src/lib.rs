@@ -7,10 +7,167 @@
 //! MS Project (clean-room, règle 1). Aucun flottant : les décimales des
 //! durées sont lues en entiers et arrondies par la règle unique R-001.
 //!
-//! État (J2, ADR-0009) : lecture seule, en cours.
+//! État (J2, ADR-0009) : lecture seule ([`read`]). Lecture événementielle
+//! quick-xml, arbre borné par sous-arbre (pile explicite, limites de taille,
+//! de profondeur, d'éléments et de texte ; DOCTYPE refusé), correspondance
+//! typée indulgente : une valeur illisible devient un diagnostic et reçoit sa
+//! valeur par défaut, jamais un échec global. Les valeurs calculées par
+//! MS Project vont dans [`RecordedSchedule`], jamais dans le `Project` :
+//! l'effacement exigé par l'ADR-0004 est structurel.
+//!
+//! Modules :
 //! - [`scalar`] : booléens, entiers, dates, heures, durées ISO 8601,
 //!   dixièmes de minute (R-070, R-072, R-073, R-075) ;
-//! - [`codes`] : tables des codes numériques MSPDI vers les types du cœur.
+//! - [`codes`] : tables des codes numériques MSPDI vers les types du cœur ;
+//! - [`error`] : erreurs structurelles typées, positions ;
+//! - [`diag`] : diagnostics d'import.
 
 pub mod codes;
+pub mod diag;
+pub mod error;
 pub mod scalar;
+
+mod calendar;
+mod fields;
+mod project;
+mod recorded;
+mod xml;
+
+use planrs_core::{Moment, Project};
+
+pub use diag::{ImportCode, ImportDiagnostic, LinkIgnoredReason};
+pub use error::{Location, MspdiError};
+pub use recorded::{RecordedSchedule, RecordedTask, Tenths};
+
+/// Limites de lecture : protègent contre un document hostile ou corrompu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    /// Taille maximale de l'entrée, en octets.
+    pub max_bytes: u64,
+    /// Profondeur maximale d'imbrication.
+    pub max_depth: u16,
+    /// Nombre maximal d'éléments.
+    pub max_elements: u64,
+    /// Longueur maximale du texte d'un élément, en octets.
+    pub max_text_bytes: usize,
+}
+
+impl Default for Limits {
+    /// 256 Mio, 64 niveaux, 50 000 000 éléments, 16 Mio de texte.
+    fn default() -> Self {
+        Self {
+            max_bytes: 256 * 1024 * 1024,
+            max_depth: 64,
+            max_elements: 50_000_000,
+            max_text_bytes: 16 * 1024 * 1024,
+        }
+    }
+}
+
+/// Options de lecture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReadOptions {
+    /// « Maintenant » injecté (règle 5) : date courante du projet si
+    /// `CurrentDate` est absent, début du projet si `StartDate` l'est.
+    pub current_date: Moment,
+    /// Limites.
+    pub limits: Limits,
+}
+
+impl ReadOptions {
+    /// Options avec les limites par défaut.
+    #[must_use]
+    pub fn new(current_date: Moment) -> Self {
+        Self {
+            current_date,
+            limits: Limits::default(),
+        }
+    }
+}
+
+/// Provenance du document.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SourceInfo {
+    /// `SaveVersion` (14 pour MS Project 2010 et suivants).
+    pub save_version: Option<i64>,
+    /// Espace de noms déclaré par la racine.
+    pub namespace: Option<String>,
+    /// Sections d'interface présentes (`Views`, `Tables`, `Filters`, `Groups`,
+    /// `Maps`, `Reports`, `Drawings`, `DataLinks`, `VBAProjects`) : signature d'un
+    /// enregistrement par MS Project.
+    pub ui_sections: Vec<String>,
+    /// Éléments sautés (Resources, Views, contenu des affectations…).
+    pub skipped_elements: u64,
+}
+
+/// Document MSPDI lu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MspdiDocument {
+    /// Entrées seules (ADR-0008), options CPM comprises.
+    pub project: Project,
+    /// Valeurs calculées telles qu'enregistrées : jamais dans `project`.
+    pub recorded: RecordedSchedule,
+    /// Provenance.
+    pub source: SourceInfo,
+    /// Diagnostics d'import, puis ceux de `Project::validate` (enveloppés).
+    pub diagnostics: Vec<ImportDiagnostic>,
+}
+
+/// BOM UTF-8.
+const BOM_UTF8: &[u8] = &[0xEF, 0xBB, 0xBF];
+
+/// Lit un document MSPDI. Aucune E/S : l'entrée est en octets (testable,
+/// wasm).
+///
+/// # Errors
+///
+/// [`MspdiError`] seulement si le document est structurellement
+/// inexploitable ; tout le reste devient un diagnostic d'import.
+pub fn read(input: &[u8], options: &ReadOptions) -> Result<MspdiDocument, MspdiError> {
+    let limits = options.limits;
+    let size = u64::try_from(input.len()).unwrap_or(u64::MAX);
+    if size > limits.max_bytes {
+        return Err(MspdiError::TooLarge {
+            size,
+            max: limits.max_bytes,
+        });
+    }
+    if matches!(input, [0xFE, 0xFF, ..] | [0xFF, 0xFE, ..]) {
+        return Err(MspdiError::Utf16NotSupported);
+    }
+    let body = input.strip_prefix(BOM_UTF8).unwrap_or(input);
+    if body.is_empty() {
+        return Err(MspdiError::Empty);
+    }
+    let text = std::str::from_utf8(body).map_err(|e| MspdiError::InvalidUtf8 {
+        at: error::locate_in_bytes(body, e.valid_up_to()),
+    })?;
+    let lines = error::LineIndex::new(text);
+    let mut sink = diag::Sink::new(&lines);
+    let raw = xml::read_document(text, limits, &lines, &mut sink)?;
+    let project::Built {
+        project,
+        recorded,
+        save_version,
+    } = project::build(&raw, options, &mut sink);
+    let source = SourceInfo {
+        save_version,
+        namespace: raw.namespace.clone(),
+        ui_sections: raw.ui_sections.clone(),
+        skipped_elements: raw.skipped_elements,
+    };
+    let mut diagnostics = sink.out;
+    diagnostics.extend(
+        project
+            .validate()
+            .finish()
+            .into_iter()
+            .map(ImportDiagnostic::core),
+    );
+    Ok(MspdiDocument {
+        project,
+        recorded,
+        source,
+        diagnostics,
+    })
+}

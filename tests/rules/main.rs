@@ -53,6 +53,14 @@ mod r070_iso_duration;
 mod r072_link_lag_tenths;
 mod r073_percent_lag_encoding;
 mod r075_datetime_without_timezone;
+mod r076_booleans_and_schema_defaults;
+mod r077_working_times;
+mod r078_week_days;
+mod r079_base_or_derived_calendar;
+mod r080_calendar_exceptions_import;
+mod r081_legacy_exceptions;
+mod r082_work_weeks_import;
+mod r086_cpm_options_import;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

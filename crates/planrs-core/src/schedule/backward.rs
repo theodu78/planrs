@@ -22,6 +22,9 @@ struct Caps {
     finish: Option<Moment>,
     /// Plafonds de début (SS, SF), à convertir pour une feuille.
     starts: Vec<Moment>,
+    /// Un successeur est peu sûr (dégradé, en échec) : dates au plus tard
+    /// de repli (R-069).
+    unreliable: bool,
 }
 
 /// Minimum d'un plafond optionnel et d'un plafond.
@@ -117,7 +120,7 @@ impl Calc<'_, '_> {
     /// Plafonds des arcs de lien sortants du nœud `v` (R-047) : FS
     /// `h(LS_s)`, FF `h(LF_s)` en fin ; SS `h(LS_s)`, SF `h(LF_s)` en début.
     /// Les arcs coupés, vers une tâche inactive ou vers un nœud sans dates
-    /// au plus tard sont ignorés.
+    /// (au plus tôt ou au plus tard) sont ignorés.
     fn out_caps(&mut self, v: NodeIx) -> Result<Caps, Fail> {
         let mut caps = Caps::default();
         // Référence au réseau copiée : aucune copie des arcs sortants.
@@ -134,7 +137,15 @@ impl Calc<'_, '_> {
             if l.to_inactive {
                 continue;
             }
-            let Some(tl) = self.state(arc.to).and_then(|s| s.late) else {
+            caps.unreliable |= self.unreliable(arc.to);
+            // Cible sans dates au plus tard, ou porte dont la borne n'a pas pu
+            // se calculer en passe avant (R-069) : le lien n'a pas été
+            // appliqué, il ne plafonne rien.
+            let Some(tl) = self
+                .state(arc.to)
+                .filter(|s| s.early.is_some())
+                .and_then(|s| s.late)
+            else {
                 continue;
             };
             let lag = self.lag_minutes(a)?;
@@ -179,6 +190,12 @@ impl Calc<'_, '_> {
             {
                 caps.starts.push(k);
             }
+            caps.unreliable |= ps.late_degraded && !self.net.is_fixed_rollup(pr);
+        }
+        if caps.unreliable
+            && let Some(s) = self.state_mut(v)
+        {
+            s.late_degraded = true;
         }
         if let Some(c) = caps.finish {
             lf = lf.min(c);
@@ -205,8 +222,10 @@ impl Calc<'_, '_> {
         let caps = self.out_caps(v)?;
         let mut c = caps.finish;
         let mut k = caps.starts.iter().copied().min();
+        let mut unreliable = caps.unreliable;
         if let Some(pr) = parent {
             let ps = *self.state(pr).ok_or(Fail::Internal("nœud hors bornes"))?;
+            unreliable |= ps.late_degraded && !self.net.is_fixed_rollup(pr);
             if let Some(pc) = ps.cap_finish {
                 c = Some(min_opt(c, pc));
             }
@@ -219,6 +238,7 @@ impl Calc<'_, '_> {
         let s = self.state_mut(v).ok_or(Fail::Internal("nœud hors bornes"))?;
         s.cap_finish = c;
         s.cap_start = k;
+        s.late_degraded |= unreliable;
         Ok(())
     }
 
@@ -227,6 +247,7 @@ impl Calc<'_, '_> {
     fn gate_late(&mut self, v: NodeIx) {
         let Some(out) = self.net.outgoing(v) else { return };
         let mut lg: Option<Moment> = None;
+        let mut unreliable = false;
         for &a in out {
             let Some(arc) = self.net.arc(a) else { continue };
             if arc.link.is_some() {
@@ -238,15 +259,19 @@ impl Calc<'_, '_> {
             if child.inactive {
                 continue;
             }
+            unreliable |= self.unreliable(arc.to);
             if let Some(l) = self.state(arc.to).and_then(|s| s.late) {
                 lg = Some(min_opt(lg, l.start));
             }
         }
-        if let (Some(lg), Some(s)) = (lg, self.state_mut(v)) {
-            s.late = Some(Span {
-                start: lg,
-                finish: lg,
-            });
+        if let Some(s) = self.state_mut(v) {
+            s.late_degraded |= unreliable;
+            if let Some(lg) = lg {
+                s.late = Some(Span {
+                    start: lg,
+                    finish: lg,
+                });
+            }
         }
     }
 
@@ -265,11 +290,13 @@ impl Calc<'_, '_> {
                 continue;
             }
             let mut late: Option<Span> = None;
+            let mut unreliable = false;
             let Some(incoming) = self.net.incoming(rollup) else {
                 continue;
             };
             for a in incoming {
                 let Some(arc) = self.net.arc(a) else { continue };
+                unreliable |= self.state(arc.from).is_some_and(|s| s.late_degraded);
                 if let Some(l) = self.state(arc.from).and_then(|s| s.late) {
                     late = Some(match late {
                         None => l,
@@ -282,6 +309,7 @@ impl Calc<'_, '_> {
             }
             if let Some(s) = pos(rollup).and_then(|i| self.st.get_mut(i)) {
                 s.late = late;
+                s.late_degraded |= unreliable;
             }
         }
     }

@@ -89,3 +89,10 @@ allow_attributes_without_reason = "deny"
 # (`map[&key]`) ; `assert!` et sa famille sont refusés par `cargo xtask panics`.
 # `float_arithmetic` n'est interdit que dans planrs-core (attribut de crate) :
 # le rendu SVG et l'interface egui calculent nativement en f32/f64.
+
+# Propriétés du moteur (P13 à P17) : 10 000 cas en CI. En debug pur, le
+# fichier `schedule_properties` dépasse 60 s (90 s mesurées pour 10 000 cas
+# sur 4 cœurs) ; une optimisation légère de planrs-core et de ses tests le
+# ramène sous ce seuil sans toucher aux assertions de débordement.
+[profile.test.package.planrs-core]
+opt-level = 1

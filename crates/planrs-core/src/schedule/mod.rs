@@ -60,6 +60,9 @@ struct NodeState {
     degraded: bool,
     /// Conversion impossible en passe avant (R-069).
     failed: bool,
+    /// Dates au plus tard et marges de repli : elles dépendent d'un
+    /// successeur dégradé ou non planifiable (R-069, propagé vers l'amont).
+    late_degraded: bool,
     /// Agrégat : plafond de fin hérité `C(S)` (R-057).
     cap_finish: Option<Moment>,
     /// Agrégat : plafond de début hérité `K(S)` (R-057, A11).
@@ -78,6 +81,7 @@ impl NodeState {
         driver: Driver::ProjectStart,
         degraded: false,
         failed: false,
+        late_degraded: false,
         cap_finish: None,
         cap_start: None,
         total_slack: Minutes::ZERO,
@@ -109,6 +113,21 @@ impl Calc<'_, '_> {
     /// État modifiable du nœud `v`.
     fn state_mut(&mut self, v: NodeIx) -> Option<&mut NodeState> {
         self.st.get_mut(pos(v)?)
+    }
+
+    /// Cible d'arc peu sûre pour la passe arrière et la marge libre (R-069) :
+    /// nœud dégradé, en échec ou aux dates au plus tard de repli ; pour une
+    /// porte, aussi l'agrégat de ses sous-tâches.
+    fn unreliable(&self, v: NodeIx) -> bool {
+        let bad = |s: &NodeState| s.degraded || s.failed || s.late_degraded;
+        let Some(s) = self.state(v) else { return true };
+        let twin = self
+            .net
+            .node(v)
+            .filter(|n| n.kind == network::NodeKind::Gate)
+            .and_then(|n| n.twin)
+            .and_then(|r| self.state(r));
+        bad(s) || twin.is_some_and(bad)
     }
 
     /// Signale l'échec du calcul de la tâche `uid` dans la passe `pass`.
@@ -152,11 +171,13 @@ impl Calc<'_, '_> {
     /// écoulé). La contrainte FF/SF se lit en temps ouvré de cette échelle
     /// (R-039) : sans ce report, un décalage écoulé vers une feuille ouvrée
     /// donnerait une marge négative sans contrainte (fin du successeur
-    /// ramenée à 17:00 alors que la borne tombait à 17:06).
+    /// ramenée à 17:00 alors que la borne tombait à 17:06). Plus aucun temps
+    /// ouvré après `y` (fin du domaine) : tout instant jusqu'à la fin du
+    /// domaine a le même temps ouvré, l'ancre est `Moment::MAX`.
     fn finish_anchor(&self, target: NodeIx, y: Moment) -> Moment {
         let scale = self.net.node(target).and_then(|n| self.net.scale(n.place));
         match scale {
-            Some(crate::calendar::TimeScale::Working(c)) => c.next_working_moment(y).unwrap_or(y),
+            Some(crate::calendar::TimeScale::Working(c)) => c.next_working_moment(y).unwrap_or(Moment::MAX),
             _ => y,
         }
     }

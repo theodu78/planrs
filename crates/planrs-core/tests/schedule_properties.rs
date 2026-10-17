@@ -1,0 +1,1056 @@
+//! Propriétés du moteur CPM (spécification J2 § 5.2, propriétés P13 à P17).
+//!
+//! Nombre de cas : la variable `PROPTEST_CASES`, lue par proptest (256 par
+//! défaut en local, 10 000 en CI) ; P13 et P14 la suivent, P15 et P16 sont
+//! plafonnées à 1 024 cas, P17 à 2 000 (spécification). Régressions :
+//! `schedule_properties.proptest-regressions`, versionné.
+//!
+//! Générateur (graine tirée par proptest, xorshift) : 1 à 40 tâches ; liens
+//! tirés dans un ordre topologique caché, permuté par rapport aux ID (des
+//! liens remontent donc la liste) ; durées 0 à 4 800 (10 % de jalons, 10 %
+//! écoulées) ; 0 à 3 prédécesseurs distincts, des quatre types ; décalages
+//! ouvrés de −2 000 à 2 000 (15 % écoulés, 10 % en %, de −100 % à 100 %) ;
+//! calendriers Standard, 24 heures, Équipe de nuit ou aléatoire, pour le
+//! projet et 20 % des tâches ; plan hiérarchique valide une fois sur deux,
+//! sans lien entre une récapitulative et sa descendante ; 5 % de tâches
+//! inactives ; ni contrainte ni tâche manuelle ; début du projet en 2026.
+//!
+//! - **P13** (composite) : (a) liens respectés ; (b) `TF ≥ FS ≥ 0` ;
+//!   (c) `ES ≤ EF`, `LS ≤ LF`, récapitulatives = enveloppe de leurs enfants ;
+//!   (d) déterminisme (clone, JSON) et permutation des liens (tout identique
+//!   sauf `driver`) ; (e) point fixe ; (f) `order` topologique.
+//! - **P14** : chaîne de marge nulle (ADR-0005 amendée par l'ADR-0009).
+//! - **P15** : oracle indépendant en temps ouvré (plus long chemin entier).
+//! - **P16** : monotonie de la fin du projet (liens FS et SS).
+//! - **P17** : chaos, aucune panique, cycles signalés, (a) et (b) hors des
+//!   tâches dégradées et des composantes qui contiennent une manuelle.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::too_many_lines,
+    reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
+)]
+#![allow(
+    clippy::many_single_char_names,
+    clippy::struct_excessive_bools,
+    clippy::needless_range_loop,
+    clippy::items_after_statements,
+    reason = "tests : notations des formules (ES, EF, d, L…) et indices de l'oracle, plus lisibles ainsi"
+)]
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use planrs_core::calendar::{
+    BuiltinCalendarNames, Calendar, CalendarSet, CompiledCalendar, DayHours, DaySetting, TimeRange, TimeScale,
+};
+use planrs_core::{
+    CalendarUid, Diagnostic, Driver, Duration, DurationUnit, Lag, LagValue, Link, LinkType, Minutes, Moment,
+    OutlineLevel, Project, ProjectInit, Schedule, ScheduleAnchor, SchedulingMode, SignedPercent, Task,
+    TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis, TimeOfDay, Week, percent_of, schedule,
+};
+use proptest::prelude::*;
+
+// ---------------------------------------------------------------------------
+// Générateur
+// ---------------------------------------------------------------------------
+
+/// xorshift64*.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.0 = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    /// Entier dans `[lo, hi]`.
+    fn range(&mut self, lo: i64, hi: i64) -> i64 {
+        let span = u64::try_from(hi - lo + 1).unwrap();
+        lo + i64::try_from(self.next() % span).unwrap()
+    }
+
+    /// Vrai avec une probabilité de `pct` %.
+    fn chance(&mut self, pct: u64) -> bool {
+        self.next() % 100 < pct
+    }
+}
+
+/// Forme des réseaux tirés.
+#[derive(Clone, Copy)]
+struct Shape {
+    /// Plan hiérarchique possible (une fois sur deux).
+    hierarchy: bool,
+    /// Types de liens tirés.
+    kinds: &'static [LinkType],
+    /// Durées et décalages écoulés.
+    elapsed: bool,
+    /// Calendriers de tâche (20 % des tâches).
+    task_calendars: bool,
+    /// Tâches inactives (5 %).
+    inactive: bool,
+    /// Borne basse des décalages en %, en centièmes.
+    percent_min: i64,
+    /// Décalage en % depuis une récapitulative (sa durée R-054 peut
+    /// diminuer quand une sous-tâche est retardée : exclu pour P16).
+    percent_from_summary: bool,
+    /// Options CPM tirées (seuil 0 ou 1 j, plusieurs chemins 20 %).
+    cpm_options: bool,
+}
+
+const ALL_KINDS: &[LinkType] = &[
+    LinkType::FinishToStart,
+    LinkType::FinishToStart,
+    LinkType::FinishToStart,
+    LinkType::StartToStart,
+    LinkType::FinishToFinish,
+    LinkType::StartToFinish,
+];
+
+/// P13, P17.
+const GENERAL: Shape = Shape {
+    hierarchy: true,
+    kinds: ALL_KINDS,
+    elapsed: true,
+    task_calendars: true,
+    inactive: true,
+    percent_min: -10_000,
+    percent_from_summary: true,
+    cpm_options: true,
+};
+
+/// P14, P15 : réseau plat, un seul calendrier ouvré, décalages ouvrés.
+const FLAT: Shape = Shape {
+    hierarchy: false,
+    kinds: ALL_KINDS,
+    elapsed: false,
+    task_calendars: false,
+    inactive: false,
+    percent_min: -10_000,
+    percent_from_summary: true,
+    cpm_options: false,
+};
+
+/// P16 : liens FS et SS, pourcentages positifs.
+const MONOTONE: Shape = Shape {
+    hierarchy: true,
+    kinds: &[LinkType::FinishToStart, LinkType::StartToStart],
+    elapsed: true,
+    task_calendars: true,
+    inactive: true,
+    percent_min: 0,
+    percent_from_summary: false,
+    cpm_options: false,
+};
+
+/// Calendrier de base aléatoire (UID 4) : chaque jour chômé une fois sur
+/// quatre, sinon une à trois plages au quart d'heure ; lundi ouvré.
+fn random_calendar(r: &mut Rng) -> Calendar {
+    let day = |force: bool, r: &mut Rng| {
+        if !force && r.chance(25) {
+            return DaySetting::NonWorking;
+        }
+        let k = r.range(1, 3);
+        let mut points: Vec<i64> = (0..2 * k).map(|_| r.range(0, 96) * 15).collect();
+        points.sort_unstable();
+        points.dedup();
+        let ranges: Vec<TimeRange> = points
+            .chunks(2)
+            .filter(|c| c.len() == 2 && c[0] < c[1])
+            .map(|c| {
+                let t = |m: i64| TimeOfDay::new(u16::try_from(m).unwrap()).unwrap();
+                TimeRange::new(t(c[0]), t(c[1])).unwrap()
+            })
+            .collect();
+        if ranges.is_empty() {
+            let t = |m: u16| TimeOfDay::new(m).unwrap();
+            DaySetting::Working(DayHours::new(vec![TimeRange::new(t(480), t(720)).unwrap()]).unwrap())
+        } else {
+            DaySetting::Working(DayHours::new(ranges).unwrap())
+        }
+    };
+    let week = Week::from_fn(|wd| day(wd == planrs_core::Weekday::Monday, r));
+    Calendar::new_base(CalendarUid::new(4), "Aléatoire".to_owned(), week)
+}
+
+/// Parents (positions), recalculés à part (R-052).
+fn parents(p: &Project) -> Vec<Option<usize>> {
+    let mut stack: Vec<(u16, usize)> = Vec::new();
+    let mut out = Vec::new();
+    for (i, t) in p.tasks.iter().enumerate() {
+        if t.is_null {
+            out.push(None);
+            continue;
+        }
+        let l = t.outline_level.get();
+        while stack.last().is_some_and(|(sl, _)| *sl >= l) {
+            stack.pop();
+        }
+        out.push(stack.last().map(|(_, pos)| *pos));
+        stack.push((l, i));
+    }
+    out
+}
+
+fn is_ancestor(parents: &[Option<usize>], anc: usize, mut q: usize) -> bool {
+    while let Some(par) = parents[q] {
+        if par == anc {
+            return true;
+        }
+        q = par;
+    }
+    false
+}
+
+fn is_summary(parents: &[Option<usize>], q: usize) -> bool {
+    parents.contains(&Some(q))
+}
+
+fn generate(seed: u64, shape: Shape) -> Project {
+    let mut r = Rng(seed | 1);
+    let base: Moment = "2026-01-05T08:00".parse().unwrap();
+    let mut offset = r.range(0, 300) * 1_440;
+    if r.chance(30) {
+        offset += r.range(0, 1_439);
+    }
+    let start = base.checked_add(Minutes::new(offset)).unwrap();
+    let mut p = Project::new(ProjectInit {
+        name: "Aléatoire".to_owned(),
+        anchor: ScheduleAnchor::FromStart(start),
+        current_date: start,
+        calendar_names: BuiltinCalendarNames::default(),
+    });
+    p.calendars.push(random_calendar(&mut r)).unwrap();
+    p.calendar = CalendarUid::new(u32::try_from(r.range(1, 4)).unwrap());
+    if shape.cpm_options {
+        p.options.critical_slack_limit_days = u32::try_from(r.range(0, 1)).unwrap();
+        p.options.multiple_critical_paths = r.chance(20);
+    }
+    let n = usize::try_from(r.range(1, 40)).unwrap();
+    let hierarchical = shape.hierarchy && r.chance(50);
+    let mut prev_level: i64 = 1;
+    let options = p.options;
+    for i in 1..=n {
+        let uid = TaskUid::new(u32::try_from(i).unwrap());
+        let mut t = Task::new(uid, format!("T{i}"), &options);
+        let minutes = if r.chance(10) { 0 } else { r.range(1, 4_800) };
+        let basis = if shape.elapsed && r.chance(10) {
+            TimeBasis::Elapsed
+        } else {
+            TimeBasis::Working
+        };
+        t.duration = Duration::new(Minutes::new(minutes), DurationUnit::Day, basis, false).unwrap();
+        if hierarchical {
+            let level = if i == 1 { 1 } else { r.range(1, prev_level + 1) };
+            t.outline_level = OutlineLevel::new(u16::try_from(level).unwrap()).unwrap();
+            prev_level = level;
+        }
+        if shape.task_calendars && r.chance(20) {
+            t.calendar = Some(CalendarUid::new(u32::try_from(r.range(1, 4)).unwrap()));
+        }
+        t.active = !(shape.inactive && r.chance(5));
+        p.tasks.push(t).unwrap();
+    }
+    // Ordre topologique caché : rang de chaque position (Fisher-Yates).
+    let mut rank: Vec<usize> = (0..n).collect();
+    for i in (1..n).rev() {
+        let j = usize::try_from(r.range(0, i64::try_from(i).unwrap())).unwrap();
+        rank.swap(i, j);
+    }
+    let par = parents(&p);
+    let uids: Vec<TaskUid> = p.tasks.iter().map(Task::uid).collect();
+    for s in 0..n {
+        let candidates: Vec<usize> = (0..n)
+            .filter(|&q| rank[q] < rank[s] && !is_ancestor(&par, q, s) && !is_ancestor(&par, s, q))
+            .collect();
+        let k = r.range(0, 3);
+        let mut chosen = BTreeSet::new();
+        let mut links = Vec::new();
+        for _ in 0..k {
+            if candidates.is_empty() {
+                break;
+            }
+            let q = candidates
+                [usize::try_from(r.range(0, i64::try_from(candidates.len()).unwrap() - 1)).unwrap()];
+            if !chosen.insert(q) {
+                continue;
+            }
+            let kind = shape.kinds
+                [usize::try_from(r.range(0, i64::try_from(shape.kinds.len()).unwrap() - 1)).unwrap()];
+            let lag_basis = |r: &mut Rng, pct: u64| {
+                if shape.elapsed && r.chance(pct) {
+                    TimeBasis::Elapsed
+                } else {
+                    TimeBasis::Working
+                }
+            };
+            let lag = if r.chance(50) {
+                Lag::ZERO
+            } else if r.chance(10) && (shape.percent_from_summary || !is_summary(&par, q)) {
+                let basis = lag_basis(&mut r, 30);
+                let percent = SignedPercent::new(r.range(shape.percent_min, 10_000)).unwrap();
+                Lag::new(basis, LagValue::Percent { percent }).unwrap()
+            } else {
+                let basis = lag_basis(&mut r, 15);
+                let minutes = Minutes::new(r.range(-2_000, 2_000));
+                Lag::new(
+                    basis,
+                    LagValue::Time {
+                        minutes,
+                        unit: DurationUnit::Day,
+                    },
+                )
+                .unwrap()
+            };
+            links.push(Link {
+                predecessor: uids[q],
+                kind,
+                lag,
+            });
+        }
+        p.tasks.get_mut(uids[s]).unwrap().predecessors = links;
+    }
+    p
+}
+
+/// Réseau chaotique : tout ce qui peut mal tourner.
+fn chaos(seed: u64) -> Project {
+    let mut p = generate(seed, GENERAL);
+    let mut r = Rng(seed.rotate_left(17) | 1);
+    let start = match r.range(0, 3) {
+        0 => "2149-12-20T08:00",
+        1 => "1984-01-02T08:00",
+        _ => "2026-10-19T08:00",
+    };
+    let start: Moment = start.parse().unwrap();
+    p.anchor = if r.chance(5) {
+        ScheduleAnchor::FromFinish(start)
+    } else {
+        ScheduleAnchor::FromStart(start)
+    };
+    if r.chance(10) {
+        let empty = Calendar::new_base(
+            CalendarUid::new(9),
+            "Vide".to_owned(),
+            Week::from_fn(|_| DaySetting::NonWorking),
+        );
+        p.calendars.push(empty).unwrap();
+        p.calendar = CalendarUid::new(9);
+    }
+    let uids: Vec<TaskUid> = p.tasks.iter().map(Task::uid).collect();
+    let n = i64::try_from(uids.len()).unwrap();
+    for uid in uids {
+        let t = p.tasks.get_mut(uid).unwrap();
+        if r.chance(5) {
+            t.is_null = true;
+        }
+        if r.chance(5) {
+            t.calendar = Some(CalendarUid::new(u32::try_from(r.range(5, 9)).unwrap()));
+        }
+        // Saut de niveau.
+        if t.outline_level.get() > 1 && r.chance(10) {
+            t.outline_level = OutlineLevel::new(t.outline_level.get() + 2).unwrap();
+        }
+        if r.chance(10) {
+            let entered_start = start.checked_add(Minutes::new(r.range(-20_000, 20_000))).ok();
+            let entered_finish = start.checked_add(Minutes::new(r.range(-20_000, 20_000))).ok();
+            t.mode = SchedulingMode::Manual {
+                start: if r.chance(70) { entered_start } else { None },
+                finish: if r.chance(70) { entered_finish } else { None },
+                duration: None,
+            };
+        }
+        // Prédécesseur inconnu, lien en double, cycle.
+        if r.chance(10) {
+            t.predecessors.push(Link {
+                predecessor: TaskUid::new(u32::try_from(n + r.range(1, 5)).unwrap()),
+                kind: LinkType::FinishToStart,
+                lag: Lag::ZERO,
+            });
+        }
+        if r.chance(10) {
+            t.predecessors.push(Link {
+                predecessor: TaskUid::new(u32::try_from(r.range(1, n)).unwrap()),
+                kind: LinkType::FinishToStart,
+                lag: Lag::ZERO,
+            });
+        }
+        for l in &mut t.predecessors {
+            if r.chance(10) {
+                let minutes = Minutes::new(r.range(-87_308_640, 87_308_640));
+                l.lag = Lag::new(
+                    TimeBasis::Working,
+                    LagValue::Time {
+                        minutes,
+                        unit: DurationUnit::Day,
+                    },
+                )
+                .unwrap();
+            }
+        }
+    }
+    p
+}
+
+// ---------------------------------------------------------------------------
+// Contrôles communs
+// ---------------------------------------------------------------------------
+
+/// Calendriers compilés, avec les replis de R-066.
+struct Cals {
+    set: CalendarSet,
+}
+
+impl Cals {
+    fn new(p: &Project) -> Self {
+        Self {
+            set: CalendarSet::compile(p).0,
+        }
+    }
+
+    fn usable(&self, uid: CalendarUid) -> Option<&CompiledCalendar> {
+        self.set.get(uid).ok().filter(|c| c.has_working_time())
+    }
+
+    /// Calendrier ouvré effectif de la tâche (R-066) ; `None` si le
+    /// calendrier du projet est inutilisable.
+    fn of(&self, p: &Project, t: &Task) -> Option<&CompiledCalendar> {
+        let project = self.usable(p.calendar)?;
+        Some(t.calendar.and_then(|c| self.usable(c)).unwrap_or(project))
+    }
+
+    /// Échelle de placement de la tâche.
+    fn place(&self, p: &Project, t: &Task) -> Option<TimeScale<'_>> {
+        if t.duration.basis() == TimeBasis::Elapsed {
+            Some(TimeScale::Elapsed)
+        } else {
+            self.of(p, t).map(TimeScale::Working)
+        }
+    }
+}
+
+/// Tâche planifiée et non dégradée.
+fn planned(s: &Schedule, uid: TaskUid) -> Option<TaskSchedule> {
+    match s.get(uid) {
+        Some(TaskOutcome::Scheduled(ts)) if !ts.degraded => Some(*ts),
+        _ => None,
+    }
+}
+
+/// Une entrée par tâche ; diagnostics triés et sans doublon ; déterminisme.
+fn check_shape(p: &Project, s: &Schedule) {
+    assert_eq!(s.tasks.len(), p.tasks.len());
+    let mut sorted = s.diagnostics.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(sorted, s.diagnostics);
+    assert_eq!(*s, schedule(&p.clone()));
+}
+
+/// (a), (b), (c) et (f) sur les tâches planifiées non dégradées hors de
+/// `skip`.
+fn check_network(p: &Project, s: &Schedule, skip: &BTreeSet<TaskUid>, check_order: bool) {
+    let cals = Cals::new(p);
+    let par = parents(p);
+    let cut: BTreeSet<(TaskUid, TaskUid)> = s
+        .diagnostics
+        .iter()
+        .filter_map(|d| match d {
+            Diagnostic::LinkIgnoredInCycle {
+                predecessor,
+                successor,
+            } => Some((*predecessor, *successor)),
+            _ => None,
+        })
+        .collect();
+    let ok = |uid: TaskUid| planned(s, uid).filter(|_| !skip.contains(&uid));
+    let order_pos: BTreeMap<TaskUid, usize> = s.order.iter().enumerate().map(|(i, u)| (*u, i)).collect();
+
+    // (b), (c).
+    for (i, t) in p.tasks.iter().enumerate() {
+        let Some(ts) = ok(t.uid()) else { continue };
+        assert!(ts.early.start <= ts.early.finish, "{}: ES > EF", t.uid());
+        assert!(ts.late.start <= ts.late.finish, "{}: LS > LF", t.uid());
+        assert!(ts.total_slack >= ts.free_slack, "{}: TF < FS {ts:?}", t.uid());
+        assert!(ts.free_slack >= Minutes::ZERO, "{}: FS < 0 {ts:?}", t.uid());
+        if ts.role == TaskRole::Summary && !ts.manual {
+            let mut span: Option<(Moment, Moment)> = None;
+            for (q, c) in p.tasks.iter().enumerate() {
+                if par[q] != Some(i) {
+                    continue;
+                }
+                if let Some(TaskOutcome::Scheduled(cs)) = s.get(c.uid()) {
+                    span = Some(span.map_or((cs.early.start, cs.early.finish), |(a, b)| {
+                        (a.min(cs.early.start), b.max(cs.early.finish))
+                    }));
+                }
+            }
+            assert_eq!(span, Some((ts.early.start, ts.early.finish)), "{}", t.uid());
+        }
+    }
+    // (c) Récapitulative du projet : enveloppe des tâches de premier niveau.
+    let mut top: Option<(Moment, Moment)> = None;
+    for (q, t) in p.tasks.iter().enumerate() {
+        if par[q].is_some() {
+            continue;
+        }
+        if let Some(TaskOutcome::Scheduled(ts)) = s.get(t.uid()) {
+            top = Some(top.map_or((ts.early.start, ts.early.finish), |(a, b)| {
+                (a.min(ts.early.start), b.max(ts.early.finish))
+            }));
+        }
+    }
+    assert_eq!(top, s.project_summary.map(|ps| (ps.early.start, ps.early.finish)));
+
+    // (a), (f) : liens effectifs.
+    for (si, st) in p.tasks.iter().enumerate() {
+        let mut seen = BTreeSet::new();
+        for l in &st.predecessors {
+            if !seen.insert(l.predecessor) || l.predecessor == st.uid() {
+                continue;
+            }
+            let Some(pi) = p.tasks.position(l.predecessor) else {
+                continue;
+            };
+            let pt = p.tasks.at(pi).unwrap();
+            if cut.contains(&(pt.uid(), st.uid()))
+                || is_ancestor(&par, pi, si)
+                || is_ancestor(&par, si, pi)
+                || !pt.active
+                || pt.is_null
+                || st.is_null
+                || is_summary(&par, pi)
+            {
+                continue;
+            }
+            let Some(pe) = ok(pt.uid()) else { continue };
+            let lag = match l.lag.value {
+                LagValue::Time { minutes, .. } => minutes,
+                LagValue::Percent { percent } => percent_of(pe.duration, percent).unwrap(),
+            };
+            let sigma = if l.lag.basis == TimeBasis::Elapsed {
+                TimeScale::Elapsed
+            } else {
+                let Some(c) = cals.of(p, st) else { continue };
+                TimeScale::Working(c)
+            };
+            let anchor = match l.kind {
+                LinkType::FinishToStart | LinkType::FinishToFinish => pe.early.finish,
+                LinkType::StartToStart | LinkType::StartToFinish => pe.early.start,
+            };
+            let Ok(bound) = (if lag == Minutes::ZERO {
+                Ok(anchor)
+            } else {
+                sigma.add(anchor, lag)
+            }) else {
+                continue;
+            };
+            // Successeur feuille, ou sous-tâches d'une récapitulative (FS/SS
+            // par la porte, FF/SF dépliés).
+            let targets: Vec<usize> = if is_summary(&par, si) {
+                (0..p.tasks.len())
+                    .filter(|q| is_ancestor(&par, si, *q) && !is_summary(&par, *q))
+                    .collect()
+            } else {
+                vec![si]
+            };
+            for q in targets {
+                let qt = p.tasks.at(q).unwrap();
+                if matches!(qt.mode, SchedulingMode::Manual { .. }) {
+                    continue;
+                }
+                let Some(qe) = ok(qt.uid()) else { continue };
+                let Some(place) = cals.place(p, qt) else { continue };
+                let w = |a: Moment, b: Moment| place.between(a, b).unwrap_or(Minutes::ZERO);
+                match l.kind {
+                    LinkType::FinishToStart => assert!(
+                        qe.early.start >= bound,
+                        "FS {} → {}: {:?} < {bound}",
+                        pt.uid(),
+                        qt.uid(),
+                        qe.early.start
+                    ),
+                    LinkType::StartToStart => {
+                        assert!(
+                            w(bound, qe.early.start) >= Minutes::ZERO,
+                            "SS {} → {}",
+                            pt.uid(),
+                            qt.uid()
+                        );
+                    }
+                    LinkType::FinishToFinish | LinkType::StartToFinish => assert!(
+                        w(bound, qe.early.finish) >= Minutes::ZERO,
+                        "FF/SF {} → {}",
+                        pt.uid(),
+                        qt.uid()
+                    ),
+                }
+                if check_order
+                    && qt.uid() == st.uid()
+                    && let (Some(a), Some(b)) = (order_pos.get(&pt.uid()), order_pos.get(&qt.uid()))
+                {
+                    assert!(a < b, "ordre : {} avant {}", pt.uid(), qt.uid());
+                }
+            }
+        }
+    }
+}
+
+/// Planning sans les pilotes (permutation des liens, P13 d).
+fn without_drivers(s: &Schedule) -> Schedule {
+    let mut s = s.clone();
+    for o in s.tasks.values_mut() {
+        if let TaskOutcome::Scheduled(ts) = o {
+            ts.driver = Driver::ProjectStart;
+        }
+    }
+    s
+}
+
+// ---------------------------------------------------------------------------
+// P13
+// ---------------------------------------------------------------------------
+
+fn p13(p: &Project) {
+    let s = schedule(p);
+    check_shape(p, &s);
+    // (d) Aller-retour JSON du projet et du planning.
+    let pj = serde_json::to_string(p).unwrap();
+    let p2: Project = serde_json::from_str(&pj).unwrap();
+    assert_eq!(schedule(&p2), s);
+    let sj = serde_json::to_string(&s).unwrap();
+    assert_eq!(serde_json::from_str::<Schedule>(&sj).unwrap(), s);
+    // (d) Permutation des liens de chaque tâche : seul le pilote change.
+    let mut permuted = p.clone();
+    let uids: Vec<TaskUid> = permuted.tasks.iter().map(Task::uid).collect();
+    for uid in &uids {
+        permuted.tasks.get_mut(*uid).unwrap().predecessors.reverse();
+    }
+    assert_eq!(without_drivers(&schedule(&permuted)), without_drivers(&s));
+    // (a), (b), (c), (f).
+    check_network(p, &s, &BTreeSet::new(), true);
+    // (e) Point fixe : feuilles actives automatiques → manuelles à leurs
+    // dates au plus tôt.
+    let mut fixed = p.clone();
+    for uid in uids {
+        let t = fixed.tasks.get_mut(uid).unwrap();
+        if let Some(TaskOutcome::Scheduled(ts)) = s.get(t.uid())
+            && ts.role == TaskRole::Leaf
+            && t.active
+        {
+            t.mode = SchedulingMode::Manual {
+                start: Some(ts.early.start),
+                finish: Some(ts.early.finish),
+                duration: None,
+            };
+        }
+    }
+    let f = schedule(&fixed);
+    for (uid, o) in &s.tasks {
+        if let (TaskOutcome::Scheduled(a), Some(TaskOutcome::Scheduled(b))) = (o, f.tasks.get(uid)) {
+            assert_eq!(a.early, b.early, "point fixe {uid}");
+            assert_eq!(a.late, b.late, "point fixe {uid}");
+            assert_eq!(a.total_slack, b.total_slack, "point fixe {uid}");
+            assert_eq!(a.free_slack, b.free_slack, "point fixe {uid}");
+        }
+    }
+    assert!(
+        !f.diagnostics
+            .iter()
+            .any(|d| d.code() == "link.manual_not_honored"),
+        "point fixe : {:?}",
+        f.diagnostics
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P14
+// ---------------------------------------------------------------------------
+
+/// Chaîne de marge nulle : en remontant les pilotes depuis une tâche qui
+/// finit à la fin du projet, chaque tâche a une marge totale nulle.
+fn p14(p: &Project) {
+    let s = schedule(p);
+    let n = p.tasks.len();
+    for (uid, o) in &s.tasks {
+        let TaskOutcome::Scheduled(ts) = o else {
+            panic!("{uid} non planifiée : {o:?}")
+        };
+        if ts.early.finish != s.project_finish {
+            continue;
+        }
+        let mut cur = (*uid, *ts);
+        for _ in 0..=n {
+            assert_eq!(
+                cur.1.total_slack,
+                Minutes::ZERO,
+                "chaîne depuis {uid} : {} {:?}",
+                cur.0,
+                cur.1
+            );
+            match cur.1.driver {
+                Driver::ProjectStart => break,
+                Driver::Link { predecessor, .. } => {
+                    cur = (predecessor, *s.scheduled(predecessor).unwrap());
+                }
+                d => panic!("pilote inattendu {d:?}"),
+            }
+        }
+        assert_eq!(cur.1.driver, Driver::ProjectStart, "chaîne sans fin depuis {uid}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P15 : oracle indépendant en temps ouvré
+// ---------------------------------------------------------------------------
+
+/// Dates et marges de l'oracle, en minutes ouvrées depuis une origine.
+struct Oracle {
+    es: Vec<i64>,
+    ef: Vec<i64>,
+    ls: Vec<i64>,
+    lf: Vec<i64>,
+    free: Vec<i64>,
+}
+
+/// Plus long chemin entier par relaxation jusqu'à stabilité (réseau plat,
+/// un seul calendrier, décalages ouvrés). Formules en temps ouvré : FS
+/// `ES ≥ EF_p + L`, SS `ES ≥ ES_p + L`, FF `ES ≥ EF_p + L − d`, SF
+/// `ES ≥ ES_p + L − d`, `ES ≥ W(début)` ; retour symétrique.
+fn oracle(p: &Project, w_start: i64) -> Oracle {
+    let n = p.tasks.len();
+    let d: Vec<i64> = p.tasks.iter().map(|t| t.duration.minutes().get()).collect();
+    // Liens : (pred, succ, type, L).
+    let mut links = Vec::new();
+    for (si, t) in p.tasks.iter().enumerate() {
+        for l in &t.predecessors {
+            let pi = p.tasks.position(l.predecessor).unwrap();
+            let lag = match l.lag.value {
+                LagValue::Time { minutes, .. } => minutes.get(),
+                LagValue::Percent { percent } => percent_of(Minutes::new(d[pi]), percent).unwrap().get(),
+            };
+            links.push((pi, si, l.kind, lag));
+        }
+    }
+    let mut es = vec![w_start; n];
+    loop {
+        let mut changed = false;
+        for &(pi, si, kind, lag) in &links {
+            let c = match kind {
+                LinkType::FinishToStart => es[pi] + d[pi] + lag,
+                LinkType::StartToStart => es[pi] + lag,
+                LinkType::FinishToFinish => es[pi] + d[pi] + lag - d[si],
+                LinkType::StartToFinish => es[pi] + lag - d[si],
+            };
+            if c > es[si] {
+                es[si] = c;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let ef: Vec<i64> = (0..n).map(|i| es[i] + d[i]).collect();
+    let finish = ef.iter().copied().max().unwrap_or(w_start);
+    let mut lf = vec![finish; n];
+    loop {
+        let mut changed = false;
+        for &(pi, si, kind, lag) in &links {
+            let ls_s = lf[si] - d[si];
+            let c = match kind {
+                LinkType::FinishToStart => ls_s - lag,
+                LinkType::StartToStart => ls_s - lag + d[pi],
+                LinkType::FinishToFinish => lf[si] - lag,
+                LinkType::StartToFinish => lf[si] - lag + d[pi],
+            };
+            if c < lf[pi] {
+                lf[pi] = c;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let ls: Vec<i64> = (0..n).map(|i| lf[i] - d[i]).collect();
+    let mut free: Vec<i64> = (0..n).map(|i| lf[i] - ef[i]).collect();
+    for &(pi, si, kind, lag) in &links {
+        let gap = match kind {
+            LinkType::FinishToStart => es[si] - lag - ef[pi],
+            LinkType::StartToStart => es[si] - lag - es[pi],
+            LinkType::FinishToFinish => ef[si] - lag - ef[pi],
+            LinkType::StartToFinish => ef[si] - lag - es[pi],
+        };
+        free[pi] = free[pi].min(gap);
+    }
+    Oracle { es, ef, ls, lf, free }
+}
+
+fn p15(p: &Project) {
+    let s = schedule(p);
+    let (set, _) = CalendarSet::compile(p);
+    let cal = set.get(p.calendar).unwrap();
+    let origin: Moment = "2025-01-01T00:00".parse().unwrap();
+    let w = |m: Moment| cal.working_between(origin, m).unwrap().get();
+    let ScheduleAnchor::FromStart(start) = p.anchor else {
+        panic!("ancre")
+    };
+    let o = oracle(p, w(start));
+    for (i, t) in p.tasks.iter().enumerate() {
+        let ts = s.scheduled(t.uid()).unwrap();
+        let got = (
+            w(ts.early.start),
+            w(ts.early.finish),
+            w(ts.late.start),
+            w(ts.late.finish),
+            ts.total_slack.get(),
+            ts.free_slack.get(),
+        );
+        let want = (o.es[i], o.ef[i], o.ls[i], o.lf[i], o.lf[i] - o.ef[i], o.free[i]);
+        assert_eq!(got, want, "tâche {} (ES, EF, LS, LF, TF, FS)", t.uid());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P16 : monotonie
+// ---------------------------------------------------------------------------
+
+fn p16(p: &Project, seed: u64) {
+    let s = schedule(p);
+    let par = parents(p);
+    let mut r = Rng(seed.rotate_left(29) | 1);
+    let leaves: Vec<usize> = (0..p.tasks.len()).filter(|&q| !is_summary(&par, q)).collect();
+    let q = leaves[usize::try_from(r.range(0, i64::try_from(leaves.len()).unwrap() - 1)).unwrap()];
+    let mut longer = p.clone();
+    let uid = p.tasks.at(q).unwrap().uid();
+    let t = longer.tasks.get_mut(uid).unwrap();
+    let d = t.duration;
+    t.duration = Duration::new(
+        Minutes::new(d.minutes().get() + r.range(1, 2_400)),
+        d.unit(),
+        d.basis(),
+        d.is_estimated(),
+    )
+    .unwrap();
+    let s2 = schedule(&longer);
+    assert!(
+        s2.project_finish >= s.project_finish,
+        "allonger {uid} avance la fin du projet : {} < {}",
+        s2.project_finish,
+        s.project_finish
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P17 : chaos
+// ---------------------------------------------------------------------------
+
+/// Tâches d'une composante (liens et hiérarchie) qui contient une manuelle.
+fn manual_components(p: &Project) -> BTreeSet<TaskUid> {
+    let n = p.tasks.len();
+    let mut root: Vec<usize> = (0..n).collect();
+    fn find(root: &mut [usize], mut x: usize) -> usize {
+        while root[x] != x {
+            root[x] = root[root[x]];
+            x = root[x];
+        }
+        x
+    }
+    let par = parents(p);
+    for (si, t) in p.tasks.iter().enumerate() {
+        let join = |a: usize, b: usize, root: &mut Vec<usize>| {
+            let (ra, rb) = (find(root, a), find(root, b));
+            root[ra] = rb;
+        };
+        if let Some(pp) = par[si] {
+            join(si, pp, &mut root);
+        }
+        for l in &t.predecessors {
+            if let Some(pi) = p.tasks.position(l.predecessor) {
+                join(si, pi, &mut root);
+            }
+        }
+    }
+    let tainted: BTreeSet<usize> = p
+        .tasks
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| matches!(t.mode, SchedulingMode::Manual { .. }))
+        .map(|(i, _)| find(&mut root, i))
+        .collect();
+    (0..n)
+        .filter(|&i| tainted.contains(&find(&mut root, i)))
+        .map(|i| p.tasks.at(i).unwrap().uid())
+        .collect()
+}
+
+/// Réseau plat : les composantes fortement connexes des liens effectifs
+/// sont exactement les cycles signalés (`link.cycle`).
+fn check_cycles(p: &Project, s: &Schedule) {
+    let n = p.tasks.len();
+    let undated = |t: &Task| {
+        t.active
+            && matches!(
+                t.mode,
+                SchedulingMode::Manual {
+                    start: None,
+                    finish: None,
+                    ..
+                }
+            )
+    };
+    let mut adj = vec![Vec::new(); n];
+    for (si, t) in p.tasks.iter().enumerate() {
+        for l in &t.predecessors {
+            let Some(pi) = p.tasks.position(l.predecessor) else {
+                continue;
+            };
+            let pt = p.tasks.at(pi).unwrap();
+            if pi == si || pt.is_null || t.is_null || undated(pt) || undated(t) || !pt.active {
+                continue;
+            }
+            adj[pi].push(si);
+        }
+    }
+    let reach = |from: usize| {
+        let mut seen = vec![false; n];
+        let mut stack = vec![from];
+        while let Some(x) = stack.pop() {
+            for &y in &adj[x] {
+                if !seen[y] {
+                    seen[y] = true;
+                    stack.push(y);
+                }
+            }
+        }
+        seen
+    };
+    let reachable: Vec<Vec<bool>> = (0..n).map(reach).collect();
+    let mut sccs: BTreeSet<Vec<TaskUid>> = BTreeSet::new();
+    for i in 0..n {
+        let comp: Vec<TaskUid> = (0..n)
+            .filter(|&j| j == i || (reachable[i][j] && reachable[j][i]))
+            .map(|j| p.tasks.at(j).unwrap().uid())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if comp.len() >= 2 {
+            sccs.insert(comp);
+        }
+    }
+    let reported: BTreeSet<Vec<TaskUid>> = s
+        .diagnostics
+        .iter()
+        .filter_map(|d| match d {
+            Diagnostic::LinkCycle { tasks } => Some(tasks.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reported, sccs);
+}
+
+fn p17(p: &Project) {
+    let s = schedule(p);
+    check_shape(p, &s);
+    if matches!(p.anchor, ScheduleAnchor::FromFinish(_)) {
+        assert!(
+            s.tasks
+                .values()
+                .all(|o| matches!(o, TaskOutcome::Excluded { .. }))
+        );
+        return;
+    }
+    for (uid, o) in &s.tasks {
+        if let TaskOutcome::Scheduled(ts) = o {
+            assert!(ts.early.start <= ts.early.finish, "{uid}");
+        }
+    }
+    if p.tasks.iter().all(|t| t.outline_level.get() == 1) {
+        check_cycles(p, &s);
+    }
+    let usable = CalendarSet::compile(p)
+        .0
+        .get(p.calendar)
+        .is_ok_and(CompiledCalendar::has_working_time);
+    if usable {
+        check_network(p, &s, &manual_components(p), false);
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::default())]
+
+    #[test]
+    fn p13_cpm_composite(seed in any::<u64>()) {
+        p13(&generate(seed, GENERAL));
+    }
+
+    #[test]
+    fn p14_zero_slack_chain(seed in any::<u64>()) {
+        p14(&generate(seed, FLAT));
+    }
+}
+
+/// Nombre de cas de `PROPTEST_CASES` (lu par proptest), plafonné.
+fn capped(cap: u32) -> ProptestConfig {
+    ProptestConfig::with_cases(ProptestConfig::default().cases.min(cap))
+}
+
+proptest! {
+    #![proptest_config(capped(1_024))]
+
+    #[test]
+    fn p15_matches_working_time_oracle(seed in any::<u64>()) {
+        p15(&generate(seed, FLAT));
+    }
+
+    #[test]
+    fn p16_project_finish_is_monotonic(seed in any::<u64>()) {
+        p16(&generate(seed, MONOTONE), seed);
+    }
+}
+
+proptest! {
+    #![proptest_config(capped(2_000))]
+
+    #[test]
+    fn p17_chaos(seed in any::<u64>()) {
+        p17(&chaos(seed));
+    }
+}
+
+/// Graines fixes, indépendantes de proptest (exécutées à chaque fois).
+#[test]
+fn fixed_seeds() {
+    for seed in 0..100 {
+        p13(&generate(seed, GENERAL));
+        p14(&generate(seed, FLAT));
+        p15(&generate(seed, FLAT));
+        p16(&generate(seed, MONOTONE), seed);
+        p17(&chaos(seed));
+    }
+}
+
+/// Régressions trouvées par P17, rejouées explicitement.
+#[test]
+fn p17_regressions() {
+    // Lien FS dont le transfert sort du domaine (début du projet en 2149)
+    // vers une récapitulative : la porte échoue (R-069) ; le prédécesseur
+    // avait une marge libre négative tant que l'arc comptait encore.
+    p17(&chaos(10_145_788_266_605_795_041));
+    // Porte d'une sous-récapitulative en échec : ses sous-tâches, planifiées
+    // sans la porte du parent, faussaient la marge libre des prédécesseurs du
+    // parent (dates au plus tard de repli depuis, `degraded`).
+    p17(&chaos(40_512_168_739_394_516));
+    // Lien FF vers une tâche qui finit sur son dernier temps ouvré avant la
+    // fin du domaine : l'ancre reportée (R-047) est la fin du domaine.
+    p17(&chaos(16_281_757_938_398_638_621));
+}

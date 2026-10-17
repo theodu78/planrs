@@ -176,7 +176,7 @@ impl Calc<'_, '_> {
                 Exclusion::Unschedulable
             });
         };
-        let mut degraded = state.degraded;
+        let mut degraded = state.degraded || state.late_degraded;
         let late = state.late.unwrap_or_else(|| {
             degraded = true;
             early

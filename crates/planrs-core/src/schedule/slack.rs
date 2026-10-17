@@ -73,7 +73,7 @@ impl Calc<'_, '_> {
         while let Some(o) = owner {
             let anc_start = self.state(o).and_then(|s| s.early).map(|e| e.start);
             for &a in net.outgoing(o).unwrap_or_default() {
-                if let Some(gap) = self.gap(a, m, early, !first && anc_start != Some(early.start))? {
+                if let Some(gap) = self.gap(v, a, m, early, !first && anc_start != Some(early.start))? {
                     fs = fs.min(gap);
                 }
             }
@@ -89,12 +89,13 @@ impl Calc<'_, '_> {
         Ok((tf, fs.min(tf)))
     }
 
-    /// Écart de l'arc de lien `a` (R-049) : `M.between(ancre propre,
+    /// Écart de l'arc de lien `a` pour le nœud `v` (R-049) : `M.between(ancre propre,
     /// h(ancre au plus tôt du successeur))`. `None` pour un arc ignoré
     /// (hiérarchie, coupé, vers une tâche inactive, cible sans dates, ou arc
     /// SS/SF hérité écarté).
     fn gap(
         &mut self,
+        v: NodeIx,
         a: u32,
         m: TimeScale<'_>,
         own: Span,
@@ -109,10 +110,18 @@ impl Calc<'_, '_> {
         if l.to_inactive || (start_kind && skip_start_kind) {
             return Ok(None);
         }
+        // Successeur peu sûr : marge libre de repli (R-069).
+        if self.unreliable(arc.to)
+            && let Some(s) = self.state_mut(v)
+        {
+            s.late_degraded = true;
+        }
         let target = self.net.node(arc.to).ok_or(Fail::Internal("nœud hors bornes"))?;
         // Cible porte : début agrégé des sous-tâches (min ES des enfants, même
         // sous une récapitulative manuelle datée, R-064).
+        // Porte en échec (R-069) : le lien n'a pas été appliqué.
         let te = match target.kind {
+            NodeKind::Gate if self.state(arc.to).is_some_and(|s| s.early.is_none()) => None,
             NodeKind::Gate => target.twin.and_then(|r| self.state(r)).and_then(|s| s.children),
             _ => self.state(arc.to).and_then(|s| s.early),
         };
@@ -126,11 +135,11 @@ impl Calc<'_, '_> {
             .net
             .scale(l.sigma)
             .ok_or(Fail::Internal("échelle hors bornes"))?;
-        let c = transfer::backward(*sigma, anchor, lag)?;
+        let bound = transfer::backward(*sigma, anchor, lag)?;
         let mine = match l.ty {
             LinkType::FinishToStart | LinkType::FinishToFinish => own.finish,
             LinkType::StartToStart | LinkType::StartToFinish => own.start,
         };
-        Ok(Some(m.between(mine, c)?))
+        Ok(Some(m.between(mine, bound)?))
     }
 }

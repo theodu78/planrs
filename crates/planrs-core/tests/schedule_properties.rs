@@ -65,6 +65,30 @@
 //! - **P22** : ALAP : feuilles ALAP de marge ≥ 0 planifiées sur leurs dates
 //!   au plus tard ; aucun lien violé ; fin du projet égale à celle du même
 //!   réseau tout en ASAP.
+//!
+//! Planification à rebours (J3, R-106 à R-111), générateur
+//! `generate_from_finish` (ancre `F` de 5 à 60 jours après le début tiré,
+//! contraintes autour de `F`, ALAP par défaut, ASAP tirée 5 % du temps) :
+//! - **P13 à rebours** : forme, déterminisme, permutation des liens (pilotes
+//!   et causes exceptés), (a') liens respectés par les dates planifiées (au
+//!   plus tard) sauf ceux qu'un `constraint.override { Successor }` nomme,
+//!   (b') hors de la fermeture aval des planchers (SNET, FNET, MSO, MFO)
+//!   `TF ≥ 0`, (c) dates planifiées = au plus tard, enveloppes, (f) ordre ;
+//!   (e') point fixe des dates au plus tard (feuilles ALAP passées en
+//!   manuelles, sans ASAP) ; (g') feuilles placées à leurs dates au plus tôt
+//!   sans lien violé (sauf vers une épingle), début calculé jamais avancé.
+//! - **P16b** : allonger une feuille ne retarde jamais le début calculé
+//!   `S*`.
+//! - **P17** : une graine sur deux planifiée à rebours ; mêmes contrôles
+//!   (a'), (b') hors des tâches dégradées et des composantes manuelles.
+//! - **P23** : symétrie avant/arrière (ADR-0010) sur un réseau plat, un
+//!   calendrier, décalages ouvrés, sans jalon, sans %, sans échéance :
+//!   liens retournés (FS → FS, SS → FF, FF → SS, SF → SF), contraintes
+//!   ASAP ↔ ALAP, SNET ↔ FNLT, FNET ↔ SNLT, MSO ↔ MFO, dates miroir en temps
+//!   ouvré ; mêmes dates en temps ouvré miroir, mêmes marges totales, mêmes
+//!   critiques, fin ↔ début calculé. **P23b** : cas concret sur le
+//!   calendrier Standard, symétrique autour du mercredi 12:30, dates miroir
+//!   brutes `t' = 2c − t`.
 
 #![allow(
     clippy::unwrap_used,
@@ -238,6 +262,13 @@ const MONOTONE: Shape = Shape {
     cpm_options: false,
     milestones: true,
     constraints: Draw::StartSide,
+};
+
+/// P16b : comme [`MONOTONE`], tous les types de contraintes (à rebours,
+/// allonger une tâche ne fait que reculer son début au plus tard).
+const MONOTONE_FROM_FINISH: Shape = Shape {
+    constraints: Draw::All,
+    ..MONOTONE
 };
 
 /// Calendrier de base aléatoire (UID 4) : chaque jour chômé une fois sur
@@ -422,6 +453,13 @@ fn generate(seed: u64, shape: Shape) -> Project {
 /// `start + [lo, hi]` minutes, bornées au domaine.
 fn add_constraints(p: &mut Project, r: &mut Rng, draw: Draw, start: Moment, (lo, hi): (i64, i64)) {
     p.options.honor_constraints = !r.chance(30);
+    // R-108 : défaut selon le sens (ASAP depuis le début, ALAP à rebours) ;
+    // la contrainte « opposée » tirée est l'autre.
+    let anchor = p.anchor;
+    let opposite = match anchor {
+        ScheduleAnchor::FromStart(_) => Constraint::AsLateAsPossible,
+        ScheduleAnchor::FromFinish(_) => Constraint::AsSoonAsPossible,
+    };
     let uids: Vec<TaskUid> = p.tasks.iter().map(Task::uid).collect();
     let date = |r: &mut Rng| {
         let m = (start.minutes() + r.range(lo, hi)).clamp(Moment::MIN.minutes(), Moment::MAX.minutes());
@@ -429,6 +467,7 @@ fn add_constraints(p: &mut Project, r: &mut Rng, draw: Draw, start: Moment, (lo,
     };
     for uid in uids {
         let t = p.tasks.get_mut(uid).unwrap();
+        t.constraint = Constraint::default_for(&anchor);
         if r.chance(20) {
             let d = date(r);
             let kinds: &[fn(Moment) -> Constraint] = match draw {
@@ -449,7 +488,7 @@ fn add_constraints(p: &mut Project, r: &mut Rng, draw: Draw, start: Moment, (lo,
             let k = usize::try_from(r.range(0, i64::try_from(kinds.len()).unwrap() - 1)).unwrap();
             t.constraint = kinds[k](d);
         } else if r.chance(6) {
-            t.constraint = Constraint::AsLateAsPossible;
+            t.constraint = opposite;
         }
         if r.chance(5) {
             t.deadline = Some(date(r));
@@ -457,8 +496,10 @@ fn add_constraints(p: &mut Project, r: &mut Rng, draw: Draw, start: Moment, (lo,
     }
 }
 
-/// Réseau chaotique : tout ce qui peut mal tourner.
-fn chaos(seed: u64) -> Project {
+/// Réseau chaotique : tout ce qui peut mal tourner ; `from_finish` force la
+/// planification à rebours (sinon tirée 5 % du temps : le tirage est fait
+/// dans les deux cas, les graines de régression gardent leur réseau).
+fn chaos(seed: u64, from_finish: bool) -> Project {
     let mut p = generate(seed, GENERAL);
     let mut r = Rng(seed.rotate_left(17) | 1);
     let start = match r.range(0, 3) {
@@ -467,7 +508,7 @@ fn chaos(seed: u64) -> Project {
         _ => "2026-10-19T08:00",
     };
     let start: Moment = start.parse().unwrap();
-    p.anchor = if r.chance(5) {
+    p.anchor = if r.chance(5) || from_finish {
         ScheduleAnchor::FromFinish(start)
     } else {
         ScheduleAnchor::FromStart(start)
@@ -549,6 +590,43 @@ fn chaos(seed: u64) -> Project {
         if r.chance(3) {
             t.deadline = Some(if r.chance(50) { Moment::MIN } else { Moment::MAX });
         }
+    }
+    p
+}
+
+/// Réseau planifié à rebours (R-106) : comme [`generate`], ancre `F` de 5
+/// à 60 jours après le début tiré, contraintes tirées autour de `F` (de −40
+/// à +3 jours), ALAP par défaut et ASAP tirée 5 % du temps (R-108).
+fn generate_from_finish(seed: u64, shape: Shape) -> Project {
+    let mut p = generate(
+        seed,
+        Shape {
+            constraints: Draw::None,
+            ..shape
+        },
+    );
+    let mut r = Rng(seed.rotate_left(41) | 1);
+    let ScheduleAnchor::FromStart(start) = p.anchor else {
+        panic!("ancre")
+    };
+    let mut offset = r.range(5, 60) * 1_440;
+    if r.chance(30) {
+        offset += r.range(0, 1_439);
+    }
+    let finish = start.checked_add(Minutes::new(offset)).unwrap();
+    p.anchor = ScheduleAnchor::FromFinish(finish);
+    if shape.constraints == Draw::None {
+        for uid in p.tasks.iter().map(Task::uid).collect::<Vec<_>>() {
+            p.tasks.get_mut(uid).unwrap().constraint = Constraint::AsLateAsPossible;
+        }
+    } else {
+        add_constraints(
+            &mut p,
+            &mut r,
+            shape.constraints,
+            finish,
+            (-40 * 1_440, 3 * 1_440),
+        );
     }
     p
 }
@@ -700,13 +778,68 @@ fn cap_closure(p: &Project) -> BTreeSet<TaskUid> {
         .collect()
 }
 
+/// Fermeture aval des planchers à rebours (P13 b', R-109) : tâches dont les
+/// dates au plus tôt peuvent dépasser leurs dates au plus tard à cause d'un
+/// plancher ou d'une épingle (SNET, FNET, MSO, MFO), par les liens
+/// (prédécesseur → successeur) et la hiérarchie (dans les deux sens). Hors
+/// de cette fermeture, la marge totale est ≥ 0.
+fn floor_closure(p: &Project) -> BTreeSet<TaskUid> {
+    let n = p.tasks.len();
+    let par = parents(p);
+    let mut next: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (si, t) in p.tasks.iter().enumerate() {
+        for l in &t.predecessors {
+            if let Some(pi) = p.tasks.position(l.predecessor) {
+                next[pi].push(si);
+            }
+        }
+        if let Some(pp) = par[si] {
+            next[si].push(pp);
+            next[pp].push(si);
+        }
+    }
+    let floored = |t: &Task| {
+        matches!(
+            t.constraint.kind(),
+            ConstraintKind::StartNoEarlierThan
+                | ConstraintKind::FinishNoEarlierThan
+                | ConstraintKind::MustStartOn
+                | ConstraintKind::MustFinishOn
+        )
+    };
+    let mut seen = vec![false; n];
+    let mut stack: Vec<usize> = (0..n).filter(|&i| floored(p.tasks.at(i).unwrap())).collect();
+    for &i in &stack {
+        seen[i] = true;
+    }
+    while let Some(x) = stack.pop() {
+        for &y in &next[x] {
+            if !seen[y] {
+                seen[y] = true;
+                stack.push(y);
+            }
+        }
+    }
+    (0..n)
+        .filter(|&i| seen[i])
+        .map(|i| p.tasks.at(i).unwrap().uid())
+        .collect()
+}
+
 /// (a'), (b'), (c) et (f) sur les tâches planifiées non dégradées hors de
 /// `skip`. (a') : un lien violé par les dates planifiées doit être nommé par
 /// un `constraint.override` (lien ou porte de la récapitulative).
 fn check_network(p: &Project, s: &Schedule, skip: &BTreeSet<TaskUid>, check_order: bool) {
     let cals = Cals::new(p);
     let par = parents(p);
-    let closure = cap_closure(p);
+    let from_finish = matches!(p.anchor, ScheduleAnchor::FromFinish(_));
+    // Marge négative possible : en amont des plafonds depuis le début, en
+    // aval des planchers à rebours.
+    let closure = if from_finish {
+        floor_closure(p)
+    } else {
+        cap_closure(p)
+    };
     let pins = pinned_tasks(p);
     let mut overridden: BTreeSet<(TaskUid, TaskUid)> = BTreeSet::new();
     let mut gate_overridden: BTreeSet<TaskUid> = BTreeSet::new();
@@ -718,6 +851,11 @@ fn check_network(p: &Project, s: &Schedule, skip: &BTreeSet<TaskUid>, check_orde
                 }
                 OverriddenBound::SummaryGate { .. } => {
                     gate_overridden.insert(*task);
+                }
+                // À rebours : la tâche forcée viole le lien vers son
+                // successeur (R-109).
+                OverriddenBound::Successor { successor, .. } => {
+                    overridden.insert((*task, *successor));
                 }
                 _ => {}
             }
@@ -755,19 +893,17 @@ fn check_network(p: &Project, s: &Schedule, skip: &BTreeSet<TaskUid>, check_orde
                 t.uid()
             );
         }
-        // (c) Dates planifiées = au plus tôt depuis le début ; une épingle a
-        // `early == late`.
-        assert_eq!(
-            (ts.start, ts.finish),
-            (ts.early.start, ts.early.finish),
-            "{}",
-            t.uid()
-        );
+        // (c) Dates planifiées = au plus tôt depuis le début, au plus tard à
+        // rebours (R-106, R-112) ; une épingle a `early == late`.
+        let want = if from_finish { ts.late } else { ts.early };
+        assert_eq!((ts.start, ts.finish), (want.start, want.finish), "{}", t.uid());
         if pins.contains(&t.uid()) {
             assert_eq!(ts.early, ts.late, "{}: épingle", t.uid());
         }
         if ts.role == TaskRole::Summary && !ts.manual {
+            // Enveloppes des enfants : au plus tôt, et planifiée (R-112).
             let mut span: Option<(Moment, Moment)> = None;
+            let mut planned: Option<(Moment, Moment)> = None;
             for (q, c) in p.tasks.iter().enumerate() {
                 if par[q] != Some(i) {
                     continue;
@@ -776,13 +912,18 @@ fn check_network(p: &Project, s: &Schedule, skip: &BTreeSet<TaskUid>, check_orde
                     span = Some(span.map_or((cs.early.start, cs.early.finish), |(a, b)| {
                         (a.min(cs.early.start), b.max(cs.early.finish))
                     }));
+                    planned = Some(planned.map_or((cs.start, cs.finish), |(a, b)| {
+                        (a.min(cs.start), b.max(cs.finish))
+                    }));
                 }
             }
             assert_eq!(span, Some((ts.early.start, ts.early.finish)), "{}", t.uid());
+            assert_eq!(planned, Some((ts.start, ts.finish)), "{}", t.uid());
         }
     }
     // (c) Récapitulative du projet : enveloppe des tâches de premier niveau.
     let mut top: Option<(Moment, Moment)> = None;
+    let mut top_planned: Option<(Moment, Moment)> = None;
     for (q, t) in p.tasks.iter().enumerate() {
         if par[q].is_some() {
             continue;
@@ -791,9 +932,13 @@ fn check_network(p: &Project, s: &Schedule, skip: &BTreeSet<TaskUid>, check_orde
             top = Some(top.map_or((ts.early.start, ts.early.finish), |(a, b)| {
                 (a.min(ts.early.start), b.max(ts.early.finish))
             }));
+            top_planned = Some(top_planned.map_or((ts.start, ts.finish), |(a, b)| {
+                (a.min(ts.start), b.max(ts.finish))
+            }));
         }
     }
     assert_eq!(top, s.project_summary.map(|ps| (ps.early.start, ps.early.finish)));
+    assert_eq!(top_planned, s.project_summary.map(|ps| (ps.start, ps.finish)));
 
     // (a), (f) : liens effectifs.
     for (si, st) in p.tasks.iter().enumerate() {
@@ -827,9 +972,11 @@ fn check_network(p: &Project, s: &Schedule, skip: &BTreeSet<TaskUid>, check_orde
                 let Some(c) = cals.of(p, st) else { continue };
                 TimeScale::Working(c)
             };
+            // Dates planifiées (au plus tôt depuis le début, au plus tard à
+            // rebours).
             let anchor = match l.kind {
-                LinkType::FinishToStart | LinkType::FinishToFinish => pe.early.finish,
-                LinkType::StartToStart | LinkType::StartToFinish => pe.early.start,
+                LinkType::FinishToStart | LinkType::FinishToFinish => pe.finish,
+                LinkType::StartToStart | LinkType::StartToFinish => pe.start,
             };
             let Ok(bound) = (if lag == Minutes::ZERO {
                 Ok(anchor)
@@ -847,6 +994,11 @@ fn check_network(p: &Project, s: &Schedule, skip: &BTreeSet<TaskUid>, check_orde
             } else {
                 vec![si]
             };
+            // À rebours, une tâche manuelle signale ses liens sortants violés
+            // (`link.manual_not_honored`, R-106).
+            if from_finish && matches!(pt.mode, SchedulingMode::Manual { .. }) {
+                continue;
+            }
             for q in targets {
                 let qt = p.tasks.at(q).unwrap();
                 if matches!(qt.mode, SchedulingMode::Manual { .. }) {
@@ -856,7 +1008,10 @@ fn check_network(p: &Project, s: &Schedule, skip: &BTreeSet<TaskUid>, check_orde
                 let Some(place) = cals.place(p, qt) else { continue };
                 // (a') Lien violé par une contrainte respectée de force :
                 // signalé, pas vérifié.
+                // À rebours, `Successor` nomme le successeur d'origine, qui peut
+                // être une récapitulative.
                 if overridden.contains(&(pt.uid(), qt.uid()))
+                    || overridden.contains(&(pt.uid(), st.uid()))
                     || (qt.uid() != st.uid() && gate_overridden.contains(&qt.uid()))
                 {
                     continue;
@@ -864,22 +1019,22 @@ fn check_network(p: &Project, s: &Schedule, skip: &BTreeSet<TaskUid>, check_orde
                 let w = |a: Moment, b: Moment| place.between(a, b).unwrap_or(Minutes::ZERO);
                 match l.kind {
                     LinkType::FinishToStart => assert!(
-                        qe.early.start >= bound,
+                        qe.start >= bound,
                         "FS {} → {}: {:?} < {bound}",
                         pt.uid(),
                         qt.uid(),
-                        qe.early.start
+                        qe.start
                     ),
                     LinkType::StartToStart => {
                         assert!(
-                            w(bound, qe.early.start) >= Minutes::ZERO,
+                            w(bound, qe.start) >= Minutes::ZERO,
                             "SS {} → {}",
                             pt.uid(),
                             qt.uid()
                         );
                     }
                     LinkType::FinishToFinish | LinkType::StartToFinish => assert!(
-                        w(bound, qe.early.finish) >= Minutes::ZERO,
+                        w(bound, qe.finish) >= Minutes::ZERO,
                         "FF/SF {} → {}",
                         pt.uid(),
                         qt.uid()
@@ -1152,6 +1307,290 @@ fn delays(p: &Project, s: &Schedule, par: &[Option<usize>]) {
             }
         }
     }
+}
+
+/// P13 à rebours (R-106 à R-111) : forme, (d) déterminisme et permutation
+/// des liens (pilotes et causes exceptés), (a'), (b'), (c), (f) ; (e')
+/// point fixe des dates au plus tard : feuilles automatiques ALAP (défaut)
+/// passées en manuelles à leurs dates au plus tard, dates au plus tard et
+/// début calculé inchangés ; (g') dates au plus tôt réalisables : feuilles
+/// placées à leurs dates au plus tôt, aucun lien violé (sauf vers une
+/// épingle) et début calculé jamais avancé (inchangé sans plancher).
+fn p13_from_finish(p: &Project) {
+    let s = schedule(p);
+    check_shape(p, &s);
+    let pj = serde_json::to_string(p).unwrap();
+    let p2: Project = serde_json::from_str(&pj).unwrap();
+    assert_eq!(schedule(&p2), s);
+    let mut permuted = p.clone();
+    let uids: Vec<TaskUid> = permuted.tasks.iter().map(Task::uid).collect();
+    for uid in &uids {
+        permuted.tasks.get_mut(*uid).unwrap().predecessors.reverse();
+    }
+    let causes = |s: &Schedule| {
+        let mut s = without_drivers(s);
+        for o in s.tasks.values_mut() {
+            if let TaskOutcome::Scheduled(ts) = o {
+                ts.late_driver = planrs_core::LateDriver::ProjectFinish;
+            }
+        }
+        s
+    };
+    assert_eq!(causes(&schedule(&permuted)), causes(&s));
+    check_network(p, &s, &BTreeSet::new(), true);
+    if s.tasks
+        .values()
+        .any(|o| matches!(o, TaskOutcome::Scheduled(ts) if ts.degraded))
+    {
+        return;
+    }
+    // (e') Point fixe des dates au plus tard.
+    let mut fixed = p.clone();
+    for uid in &uids {
+        let t = fixed.tasks.get_mut(*uid).unwrap();
+        if let Some(TaskOutcome::Scheduled(ts)) = s.get(t.uid())
+            && ts.role == TaskRole::Leaf
+            && t.active
+            && t.constraint == Constraint::AsLateAsPossible
+        {
+            t.mode = SchedulingMode::Manual {
+                start: Some(ts.late.start),
+                finish: Some(ts.late.finish),
+                duration: None,
+            };
+        }
+    }
+    let f = schedule(&fixed);
+    // L'épingle d'une tâche ASAP (R-108) suit ses dates au plus tôt, qui
+    // changent quand ses prédécesseurs deviennent manuels (une manuelle a
+    // ses dates saisies au plus tôt comme au plus tard) : pas de point fixe
+    // exact s'il y en a une.
+    let asap = p
+        .tasks
+        .iter()
+        .any(|t| t.active && t.constraint == Constraint::AsSoonAsPossible);
+    if !asap {
+        for (uid, o) in &s.tasks {
+            if let (TaskOutcome::Scheduled(a), Some(TaskOutcome::Scheduled(b))) = (o, f.tasks.get(uid)) {
+                assert_eq!(a.late, b.late, "point fixe {uid}");
+            }
+        }
+        assert_eq!(f.project_start, s.project_start, "point fixe : début calculé");
+    }
+    // (g') Feuilles à leurs dates au plus tôt.
+    let par = parents(p);
+    let mut pins = pinned_tasks(p);
+    for (i, t) in p.tasks.iter().enumerate() {
+        if pins.contains(&t.uid()) {
+            let mut q = i;
+            while let Some(a) = par[q] {
+                pins.insert(p.tasks.at(a).unwrap().uid());
+                q = a;
+            }
+        }
+    }
+    let mut early = p.clone();
+    for uid in &uids {
+        let t = early.tasks.get_mut(*uid).unwrap();
+        if let Some(TaskOutcome::Scheduled(ts)) = s.get(*uid)
+            && ts.role == TaskRole::Leaf
+            && t.active
+        {
+            t.mode = SchedulingMode::Manual {
+                start: Some(ts.early.start),
+                finish: Some(ts.early.finish),
+                duration: None,
+            };
+        }
+    }
+    let e = schedule(&early);
+    let broken: Vec<&Diagnostic> = e
+        .diagnostics
+        .iter()
+        .filter(
+            |d| matches!(d, Diagnostic::LinkManualNotHonored { successor, .. } if !pins.contains(successor)),
+        )
+        .collect();
+    assert!(broken.is_empty(), "dates au plus tôt : {broken:?}");
+    assert!(
+        e.project_start >= s.project_start,
+        "dates au plus tôt : début calculé"
+    );
+    if floor_closure(p).is_empty() {
+        assert_eq!(
+            e.project_start, s.project_start,
+            "dates au plus tôt : début calculé"
+        );
+    }
+}
+
+/// P16b : à rebours, allonger une feuille ne retarde jamais le début calculé
+/// `S*` (R-107).
+fn p16b(p: &Project, seed: u64) {
+    let s = schedule(p);
+    let par = parents(p);
+    let mut r = Rng(seed.rotate_left(29) | 1);
+    let leaves: Vec<usize> = (0..p.tasks.len()).filter(|&q| !is_summary(&par, q)).collect();
+    let q = leaves[usize::try_from(r.range(0, i64::try_from(leaves.len()).unwrap() - 1)).unwrap()];
+    let mut longer = p.clone();
+    let uid = p.tasks.at(q).unwrap().uid();
+    let t = longer.tasks.get_mut(uid).unwrap();
+    let d = t.duration;
+    t.duration = Duration::new(
+        Minutes::new(d.minutes().get() + r.range(1, 2_400)),
+        d.unit(),
+        d.basis(),
+        d.is_estimated(),
+    )
+    .unwrap();
+    let s2 = schedule(&longer);
+    assert!(
+        s2.project_start <= s.project_start,
+        "allonger {uid} retarde le début calculé : {} > {}",
+        s2.project_start,
+        s.project_start
+    );
+}
+
+/// Réseau de P23 : forme `SYMMETRIC`, décalages en % convertis en minutes
+/// (durée du prédécesseur), sans échéance ; option « plusieurs chemins
+/// critiques » tirée.
+fn symmetric(seed: u64) -> Project {
+    let mut p = generate(seed, FLAT_CONSTRAINED_NO_MILESTONE);
+    let mut r = Rng(seed.rotate_left(7) | 1);
+    p.options.multiple_critical_paths = r.chance(30);
+    let durations: BTreeMap<TaskUid, Minutes> =
+        p.tasks.iter().map(|t| (t.uid(), t.duration.minutes())).collect();
+    for uid in p.tasks.iter().map(Task::uid).collect::<Vec<_>>() {
+        let t = p.tasks.get_mut(uid).unwrap();
+        t.deadline = None;
+        for l in &mut t.predecessors {
+            if let LagValue::Percent { percent } = l.lag.value {
+                let minutes = percent_of(durations[&l.predecessor], percent).unwrap();
+                l.lag = Lag::new(
+                    l.lag.basis,
+                    LagValue::Time {
+                        minutes,
+                        unit: DurationUnit::Day,
+                    },
+                )
+                .unwrap();
+            }
+        }
+    }
+    p
+}
+
+/// P23 : symétrie avant/arrière (ADR-0010, R-106 à R-110). Réseau plat, un
+/// calendrier, décalages ouvrés, sans jalon, sans %, sans échéance : `N`
+/// planifié depuis son début `s`, son miroir `N^R` à rebours depuis `F'`
+/// (liens retournés : FS → FS, SS → FF, FF → SS, SF → SF, même décalage ;
+/// contraintes ASAP ↔ ALAP, SNET ↔ FNLT, FNET ↔ SNLT, MSO ↔ MFO, dates
+/// miroir en temps ouvré ; même option, même R-051). Avec
+/// `u(t) = W(t) − W(s)` et `v(t) = W(F') − W(t)` : `u(ES) = v(LF^R)`,
+/// `u(EF) = v(LS^R)`, `u(LS) = v(EF^R)`, `u(LF) = v(ES^R)`, mêmes marges
+/// totales, mêmes tâches critiques, `u(fin de N) = v(S*)`.
+fn p23(seed: u64) {
+    let n = symmetric(seed);
+    let (set, _) = CalendarSet::compile(&n);
+    let cal = set.get(n.calendar).unwrap();
+    let origin: Moment = "2025-01-01T00:00".parse().unwrap();
+    let w = |m: Moment| cal.working_between(origin, m).unwrap().get();
+    let ScheduleAnchor::FromStart(s0) = n.anchor else {
+        panic!("ancre")
+    };
+    let mut r = Rng(seed.rotate_left(13) | 1);
+    let f0 = s0
+        .checked_add(Minutes::new(r.range(0, 90) * 1_440 + r.range(0, 1_439)))
+        .unwrap();
+    // Date miroir : W(c') = W(F') + W(s) − W(c).
+    let mirror = |c: Moment| {
+        let d = w(c) - w(s0);
+        cal.add_working(f0, Minutes::new(-d)).unwrap()
+    };
+    p23_check(&n, f0, &mirror);
+}
+
+/// P23b : cas concret de P23 sur le calendrier Standard sans exception,
+/// symétrique autour du mercredi 12:30 (lun 08:00 ↔ ven 17:00) : `N` depuis
+/// lun 19/10/2026 08:00, `N^R` à rebours depuis ven 23/10 17:00, dates
+/// miroir brutes `t' = 2c − t` (c = mer 21/10 12:30), comparées en temps
+/// ouvré.
+fn p23b(seed: u64) {
+    let mut n = symmetric(seed);
+    let s0: Moment = "2026-10-19T08:00".parse().unwrap();
+    let c: Moment = "2026-10-21T12:30".parse().unwrap();
+    n.anchor = ScheduleAnchor::FromStart(s0);
+    n.calendar = CalendarUid::new(1);
+    let mirror = |t: Moment| Moment::from_minutes(2 * c.minutes() - t.minutes()).unwrap();
+    p23_check(&n, mirror(s0), &mirror);
+}
+
+/// Contrôle commun de P23 et P23b : `N` (depuis le début) et son miroir
+/// `N^R` à rebours depuis `f0`, dates de contrainte par `mirror`.
+fn p23_check(n: &Project, f0: Moment, mirror: &dyn Fn(Moment) -> Moment) {
+    let (set, _) = CalendarSet::compile(n);
+    let cal = set.get(n.calendar).unwrap();
+    let origin: Moment = "2025-01-01T00:00".parse().unwrap();
+    let w = |m: Moment| cal.working_between(origin, m).unwrap().get();
+    let ScheduleAnchor::FromStart(s0) = n.anchor else {
+        panic!("ancre")
+    };
+    let mut m = n.clone();
+    m.anchor = ScheduleAnchor::FromFinish(f0);
+    for t in m.tasks.iter().map(Task::uid).collect::<Vec<_>>() {
+        m.tasks.get_mut(t).unwrap().predecessors.clear();
+    }
+    for t in &n.tasks {
+        for l in &t.predecessors {
+            let kind = match l.kind {
+                LinkType::FinishToStart => LinkType::FinishToStart,
+                LinkType::StartToStart => LinkType::FinishToFinish,
+                LinkType::FinishToFinish => LinkType::StartToStart,
+                LinkType::StartToFinish => LinkType::StartToFinish,
+            };
+            m.tasks.get_mut(l.predecessor).unwrap().predecessors.push(Link {
+                predecessor: t.uid(),
+                kind,
+                lag: l.lag,
+            });
+        }
+        let c = match t.constraint {
+            Constraint::AsSoonAsPossible => Constraint::AsLateAsPossible,
+            Constraint::AsLateAsPossible => Constraint::AsSoonAsPossible,
+            Constraint::StartNoEarlierThan { date } => Constraint::FinishNoLaterThan { date: mirror(date) },
+            Constraint::FinishNoLaterThan { date } => Constraint::StartNoEarlierThan { date: mirror(date) },
+            Constraint::FinishNoEarlierThan { date } => Constraint::StartNoLaterThan { date: mirror(date) },
+            Constraint::StartNoLaterThan { date } => Constraint::FinishNoEarlierThan { date: mirror(date) },
+            Constraint::MustStartOn { date } => Constraint::MustFinishOn { date: mirror(date) },
+            Constraint::MustFinishOn { date } => Constraint::MustStartOn { date: mirror(date) },
+        };
+        m.tasks.get_mut(t.uid()).unwrap().constraint = c;
+    }
+    let a = schedule(n);
+    let b = schedule(&m);
+    let u = |t: Moment| w(t) - w(s0);
+    let v = |t: Moment| w(f0) - w(t);
+    for t in &n.tasks {
+        let x = a.scheduled(t.uid()).unwrap();
+        let y = b.scheduled(t.uid()).unwrap();
+        let got = (
+            u(x.early.start),
+            u(x.early.finish),
+            u(x.late.start),
+            u(x.late.finish),
+        );
+        let want = (
+            v(y.late.finish),
+            v(y.late.start),
+            v(y.early.finish),
+            v(y.early.start),
+        );
+        assert_eq!(got, want, "tâche {} (ES, EF, LS, LF)", t.uid());
+        assert_eq!(x.total_slack, y.total_slack, "tâche {} : TF", t.uid());
+        assert_eq!(x.critical, y.critical, "tâche {} : critique", t.uid());
+    }
+    assert_eq!(u(a.project_finish), v(b.project_start), "fin ↔ début calculé");
 }
 
 // ---------------------------------------------------------------------------
@@ -1754,23 +2193,10 @@ fn check_cycles(p: &Project, s: &Schedule) {
 fn p17(p: &Project) {
     let s = schedule(p);
     check_shape(p, &s);
-    if matches!(p.anchor, ScheduleAnchor::FromFinish(_)) {
-        // À rebours (R-106) : dates cohérentes, dates planifiées = au plus
-        // tard (contrôles complets : P13 à rebours).
-        for (uid, o) in &s.tasks {
-            if let TaskOutcome::Scheduled(ts) = o {
-                assert!(ts.late.start <= ts.late.finish, "{uid}");
-                if !ts.degraded {
-                    assert!(ts.early.start <= ts.early.finish, "{uid}");
-                }
-                assert_eq!((ts.start, ts.finish), (ts.late.start, ts.late.finish), "{uid}");
-            }
-        }
-        return;
-    }
     for (uid, o) in &s.tasks {
         if let TaskOutcome::Scheduled(ts) = o {
             assert!(ts.early.start <= ts.early.finish, "{uid}");
+            assert!(ts.late.start <= ts.late.finish, "{uid}");
         }
     }
     if p.tasks.iter().all(|t| t.outline_level.get() == 1) {
@@ -1796,6 +2222,11 @@ proptest! {
     #[test]
     fn p14_zero_slack_chain(seed in any::<u64>()) {
         p14(&generate(seed, FLAT));
+    }
+
+    #[test]
+    fn p13_from_finish_composite(seed in any::<u64>()) {
+        p13_from_finish(&generate_from_finish(seed, CONSTRAINED));
     }
 }
 
@@ -1831,6 +2262,21 @@ proptest! {
     fn p22_alap_on_late_dates(seed in any::<u64>()) {
         p22(&generate(seed, CONSTRAINED));
     }
+
+    #[test]
+    fn p16b_computed_start_is_monotonic(seed in any::<u64>()) {
+        p16b(&generate_from_finish(seed, MONOTONE_FROM_FINISH), seed);
+    }
+
+    #[test]
+    fn p23_forward_backward_symmetry(seed in any::<u64>()) {
+        p23(seed);
+    }
+
+    #[test]
+    fn p23b_standard_calendar_raw_mirror(seed in any::<u64>()) {
+        p23b(seed);
+    }
 }
 
 proptest! {
@@ -1838,7 +2284,7 @@ proptest! {
 
     #[test]
     fn p17_chaos(seed in any::<u64>()) {
-        p17(&chaos(seed));
+        p17(&chaos(seed, seed % 2 == 1));
     }
 }
 
@@ -1851,10 +2297,16 @@ fn fixed_seeds() {
         p14(&generate(seed, FLAT));
         p15(&generate(seed, FLAT_NO_MILESTONE));
         p16(&generate(seed, MONOTONE), seed);
-        p17(&chaos(seed));
+        p17(&chaos(seed, seed % 2 == 1));
         p20(&generate(seed, CONSTRAINED));
         p21(&generate(seed, FLAT_CONSTRAINED_NO_MILESTONE));
         p22(&generate(seed, CONSTRAINED));
+        p13_from_finish(&generate_from_finish(seed, GENERAL));
+        p13_from_finish(&generate_from_finish(seed, CONSTRAINED));
+        p16b(&generate_from_finish(seed, MONOTONE_FROM_FINISH), seed);
+        p17(&chaos(seed, true));
+        p23(seed);
+        p23b(seed);
     }
 }
 
@@ -1864,12 +2316,12 @@ fn p17_regressions() {
     // Lien FS dont le transfert sort du domaine (début du projet en 2149)
     // vers une récapitulative : la porte échoue (R-069) ; le prédécesseur
     // avait une marge libre négative tant que l'arc comptait encore.
-    p17(&chaos(10_145_788_266_605_795_041));
+    p17(&chaos(10_145_788_266_605_795_041, false));
     // Porte d'une sous-récapitulative en échec : ses sous-tâches, planifiées
     // sans la porte du parent, faussaient la marge libre des prédécesseurs du
     // parent (dates au plus tard de repli depuis, `degraded`).
-    p17(&chaos(40_512_168_739_394_516));
+    p17(&chaos(40_512_168_739_394_516, false));
     // Lien FF vers une tâche qui finit sur son dernier temps ouvré avant la
     // fin du domaine : l'ancre reportée (R-047) est la fin du domaine.
-    p17(&chaos(16_281_757_938_398_638_621));
+    p17(&chaos(16_281_757_938_398_638_621, false));
 }

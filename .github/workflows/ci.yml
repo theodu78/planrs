@@ -104,8 +104,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # Trois cas (grand réseau, contraint, à rebours, spécification J3
+      # § 9.2), mesurés l'un après l'autre : en parallèle, ils se
+      # perturberaient.
       - name: Budget 50 ms
-        run: cargo test -p planrs-tests --release --test perf -- --ignored --nocapture
+        run: cargo test -p planrs-tests --release --test perf -- --ignored --nocapture --test-threads=1
 
       # Lecture MSPDI : coût linéaire des liens (surcoût < 1 s pour une tâche
       # à 199 999 prédécesseurs) ; médiane de 5 000 tâches, informative.

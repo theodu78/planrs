@@ -29,3 +29,21 @@ Sources citées (pages Microsoft uniquement ; « Q » = Microsoft Q&A, communaut
 - **Source** : support.microsoft.com, « Specifications for Microsoft Project » (S11 : unités ≤ 60 000 000, coût ≤ 999 999 999 999,99), ADR-0005 ; borne du décalage en % : hypothèse.
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r002_fixed_point_quantities.rs` (`r002_*`).
+
+## R-003 — Domaine des dates et résolution à la minute
+- **Formulation** : un instant est un nombre entier de minutes depuis 1984-01-01 00:00, dans [1984-01-01 00:00 ; 2150-01-01 00:00]. Cette dernière valeur est la fin du 31/12/2149 (24:00). Hors domaine : `TimeError::OutOfDomain`. Exemples : 2026-10-19T08:00 = 22 510 560 ; 1983-12-31T23:59 refusé ; 2150-01-01T00:00 accepté (= `Moment::MAX` = 87 308 640) ; 2150-01-01T00:01 refusé ; le jour 0 est un dimanche ; `Day::MAX` = 2149-12-31, un mercredi.
+- **Source** : support.microsoft.com, « Specifications for Microsoft Project » (S11 : dates du 1er janvier 1984 au 31 décembre 2149).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r003_date_domain.rs` (`r003_*`) ; conversion exhaustive des 60 631 jours contre chrono dans `crates/planrs-core/src/time.rs`.
+
+## R-004 — Secondes tronquées à l'import
+- **Formulation** : `Moment::from_naive_floor` tronque les secondes (plancher) et signale la troncature ; `Moment::from_naive` (saisie stricte) refuse des secondes non nulles (`NonZeroSeconds`). Exemples : 2026-10-19T08:00:30 → 08:00, troncature signalée ; 08:00:59 → 08:00 ; 08:00:00 → 08:00 sans signal ; `from_naive(08:00:30)` → `NonZeroSeconds`.
+- **Source** : hypothèse (MS Project affiche à la minute).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r004_seconds_truncated.rs` (`r004_*`).
+
+## R-005 — Heure locale sans fuseau ni heure d'été
+- **Formulation** : chaque jour dure 1 440 minutes ; aucun fuseau, aucun changement d'heure. Exemples : `Moment(2026-03-30 00:00) − Moment(2026-03-29 00:00)` = 1 440 (jour du passage à l'heure d'été en France) ; sur le calendrier 24 heures, `working_between(2026-03-29 00:00, 2026-03-30 00:00)` = 1 440.
+- **Source** : brief § 3 ; hypothèse pour MS Project.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r005_local_time_no_dst.rs` (`r005_*`), partie temps civil ; le cas sur le calendrier 24 heures s'ajoute avec les conversions ouvrées.

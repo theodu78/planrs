@@ -17,6 +17,9 @@
 // Modules des règles, un par fichier, dans l'ordre des identifiants.
 mod r001_rounding_half_away_from_zero;
 mod r002_fixed_point_quantities;
+mod r003_date_domain;
+mod r004_seconds_truncated;
+mod r005_local_time_no_dst;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

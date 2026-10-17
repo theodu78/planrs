@@ -17,6 +17,8 @@
 //! État : jalon J1 en cours (ADR-0008). Modules :
 //! - [`fixed`] : arrondi unique (R-001) et décimal exact ;
 //! - [`quantity`] : unités, pourcentages et coûts en point fixe (R-002) ;
+//! - [`time`] : instants à la minute, jours, heures, semaines (R-003 à R-005) ;
+//! - [`duration`] : minutes, durées, travail, décalages ;
 //! - [`error`] : erreurs typées, codes stables.
 
 #![deny(
@@ -26,14 +28,18 @@
     clippy::dbg_macro
 )]
 
+pub mod duration;
 pub mod error;
 pub mod fixed;
 pub mod parity;
 pub mod quantity;
+pub mod time;
 
-pub use error::FixedError;
+pub use duration::Minutes;
+pub use error::{FixedError, TimeError};
 pub use fixed::{Decimal, round_div};
 pub use quantity::{Money, Percent, Rate, RateUnit, SignedPercent, Units};
+pub use time::{Day, DayRange, Moment, Month, TimeOfDay, Week, Weekday};
 
 /// Nom affiché du produit.
 ///

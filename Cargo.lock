@@ -2847,6 +2847,7 @@ dependencies = [
 name = "planrs-tests"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "planrs-core",
  "serde",
  "toml",

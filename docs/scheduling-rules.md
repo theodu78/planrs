@@ -386,7 +386,7 @@ Le moteur (`planrs_core::schedule`, ADR-0009) calcule un `Schedule` hors du mod�
 ## R-045 — Fin du projet
 - **Formulation** : max des fins au plus tôt des feuilles actives planifiées (manuelles comprises, inactives exclues) et des récapitulatives manuelles datées (R-064) ; sans tâche planifiée : début du projet brut. Précision J3 (ADR-0010) : c'est le max des fins seulement, même s'il précède le début du projet (tâche manuelle, contrainte dure respectée avant lui, R-105) ; en J2 le calcul partait du début du projet. Exemple : M manuelle ven 16/10 08:00 – 17:00 seule, début lun 19/10 → fin du projet ven 16/10 17:00. À rebours (R-106), la fin du projet n'est pas calculée : c'est l'ancre `F` telle que saisie (brute), et le début du projet est calculé (R-107). Exemples : réseau N1 (A 1 j ; B 2 j ; C 1 j FS de A et de B ; D 1 j seul) → mer 21/10 17:00 ; projet vide commençant sam 17/10 10:00 → sam 17/10 10:00.
 - **Source** : S22, S16 ; projet vide : hypothèse.
-- **Statut** : `vérifié contre MS Project` (corpus A1 UID 0, A2 UID 0 : fin de la récapitulative du projet) ; projet vide : `hypothèse`.
+- **Statut** : `vérifié contre MS Project` (corpus A1 UID 0, A2 UID 0, A4 UID 0 : fin de la récapitulative du projet) ; projet vide : `hypothèse`.
 - **Tests** : `tests/rules/r045_project_finish.rs` (`r045_*`, dont `r045_finish_before_the_project_start`) ; à rebours : `tests/rules/r106_schedule_from_finish.rs`, `tests/rules/r107_from_finish_project_start.rs`.
 
 ## R-046 — Fin au plus tard sans successeur
@@ -416,7 +416,7 @@ Le moteur (`planrs_core::schedule`, ADR-0009) calcule un `Schedule` hors du mod�
 ## R-050 — Critique
 - **Formulation** : une tâche est critique si `TF ≤ critical_slack_limit_days × minutes_per_day` (option `CriticalSlackLimit`, 0 par défaut) ; une marge négative (contrainte, échéance, R-101) est critique. Exemples : N2, seuil 0 : B et C critiques ; seuil 1 j (480) : A, E, B, C critiques.
 - **Source** : support.microsoft.com, « Critical fields » (S19), « Manage your project's critical path » (S20) ; schéma (S2) ; Q5 (seuil en durée : 1 j = 8 h).
-- **Statut** : `vérifié contre MS Project` au seuil 0 (corpus A1, A2, A4 : 91 cas, `CriticalSlackLimit` 0 partout) ; seuil > 0 : `hypothèse`.
+- **Statut** : `vérifié contre MS Project` au seuil 0 (corpus A1, A2, A4, A7 : 119 cas, `CriticalSlackLimit` 0 partout) ; seuil > 0 : `hypothèse`.
 - **Tests** : `tests/rules/r050_critical_threshold.rs` (`r050_*`) ; marge négative critique : `tests/rules/r101_negative_slack.rs`, `tests/rules/r095_start_no_later_than.rs`.
 
 ## R-051 — Plusieurs chemins critiques
@@ -434,7 +434,7 @@ Le moteur (`planrs_core::schedule`, ADR-0009) calcule un `Schedule` hors du mod�
 ## R-053 — Dates d'une récapitulative
 - **Formulation** : début = min des ES, fin = max des EF de ses enfants actifs planifiés (manuels compris, inactifs exclus) ; aucun enfant planifié → `Excluded { EmptySummary }`, et les liens qui la touchent sont ignorés (`link.excluded_endpoint`). En J2, dates planifiées = dates au plus tôt. Exemples : S {A 2 j ; B FS de A 1 j} → lun 19/10 08:00 – mer 21/10 17:00 ; S {A 1 j ; M manuelle jeu 22/10 – ven 23/10} → lun – ven ; S {A 1 j, I inactive 3 j} → lun 08:00 – 17:00 ; S {I inactive} → `EmptySummary`. Amendement J3 (R-112) : ce sont aussi ses dates planifiées depuis le début, épingles des tâches ALAP comprises (enveloppe recalculée en repasse, R-092) ; à rebours, ses dates planifiées sont ses dates au plus tard (R-060, enveloppe des dates planifiées de ses enfants).
 - **Source** : support.microsoft.com, « Indent or outdent tasks… » (S23), « How Project schedules tasks: Behind the scenes » (S8) ; observé O3 (A1 UID 108) ; inactifs : S25.
-- **Statut** : `vérifié contre MS Project` (corpus A1 UID 1, 2, 3, 5, 17, 18 : 17 récapitulatives identiques) ; récapitulative vide et sous-tâches manuelles : `hypothèse`.
+- **Statut** : `vérifié contre MS Project` (corpus A1 UID 1, 2, 3, 5, 17, 18 : 17 récapitulatives identiques ; A4 UID 1, 5, 8, 12 … 36 : 11 récapitulatives, depuis R-113) ; récapitulative vide et sous-tâches manuelles : `hypothèse`.
 - **Tests** : `tests/rules/r053_summary_dates.rs` (`r053_*`) ; dates planifiées avec une épingle : `tests/rules/r112_summary_scheduled_dates.rs`.
 
 ## R-054 — Durée d'une récapitulative
@@ -476,7 +476,7 @@ Le moteur (`planrs_core::schedule`, ADR-0009) calcule un `Schedule` hors du mod�
 ## R-060 — Dates au plus tard, marges et critique d'une récapitulative
 - **Formulation** : LS = min des LS, LF = max des LF de ses enfants actifs ; TF = `min(between(ES, LS), between(EF, LF))` sur ces dates agrégées et le calendrier de la récapitulative, sinon du projet ; marge libre par R-049 (sans lien sortant propre ni hérité : FS = TF) ; critique par R-050 seulement, jamais « parce qu'un enfant l'est ». Exemples : P 1 j (lun) ; S {A 1 j sans lien, B 1 j FS de P} ; Q 1 j FS de B → B mar, Q mer, fin du projet mer 17:00 ; A TF 960 ; B TF 0, critique ; S : ES lun 08:00, EF mar 17:00, LS mar 08:00, LF mer 17:00 → TF(S) = FS(S) = 480, non critique malgré B (critique au seuil 1 j). S {A 1 j, B 2 j} FS → Y ; Z 4 j seule : TF(S) = 480, FS(S) = 0 (écart à Y).
 - **Source** : observé O3 (A1 UID 108 : TF 105 600 dixièmes, `Critical` 0 alors que l'enfant UID 110 est critique), O4 (A1 UID 17, 18, 53, 54, 105 : FS = TF sans lien sortant), O5 (A6 UID 10, 12, 14 : FS avec lien sortant) ; reste : hypothèse.
-- **Statut** : `vérifié contre MS Project` (corpus A1 UID 1, 2, 3, 5, 17, 18 : 17 récapitulatives, dont O3, UID 108, et O4, UID 17, 18, 53, 54, 105) ; récapitulative avec lien sortant (O5) : `hypothèse` (A6 diverge pour d'autres causes).
+- **Statut** : `vérifié contre MS Project` (corpus A1 UID 1, 2, 3, 5, 17, 18 : 17 récapitulatives, dont O3, UID 108, et O4, UID 17, 18, 53, 54, 105 ; A4 : 11 récapitulatives, dont UID 19, 23, 33 à marge > 0, depuis R-113) ; récapitulative avec lien sortant (O5) : `hypothèse` (A6 diverge pour d'autres causes).
 - **Tests** : `tests/rules/r060_summary_slack_and_critical.rs` (`r060_*`).
 
 ## R-061 — Jalon et durée nulle dans le réseau
@@ -770,13 +770,13 @@ Bloc réservé à la lecture MSPDI (`planrs-mspdi`) ; l'écriture a son propre b
 ## R-083 — Valeurs enregistrées, marges en dixièmes
 - **Formulation** : `Start`, `Finish`, `EarlyStart`, `EarlyFinish`, `LateStart`, `LateFinish`, `TotalSlack`, `FreeSlack`, `StartSlack`, `FinishSlack` (amendement J3 : réécrits tels quels avec `Computed::Recorded`, R-122), `Critical`, `Summary`, `Duration`, `LevelingDelay` de chaque tâche (UID 0 compris) vont dans `RecordedSchedule`, jamais dans le `Project` ; marges et `LevelingDelay` lues en `Tenths` sans arrondi (la comparaison du corpus se fait en dixièmes, moteur × 10) ; `LevelingDelay` ≠ 0 → `mspdi.unsupported` (`leveling_delay`, J5), jamais appliqué ; affectations comptées par `TaskUID` parmi les affectations lues (R-088 ; `TaskUID` inconnu : affectation ignorée, `mspdi.dangling_reference`). Exemples : 9 600 = 960 min ; 43 200 = 4 320 min ; 768 = 76,8 min, gardé tel quel.
 - **Source** : learn.microsoft.com, « TotalSlack Element », « FreeSlack Element » (dixièmes de minute, S4) ; observé O2 (345 600 = 72 j).
-- **Statut** : `vérifié contre MS Project` (corpus A1, A2, A4 : 91 cas dont `TotalSlack` et `FreeSlack` égaux au moteur × 10, par exemple A2 UID 2 : 345 600).
+- **Statut** : `vérifié contre MS Project` (corpus A1, A2, A4, A7 : 119 cas dont `TotalSlack` et `FreeSlack` égaux au moteur × 10, par exemple A2 UID 2 : 345 600 ; A4 UID 14 : `FreeSlack` 1 200).
 - **Tests** : `tests/rules/r083_recorded_slack_tenths.rs` (`r083_*`, dont `r083_start_and_finish_slack_are_recorded`) ; propriété P19 « pas de fuite » dans `crates/planrs-mspdi/tests/no_leak.rs`.
 
 ## R-084 — Récapitulative du projet, ordre et identité des tâches
 - **Formulation** : UID 0 (`OutlineLevel 0`) → `summary_task`, au premier niveau du modèle ; ordre des tâches = ordre du document (l'ID se déduit de la position) ; `ID` ≠ position → `mspdi.inconsistent` ; `OutlineLevel` absent → 1 ; `OutlineLevel 0` hors UID 0 → 1 et `mspdi.inconsistent` ; drapeau `Summary` contraire à la hiérarchie (R-052) → `mspdi.inconsistent` ; `IsNull 1` → ligne vide ; UID absent, négatif ou en double → tâche ignorée et signalée. Exemple : fixture de 11 lignes dont 5 `IsNull` → ID 1 à 11, 6 tâches calculées.
 - **Source** : learn.microsoft.com, « Task Element » (S4) ; ADR-0008.
-- **Statut** : `vérifié contre MS Project` pour la récapitulative du projet (corpus A1 UID 0, A2 UID 0) ; ordre, `ID` et lignes vides : `hypothèse`.
+- **Statut** : `vérifié contre MS Project` pour la récapitulative du projet (corpus A1 UID 0, A2 UID 0, A4 UID 0) ; ordre, `ID` et lignes vides : `hypothèse`.
 - **Tests** : `tests/rules/r084_project_summary_and_task_identity.rs` (`r084_*`), fixture `tests/fixtures/mspdi/null_rows.xml`.
 
 ## R-085 — Tâches manuelles

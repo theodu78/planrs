@@ -11,6 +11,12 @@ repository.workspace = true
 planrs-core.workspace = true
 planrs-mspdi.workspace = true
 planrs-render.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

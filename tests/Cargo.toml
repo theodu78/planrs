@@ -48,6 +48,7 @@ harness = false
 
 [dependencies]
 chrono.workspace = true
+planrs-automation.workspace = true
 planrs-core.workspace = true
 planrs-mspdi.workspace = true
 quick-xml.workspace = true

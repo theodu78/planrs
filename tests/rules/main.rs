@@ -134,6 +134,8 @@ mod r130_required_elements;
 mod r131_strings_write;
 mod r132_constraints_write;
 mod r133_normalize;
+mod r140_duration_text_parse;
+mod r141_duration_text_format;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

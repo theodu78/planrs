@@ -3,13 +3,15 @@
 //!
 //! Récapitulatives : dates (R-053, agrégat de la passe avant), durée
 //! (R-054), % achevé (R-055), dates au plus tard agrégées (R-060, dans
-//! `backward.rs`), récapitulative manuelle datée (R-064). Reste : la
-//! récapitulative du projet (R-068).
+//! `backward.rs`), récapitulative manuelle datée (R-064), récapitulative du
+//! projet (R-068).
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 
-use super::network::{NodeIx, NodeKind, Role, Status, TaskInfo, pos};
-use super::{Calc, Exclusion, Schedule, TaskOutcome, TaskRole, TaskSchedule};
+use super::network::{NodeIx, NodeKind, PROJECT, Role, Status, TaskInfo, pos};
+use super::{Calc, Driver, Exclusion, Schedule, TaskOutcome, TaskRole, TaskSchedule};
+use crate::calendar::Span;
 use crate::diagnostic::Diagnostic;
 use crate::duration::Minutes;
 use crate::fixed::round_div;
@@ -45,15 +47,68 @@ impl Calc<'_, '_> {
                 sorted.push(node.uid);
             }
         }
+        let project_summary = self.project_summary(&tasks);
         Schedule {
             project_start: self.start,
             project_finish: self.finish,
-            // R-068 : agent des récapitulatives.
-            project_summary: None,
+            project_summary,
             tasks,
             order: sorted,
             diagnostics: self.diags.finish(),
         }
+    }
+
+    /// R-068 : récapitulative du projet (UID 0), agrégat des tâches actives
+    /// planifiées de premier niveau (R-053, R-054, R-055, R-060) sur le
+    /// calendrier du projet ; sans lien, sa marge libre égale sa marge
+    /// totale. `None` si aucune tâche n'est planifiée.
+    fn project_summary(&self, tasks: &BTreeMap<crate::ids::TaskUid, TaskOutcome>) -> Option<TaskSchedule> {
+        let (mut early, mut late, mut degraded): (Option<Span>, Option<Span>, bool) = (None, None, false);
+        let hull = |a: Option<Span>, b: Span| {
+            Some(a.map_or(b, |a| Span {
+                start: a.start.min(b.start),
+                finish: a.finish.max(b.finish),
+            }))
+        };
+        for info in &self.net.tasks {
+            if info.parent.is_some() || info.role == Role::Null || info.inactive() {
+                continue;
+            }
+            let Some(TaskOutcome::Scheduled(ts)) = tasks.get(&info.uid) else {
+                continue;
+            };
+            early = hull(early, ts.early);
+            late = hull(late, ts.late);
+            degraded |= ts.degraded;
+        }
+        let (early, late) = (early?, late?);
+        let scale = self.net.scale(PROJECT);
+        let between = |a, b| scale.and_then(|s| s.between(a, b).ok());
+        let duration = between(early.start, early.finish);
+        let tf = match (
+            between(early.start, late.start),
+            between(early.finish, late.finish),
+        ) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            _ => None,
+        };
+        degraded |= duration.is_none() || tf.is_none();
+        let tf = tf.unwrap_or(Minutes::ZERO);
+        Some(TaskSchedule {
+            role: TaskRole::Summary,
+            manual: false,
+            start: early.start,
+            finish: early.finish,
+            early,
+            late,
+            duration: duration.unwrap_or(Minutes::ZERO),
+            total_slack: tf,
+            free_slack: tf,
+            critical: tf <= self.critical_limit(),
+            percent_complete: self.percent_over(0..self.net.tasks.len()),
+            driver: Driver::Rollup,
+            degraded,
+        })
     }
 
     /// Liens vers une récapitulative sans enfant planifié (R-053) :
@@ -146,7 +201,7 @@ impl Calc<'_, '_> {
                 TaskRole::Summary,
                 fixed,
                 duration.unwrap_or(Minutes::ZERO),
-                self.summary_percent(p, info),
+                self.percent_over(p.saturating_add(1)..info.end),
             )
         } else {
             (
@@ -178,10 +233,11 @@ impl Calc<'_, '_> {
     /// actives planifiées (récapitulatives intermédiaires exclues), réel =
     /// durée × % (R-010) ; Σ durée nulle : moyenne arrondie des % ; aucune
     /// feuille : 0.
-    fn summary_percent(&self, p: usize, info: &TaskInfo) -> Percent {
+    /// Feuilles des positions `range` (le sous-arbre d'une récapitulative,
+    /// ou tout le projet pour la récapitulative du projet, R-068).
+    fn percent_over(&self, range: Range<usize>) -> Percent {
         let (mut actual, mut total, mut pct_sum, mut count) = (0i128, 0i128, 0i128, 0i128);
-        let first = p.saturating_add(1);
-        for q in first..info.end {
+        for q in range {
             let (Some(leaf), Some(task)) = (self.net.task(q), self.project.tasks.at(q)) else {
                 continue;
             };

@@ -495,6 +495,12 @@ Le moteur (`planrs_core::schedule`, ADR-0009) calcule un `Schedule` hors du mod�
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r067_elapsed_duration_task.rs` (`r067_*`).
 
+## R-068 — Récapitulative du projet (UID 0)
+- **Formulation** : `Schedule::project_summary` (aussi lue par `scheduled(UID 0)`) agrège les tâches actives planifiées de premier niveau : début = min ES, fin = max EF (R-053), dates au plus tard min LS / max LF (R-060), durée et marges sur le calendrier du projet (R-054, R-060), marge libre = marge totale (aucun lien), critique par le seuil (R-050), % achevé sur toutes les feuilles actives planifiées (R-055), pilote `Rollup`. Absente si aucune tâche n'est planifiée. Elle n'apparaît pas dans `Schedule::tasks` ni dans `critical()`. Exemples : N1 → lun 19/10 08:00 – mer 21/10 17:00, durée 1 440, TF 0, critique ; S {A 960 à 50 %, B 480}, C 240 à 100 %, I inactive → fin mar 20/10 17:00, % 4 286.
+- **Source** : S8, S23 ; observé A1 à A7 (UID 0, `OutlineLevel` 0).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r068_project_summary.rs` (`r068_*`).
+
 ## R-069 — Conversion impossible
 - **Formulation** : une conversion qui échoue en passe avant (hors domaine, calendrier sans temps ouvré) exclut la tâche (`Excluded { Unschedulable }`, `task.unschedulable { pass: Forward, cause }`, `cause` = code de l'erreur) ; ses liens sortants sont ignorés (`link.excluded_endpoint`) et ses successeurs, planifiés sans eux, ont `degraded = true` (transitif). En passe arrière : `late = early`, `degraded`, `task.unschedulable { pass: Backward }`. Un invariant interne violé donne `schedule.internal`. Exemple : début mer 31/12/2149 08:00 ; A 2 j → `calendar.out_of_domain` → non planifiable ; B FS de A 1 j → mer 08:00 – 17:00, dégradée ; C FS de B, dégradée.
 - **Source** : hypothèse (règle 10).

@@ -82,6 +82,7 @@ mod r064_manual_summary;
 mod r065_link_cycle;
 mod r066_task_calendar_fallback;
 mod r067_elapsed_duration_task;
+mod r068_project_summary;
 mod r069_unschedulable_task;
 mod r070_iso_duration;
 mod r071_duration_format;

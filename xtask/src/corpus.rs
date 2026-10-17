@@ -155,11 +155,12 @@ fn check(entry: &Entry, bytes: &[u8]) -> Result<(), String> {
 }
 
 /// Traite une entrée : rien si le fichier est déjà bon, sinon essaie chaque
-/// adresse avec `download(url, destination)`.
+/// adresse avec `download(url, destination, taille attendue)`. Un fichier
+/// téléchargé plus gros que prévu est refusé avant d'être lu en mémoire.
 fn process(
     entry: &Entry,
     files: &Path,
-    download: &mut dyn FnMut(&str, &Path) -> Result<(), String>,
+    download: &mut dyn FnMut(&str, &Path, u64) -> Result<(), String>,
 ) -> Outcome {
     let target = files.join(&entry.name);
     if let Ok(bytes) = std::fs::read(&target)
@@ -172,7 +173,8 @@ fn process(
     for url in std::iter::once(&entry.url).chain(entry.mirrors.iter()) {
         let _ = std::fs::remove_file(&part);
         let attempt = if url.starts_with("https://") {
-            download(url, &part)
+            download(url, &part, entry.size)
+                .and_then(|()| not_larger(&part, entry.size))
                 .and_then(|()| std::fs::read(&part).map_err(|e| e.to_string()))
                 .and_then(|bytes| check(entry, &bytes))
                 .and_then(|()| std::fs::rename(&part, &target).map_err(|e| e.to_string()))
@@ -188,9 +190,21 @@ fn process(
     Outcome::Absent(reasons.join(" ; "))
 }
 
+/// Taille du fichier `path` au plus `max` octets, vérifiée sur ses
+/// métadonnées (sans le lire).
+fn not_larger(path: &Path, max: u64) -> Result<(), String> {
+    let size = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+    if size > max {
+        return Err(format!("taille {size} octets, attendu {max}"));
+    }
+    Ok(())
+}
+
 /// Téléchargement par `curl` (échec HTTP = erreur, redirections suivies,
-/// 60 s au plus, deux nouvelles tentatives).
-fn download_with_curl(url: &str, destination: &Path) -> Result<(), String> {
+/// 60 s au plus, deux nouvelles tentatives, `--max-filesize` à la taille du
+/// manifeste : un serveur ou un miroir compromis ne peut pas servir un
+/// fichier énorme).
+fn download_with_curl(url: &str, destination: &Path, max_size: u64) -> Result<(), String> {
     let output = Command::new("curl")
         .args([
             "--fail",
@@ -203,8 +217,10 @@ fn download_with_curl(url: &str, destination: &Path) -> Result<(), String> {
             "2",
             "--proto",
             "=https",
-            "--output",
+            "--max-filesize",
         ])
+        .arg(max_size.to_string())
+        .arg("--output")
         .arg(destination)
         .arg(url)
         .output()
@@ -287,7 +303,7 @@ license = "none"
         let dir = temp_dir("present");
         std::fs::write(dir.join("a.xml"), b"abc").unwrap();
         let mut calls = 0;
-        let outcome = process(&entry("a.xml", &[]), &dir, &mut |_, _| {
+        let outcome = process(&entry("a.xml", &[]), &dir, &mut |_, _, _| {
             calls += 1;
             Ok(())
         });
@@ -303,7 +319,8 @@ license = "none"
             "a.xml",
             &["https://example.invalid/m1.xml", "https://example.invalid/m2.xml"],
         );
-        let outcome = process(&e, &dir, &mut |url, dest| {
+        let outcome = process(&e, &dir, &mut |url, dest, max| {
+            assert_eq!(max, 3);
             if url.ends_with("m1.xml") {
                 return Err("404".to_owned());
             }
@@ -323,7 +340,7 @@ license = "none"
         let dir = temp_dir("absent");
         let mut e = entry("a.xml", &["http://example.invalid/clair.xml"]);
         e.size = 4;
-        let outcome = process(&e, &dir, &mut |_, dest| {
+        let outcome = process(&e, &dir, &mut |_, dest, _| {
             std::fs::write(dest, b"abc").map_err(|e| e.to_string())
         });
         let Outcome::Absent(reason) = outcome else {
@@ -332,6 +349,19 @@ license = "none"
         assert!(reason.contains("taille 3 octets"), "{reason}");
         assert!(reason.contains("non https"), "{reason}");
         assert!(!dir.join("a.xml").exists());
+        assert!(!dir.join(".part-a.xml").exists());
+    }
+
+    #[test]
+    fn oversized_download_is_refused_before_reading() {
+        let dir = temp_dir("oversized");
+        let outcome = process(&entry("a.xml", &[]), &dir, &mut |_, dest, _| {
+            std::fs::write(dest, vec![b'x'; 4_096]).map_err(|e| e.to_string())
+        });
+        let Outcome::Absent(reason) = outcome else {
+            panic!("absent attendu : {outcome:?}");
+        };
+        assert!(reason.contains("taille 4096 octets, attendu 3"), "{reason}");
         assert!(!dir.join(".part-a.xml").exists());
     }
 }

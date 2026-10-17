@@ -9,7 +9,10 @@
 //!    (absents) : un absent ne compte ni pour ni contre ;
 //! 4. `PLANRS_CORPUS=required`, manifeste non vide et tous les fichiers
 //!    absents : échec ; sinon un absent n'est qu'un avertissement ;
-//! 5. identiques > `floor` : « plancher relevable », succès.
+//! 5. identiques > `floor` : « plancher relevable », succès ;
+//! 6. fichier enregistré par MS Project (`producer = msproject`) : tout cas
+//!    compare les champs de base (neuf, dix pour une récapitulative), sinon
+//!    échec (comparaison incomplète : le plancher serait tenu à vide).
 
 use serde::Serialize;
 
@@ -40,6 +43,9 @@ pub enum FileStatus {
         cases: u32,
         /// Cas identiques.
         identical: u32,
+        /// Comparaisons incomplètes (champ de base absent, ou aucune valeur
+        /// comparable).
+        incomplete: u32,
     },
 }
 
@@ -50,6 +56,8 @@ pub struct FileResult {
     pub name: String,
     /// Plancher du fichier.
     pub floor: u32,
+    /// Fichier enregistré par MS Project : la comparaison doit être complète.
+    pub complete_required: bool,
     /// État.
     pub status: FileStatus,
 }
@@ -125,7 +133,18 @@ pub fn decide(results: &[FileResult], corpus_floor: u32, required: bool) -> Verd
                     v.warnings.push(msg);
                 }
             }
-            FileStatus::Compared { cases, identical } => {
+            FileStatus::Compared {
+                cases,
+                identical,
+                incomplete,
+            } => {
+                if r.complete_required && *incomplete > 0 {
+                    v.failures.push(format!(
+                        "{} : comparaison incomplète, {incomplete} cas sans tous les champs de base \
+                         (régression du lecteur ?)",
+                        r.name
+                    ));
+                }
                 identical_present = identical_present.saturating_add(u64::from(*identical));
                 if *identical < r.floor {
                     v.failures.push(format!(

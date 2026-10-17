@@ -70,6 +70,22 @@ impl Field {
     }
 }
 
+/// Champs de base : tout cas d'un fichier enregistré par MS Project doit les
+/// avoir tous (plus [`Field::Duration`] pour une récapitulative ou l'UID 0),
+/// sinon la comparaison est incomplète et le plancher pourrait être tenu à
+/// vide (relecture J2).
+pub const BASE_FIELDS: [Field; 9] = [
+    Field::Start,
+    Field::Finish,
+    Field::EarlyStart,
+    Field::EarlyFinish,
+    Field::LateStart,
+    Field::LateFinish,
+    Field::TotalSlack,
+    Field::FreeSlack,
+    Field::Critical,
+];
+
 /// Nature d'un cas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -239,6 +255,18 @@ impl Case {
     pub fn identical(&self) -> bool {
         self.divergences.is_empty()
     }
+
+    /// Champs de base ([`BASE_FIELDS`], plus la durée pour une
+    /// récapitulative ou l'UID 0) que ce cas n'a pas comparés.
+    #[must_use]
+    pub fn missing_fields(&self) -> Vec<Field> {
+        let duration = (self.kind != CaseKind::Leaf).then_some(Field::Duration);
+        BASE_FIELDS
+            .into_iter()
+            .chain(duration)
+            .filter(|f| !self.compared.contains(f))
+            .collect()
+    }
 }
 
 /// Comparaison d'un fichier.
@@ -261,6 +289,30 @@ impl FileComparison {
     #[must_use]
     pub fn identical_count(&self) -> u32 {
         count(self.cases.iter().filter(|c| c.identical()))
+    }
+
+    /// Nombre de comparaisons par champ, sur tous les cas.
+    #[must_use]
+    pub fn compared_by_field(&self) -> BTreeMap<Field, u32> {
+        let mut out = BTreeMap::new();
+        for field in self.cases.iter().flat_map(|c| c.compared.iter()) {
+            let n = out.entry(*field).or_insert(0_u32);
+            *n = n.saturating_add(1);
+        }
+        out
+    }
+
+    /// Comparaisons incomplètes : cas auxquels manque un champ de base, plus
+    /// tâches exclues faute de valeur enregistrée comparable.
+    #[must_use]
+    pub fn incomplete_count(&self) -> u32 {
+        let missing = count(self.cases.iter().filter(|c| !c.missing_fields().is_empty()));
+        let empty = self
+            .excluded
+            .get(&Excluded::NoComparableValue)
+            .copied()
+            .unwrap_or(0);
+        missing.saturating_add(empty)
     }
 }
 

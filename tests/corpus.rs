@@ -49,6 +49,7 @@ impl FileRun {
         FileResult {
             name: self.entry.name.clone(),
             floor: self.entry.floor,
+            complete_required: self.entry.producer == manifest::Producer::Msproject,
             status: self.status.clone(),
         }
     }
@@ -108,6 +109,7 @@ pub fn run_bytes(entry: &Entry, bytes: &[u8]) -> FileRun {
         status: FileStatus::Compared {
             cases: comparison.case_count(),
             identical: comparison.identical_count(),
+            incomplete: comparison.incomplete_count(),
         },
         document: Some(document),
         engine_diagnostics,

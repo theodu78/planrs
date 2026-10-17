@@ -181,7 +181,12 @@ fn compared(name: &str, floor: u32, cases: u32, identical: u32) -> FileResult {
     FileResult {
         name: name.to_owned(),
         floor,
-        status: FileStatus::Compared { cases, identical },
+        complete_required: true,
+        status: FileStatus::Compared {
+            cases,
+            identical,
+            incomplete: 0,
+        },
     }
 }
 
@@ -189,8 +194,29 @@ fn absent(name: &str, floor: u32) -> FileResult {
     FileResult {
         name: name.to_owned(),
         floor,
+        complete_required: true,
         status: FileStatus::Absent(AbsentReason::NotDownloaded),
     }
+}
+
+#[test]
+fn verdict_incomplete_msproject_file_fails() {
+    let incomplete = |complete_required| FileResult {
+        name: "a".to_owned(),
+        floor: 0,
+        complete_required,
+        status: FileStatus::Compared {
+            cases: 10,
+            identical: 10,
+            incomplete: 1,
+        },
+    };
+    let v = verdict::decide(&[incomplete(true)], 0, false);
+    assert!(
+        v.failures.iter().any(|f| f.contains("comparaison incomplète")),
+        "{v:?}"
+    );
+    assert!(verdict::decide(&[incomplete(false)], 0, false).passed());
 }
 
 #[test]
@@ -223,6 +249,7 @@ fn verdict_read_error_fails_only_with_a_floor() {
     let err = |floor| FileResult {
         name: "a".to_owned(),
         floor,
+        complete_required: true,
         status: FileStatus::ReadError("mspdi.xml".to_owned()),
     };
     assert!(verdict::decide(&[err(0)], 0, false).passed());
@@ -346,7 +373,8 @@ fn identical_project_compares_every_field_and_excludes_manual_and_null_rows() {
         run.status,
         FileStatus::Compared {
             cases: 3,
-            identical: 3
+            identical: 3,
+            incomplete: 0
         },
         "{cmp:#?}"
     );
@@ -392,7 +420,8 @@ fn divergence_is_reported_with_its_delta_and_without_task_names() {
         run.status,
         FileStatus::Compared {
             cases: 3,
-            identical: 2
+            identical: 2,
+            incomplete: 0
         }
     );
 
@@ -445,6 +474,37 @@ fn propagated_divergence_is_labelled() {
     let cmp = run.comparison.unwrap();
     let b = cmp.cases.iter().find(|c| c.uid == 2).unwrap();
     assert!(b.causes.contains(&Cause::DivergentPredecessor), "{:?}", b.causes);
+}
+
+#[test]
+fn missing_recorded_slack_makes_the_comparison_incomplete() {
+    // Relecture J2 : une régression du lecteur qui perdrait `TotalSlack`
+    // laisserait le cas « identique » sur les autres champs ; pour un fichier
+    // enregistré par MS Project, le verdict échoue.
+    let xml = sample("2026-10-20T17:00:00").replacen("<TotalSlack>0</TotalSlack>", "", 2);
+    let mut e = entry("s.xml", xml.as_bytes(), 0);
+    e.producer = Producer::Msproject;
+    let run = corpus::run_bytes(&e, xml.as_bytes());
+    let cmp = run.comparison.as_ref().unwrap();
+    // UID 0 et A sans marge totale : comparés sur les autres champs.
+    assert_eq!(cmp.identical_count(), 3);
+    assert_eq!(cmp.incomplete_count(), 2);
+    assert_eq!(cmp.compared_by_field().get(&Field::TotalSlack), Some(&1));
+    assert_eq!(cmp.cases[0].missing_fields(), [Field::TotalSlack]);
+    let v = verdict::decide(&[run.result()], 0, true);
+    assert!(!v.passed(), "{v:?}");
+    let r = report::build(&[run], floors_zero(), v);
+    assert_eq!(r.files[0].incomplete, 2);
+    assert_eq!(r.files[0].compared_by_field.get("total_slack"), Some(&1));
+    assert!(report::markdown(&r).contains("incomplètes : 2"));
+}
+
+fn floors_zero() -> Floors {
+    Floors {
+        corpus: 0,
+        oracle: 0,
+        total: 0,
+    }
 }
 
 #[test]

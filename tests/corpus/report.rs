@@ -135,6 +135,11 @@ pub struct FileReport {
     pub by_kind: BTreeMap<&'static str, KindCount>,
     /// Exclus par raison.
     pub excluded: BTreeMap<String, u32>,
+    /// Nombre de comparaisons par champ (garantie que le plancher n'est pas
+    /// tenu à vide).
+    pub compared_by_field: BTreeMap<&'static str, u32>,
+    /// Comparaisons incomplètes (voir `FileComparison::incomplete_count`).
+    pub incomplete: u32,
     /// Nombre de divergences par champ.
     pub divergences_by_field: BTreeMap<&'static str, u32>,
     /// Cas différents par cause probable (un cas compte pour chacune de ses
@@ -253,6 +258,8 @@ fn file_report(run: &FileRun) -> FileReport {
     }
     let mut by_kind: BTreeMap<&'static str, KindCount> = BTreeMap::new();
     let mut excluded = BTreeMap::new();
+    let mut compared_by_field = BTreeMap::new();
+    let mut incomplete = 0;
     let mut divergences_by_field = BTreeMap::new();
     let mut divergent_cases_by_cause = BTreeMap::new();
     let mut divergent_cases_without_cause = 0_u32;
@@ -264,6 +271,10 @@ fn file_report(run: &FileRun) -> FileReport {
         for (reason, n) in &cmp.excluded {
             excluded.insert(reason.key(), *n);
         }
+        for (field, n) in cmp.compared_by_field() {
+            compared_by_field.insert(field.as_str(), n);
+        }
+        incomplete = cmp.incomplete_count();
         for case in &cmp.cases {
             let k = by_kind.entry(case.kind.as_str()).or_default();
             k.cases = k.cases.saturating_add(1);
@@ -301,6 +312,8 @@ fn file_report(run: &FileRun) -> FileReport {
         raisable: run.comparison.is_some() && identical > floor,
         by_kind,
         excluded,
+        compared_by_field,
+        incomplete,
         divergences_by_field,
         divergent_cases_by_cause,
         divergent_cases_without_cause,
@@ -457,6 +470,12 @@ fn file_markdown(s: &mut String, f: &FileReport) {
         .join(", ");
     let _ = writeln!(s, "- Par nature (identiques/cas) : {kinds}.");
     let _ = writeln!(s, "- Exclus : {}.", counts(&f.excluded));
+    let _ = writeln!(
+        s,
+        "- Comparaisons par champ : {} ; incomplètes : {}.",
+        counts(&f.compared_by_field),
+        f.incomplete
+    );
     let _ = writeln!(s, "- Diagnostics d'import : {}.", counts(&f.import_diagnostics));
     let _ = writeln!(s, "- Diagnostics du moteur : {}.", counts(&f.engine_diagnostics));
     let _ = writeln!(

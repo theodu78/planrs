@@ -1,0 +1,10 @@
+# Sorties de compilation
+/target/
+/apps/planrs-web/dist/
+
+# Corpus public : fichiers non versionnés (droits d'auteur), seul le manifeste l'est
+/tests/corpus/files/
+
+# Captures produites par les tests visuels (nouvelle capture / différence)
+*.new.png
+*.diff.png

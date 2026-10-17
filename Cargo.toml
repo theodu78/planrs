@@ -1,0 +1,69 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/planrs-core",
+    "crates/planrs-mspdi",
+    "crates/planrs-render",
+    "crates/planrs-automation",
+    "crates/planrs-mcp",
+    "crates/planrs-ui-egui",
+    "apps/planrs-cli",
+    "apps/planrs",
+    "apps/planrs-web",
+    "tests",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# eframe/egui 0.37 exigent Rust 1.95.
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+# Provisoire : le dépôt GitHub n'existe pas encore (voir docs/rename.md).
+repository = "https://github.com/theodu78/planrs"
+
+[workspace.dependencies]
+# Crates internes (version explicite : pas de dépendance « wildcard » pour cargo-deny).
+planrs-core = { path = "crates/planrs-core", version = "0.1.0" }
+planrs-mspdi = { path = "crates/planrs-mspdi", version = "0.1.0" }
+planrs-render = { path = "crates/planrs-render", version = "0.1.0" }
+planrs-automation = { path = "crates/planrs-automation", version = "0.1.0" }
+planrs-mcp = { path = "crates/planrs-mcp", version = "0.1.0" }
+planrs-ui-egui = { path = "crates/planrs-ui-egui", version = "0.1.0" }
+
+# Dates sans horloge ni fuseau : le moteur travaille en heure locale du projet
+# et ne lit jamais l'heure système (règle 5).
+chrono = { version = "0.4.45", default-features = false, features = ["std", "serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.21"
+quick-xml = { version = "0.42.0", features = ["serialize"] }
+# rmcp épinglé exactement (ADR-0005 : API mouvante) ; toute montée est un commit dédié.
+rmcp = { version = "=3.5.1", default-features = false, features = ["server", "macros", "transport-io"] }
+egui = "0.37.0"
+eframe = "0.37.0"
+clap = { version = "4.6.7", features = ["derive"] }
+log = "0.4.34"
+wasm-bindgen-futures = "0.4.79"
+web-sys = { version = "0.3.106", features = ["Window", "Document", "Element", "HtmlCanvasElement"] }
+cargo_metadata = "0.23.1"
+toml = "1.1.8"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Règle 10 « ne jamais planter » : interdits hors tests.
+# Les tests les lèvent par des `#![allow(...)]` locaux et commentés.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unreachable = "deny"
+todo = "deny"
+unimplemented = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+# `float_arithmetic` n'est interdit que dans planrs-core (attribut de crate) :
+# le rendu SVG et l'interface egui calculent nativement en f32/f64.

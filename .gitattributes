@@ -1,0 +1,2 @@
+# L'éditeur VBA de MS Project n'importe correctement un module .bas qu'en CRLF.
+*.bas text eol=crlf

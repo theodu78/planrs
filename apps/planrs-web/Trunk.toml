@@ -1,0 +1,6 @@
+# Configuration trunk de la version web (`trunk serve` / `trunk build --release`
+# depuis ce dossier). Pas encore exécuté en CI.
+
+[build]
+target = "index.html"
+dist = "dist"

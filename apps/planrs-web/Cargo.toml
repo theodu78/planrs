@@ -1,0 +1,22 @@
+[package]
+name = "planrs-web"
+description = "Version web de planrs : la même interface egui compilée en WebAssembly (trunk)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+planrs-core.workspace = true
+planrs-ui-egui.workspace = true
+eframe.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+log.workspace = true
+wasm-bindgen-futures.workspace = true
+web-sys.workspace = true
+
+[lints]
+workspace = true

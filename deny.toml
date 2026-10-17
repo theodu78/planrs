@@ -1,0 +1,71 @@
+# Politique cargo-deny de planrs (règle 2 : licence MIT OR Apache-2.0 et
+# dépendances compatibles). Exécuté en CI ; doit passer avant tout commit.
+
+[graph]
+# Toutes les plateformes sont vérifiées (pas de filtre de cibles) : les
+# dépendances propres à Windows, macOS ou au web comptent aussi.
+all-features = false
+
+[advisories]
+# Base RustSec : toute vulnérabilité connue échoue. Une exception éventuelle
+# va dans `ignore` avec l'identifiant RUSTSEC et sa justification.
+version = 2
+yanked = "deny"
+unmaintained = "workspace"
+ignore = []
+
+[licenses]
+version = 2
+# Licences permissives compatibles avec MIT OR Apache-2.0. Toute licence
+# absente de cette liste est refusée, en particulier les copyleft :
+# GPL, LGPL, AGPL, CPAL, SSPL, EUPL, OSL…
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "0BSD",
+    # Polices embarquées (egui)
+    "OFL-1.1",
+]
+# MPL-2.0 (copyleft faible, au fichier) : cargo-deny ne sait plus émettre un
+# simple avertissement par licence. Elle n'est donc pas autorisée globalement :
+# chaque crate MPL-2.0 doit figurer dans `exceptions` ci-dessous, après revue.
+confidence-threshold = 0.93
+# Exceptions limitées à une crate, chacune revue et justifiée.
+exceptions = [
+    # Presse-papiers Windows d'eframe (arboard). BSL-1.0 : permissive, OSI,
+    # compatible MIT/Apache, pas d'obligation de notice dans les binaires.
+    { crate = "clipboard-win", allow = ["BSL-1.0"] },
+    { crate = "error-code", allow = ["BSL-1.0"] },
+    # Polices par défaut d'egui (dont Ubuntu-Light). Licence de police
+    # permissive : redistribution libre, contraintes sur le nom des dérivés
+    # uniquement. Ne touche pas le code.
+    { crate = "epaint_default_fonts", allow = ["Ubuntu-font-1.0"] },
+]
+# Pas d'alerte pour une licence autorisée mais non utilisée aujourd'hui.
+unused-allowed-license = "allow"
+
+[licenses.private]
+# Les crates internes non publiées (xtask, planrs-tests, planrs-web) héritent
+# de la licence du workspace ; elles sont vérifiées comme les autres.
+ignore = false
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = false
+highlight = "all"
+deny = []
+
+[sources]
+# crates.io uniquement : ni registre tiers, ni dépendance git.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

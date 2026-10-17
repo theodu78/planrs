@@ -1,0 +1,20 @@
+[package]
+name = "planrs-cli"
+description = "Ligne de commande de planrs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Le binaire s'appelle `planrs` (voir docs/rename.md).
+[[bin]]
+name = "planrs"
+path = "src/main.rs"
+
+[dependencies]
+planrs-core.workspace = true
+clap.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "planrs-mspdi"
+description = "Import/export MSPDI XML pour planrs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+planrs-core.workspace = true
+quick-xml.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

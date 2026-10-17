@@ -51,3 +51,16 @@ Une entrée par décision, datée, avec le contexte, les options écartées et l
 - **Propriété « chaîne critique continue ».** Fausse en général (contraintes, échéances, marge négative, plusieurs fins). Reformulée : sans contrainte ni échéance, il existe un chemin de marge totale 0 de la première à la dernière tâche.
 - **Captures d'interface.** `egui_kittest` avec seuil de tolérance (`kittest.toml`) ; CI Linux avec adaptateur wgpu logiciel (lavapipe).
 - **`rmcp`** épinglé en 3.x (API mouvante) ; `svg2pdf` pour l'export PDF.
+
+## ADR-0006 — 2026-10-17 — Socle technique du workspace (J1, première moitié)
+
+**Décision.**
+- **Lints partagés** dans `[workspace.lints]`, hérités par toutes les crates : `unsafe_code = "forbid"`, clippy `all` + `pedantic` en avertissement (bloquants en CI par `-D warnings`), et en refus `unwrap_used`, `expect_used`, `panic`, `unreachable`, `todo`, `unimplemented`, `indexing_slicing`, `arithmetic_side_effects`. Les tests les lèvent par un `#![allow(...)]` local commenté.
+- **`float_arithmetic` refusé dans `planrs-core` seulement** (attribut de crate) : Cargo n'autorise pas une crate à compléter `[workspace.lints]`, et le rendu SVG comme egui calculent en flottants. MSPDI convertit aux frontières.
+- **Binaire desktop nommé `planrs-desktop`** : la CLI s'appelle `planrs` (brief, section 7) et deux binaires homonymes entrent en collision dans `target/`. À trancher avant J8 (packaging) : garder deux binaires, ou un seul `planrs` dont une sous-commande ouvre l'interface (au prix d'une CLI liée à egui).
+- **Tests transverses** dans un paquet interne `planrs-tests` (dossier `tests/`, non publié) avec trois cibles `rules`, `oracle`, `corpus` : un workspace virtuel ne compile pas un `tests/` racine, et ce paquet garde l'arborescence du brief.
+- **Oracle** : disposition `tests/oracle/input/<cas>.xml` ↔ `tests/oracle/msproject/<cas>.xml`, alignée sur `tools/oracle/generate.bas` (dossier d'entrée → dossier de sortie). Le harnais échoue s'il trouve un cas tant que la comparaison n'existe pas.
+- **Couches (règle 9)** vérifiées par `cargo xtask layers` sur la résolution de `cargo metadata` (toutes plateformes, dépendances normales, build et dev). Exemptées : `planrs-ui-egui`, `planrs`, `planrs-web`. La CLI n'est **pas** exemptée (binaire headless ; `planrs mcp` parle à l'application par un canal, ADR-0002). Interdits : `egui`, `eframe`, `winit`, `rfd` et toute crate `egui-*` / `egui_*`.
+- **cargo-deny** : licences permissives en liste blanche ; tout le reste refusé (dont GPL, LGPL, AGPL, CPAL, SSPL). cargo-deny ne sait plus avertir par licence : **MPL-2.0 n'est pas autorisée globalement**, chaque crate MPL passe par une exception revue. Exceptions actuelles, limitées à la crate : `clipboard-win` et `error-code` (BSL-1.0, presse-papiers Windows d'eframe), `epaint_default_fonts` (Ubuntu Font Licence, polices d'egui).
+- **Versions** : egui/eframe 0.37 (MSRV 1.95, d'où `rust-version = "1.95"`), `rmcp` épinglé `=3.5.1` (features `server`, `macros`, `transport-io`), quick-xml 0.42, chrono 0.4 sans `clock` (ni horloge ni fuseau).
+- **Version web** : binaire `planrs-web` sans `#[wasm_bindgen]` écrit à la main ; `main` trouve le canevas et lance `eframe::WebRunner`. Pas construit en CI tant que trunk n'y est pas installé.

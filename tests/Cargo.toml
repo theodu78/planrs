@@ -1,0 +1,38 @@
+[package]
+name = "planrs-tests"
+description = "Harnais de tests transverses de planrs : règles R-xxx, fixtures, oracle MS Project, corpus public."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+# Arborescence imposée par le brief (tests/rules, tests/oracle, tests/corpus) :
+# les cibles sont déclarées à la main, pas découvertes.
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+
+[lib]
+path = "lib.rs"
+
+[[test]]
+name = "rules"
+path = "rules/main.rs"
+
+[[test]]
+name = "oracle"
+path = "oracle/main.rs"
+
+[[test]]
+name = "corpus"
+path = "corpus/main.rs"
+
+[dependencies]
+planrs-core.workspace = true
+serde.workspace = true
+toml.workspace = true
+
+[lints]
+workspace = true

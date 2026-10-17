@@ -1,0 +1,14 @@
+[package]
+name = "planrs-render"
+description = "Rendu du diagramme de Gantt de planrs en SVG."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+planrs-core.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "planrs-mcp"
+description = "Serveur MCP de planrs, au-dessus de planrs-automation."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+planrs-automation.workspace = true
+rmcp.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "planrs"
+description = "Application desktop de planrs (eframe, rendu wgpu)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Binaire nommé `planrs-desktop` : le nom `planrs` est pris par la CLI
+# (apps/planrs-cli) et deux binaires homonymes entrent en collision dans
+# target/. Voir ADR-0006 et docs/rename.md.
+[[bin]]
+name = "planrs-desktop"
+path = "src/main.rs"
+
+[dependencies]
+planrs-core.workspace = true
+planrs-ui-egui.workspace = true
+eframe.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,19 @@
+# Manifeste figé du corpus public (ADR-0004).
+#
+# Les fichiers ne sont PAS commités (droits d'auteur) : ils se placent dans
+# tests/corpus/files/, ignoré par git. Seul ce manifeste est versionné.
+# Le plancher de parité (planrs_core::parity::FLOOR) se mesure en nombre de cas
+# sur cette liste : ajouter un fichier ouvre une nouvelle ligne, il ne fait pas
+# baisser la parité mesurée.
+#
+# Format d'une entrée (toutes les clés sauf `note` sont obligatoires) :
+#
+# [[file]]
+# name = "exemple.xml"                 # nom dans tests/corpus/files/
+# source = "Support de formation X"    # provenance lisible
+# url = "https://exemple.org/plan.xml" # adresse de téléchargement
+# date = "2026-10-17"                  # date de récupération, AAAA-MM-JJ
+# sha256 = "<64 hexadécimaux minuscules>"
+# note = "converti depuis .mpp avec MPXJ (outil externe)"
+
+format = 1

@@ -20,6 +20,11 @@ mod r002_fixed_point_quantities;
 mod r003_date_domain;
 mod r004_seconds_truncated;
 mod r005_local_time_no_dst;
+mod r006_working_unit_factors;
+mod r007_elapsed_unit_factors;
+mod r008_duration_sign;
+mod r009_stored_minutes_options;
+mod r010_percent_lag_conversion;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

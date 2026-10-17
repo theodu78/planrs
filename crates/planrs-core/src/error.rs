@@ -108,6 +108,51 @@ impl TimeError {
     }
 }
 
+/// Erreur des durées, du travail et des décalages (`duration.rs`).
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error, Serialize)]
+#[serde(tag = "code")]
+pub enum DurationError {
+    /// Durée ou travail négatif.
+    #[serde(rename = "duration.negative")]
+    #[error("une durée ou un travail ne peut pas être négatif")]
+    Negative,
+    /// Valeur au-delà des bornes.
+    #[serde(rename = "duration.out_of_range")]
+    #[error("durée, travail ou décalage hors des bornes")]
+    OutOfRange,
+    /// Dépassement de capacité pendant un calcul.
+    #[serde(rename = "duration.overflow")]
+    #[error("dépassement de capacité dans un calcul de durée")]
+    Overflow,
+    /// Facteurs de conversion hors des bornes.
+    #[serde(rename = "duration.invalid_factors")]
+    #[error(
+        "facteurs de conversion invalides : {minutes_per_day} min/jour (1 à 1 440), \
+         {minutes_per_week} min/semaine (1 à 10 080), {days_per_month} jours/mois (1 à 31)"
+    )]
+    InvalidFactors {
+        /// Minutes par jour.
+        minutes_per_day: u32,
+        /// Minutes par semaine.
+        minutes_per_week: u32,
+        /// Jours par mois.
+        days_per_month: u32,
+    },
+}
+
+impl DurationError {
+    /// Code stable de l'erreur.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Negative => "duration.negative",
+            Self::OutOfRange => "duration.out_of_range",
+            Self::Overflow => "duration.overflow",
+            Self::InvalidFactors { .. } => "duration.invalid_factors",
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     #![allow(
@@ -117,7 +162,7 @@ pub(crate) mod tests {
         reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
     )]
 
-    use super::{FixedError, TimeError};
+    use super::{DurationError, FixedError, TimeError};
     use crate::time::Day;
 
     /// Vérifie que l'étiquette serde `code` vaut `code()`.
@@ -160,6 +205,24 @@ pub(crate) mod tests {
         ] {
             assert_tag(&e, e.code());
             assert!(e.code().starts_with("time."));
+            assert_ne!(e.to_string(), "");
+        }
+    }
+
+    #[test]
+    fn duration_error_codes_match_serde_tags() {
+        for e in [
+            DurationError::Negative,
+            DurationError::OutOfRange,
+            DurationError::Overflow,
+            DurationError::InvalidFactors {
+                minutes_per_day: 0,
+                minutes_per_week: 0,
+                days_per_month: 0,
+            },
+        ] {
+            assert_tag(&e, e.code());
+            assert!(e.code().starts_with("duration."));
             assert_ne!(e.to_string(), "");
         }
     }

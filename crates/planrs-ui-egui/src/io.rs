@@ -55,7 +55,8 @@ pub trait FileService {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RfdFileService;
 
-/// Sélecteur inerte (tests) : n'ouvre rien, n'envoie rien.
+/// Sélecteur inerte (tests) : n'ouvre rien et répond aussitôt
+/// [`OpenEvent::Cancelled`], comme un utilisateur qui referme la boîte.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoFileService;
 
@@ -143,11 +144,12 @@ impl FileService for RfdFileService {
 impl FileService for NoFileService {
     fn pick_and_open(
         &mut self,
-        _ctx: &egui::Context,
+        ctx: &egui::Context,
         _now: Moment,
         _title: String,
         _filter: String,
-        _tx: Sender<OpenEvent>,
+        tx: Sender<OpenEvent>,
     ) {
+        deliver(&tx, ctx, OpenEvent::Cancelled);
     }
 }

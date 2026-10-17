@@ -13,12 +13,13 @@ use planrs_mspdi::ImportDiagnostic;
 
 use crate::action::Action;
 use crate::document::{self, LoadedDocument, OpenError};
+use crate::geom;
 use crate::i18n::{Arg, Language, TextId, Texts};
 use crate::io::{FileService, NoFileService, OpenEvent};
 use crate::rows::RowModel;
 use crate::state::{StateLoadError, TABLE_WIDTH_MAX, TABLE_WIDTH_MIN, ThemePref, UiState};
 use crate::theme::Palette;
-use crate::timescale::DayRange;
+use crate::timescale::{DayRange, TimeAxis, fit_zoom, zoom_anchor};
 use crate::view::{self, FrameCtx, FrameStats, Metrics, ViewTransient};
 
 /// Provenance d'un document ouvert.
@@ -114,6 +115,14 @@ pub struct App {
     applied_theme: Option<ThemePref>,
     /// Génération du prochain document ouvert.
     next_generation: u64,
+    /// Une ouverture par le sélecteur est en cours (une seule à la fois).
+    opening: bool,
+    /// Abscisse écran du bord gauche du Gantt à la dernière image (ancre du
+    /// zoom à la molette).
+    gantt_left: f32,
+    /// Largeur du Gantt à la dernière image, d'après la mise en page
+    /// partagée (repli quand la vue n'a pas encore mesuré).
+    gantt_width: f32,
 }
 
 impl App {
@@ -138,6 +147,9 @@ impl App {
             rx,
             applied_theme: None,
             next_generation: 1,
+            opening: false,
+            gantt_left: 0.0,
+            gantt_width: 0.0,
         }
     }
 
@@ -161,7 +173,9 @@ impl App {
         }
     }
 
-    /// Met une action en file ; elle sera appliquée en fin d'image.
+    /// Met une action en file ; elle sera appliquée par le réducteur en fin
+    /// de la prochaine image (les effets sur le contexte egui, comme le
+    /// thème, demandent ce contexte).
     pub fn dispatch(&mut self, action: Action) {
         self.actions.push(action);
     }
@@ -178,6 +192,24 @@ impl App {
         &self.texts
     }
 
+    /// Modèle de lignes du document ouvert (dans la langue courante).
+    #[must_use]
+    pub const fn rows(&self) -> Option<&RowModel> {
+        self.rows.as_ref()
+    }
+
+    /// État transitoire de la vue (défilements, ajustement en attente).
+    #[must_use]
+    pub const fn view(&self) -> &ViewTransient {
+        &self.view
+    }
+
+    /// Une ouverture par le sélecteur de fichiers est en cours.
+    #[must_use]
+    pub const fn is_opening(&self) -> bool {
+        self.opening
+    }
+
     /// Signale (une fois) un état d'interface illisible ou trop récent.
     pub fn report_state_load(&mut self, error: &StateLoadError) {
         let text = self.texts.get_args(
@@ -188,6 +220,18 @@ impl App {
             severity: Severity::Warning,
             text,
         });
+    }
+
+    /// Vue remise à zéro pour un nouveau document (ou aucun), en gardant la
+    /// largeur mesurée du Gantt pour ajuster le zoom dès la première image.
+    fn fresh_view(&self, needs_fit: bool) -> ViewTransient {
+        ViewTransient {
+            pending_scroll_y: Some(0.0),
+            gantt_scroll_x: 0.0,
+            zoom_accum: 0.0,
+            needs_fit,
+            last_gantt_width: self.view.last_gantt_width,
+        }
     }
 
     /// Installe un document chargé et reconstruit les caches.
@@ -205,13 +249,15 @@ impl App {
         self.rows = Some(RowModel::build(&document, &self.texts.format_labels()));
         self.document = Some(document);
         self.selection = None;
-        self.view = ViewTransient {
-            needs_fit: true,
-            ..ViewTransient::default()
-        };
+        self.view = self.fresh_view(true);
+        // Une ouverture réussie rend caduques les erreurs d'ouverture
+        // précédentes.
+        self.messages
+            .retain(|message| message.severity != Severity::Error);
     }
 
-    /// Transforme une erreur d'ouverture en message traduit.
+    /// Transforme une erreur d'ouverture en message traduit (le titre
+    /// `open-error-title` est ajouté par le bandeau).
     fn report_open_error(&mut self, error: &OpenError) {
         let (id, detail) = match error {
             OpenError::Read(detail) => (TextId::OpenErrorRead, detail.clone()),
@@ -227,6 +273,7 @@ impl App {
     /// Relève les résultats d'ouverture arrivés depuis l'image précédente.
     fn poll_io(&mut self) {
         while let Ok(event) = self.rx.try_recv() {
+            self.opening = false;
             match event {
                 OpenEvent::Cancelled => {}
                 OpenEvent::Opened { origin, result } => match result {
@@ -237,8 +284,9 @@ impl App {
         }
     }
 
-    /// Applique le thème (seulement au changement) et la langue résolue.
-    fn sync_settings(&mut self, ctx: &egui::Context) {
+    /// Applique la préférence de thème au contexte egui, seulement si elle a
+    /// changé depuis le dernier appel.
+    fn apply_theme(&mut self, ctx: &egui::Context) {
         if self.applied_theme != Some(self.state.theme) {
             ctx.set_theme(match self.state.theme {
                 ThemePref::System => egui::ThemePreference::System,
@@ -247,57 +295,180 @@ impl App {
             });
             self.applied_theme = Some(self.state.theme);
         }
+    }
+
+    /// Recrée les messages et le modèle de lignes si la langue résolue a
+    /// changé.
+    fn apply_language(&mut self) {
         let language = Language::resolve(self.state.language, self.env.system_language);
-        if language != self.texts.language() {
-            self.texts = Texts::new(language);
-            if let Some(document) = &self.document {
-                self.rows = Some(RowModel::build(document, &self.texts.format_labels()));
-            }
+        if language == self.texts.language() {
+            return;
         }
+        self.texts = Texts::new(language);
+        if let Some(document) = &mut self.document {
+            if document.origin.demo {
+                document.origin.name = self.texts.get(TextId::DemoFileName);
+            }
+            self.rows = Some(RowModel::build(document, &self.texts.format_labels()));
+        }
+    }
+
+    /// Largeur courante du Gantt : mesure de la vue, sinon mise en page.
+    fn current_gantt_width(&self) -> f32 {
+        let measured = self.view.last_gantt_width;
+        if measured.is_finite() && measured > 0.0 {
+            measured
+        } else {
+            self.gantt_width
+        }
+    }
+
+    /// Défilement horizontal maximal du Gantt au zoom courant.
+    fn max_gantt_scroll(&self) -> f32 {
+        let Some(document) = &self.document else {
+            return 0.0;
+        };
+        let content = TimeAxis::new(document.range, self.state.zoom, 0.0).content_width();
+        let max = content - self.current_gantt_width();
+        if max.is_finite() { max.max(0.0) } else { 0.0 }
+    }
+
+    /// Ramène le défilement horizontal dans `[0, max]`.
+    fn clamp_gantt_scroll(&mut self) {
+        let max = self.max_gantt_scroll();
+        let x = self.view.gantt_scroll_x;
+        self.view.gantt_scroll_x = if x.is_finite() { x.clamp(0.0, max) } else { 0.0 };
+    }
+
+    /// Ajuste le zoom à la plage du document si c'est demandé et que la
+    /// largeur du Gantt est connue. Rend `true` si le zoom a été ajusté.
+    fn fit_if_needed(&mut self) -> bool {
+        if !self.view.needs_fit {
+            return false;
+        }
+        let Some(document) = &self.document else {
+            self.view.needs_fit = false;
+            return false;
+        };
+        let width = self.current_gantt_width();
+        if !(width.is_finite() && width > 0.0) {
+            return false;
+        }
+        let zoom = fit_zoom(document.range, width);
+        self.view.needs_fit = false;
+        let changed = zoom != self.state.zoom;
+        self.state.zoom = zoom;
+        self.clamp_gantt_scroll();
+        changed
     }
 
     /// Réducteur : applique une action.
     fn apply(&mut self, action: Action, ctx: &egui::Context) {
         match action {
             Action::OpenDemo => self.open_demo(),
-            Action::OpenDialog => {
-                let now = (self.env.now)();
-                let title = self.texts.get(TextId::DialogOpenTitle);
-                let filter = self.texts.get(TextId::FileFilterMspdi);
-                self.env
-                    .files
-                    .pick_and_open(ctx, now, title, filter, self.tx.clone());
-            }
+            Action::OpenDialog => self.open_dialog(ctx),
             Action::CloseDocument => {
                 self.document = None;
                 self.rows = None;
                 self.selection = None;
-                self.view = ViewTransient::default();
+                self.view = self.fresh_view(false);
             }
             Action::Select(selection) => self.selection = selection,
-            Action::SetLanguage(language) => self.state.language = language,
-            Action::SetTheme(theme) => self.state.theme = theme,
-            Action::SetZoom(zoom) => self.state.zoom = zoom,
+            Action::SetLanguage(language) => {
+                self.state.language = language;
+                self.apply_language();
+            }
+            Action::SetTheme(theme) => {
+                self.state.theme = theme;
+                self.apply_theme(ctx);
+            }
+            Action::SetZoom(zoom) => {
+                self.state.zoom = zoom;
+                self.view.needs_fit = false;
+                self.clamp_gantt_scroll();
+            }
+            Action::FitZoom => {
+                self.view.needs_fit = self.document.is_some();
+                self.fit_if_needed();
+            }
+            Action::ZoomStep { steps, anchor_x } => self.zoom_step(steps, anchor_x),
             Action::SetTableWidth(width) => {
                 self.state.table_width = width.clamp(TABLE_WIDTH_MIN, TABLE_WIDTH_MAX);
             }
+            Action::ScrollGanttX(delta) => {
+                if delta.is_finite() {
+                    self.view.gantt_scroll_x += delta;
+                }
+                self.clamp_gantt_scroll();
+            }
+            Action::ScrollToRow(index) => {
+                let len = self.rows.as_ref().map_or(0, RowModel::len);
+                let row = index.min(len.saturating_sub(1));
+                self.view.pending_scroll_y = Some(geom::index_to_f32(row) * view::ROW_H);
+            }
             Action::ToggleDiagnostics => self.state.diagnostics_open = !self.state.diagnostics_open,
             Action::DismissMessage => self.messages.clear(),
-            // Inertes dans le commit de contrat (lots L3, L4, L5).
-            Action::FitZoom | Action::ZoomStep { .. } | Action::ScrollGanttX(_) | Action::ScrollToRow(_) => {}
         }
     }
 
-    /// Une image complète dans `ui` (appelée par [`crate::ui`]).
+    /// Lance le sélecteur de fichiers (une seule ouverture à la fois).
+    fn open_dialog(&mut self, ctx: &egui::Context) {
+        if self.opening {
+            let text = self.texts.get(TextId::OpenInProgress);
+            if !self.messages.iter().any(|message| message.text == text) {
+                self.messages.push(UserMessage {
+                    severity: Severity::Info,
+                    text,
+                });
+            }
+            return;
+        }
+        self.opening = true;
+        let now = (self.env.now)();
+        let title = self.texts.get(TextId::DialogOpenTitle);
+        let filter = self.texts.get(TextId::FileFilterMspdi);
+        self.env
+            .files
+            .pick_and_open(ctx, now, title, filter, self.tx.clone());
+    }
+
+    /// Pas de zoom ancré sous le pointeur (abscisse écran `anchor_x`).
+    fn zoom_step(&mut self, steps: i8, anchor_x: f32) {
+        let from = self.state.zoom;
+        let mut to = from;
+        for _ in 0..steps.unsigned_abs() {
+            to = if steps > 0 { to.finer() } else { to.coarser() };
+        }
+        if to == from {
+            return;
+        }
+        let offset = anchor_x - self.gantt_left;
+        let offset = if offset.is_finite() {
+            offset.clamp(0.0, self.current_gantt_width().max(0.0))
+        } else {
+            0.0
+        };
+        self.view.gantt_scroll_x = zoom_anchor(self.view.gantt_scroll_x, offset, from, to);
+        self.state.zoom = to;
+        self.view.needs_fit = false;
+        self.clamp_gantt_scroll();
+    }
+
+    /// Une image complète dans `ui` (appelée par [`crate::ui`]) : relève des
+    /// ouvertures, réglages, panneaux, vue centrale, puis réducteur.
     pub(crate) fn show(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.poll_io();
-        self.sync_settings(&ctx);
+        self.apply_theme(&ctx);
+        self.apply_language();
         let palette = Palette::for_theme(ctx.theme());
         let metrics = Metrics::default();
         let mut actions = std::mem::take(&mut self.actions);
         let mut stats = FrameStats::default();
+        let mut layout_gantt: Option<(f32, f32)> = None;
         {
+            // Champs disjoints : le contexte d'image emprunte l'état en
+            // lecture, la vue transitoire est empruntée à part.
             let mut fc = FrameCtx {
                 state: &self.state,
                 doc: self.document.as_ref(),
@@ -316,17 +487,39 @@ impl App {
                 view::diagnostics::panel(ui, &mut fc);
             }
             let view_state = &mut self.view;
-            egui::CentralPanel::default().show(ui, |ui| {
-                if fc.doc.is_some() {
+            if fc.doc.is_some() {
+                let frame = egui::Frame::central_panel(ui.style()).inner_margin(0.0);
+                egui::CentralPanel::default().frame(frame).show(ui, |ui| {
+                    let avail = ui.available_rect_before_wrap();
+                    let layout = geom::main_layout(avail, f32::from(fc.state.table_width), fc.metrics);
+                    layout_gantt = Some((layout.gantt_clip.left(), layout.gantt_clip.width()));
                     view::main_view::show(ui, &mut fc, view_state);
-                } else {
+                });
+            } else {
+                egui::CentralPanel::default().show(ui, |ui| {
                     view::chrome::welcome(ui, &mut fc);
-                }
-            });
+                });
+            }
         }
         self.last_frame = stats;
+        if let Some((left, width)) = layout_gantt
+            && left.is_finite()
+            && width.is_finite()
+        {
+            self.gantt_left = left;
+            self.gantt_width = width.max(0.0);
+        }
+        // Les actions sont appliquées après le dessin : une image de plus
+        // montre leur effet (langue, zoom, document…).
+        let applied = !actions.is_empty();
         for action in actions {
             self.apply(action, &ctx);
+        }
+        // Ajustement du zoom après une ouverture, dès que la largeur du
+        // Gantt est connue : là aussi, une image de plus au bon zoom.
+        let fitted = self.fit_if_needed();
+        if applied || fitted {
+            ctx.request_repaint();
         }
     }
 }

@@ -1,6 +1,11 @@
 # Configuration trunk de la version web (`trunk serve` / `trunk build --release`
-# depuis ce dossier). Pas encore exécuté en CI.
+# depuis ce dossier). Exécuté par le workflow `desktop-build.yml` (job `web`).
 
 [build]
 target = "index.html"
 dist = "dist"
+# Adresses relatives : `dist/` peut être servi sous un sous-chemin (pages
+# statiques, artefact décompressé n'importe où).
+public_url = "./"
+# Noms de fichiers suffixés par leur empreinte (cache navigateur sûr).
+filehash = true

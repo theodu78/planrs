@@ -32,10 +32,13 @@ pub mod extras;
 pub mod scalar;
 pub mod schema;
 
+mod assignment;
+mod baseline;
 mod calendar;
 mod fields;
 mod project;
 mod recorded;
+mod resource;
 mod task;
 mod xml;
 
@@ -195,13 +198,19 @@ pub fn read(input: &[u8], options: &ReadOptions) -> Result<MspdiDocument, MspdiE
         project,
         recorded,
         save_version,
+        dropped_computed,
     } = project::build(&raw, options, &mut sink);
+    let mut all_dropped = raw.dropped_computed.clone();
+    for (name, n) in dropped_computed {
+        let total = all_dropped.entry(name).or_insert(0);
+        *total = total.saturating_add(n);
+    }
     let source = SourceInfo {
         save_version,
         namespace: raw.namespace.clone(),
         ui_sections: raw.ui_sections.clone(),
         skipped_elements: raw.skipped_elements,
-        dropped_computed: raw.dropped_computed.clone(),
+        dropped_computed: all_dropped,
         not_preserved: raw.not_preserved,
         dropped_diagnostics: sink.dropped,
     };

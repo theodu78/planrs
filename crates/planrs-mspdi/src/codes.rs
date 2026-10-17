@@ -8,7 +8,7 @@
 //! valeur par défaut.
 
 use planrs_core::calendar::{MonthItem, MonthPosition};
-use planrs_core::{DurationUnit, LinkType, Month, TaskType, TimeBasis, Week, Weekday};
+use planrs_core::{DurationUnit, LinkType, Month, RateUnit, TaskType, TimeBasis, Week, Weekday, WorkContour};
 
 /// Écart entre un code de durée et sa variante estimée (« ? ») : 32.
 const ESTIMATED_OFFSET: i64 = 32;
@@ -289,6 +289,65 @@ pub const fn work_format(code: i64) -> Option<DurationUnit> {
     }
 }
 
+/// Type de ressource MSPDI (`Resource/Type`, R-124) : 0 matérielle,
+/// 1 travail ; 2 (coût) n'est pas dans pj15 mais se lit (le drapeau
+/// `IsCostResource` l'emporte, voir `resource.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResourceTypeCode {
+    /// 0 : matérielle.
+    Material,
+    /// 1 : travail.
+    Work,
+    /// 2 : coût.
+    Cost,
+}
+
+/// `Resource/Type` : 0, 1, 2.
+#[must_use]
+pub const fn resource_type(code: i64) -> Option<ResourceTypeCode> {
+    match code {
+        0 => Some(ResourceTypeCode::Material),
+        1 => Some(ResourceTypeCode::Work),
+        2 => Some(ResourceTypeCode::Cost),
+        _ => None,
+    }
+}
+
+/// `StandardRateFormat`, `OvertimeRateFormat` (R-124) : unité d'affichage
+/// du taux — 1 minute, 2 heure, 3 jour, 4 semaine, 5 mois, 7 an,
+/// 8 matériel (unité de la ressource matérielle).
+#[must_use]
+pub const fn rate_format(code: i64) -> Option<RateUnit> {
+    match code {
+        1 => Some(RateUnit::Minute),
+        2 => Some(RateUnit::Hour),
+        3 => Some(RateUnit::Day),
+        4 => Some(RateUnit::Week),
+        5 => Some(RateUnit::Month),
+        7 => Some(RateUnit::Year),
+        8 => Some(RateUnit::MaterialUnit),
+        _ => None,
+    }
+}
+
+/// `WorkContour` (R-125) : 0 uniforme, 1 croissant, 2 décroissant, 3 deux
+/// pics, 4 pic au début, 5 pic à la fin, 6 cloche, 7 tortue, 8 modifié.
+#[must_use]
+pub const fn work_contour(code: i64) -> Option<WorkContour> {
+    match code {
+        0 => Some(WorkContour::Flat),
+        1 => Some(WorkContour::BackLoaded),
+        2 => Some(WorkContour::FrontLoaded),
+        3 => Some(WorkContour::DoublePeak),
+        4 => Some(WorkContour::EarlyPeak),
+        5 => Some(WorkContour::LatePeak),
+        6 => Some(WorkContour::Bell),
+        7 => Some(WorkContour::Turtle),
+        8 => Some(WorkContour::Contoured),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -482,5 +541,37 @@ mod tests {
         assert_eq!(work_format(0), None);
         assert_eq!(work_format(6), None);
         assert!(OUT.iter().all(|c| work_format(*c).is_none()));
+    }
+
+    #[test]
+    fn r088_resource_rate_and_contour_codes() {
+        use super::{ResourceTypeCode, rate_format, resource_type, work_contour};
+        use planrs_core::{RateUnit, WorkContour};
+        assert_eq!(resource_type(0), Some(ResourceTypeCode::Material));
+        assert_eq!(resource_type(1), Some(ResourceTypeCode::Work));
+        assert_eq!(resource_type(2), Some(ResourceTypeCode::Cost));
+        assert_eq!(resource_type(3), None);
+        let units = [
+            (1, RateUnit::Minute),
+            (2, RateUnit::Hour),
+            (3, RateUnit::Day),
+            (4, RateUnit::Week),
+            (5, RateUnit::Month),
+            (7, RateUnit::Year),
+            (8, RateUnit::MaterialUnit),
+        ];
+        for (code, unit) in units {
+            assert_eq!(rate_format(code), Some(unit));
+        }
+        assert_eq!(rate_format(6), None);
+        assert_eq!(rate_format(0), None);
+        assert_eq!(work_contour(0), Some(WorkContour::Flat));
+        assert_eq!(work_contour(8), Some(WorkContour::Contoured));
+        assert_eq!(work_contour(9), None);
+        assert!(
+            OUT.iter().all(|c| resource_type(*c).is_none()
+                && rate_format(*c).is_none()
+                && work_contour(*c).is_none())
+        );
     }
 }

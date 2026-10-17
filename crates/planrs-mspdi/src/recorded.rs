@@ -42,6 +42,11 @@ pub struct RecordedTask {
     pub total_slack: Option<Tenths>,
     /// `FreeSlack`, en dixièmes de minute.
     pub free_slack: Option<Tenths>,
+    /// `StartSlack`, en dixièmes de minute (R-083, réécrit tel quel avec
+    /// `Computed::Recorded`, R-122).
+    pub start_slack: Option<Tenths>,
+    /// `FinishSlack`, en dixièmes de minute.
+    pub finish_slack: Option<Tenths>,
     /// `Critical`.
     pub critical: Option<bool>,
     /// `Summary`.

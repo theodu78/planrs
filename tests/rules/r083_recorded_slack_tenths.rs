@@ -66,3 +66,23 @@ fn r083_assignments_counted() {
     assert!(doc.diagnostics.iter().any(|d| d.code == ImportCode::DanglingReference
         && d.element == "Assignments/Assignment/TaskUID"));
 }
+
+#[test]
+fn r083_start_and_finish_slack_are_recorded() {
+    // `StartSlack` et `FinishSlack` lus en dixièmes, sans arrondi, dans le
+    // planning enregistré (réécrits tels quels avec `Computed::Recorded`,
+    // R-122).
+    let bytes = std::fs::read(planrs_tests::tests_path("fixtures/mspdi/resources.xml")).unwrap();
+    let doc = planrs_mspdi::read(
+        &bytes,
+        &planrs_mspdi::ReadOptions::new(planrs_tests::moment("2026-01-01T00:00")),
+    )
+    .unwrap();
+    let rec = &doc.recorded.tasks[&planrs_core::TaskUid::new(1)];
+    assert_eq!(rec.start_slack, Some(planrs_mspdi::Tenths(9_600)));
+    assert_eq!(rec.finish_slack, Some(planrs_mspdi::Tenths(4_800)));
+    assert_eq!(
+        doc.recorded.tasks[&planrs_core::TaskUid::new(2)].start_slack,
+        None
+    );
+}

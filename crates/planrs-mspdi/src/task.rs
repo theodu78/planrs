@@ -1,14 +1,15 @@
 //! Import des tâches, des liens et des valeurs enregistrées (R-071, R-074,
 //! R-076, R-083 à R-085).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use planrs_core::{
     CalendarUid, Constraint, Decimal, Duration, DurationUnit, Lag, LagValue, Link, LinkType, Minutes, Moment,
     OutlineLevel, Percent, Priority, Project, ProjectOptions, SchedulingMode, SignedPercent, Subject, Task,
-    TaskUid, TimeBasis,
+    TaskUid, TimeBasis, Work,
 };
 
+use crate::baseline;
 use crate::codes::{self, ConstraintKind, DurationCode};
 use crate::diag::{ImportCode, LinkIgnoredReason, Sink};
 use crate::extras;
@@ -36,7 +37,6 @@ struct Read<'e> {
 /// `recorded`.
 pub(crate) fn import(
     elements: &[Element<'_>],
-    assignments: &[Element<'_>],
     project: &mut Project,
     recorded: &mut RecordedSchedule,
     sink: &mut Sink<'_>,
@@ -63,7 +63,11 @@ pub(crate) fn import(
         let rec = recorded_task(&f, sink);
         let position = rows.len();
         let (mut task, duration) = task(uid, &f, &rec, &options, position, sink);
-        task.extras = planrs_core::Extras(extras::collect(&element.children, Parent::Task, None));
+        let baselines = baseline::task(&element.children, &options, f.subject(), sink);
+        task.baselines = baselines.map;
+        let mut kept = extras::collect(&element.children, Parent::Task, None);
+        kept.extend(baselines.extras);
+        task.extras = planrs_core::Extras(kept);
         extras::canonical_order(&mut task.extras, Parent::Task);
         recorded.tasks.insert(uid, rec);
         if uid == TaskUid::PROJECT_SUMMARY {
@@ -120,8 +124,6 @@ pub(crate) fn import(
         // UID uniques (filtrés plus haut) : l'ajout ne peut pas échouer.
         let _ = project.tasks.push(row.task);
     }
-
-    count_assignments(assignments, recorded, sink);
 }
 
 /// UID d'une tâche ; absent, négatif ou illisible : tâche ignorée.
@@ -166,6 +168,8 @@ fn recorded_task(f: &Fields<'_>, sink: &mut Sink<'_>) -> RecordedTask {
         late_finish: f.datetime("LateFinish", sink),
         total_slack: tenths("TotalSlack", sink),
         free_slack: tenths("FreeSlack", sink),
+        start_slack: tenths("StartSlack", sink),
+        finish_slack: tenths("FinishSlack", sink),
         critical: f.bool("Critical", sink),
         summary: f.bool("Summary", sink),
         duration: f.duration("Duration", sink).map(|(d, _)| Minutes::new(d.minutes)),
@@ -196,6 +200,7 @@ fn task(
         .unwrap_or(options.new_tasks_effort_driven);
     let duration = task_duration(f, rec.duration, options, sink);
     t.duration = duration;
+    t.work = baseline::work(f, "Work", sink).unwrap_or(Work::ZERO);
     t.milestone = f.bool("Milestone", sink).unwrap_or(false);
     t.constraint = constraint(f, sink);
     t.deadline = f.datetime("Deadline", sink);
@@ -209,6 +214,8 @@ fn task(
     t.progress.actual_finish = f.datetime("ActualFinish", sink);
     t.progress.actual_duration = non_negative_minutes(f, "ActualDuration", sink);
     t.progress.remaining_duration = non_negative_minutes(f, "RemainingDuration", sink);
+    t.progress.actual_work = baseline::work(f, "ActualWork", sink).unwrap_or(Work::ZERO);
+    t.progress.remaining_work = baseline::work(f, "RemainingWork", sink).unwrap_or(Work::ZERO);
     f.raw("Notes", sink).unwrap_or_default().clone_into(&mut t.notes);
     t.mode = mode(f, rec, duration, sink);
     t.active = f.bool("Active", sink).unwrap_or(true);
@@ -564,33 +571,4 @@ fn lag(f: &Fields<'_>, options: &ProjectOptions, sink: &mut Sink<'_>) -> Lag {
         f.invalid("LinkLag", at, &tenths.to_string(), sink);
         Lag::ZERO
     })
-}
-
-/// Compte les affectations par tâche (`Assignments/Assignment/TaskUID`).
-fn count_assignments(assignments: &[Element<'_>], recorded: &mut RecordedSchedule, sink: &mut Sink<'_>) {
-    let mut counts: BTreeMap<TaskUid, u32> = BTreeMap::new();
-    for a in assignments {
-        let f = Fields::new(&a.children, "Assignments/Assignment", None, a.at);
-        let Some((v, at)) = f.int("TaskUID", sink) else {
-            continue;
-        };
-        match u32::try_from(v).map(TaskUid::new) {
-            Ok(uid) if recorded.tasks.contains_key(&uid) => {
-                let n = counts.entry(uid).or_insert(0);
-                *n = n.saturating_add(1);
-            }
-            _ => f.report(
-                ImportCode::DanglingReference,
-                "TaskUID",
-                at,
-                Some(&v.to_string()),
-                sink,
-            ),
-        }
-    }
-    for (uid, n) in counts {
-        if let Some(rec) = recorded.tasks.get_mut(&uid) {
-            rec.assignments = n;
-        }
-    }
 }

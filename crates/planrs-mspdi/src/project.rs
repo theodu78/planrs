@@ -1,23 +1,26 @@
 //! Correspondance typée de l'élément `Project` (§ 7.6) : informations,
-//! ancre, options, calendrier du projet ; puis calendriers et tâches.
+//! ancre, options, calendrier du projet ; puis calendriers, tâches,
+//! ressources et affectations.
 //!
 //! Valeurs par défaut : celles du schéma MSPDI pour un élément absent
 //! (R-076), sinon celles du modèle (R-032).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use planrs_core::{
     Arena, BuiltinCalendarNames, CalendarUid, ConversionFactors, ExtraEntry, Extras, Guid, Project,
-    ProjectInfo, ProjectInit, ProjectOptions, ScheduleAnchor, Subject, TaskType,
+    ProjectInfo, ProjectInit, ProjectOptions, ScheduleAnchor, Subject, TaskType, TaskUid,
 };
 
 use crate::ReadOptions;
+use crate::assignment;
 use crate::calendar;
 use crate::codes::{self, DurationCode};
 use crate::diag::{ImportCode, Sink};
 use crate::extras::{self, ORIGIN};
 use crate::fields::Fields;
 use crate::recorded::RecordedSchedule;
+use crate::resource;
 use crate::schema::Parent;
 use crate::task;
 use crate::xml::RawDocument;
@@ -27,6 +30,9 @@ pub(crate) struct Built {
     pub(crate) project: Project,
     pub(crate) recorded: RecordedSchedule,
     pub(crate) save_version: Option<i64>,
+    /// Calculés écartés après la lecture XML (répartitions de type 1 des
+    /// affectations, R-087), à ajouter à ceux de la lecture.
+    pub(crate) dropped_computed: BTreeMap<String, u64>,
 }
 
 /// UID du calendrier du projet quand `CalendarUID` manque et qu'aucun
@@ -80,12 +86,26 @@ pub(crate) fn build(raw: &RawDocument<'_>, options: &ReadOptions, sink: &mut Sin
         tasks: BTreeMap::new(),
     };
 
-    task::import(&raw.tasks, &raw.assignments, &mut project, &mut recorded, sink);
+    task::import(&raw.tasks, &mut project, &mut recorded, sink);
+    project.resources = resource::import(&raw.resources, &project.options.factors, sink);
+    let tasks: BTreeSet<TaskUid> = recorded.tasks.keys().copied().collect();
+    let (assignments, dropped_timephased) = assignment::import(&raw.assignments, &tasks, sink);
+    for (uid, n) in assignment::count_by_task(&assignments) {
+        if let Some(rec) = recorded.tasks.get_mut(&uid) {
+            rec.assignments = n;
+        }
+    }
+    project.assignments = assignments;
+    let mut dropped_computed = BTreeMap::new();
+    if dropped_timephased > 0 {
+        dropped_computed.insert("TimephasedData".to_owned(), dropped_timephased);
+    }
 
     Built {
         project,
         recorded,
         save_version,
+        dropped_computed,
     }
 }
 

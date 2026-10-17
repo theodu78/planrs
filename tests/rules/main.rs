@@ -102,6 +102,7 @@ mod r084_project_summary_and_task_identity;
 mod r085_manual_tasks_import;
 mod r086_cpm_options_import;
 mod r087_extras_capture;
+mod r088_resources_assignments_baselines_import;
 mod r090_constraint_date_normalization;
 mod r091_as_soon_as_possible;
 mod r093_start_no_earlier_than;
@@ -114,6 +115,9 @@ mod r099_honor_constraints_option;
 mod r100_constraint_conflict_diagnostics;
 mod r101_negative_slack;
 mod r105_constraint_outside_project;
+mod r124_resources_mspdi;
+mod r125_assignments_mspdi;
+mod r126_baselines_mspdi;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

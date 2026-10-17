@@ -213,3 +213,28 @@ fn r087_without_extras_nothing_is_kept() {
     assert!(doc.project.tasks.get(TaskUid::new(1)).unwrap().extras.is_empty());
     assert!(doc.project.calendars.at(0).unwrap().extras.is_empty());
 }
+
+#[test]
+fn r087_scheduled_work_distribution_of_an_assignment_is_dropped() {
+    // Affectation à profil uniforme (`WorkContour` 0) : répartitions de type
+    // 1 (travail planifié, calculé par MS Project) écartées et comptées ;
+    // type 2 (réel) conservé. Profil modifié (`WorkContour` 8) : tout est
+    // conservé (fixture `resources.xml`).
+    let bytes = std::fs::read(planrs_tests::tests_path("fixtures/mspdi/resources.xml")).unwrap();
+    let doc = read(&bytes, &ReadOptions::new(moment("2026-01-01T00:00"))).unwrap();
+    let extras = |uid: u32| {
+        pairs(
+            &doc.project
+                .assignments
+                .get(planrs_core::AssignmentUid::new(uid))
+                .unwrap()
+                .extras,
+        )
+        .into_iter()
+        .map(|(k, p)| (k.to_owned(), p.contains("<Type>1</Type>")))
+        .collect::<Vec<_>>()
+    };
+    assert_eq!(extras(1), [("TimephasedData".to_owned(), false)]);
+    assert_eq!(extras(2), [("TimephasedData".to_owned(), true)]);
+    assert_eq!(doc.source.dropped_computed.get("TimephasedData"), Some(&2));
+}

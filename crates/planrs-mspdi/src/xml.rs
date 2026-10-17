@@ -2,8 +2,9 @@
 //! (ADR-0009, A19 ; capture des éléments non modélisés : R-087, ADR-0010).
 //!
 //! Le document n'est jamais chargé en arbre complet : seuls les sous-arbres
-//! utiles sont construits (`Calendars/Calendar`, `Tasks/Task`, les champs
-//! scalaires de `Project`, le `TaskUID` de chaque `Assignments/Assignment`).
+//! utiles sont construits (`Calendars/Calendar`, `Tasks/Task`,
+//! `Resources/Resource`, `Assignments/Assignment`, les champs scalaires de
+//! `Project`).
 //! Sous un élément retenu, la table du schéma ([`crate::schema`]) décide du
 //! sort de chaque enfant, selon sa classe :
 //! - lu (M, M?, D, C, F, et `GUID`) : construit ;
@@ -93,8 +94,6 @@ enum Kind {
     Exceptions,
     /// `WorkWeeks`.
     WorkWeeks,
-    /// `Assignments/Assignment` réduit à son `TaskUID` (J2).
-    AssignmentTaskUid,
 }
 
 /// Sort d'un enfant d'un élément retenu.
@@ -177,13 +176,6 @@ fn fate(parent: Kind, name: &str, capture: bool) -> Fate {
         Kind::WorkingTimes => lost_unless(name == "WorkingTime", Kind::WorkingTime),
         Kind::WorkingTime => lost_unless(matches!(name, "FromTime" | "ToTime"), Kind::Scalar),
         Kind::TimePeriod => lost_unless(matches!(name, "FromDate" | "ToDate"), Kind::Scalar),
-        Kind::AssignmentTaskUid => {
-            if name == "TaskUID" {
-                Fate::Build(Kind::Scalar)
-            } else {
-                Fate::Skip
-            }
-        }
         Kind::Scalar => Fate::Skip,
     }
 }
@@ -551,7 +543,7 @@ impl<'a> State<'a, '_, '_> {
                 },
                 (Container::Assignments, "Assignment") => Role::Build {
                     top: Some(Dest::Assignment),
-                    kind: Kind::AssignmentTaskUid,
+                    kind: Kind::Entity(Parent::Assignment),
                 },
                 _ => Role::Skip,
             },
@@ -746,9 +738,9 @@ mod tests {
         assert_eq!(doc.fields[4].raw, Some("<Maps/>"));
         assert_eq!(doc.fields[1].raw, None);
         assert_eq!(doc.ui_sections, ["Views", "Maps"]);
-        // Sautés : UID, TimephasedData et Type de l'affectation (réduite à
-        // son `TaskUID`).
-        assert_eq!(doc.skipped_elements, 3);
+        // Rien n'est sauté : la répartition de l'affectation est capturée
+        // (le filtre des répartitions calculées vient après, R-087).
+        assert_eq!(doc.skipped_elements, 0);
         assert_eq!(doc.resources.len(), 1);
         assert_eq!(doc.calendars.len(), 1);
         let cal = &doc.calendars[0];
@@ -757,8 +749,14 @@ mod tests {
         assert_eq!(doc.tasks[0].children[1].name, "Name");
         assert_eq!(doc.tasks[1].children[1].children[0].text, "0");
         assert_eq!(doc.assignments.len(), 1);
-        assert_eq!(doc.assignments[0].children.len(), 1);
-        assert_eq!(doc.assignments[0].children[0].text, "1");
+        let names: Vec<&str> = doc.assignments[0]
+            .children
+            .iter()
+            .map(|c| c.name.as_ref())
+            .collect();
+        assert_eq!(names, ["UID", "TaskUID", "TimephasedData"]);
+        assert_eq!(doc.assignments[0].children[1].text, "1");
+        assert!(doc.assignments[0].children[2].raw.is_some());
         // Position : début de la balise.
         assert_eq!(&SMALL[usize::try_from(doc.tasks[1].at).unwrap()..][..6], "<Task>");
     }

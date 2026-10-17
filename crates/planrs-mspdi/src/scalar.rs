@@ -8,7 +8,7 @@
 //! en entiers, puis arrondies par la règle unique R-001.
 
 use chrono::NaiveDate;
-use planrs_core::{Minutes, Moment, TimeOfDay, round_div};
+use planrs_core::{Decimal, Minutes, Moment, TimeOfDay, round_div};
 
 /// Booléen MSPDI (`xsd:boolean`) : `1`/`true` ou `0`/`false`, espaces de tête
 /// et de fin ignorés (R-076). Toute autre écriture rend `None`.
@@ -410,6 +410,66 @@ pub const fn percent_lag_from_link_lag(link_lag: i64) -> Option<i64> {
     link_lag.checked_mul(10)
 }
 
+/// Décimal lu (`xsd:decimal`, `xsd:float` sans exposant) : valeur exacte au
+/// plus à 6 décimales, et vrai si des décimales au-delà de la sixième ont
+/// été arrondies (R-001).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ParsedDecimal {
+    /// Valeur.
+    pub value: Decimal,
+    /// Vrai si la valeur a été arrondie à 6 décimales.
+    pub rounded: bool,
+}
+
+/// R-088 : nombre décimal `[+-]chiffres[.chiffres]` (espaces de tête et de
+/// fin ignorés ; `.5` et `5.` admis), sans flottant. Au-delà de 6
+/// décimales, arrondi par R-001 (`rounded`). Exposant, valeur vide ou trop
+/// grande pour un `i64` : `None`. Exemples : `1.00` → 1 ; `4.15875` →
+/// 4,15875 ; `0.5` → 0,5 ; `-3` → −3 ; `0.1234567` → 0,123457 (arrondi).
+#[must_use]
+pub fn parse_decimal(s: &str) -> Option<ParsedDecimal> {
+    let t = s.trim();
+    let (negative, body) = match t.as_bytes().first() {
+        Some(b'-') => (true, t.get(1..)?),
+        Some(b'+') => (false, t.get(1..)?),
+        _ => (false, t),
+    };
+    let (int, frac) = body.split_once('.').unwrap_or((body, ""));
+    if (int.is_empty() && frac.is_empty()) || !int.bytes().chain(frac.bytes()).all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let digits = |d: &str| -> Option<i128> {
+        d.bytes().try_fold(0_i128, |acc, b| {
+            acc.checked_mul(10)?.checked_add(i128::from(b.checked_sub(b'0')?))
+        })
+    };
+    let max = usize::from(Decimal::MAX_SCALE);
+    let (kept, dropped) = if frac.len() > max {
+        (frac.get(..max)?, frac.get(max..)?)
+    } else {
+        (frac, "")
+    };
+    let scale = u8::try_from(kept.len()).ok()?;
+    let mut mantissa = digits(int)?
+        .checked_mul(10_i128.checked_pow(u32::from(scale))?)?
+        .checked_add(digits(kept)?)?;
+    let mut rounded = false;
+    if !dropped.is_empty() {
+        // Arrondi à 6 décimales : (mantisse × 10^k + reste) / 10^k, R-001.
+        let k = u32::try_from(dropped.len()).ok()?;
+        let rest = digits(dropped)?;
+        rounded = rest != 0;
+        let den = 10_i128.checked_pow(k)?;
+        let num = mantissa.checked_mul(den)?.checked_add(rest)?;
+        mantissa = i128::from(round_div(num, den)?);
+    }
+    if negative {
+        mantissa = mantissa.checked_neg()?;
+    }
+    let value = Decimal::new(i64::try_from(mantissa).ok()?, scale).ok()?;
+    Some(ParsedDecimal { value, rounded })
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -418,7 +478,7 @@ mod tests {
     )]
 
     use super::{
-        DateTimeError, IsoDuration, IsoDurationError, parse_bool, parse_datetime, parse_int,
+        DateTimeError, IsoDuration, IsoDurationError, parse_bool, parse_datetime, parse_decimal, parse_int,
         parse_iso_duration, parse_time, percent_lag_from_link_lag, tenths_to_minutes,
     };
     use planrs_core::{Minutes, Moment, TimeOfDay};
@@ -569,5 +629,23 @@ mod tests {
         assert_eq!(percent_lag_from_link_lag(500), Some(5_000));
         assert_eq!(percent_lag_from_link_lag(-250), Some(-2_500));
         assert_eq!(percent_lag_from_link_lag(i64::MAX), None);
+    }
+
+    #[test]
+    fn r088_decimals() {
+        let d = |t: &str| parse_decimal(t).map(|p| (p.value.normalized().to_string(), p.rounded));
+        assert_eq!(d("1.00"), Some(("1".to_owned(), false)));
+        assert_eq!(d(" 4.15875 "), Some(("4.15875".to_owned(), false)));
+        assert_eq!(d("0.5"), Some(("0.5".to_owned(), false)));
+        assert_eq!(d(".5"), Some(("0.5".to_owned(), false)));
+        assert_eq!(d("5."), Some(("5".to_owned(), false)));
+        assert_eq!(d("-3"), Some(("-3".to_owned(), false)));
+        assert_eq!(d("+2.25"), Some(("2.25".to_owned(), false)));
+        assert_eq!(d("0.1234567"), Some(("0.123457".to_owned(), true)));
+        assert_eq!(d("-0.0000005"), Some(("-0.000001".to_owned(), true)));
+        assert_eq!(d("1.0000000"), Some(("1".to_owned(), false)));
+        for bad in ["", ".", "-", "1e5", "1,5", "abc", "1.2.3", "99999999999999999999"] {
+            assert_eq!(parse_decimal(bad), None, "{bad}");
+        }
     }
 }

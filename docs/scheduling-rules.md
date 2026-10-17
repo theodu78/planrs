@@ -405,11 +405,53 @@ Le moteur (`planrs_core::schedule`, ADR-0009) calcule un `Schedule` hors du mod�
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r052_outline_hierarchy.rs` (`r052_*`).
 
+## R-053 — Dates d'une récapitulative
+- **Formulation** : début = min des ES, fin = max des EF de ses enfants actifs planifiés (manuels compris, inactifs exclus) ; aucun enfant planifié → `Excluded { EmptySummary }`, et les liens qui la touchent sont ignorés (`link.excluded_endpoint`). En J2, dates planifiées = dates au plus tôt. Exemples : S {A 2 j ; B FS de A 1 j} → lun 19/10 08:00 – mer 21/10 17:00 ; S {A 1 j ; M manuelle jeu 22/10 – ven 23/10} → lun – ven ; S {A 1 j, I inactive 3 j} → lun 08:00 – 17:00 ; S {I inactive} → `EmptySummary`.
+- **Source** : support.microsoft.com, « Indent or outdent tasks… » (S23), « How Project schedules tasks: Behind the scenes » (S8) ; observé O3 (A1 UID 108) ; inactifs : S25.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r053_summary_dates.rs` (`r053_*`).
+
+## R-054 — Durée d'une récapitulative
+- **Formulation** : temps ouvré entre son début et sa fin sur le calendrier de la récapitulative, sinon du projet ; jamais la somme des durées des enfants. Exemples : S {A 1 j ; B FS+2 j de A 1 j} : B jeu 22/10 → S lun 08:00 – jeu 17:00 = 1 920 ; début ven 23/10 08:00, S {A 1 j ; B FS 1 j} → ven 08:00 – lun 26/10 17:00 = 960 ; S (24 heures) {A 1 j Standard, lun 08:00 – 17:00} → 540.
+- **Source** : Microsoft Q&A 5110117 (Q4) ; S8.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r054_summary_duration.rs` (`r054_*`).
+
+## R-055 — % achevé d'une récapitulative
+- **Formulation** : `round_div(Σ réel × 10 000, Σ durée)` (centièmes de %, R-001) sur les feuilles actives planifiées descendantes, récapitulatives intermédiaires exclues ; réel = `percent_of(durée, % achevé)` (R-010) ; Σ durée nulle : moyenne arrondie des % des feuilles ; aucune feuille : 0. Une feuille garde son % saisi. Exemples : A 960 à 50 %, B 480 à 0 %, C 240 à 100 % → 720 / 1 680 → 4 286 ; S1 {S2 {A ; B FS+2 j de A}, C} → S2 3 333, S1 4 286 (une pondération par la durée de S2, 2 400, donnerait 3 939) ; deux jalons à 100 % et 0 % → 5 000.
+- **Source** : Microsoft Q&A 5110117 (Q4) ; support.microsoft.com, « Percent (%) Complete fields », « Actual Duration » (S26) ; cas limites et arrondi : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r055_summary_percent_complete.rs` (`r055_*`).
+
+## R-056 — Lien FS ou SS vers une récapitulative (porte)
+- **Formulation** : la borne du lien s'applique comme plancher de début à toutes les sous-tâches, à tout niveau (porte de la récapitulative, instant non recalé, héritée par les portes des sous-récapitulatives) ; une sous-tâche garde ses propres liens, la plus grande borne gagne (R-044) ; pilote `SummaryGate` de la récapitulative la plus proche. Exemples : X 2 j (lun – mar) FS → S {A 1 j, B 1 j} → A, B mer 08:00 – 17:00, pilote `SummaryGate(S)` ; X SS+1 j → S : borne lun 17:00 → A, B mar 08:00 – 17:00 ; X FS → S1 {S2 {A}} → A mer 08:00.
+- **Source** : learn.microsoft.com, « Tasks aren't scheduled as expected in Microsoft Project » (S24) ; observé O6 (A6 UID 9 : sous-tâches à partir du 27/11/2024 08:00).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r056_summary_predecessor_gates_subtasks.rs` (`r056_*`).
+
+## R-057 — Lien sortant d'une récapitulative
+- **Formulation** : FS et FF lisent la fin agrégée ; au retour, leur plafond de fin (`h`, R-047) s'applique à toutes les feuilles de la récapitulative, à tout niveau. SS et SF lisent le début agrégé ; au retour, leur plafond de début s'applique aux seules feuilles dont l'ES égale celui de la récapitulative (ADR-0009 A11), à travers les sous-récapitulatives de même début. Le décalage en % se calcule sur la durée R-054. La marge libre d'une feuille compte les liens hérités sous la même restriction (R-049). Exemples : S {A 1 j, B 2 j} FS → Y 1 j : Y mer 08:00 – 17:00 ; A LF mar 17:00, TF 480, FS 480 ; B TF 0. S {A 1 j ; B FS de A 1 j} SS+1 j → Y 1 j : Y mar 08:00 – 17:00 ; plafond lun 08:00 sur A seule → TF(A) = TF(B) = TF(Y) = 0 (sur toutes les feuilles : TF(B) = −480 sans contrainte). S {A 1 j, B 2 j} FS+50 % → Y : 50 % de 960 → Y jeu 22/10 08:00. S {A 1 j, B 2 j} FF → Y 1 j : Y mar 08:00 – 17:00, TF(A) = 480.
+- **Source** : S24 ; observé O6 (A6 UID 11 et 25) ; restriction SS/SF : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r057_summary_successor.rs` (`r057_*`).
+
+## R-058 — Lien FF ou SF vers une récapitulative
+- **Formulation** : déplié en une borne de fin sur chaque feuille active descendante, à tout niveau (conversion R-039, R-040), avec l'avertissement `link.finish_to_summary`. Exemples : X 3 j (lun – mer) FF → S {A 1 j, B 1 j} → A, B mer 08:00 – 17:00 ; X 1 j SF+2 j → S1 {S2 {A 1 j}, B 1 j} → A, B mar 08:00 – 17:00.
+- **Source** : hypothèse (MS Project refuse peut-être ce lien à la saisie).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r058_finish_link_into_summary.rs` (`r058_*`).
+
 ## R-059 — Lien entre une récapitulative et sa descendante
 - **Formulation** : ignoré, dans les deux sens, avec `link.summary_descendant` (erreur). Exemple : S {A 1 j}, lien A FS → S : ignoré, A lun 08:00 – 17:00 ; lien S FS → A : ignoré aussi.
 - **Source** : Microsoft Q&A 5029993 (Q7).
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r059_summary_descendant_link.rs` (`r059_*`).
+
+## R-060 — Dates au plus tard, marges et critique d'une récapitulative
+- **Formulation** : LS = min des LS, LF = max des LF de ses enfants actifs ; TF = `min(between(ES, LS), between(EF, LF))` sur ces dates agrégées et le calendrier de la récapitulative, sinon du projet ; marge libre par R-049 (sans lien sortant propre ni hérité : FS = TF) ; critique par R-050 seulement, jamais « parce qu'un enfant l'est ». Exemples : P 1 j (lun) ; S {A 1 j sans lien, B 1 j FS de P} ; Q 1 j FS de B → B mar, Q mer, fin du projet mer 17:00 ; A TF 960 ; B TF 0, critique ; S : ES lun 08:00, EF mar 17:00, LS mar 08:00, LF mer 17:00 → TF(S) = FS(S) = 480, non critique malgré B (critique au seuil 1 j). S {A 1 j, B 2 j} FS → Y ; Z 4 j seule : TF(S) = 480, FS(S) = 0 (écart à Y).
+- **Source** : observé O3 (A1 UID 108 : TF 105 600 dixièmes, `Critical` 0 alors que l'enfant UID 110 est critique), O4 (A1 UID 17, 18, 53, 54, 105 : FS = TF sans lien sortant), O5 (A6 UID 10, 12, 14 : FS avec lien sortant) ; reste : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r060_summary_slack_and_critical.rs` (`r060_*`).
 
 ## R-061 — Jalon et durée nulle dans le réseau
 - **Formulation** : une tâche de durée nulle est placée par R-031 dans les deux passes ; l'indicateur `milestone` n'influe pas, seule la durée compte. Exemples : A 1 j ; M FS 0 → lun 17:00 ; N FS de M 1 j → mar 08:00 – 17:00 ; au plus tard, M = `backward_span(mar 08:00, 0)` = mar 08:00, TF 0 ; A LF lun 17:00. Projet commençant mar 20/10 08:00, jalon sans lien, successeur LS mar 08:00 → LF du jalon mar 08:00 (O1). Tâche d'un jour marquée jalon : planifiée comme un jour.

@@ -1,7 +1,7 @@
 # Intégration continue de planrs : mêmes checks que ceux exigés avant tout
 # commit (CLAUDE.md), plus les contrôles xtask, la compilation WebAssembly,
-# les tests sur macOS et Windows, la MSRV, le budget du moteur et la parité
-# sur le corpus public.
+# les tests sur macOS et Windows, la MSRV, le budget du moteur, la parité
+# sur le corpus public et la conformité au schéma MSPDI.
 #
 # Aucun paquet système n'est installé : aucune dépendance actuelle n'en exige à
 # la compilation (winit et xkbcommon chargent leurs bibliothèques par dlopen,
@@ -150,6 +150,37 @@ jobs:
           name: corpus-report
           # Rapport seul, jamais les fichiers du corpus.
           path: target/tmp/corpus-report.*
+
+  # Schéma MSPDI pj15 (ADR-0010, D18) : fichier public de Microsoft, extrait
+  # du MSI du SDK de Project 2013 (64 Mo) par `cargo xtask schema fetch`, en
+  # Rust pur, empreintes du MSI et du XSD vérifiées. Le XSD (240 Ko) est mis
+  # en cache sous la clé de son empreinte (pas d'enjeu de droits, à la
+  # différence du corpus) et revérifié par la même tâche après restauration ;
+  # le MSI n'est téléchargé qu'en cas d'absence. Conformité de la table du
+  # schéma (P27) et des documents écrits (P26).
+  schema:
+    name: schéma MSPDI (pj15)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache du schéma
+        uses: actions/cache@v4
+        with:
+          path: tests/schema/mspdi_pj15.xsd
+          key: mspdi-pj15-1c208a9732d6ba16f677a9f2fb9d5a629f0c200346b1851998a44765c502eb85
+
+      - name: Extraction (sha256 vérifiés)
+        run: cargo xtask schema fetch
+
+      - name: Conformité
+        run: cargo test -p planrs-tests --test schema
+        env:
+          PLANRS_SCHEMA: required
 
   msrv:
     name: MSRV (Rust 1.95)

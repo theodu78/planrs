@@ -20,12 +20,15 @@
 //!   dixièmes de minute (R-070, R-072, R-073, R-075) ;
 //! - [`codes`] : tables des codes numériques MSPDI vers les types du cœur ;
 //! - [`error`] : erreurs structurelles typées, positions ;
-//! - [`diag`] : diagnostics d'import.
+//! - [`diag`] : diagnostics d'import ;
+//! - [`schema`] : table unique des éléments du schéma (séquences pj15,
+//!   classes, ordre observé ; R-087, R-121).
 
 pub mod codes;
 pub mod diag;
 pub mod error;
 pub mod scalar;
+pub mod schema;
 
 mod calendar;
 mod fields;

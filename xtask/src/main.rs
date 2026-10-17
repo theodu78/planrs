@@ -7,6 +7,8 @@
 //!   transitivement, d'egui, eframe, winit ou rfd.
 //! - `corpus fetch` : télécharge les fichiers du corpus public
 //!   (`tests/corpus/manifest.toml`), contrôle taille et SHA-256.
+//! - `schema fetch` : extrait le schéma MSPDI `mspdi_pj15.xsd` du MSI du SDK
+//!   de Project 2013 (`tests/schema/`, sha256 vérifiés).
 //! - `panics` : complète clippy pour la règle 10 (ne jamais planter). Refuse
 //!   hors du code de test les `allow`/`expect` qui lèvent un interdit de la
 //!   règle 10 et la famille `assert!`, qu'aucune lint clippy ne refuse.
@@ -14,6 +16,7 @@
 mod corpus;
 mod layers;
 mod panics;
+mod schema;
 
 use std::process::ExitCode;
 
@@ -23,7 +26,9 @@ tâches :
   layers   vérifie les couches (règle 9)
   panics   vérifie les interdits de la règle 10 que clippy ne couvre pas
   corpus fetch
-           télécharge le corpus public (tests/corpus/files, sha256 vérifié)";
+           télécharge le corpus public (tests/corpus/files, sha256 vérifié)
+  schema fetch
+           extrait mspdi_pj15.xsd du SDK de Project 2013 (tests/schema, sha256 vérifiés)";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -31,6 +36,7 @@ fn main() -> ExitCode {
         Some("layers") => layers::run(),
         Some("panics") => panics::run(),
         Some("corpus") => corpus::run(args.get(1..).unwrap_or_default()),
+        Some("schema") => schema::run(args.get(1..).unwrap_or_default()),
         _ => {
             eprintln!("{USAGE}");
             ExitCode::FAILURE

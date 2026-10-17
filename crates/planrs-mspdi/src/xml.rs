@@ -754,6 +754,38 @@ mod tests {
     }
 
     #[test]
+    fn read_lists_agree_with_the_schema_table() {
+        // Les listes des champs lus (J2) ne nomment que des éléments que la
+        // table du schéma classe comme lus (M, M?, D, C, F), ou `GUID`.
+        use crate::schema::{Class, Parent, sequence};
+        let lists: [(Parent, &[&str]); 4] = [
+            (Parent::Project, super::PROJECT_FIELDS),
+            (Parent::Task, super::TASK_FIELDS),
+            (Parent::PredecessorLink, super::LINK_FIELDS),
+            (Parent::Calendar, super::CALENDAR_FIELDS),
+        ];
+        for (parent, names) in lists
+            .into_iter()
+            .chain([(Parent::Exception, super::EXCEPTION_FIELDS)])
+        {
+            for name in names {
+                let class = sequence(parent).class(name);
+                let read = matches!(
+                    class,
+                    Some(
+                        Class::Modeled | Class::ModeledOpt | Class::Derived | Class::Computed | Class::Format
+                    )
+                );
+                // `LevelingDelay` : conservé (P) et lu pour le harnais (R-083).
+                assert!(
+                    read || *name == "GUID" || *name == "LevelingDelay",
+                    "{parent:?}/{name} : {class:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn retained_budget() {
         // Name, Task, UID, Name : le quatrième élément retenu dépasse 3.
         let limits = Limits {

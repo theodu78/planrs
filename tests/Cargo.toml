@@ -29,6 +29,12 @@ path = "oracle/main.rs"
 name = "corpus"
 path = "corpus/main.rs"
 
+# Conformité au schéma MSPDI pj15 (P26, P27) ; sautée si le XSD est absent,
+# sauf sous `PLANRS_SCHEMA=required` (job CI `schema`).
+[[test]]
+name = "schema"
+path = "schema/main.rs"
+
 # Budget de performance du moteur (ignoré hors du job CI `perf`, en release).
 [[test]]
 name = "perf"
@@ -44,6 +50,7 @@ harness = false
 chrono.workspace = true
 planrs-core.workspace = true
 planrs-mspdi.workspace = true
+quick-xml.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

@@ -58,6 +58,10 @@ toml = "1.1.8"
 # Empreintes SHA-256 du corpus public (`cargo xtask corpus fetch` et harnais
 # `tests/corpus`) : aucun téléchargement dans `cargo test`.
 sha2 = "0.11.1"
+# `cargo xtask schema fetch` (ADR-0010, D18) : lecture du MSI du SDK de
+# Project 2013 et de son archive CAB, en Rust pur (MIT).
+msi = "0.10.0"
+cab = "0.6.0"
 # Dépendances de développement de planrs-core (ADR-0008) : JSON de référence et
 # aller-retour serde, tests de propriétés. proptest sans `fork` ni `timeout`
 # (inutiles ici, et autant de crates en moins).

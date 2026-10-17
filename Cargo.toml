@@ -60,6 +60,10 @@ toml = "1.1.8"
 # (inutiles ici, et autant de crates en moins).
 serde_json = "1.0.154"
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }
+# Benchmark informatif des conversions de calendrier (ADR-0008), non exécuté
+# en CI (seulement compilé par clippy --all-targets). Sans rayon ni plotters :
+# ni parallélisme ni graphiques, autant de crates en moins.
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

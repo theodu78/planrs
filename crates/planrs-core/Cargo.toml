@@ -13,8 +13,14 @@ serde.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 proptest.workspace = true
 serde_json.workspace = true
+
+# Benchmark informatif, hors CI : `cargo bench -p planrs-core`.
+[[bench]]
+name = "calendar"
+harness = false
 
 [lints]
 workspace = true

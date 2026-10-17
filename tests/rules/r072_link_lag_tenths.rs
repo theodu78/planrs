@@ -20,3 +20,51 @@ fn r072_remainder_rounded_by_r001() {
     assert_eq!(tenths_to_minutes(-25), (Minutes::new(-3), true));
     assert_eq!(tenths_to_minutes(24), (Minutes::new(2), true));
 }
+
+/// Liens de la tâche `uid` de la fixture `tasks.xml` : (base, minutes, unité).
+fn lags(
+    uid: u32,
+) -> (
+    Vec<(planrs_core::TimeBasis, i64, planrs_core::DurationUnit)>,
+    planrs_mspdi::MspdiDocument,
+) {
+    let bytes = std::fs::read(planrs_tests::tests_path("fixtures/mspdi/tasks.xml")).unwrap();
+    let doc = planrs_mspdi::read(
+        &bytes,
+        &planrs_mspdi::ReadOptions::new(planrs_tests::moment("2026-01-01T00:00")),
+    )
+    .unwrap();
+    let out = doc
+        .project
+        .tasks
+        .get(planrs_core::TaskUid::new(uid))
+        .unwrap()
+        .predecessors
+        .iter()
+        .filter_map(|l| match l.lag.value {
+            planrs_core::LagValue::Time { minutes, unit } => Some((l.lag.basis, minutes.get(), unit)),
+            planrs_core::LagValue::Percent { .. } => None,
+        })
+        .collect();
+    (out, doc)
+}
+
+#[test]
+fn r072_lag_format_gives_basis_and_unit() {
+    use planrs_core::DurationUnit::Day;
+    use planrs_core::TimeBasis::{Elapsed, Working};
+    // UID 3 : 4 800 + `LagFormat` 7 → +480 ouvré (1 j).
+    assert_eq!(lags(3).0, [(Working, 480, Day)]);
+    // UID 4 : FF −4 800 + 7 → −480 ; SS 28 800 + 8 → +2 880 écoulé (2 ej).
+    assert_eq!(lags(4).0, [(Working, -480, Day), (Elapsed, 2_880, Day)]);
+    // UID 5 : SF 25 dixièmes → 3 min, arrondi signalé.
+    let (l, doc) = lags(5);
+    assert_eq!(l, [(Working, 3, Day)]);
+    assert!(
+        doc.diagnostics
+            .iter()
+            .any(|d| d.code == planrs_mspdi::ImportCode::Rounded
+                && d.element == "Tasks/Task/PredecessorLink/LinkLag"
+                && d.value.as_deref() == Some("25"))
+    );
+}

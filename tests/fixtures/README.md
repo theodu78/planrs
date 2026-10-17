@@ -17,5 +17,8 @@ Petits fichiers MSPDI **écrits à la main** pour planrs (aucun fichier tiers, a
 | `project_defaults.xml` | projet minimal, booléens et options absents | R-076 |
 | `project_options.xml` | options du projet toutes renseignées (facteurs, heures, formats, seuil de criticité, plusieurs chemins critiques) | R-076, R-086 |
 | `calendars.xml` | huit calendriers : exceptions de chaque type, plages à fusionner ou invalides, jours manquants, dérivés, base négative, ancienne forme, semaines datées | R-077 à R-082 |
+| `tasks.xml` | tâches, formats de durée, liens des quatre types, décalages ouvrés, écoulés et en %, liens ignorés, valeurs enregistrées, affectations | R-070 à R-076, R-083 |
+| `manual.xml` | tâches manuelles (avec et sans `Manual*`, début seul), récapitulative manuelle | R-085 |
+| `null_rows.xml` | 11 lignes dont 5 vides, ID et drapeau `Summary` incohérents | R-084 |
 
-Les mêmes fichiers servent aux tests de robustesse du lecteur (`crates/planrs-mspdi/tests/robustness.rs` : chaque préfixe, mutations P18).
+Les mêmes fichiers servent aux tests de robustesse du lecteur (`crates/planrs-mspdi/tests/robustness.rs` : chaque préfixe, mutations P18) et à la propriété « pas de fuite » P19 (`crates/planrs-mspdi/tests/no_leak.rs`).

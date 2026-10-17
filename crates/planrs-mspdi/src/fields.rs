@@ -7,7 +7,9 @@ use std::collections::BTreeMap;
 use planrs_core::{Moment, Subject, TimeOfDay};
 
 use crate::diag::{ImportCode, Sink};
-use crate::scalar::{DateTimeError, parse_bool, parse_datetime, parse_int, parse_time};
+use crate::scalar::{
+    DateTimeError, IsoDuration, parse_bool, parse_datetime, parse_int, parse_iso_duration, parse_time,
+};
 use crate::xml::Element;
 
 /// Champs d'un élément, indexés par nom local.
@@ -186,5 +188,19 @@ impl<'e> Fields<'e> {
             self.report(ImportCode::Rounded, name, at, Some(t), sink);
         }
         Some(v)
+    }
+
+    /// Durée ISO 8601 (R-070), signée ; arrondi signalé ; illisible →
+    /// diagnostic, `None`.
+    pub(crate) fn duration(&self, name: &str, sink: &mut Sink<'_>) -> Option<(IsoDuration, u64)> {
+        let (t, at) = self.scalar(name, sink)?;
+        let Ok(d) = parse_iso_duration(t) else {
+            self.invalid(name, at, t, sink);
+            return None;
+        };
+        if d.rounded {
+            self.report(ImportCode::Rounded, name, at, Some(t), sink);
+        }
+        Some((d, at))
     }
 }

@@ -17,6 +17,7 @@ use crate::codes::{self, DurationCode};
 use crate::diag::{ImportCode, Sink};
 use crate::fields::Fields;
 use crate::recorded::RecordedSchedule;
+use crate::task;
 use crate::xml::RawDocument;
 
 /// Résultat de la correspondance.
@@ -70,11 +71,13 @@ pub(crate) fn build(raw: &RawDocument, options: &ReadOptions, sink: &mut Sink<'_
     project.options = project_options(&f, sink);
     project.calendar = project_calendar(&f, sink);
     project.calendars = calendar::import(&raw.calendars, project.calendar, sink);
-    let recorded = RecordedSchedule {
+    let mut recorded = RecordedSchedule {
         project_start: recorded_start,
         project_finish: recorded_finish,
         tasks: BTreeMap::new(),
     };
+
+    task::import(&raw.tasks, &raw.assignments, &mut project, &mut recorded, sink);
 
     Built {
         project,

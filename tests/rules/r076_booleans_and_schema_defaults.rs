@@ -137,3 +137,39 @@ fn r076_missing_start_date_uses_injected_now() {
     assert!(has(&doc, &ImportCode::MissingRequired, "StartDate"));
     assert_eq!(doc.recorded.project_start, None);
 }
+
+#[test]
+fn r076_task_booleans() {
+    // `SaveVersion` 12, tâche sans `Active`, `Manual`, `IsNull` : active,
+    // automatique, non vide.
+    let xml = "<Project><SaveVersion>12</SaveVersion><StartDate>2026-10-19T08:00:00</StartDate>\
+               <Tasks><Task><UID>1</UID><ID>1</ID><Duration>PT8H0M0S</Duration></Task></Tasks></Project>";
+    let doc = read(xml.as_bytes(), &ReadOptions::new(moment("2026-01-01T00:00"))).unwrap();
+    let t = doc.project.tasks.get(planrs_core::TaskUid::new(1)).unwrap();
+    assert!(t.active);
+    assert!(!t.is_null);
+    assert_eq!(t.mode, planrs_core::SchedulingMode::Auto);
+    // Fixture `tasks.xml` : UID 6 `<Milestone>2</Milestone>` → faux, signalé ;
+    // UID 7 `<Active>0</Active>` → inactive.
+    let doc = fixture("tasks.xml");
+    let t6 = doc.project.tasks.get(planrs_core::TaskUid::new(6)).unwrap();
+    assert!(!t6.milestone);
+    assert!(has(&doc, &ImportCode::InvalidValue, "Tasks/Task/Milestone"));
+    assert!(
+        !doc.project
+            .tasks
+            .get(planrs_core::TaskUid::new(7))
+            .unwrap()
+            .active
+    );
+    // Type de tâche absent : `DefaultTaskType` du projet (absent → durée fixe).
+    let doc = read(xml.as_bytes(), &ReadOptions::new(moment("2026-01-01T00:00"))).unwrap();
+    assert_eq!(
+        doc.project
+            .tasks
+            .get(planrs_core::TaskUid::new(1))
+            .unwrap()
+            .task_type,
+        TaskType::FixedDuration
+    );
+}

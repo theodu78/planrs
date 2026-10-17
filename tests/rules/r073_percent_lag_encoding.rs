@@ -12,3 +12,49 @@ fn r073_percent_lag_is_link_lag_times_ten() {
     // Débordement : aucune valeur (l'import signale et applique 0).
     assert_eq!(percent_lag_from_link_lag(i64::MAX), None);
 }
+
+#[test]
+fn r073_percent_lag_import() {
+    use planrs_core::{LagValue, SignedPercent, TaskUid, TimeBasis};
+    let bytes = std::fs::read(planrs_tests::tests_path("fixtures/mspdi/tasks.xml")).unwrap();
+    let doc = planrs_mspdi::read(
+        &bytes,
+        &planrs_mspdi::ReadOptions::new(planrs_tests::moment("2026-01-01T00:00")),
+    )
+    .unwrap();
+    let percent = |uid: u32| {
+        doc.project
+            .tasks
+            .get(TaskUid::new(uid))
+            .unwrap()
+            .predecessors
+            .iter()
+            .find_map(|l| match l.lag.value {
+                LagValue::Percent { percent } => Some((l.lag.basis, percent)),
+                LagValue::Time { .. } => None,
+            })
+            .unwrap()
+    };
+    // UID 5 : 500 + `LagFormat` 19 → 50 % ouvré ; UID 7 : −250 + 20 → −25 %
+    // écoulé.
+    assert_eq!(
+        percent(5),
+        (TimeBasis::Working, SignedPercent::new(5_000).unwrap())
+    );
+    assert_eq!(
+        percent(7),
+        (TimeBasis::Elapsed, SignedPercent::new(-2_500).unwrap())
+    );
+    // Signalé à chaque occurrence (hypothèse pure).
+    let unsupported = doc
+        .diagnostics
+        .iter()
+        .filter(|d| {
+            d.code
+                == planrs_mspdi::ImportCode::Unsupported {
+                    what: "percent_lag_encoding".to_owned(),
+                }
+        })
+        .count();
+    assert_eq!(unsupported, 2);
+}

@@ -50,8 +50,10 @@ mod r032_new_project_defaults;
 mod r033_date_without_time;
 mod r034_effective_status_date;
 mod r070_iso_duration;
+mod r071_duration_format;
 mod r072_link_lag_tenths;
 mod r073_percent_lag_encoding;
+mod r074_link_type;
 mod r075_datetime_without_timezone;
 mod r076_booleans_and_schema_defaults;
 mod r077_working_times;
@@ -60,6 +62,9 @@ mod r079_base_or_derived_calendar;
 mod r080_calendar_exceptions_import;
 mod r081_legacy_exceptions;
 mod r082_work_weeks_import;
+mod r083_recorded_slack_tenths;
+mod r084_project_summary_and_task_identity;
+mod r085_manual_tasks_import;
 mod r086_cpm_options_import;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention

@@ -269,6 +269,12 @@ Bloc réservé à la lecture et à l'écriture MSPDI (`planrs-mspdi`) ; R-087 à
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r070_iso_duration.rs` (`r070_*`) ; tests unitaires de `crates/planrs-mspdi/src/scalar.rs`.
 
+## R-071 — `DurationFormat` d'une tâche
+- **Formulation** : unité, base et estimation par la table de `DurationFormat` (3/35 m, 4/36 em, 5/37 h, 6/38 eh, 7/39 j, 8/40 ej, 9/41 sem, 10/42 esem, 11/43 mois, 12/44 emois ; + 32 = « ? ») ; 21 et 53 (nul) → unité par défaut du projet (`DurationFormat` du projet, sinon jour), ouvrée ; 19, 20, 51, 52 (%) sur une durée de tâche → jour ouvré, `mspdi.invalid_value` ; code inconnu → `mspdi.unknown_code` ; `Estimated` présent l'emporte sur les codes « ? ». Les minutes viennent de `Duration` (R-070) quelle que soit l'unité. La durée d'une récapitulative automatique (déduite de la hiérarchie, R-052) est une valeur calculée : gardée dans `RecordedSchedule`, mise à 0 dans le modèle (une récapitulative manuelle garde la sienne, R-064). Exemples : `PT40H0M0S` + 39 → 2 400, jour, ouvrée, estimée ; `PT120H0M0S` + 8 → 7 200, jour, écoulée ; `PT8H0M0S` + 7 avec `Estimated 1` → estimée ; récapitulative `PT80H0M0S` + 21 → 4 800 enregistrées, jour.
+- **Source** : learn.microsoft.com, « DurationFormat Element » (S3), « XML Schema for the Tasks Element » (S4) ; durée des récapitulatives hors du modèle : ADR-0004, ADR-0009.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r071_duration_format.rs` (`r071_*`), fixture `tests/fixtures/mspdi/tasks.xml`.
+
 ## R-072 — `LinkLag` en dixièmes de minute
 - **Formulation** : minutes = `round_div(LinkLag, 10)` (R-001), diagnostic `mspdi.rounded` s'il y a un reste ; base et unité par `LagFormat` (absent : jour ouvré). Exemples : 4 800 + `LagFormat` 7 → 480 ouvré ; −4 800 → −480 ; 28 800 + 8 → 2 880 écoulé ; 25 → 3 et diagnostic.
 - **Source** : learn.microsoft.com, « LinkLag Element » (« in tenths of a minute », S4), « LagFormat Element ».
@@ -280,6 +286,12 @@ Bloc réservé à la lecture et à l'écriture MSPDI (`planrs-mspdi`) ; R-087 à
 - **Source** : hypothèse pure (aucun fichier du corpus n'a de décalage en pourcentage).
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r073_percent_lag_encoding.rs` (`r073_*`).
+
+## R-074 — Type de lien et liens ignorés
+- **Formulation** : `Type` 0 FF, 1 FS, 2 SF, 3 SS ; absent → FS ; autre → lien ignoré (`mspdi.link_ignored`, `unknown_type`) ; `CrossProject 1` → ignoré (`cross_project`) ; lien sur soi → ignoré (`self_link`) ; prédécesseur inconnu (UID 0 compris) → ignoré, `mspdi.dangling_reference` ; paire en double → le premier gardé, `mspdi.duplicate` ; `PredecessorUID` absent → `mspdi.missing_required`. L'ordre MSPDI des liens est conservé ; un cycle est accepté tel quel (le moteur le traite, R-065). Exemples : un fichier du corpus (A6) a 6 liens `Type 0` → FF ; fixture : FF, SS, SF lus, cinq liens ignorés.
+- **Source** : learn.microsoft.com, « PredecessorLink Element » (S4).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r074_link_type.rs` (`r074_*`).
 
 ## R-075 — Dates sans fuseau
 - **Formulation** : `AAAA-MM-JJThh:mm[:ss[.fff]]` en heure locale du projet ; un suffixe `Z` ou `±hh:mm` est ignoré (diagnostic `mspdi.inconsistent`) ; secondes tronquées (R-004, diagnostic `mspdi.rounded` si non nulles) ; `24:00:00` = lendemain 00:00 ; hors du domaine 1984-2149 → aucune date et diagnostic. Exemples : `2009-11-09T08:00:00` → lun 09/11/2009 08:00 ; `2026-08-07T18:18:20` → 18:18, `mspdi.rounded` ; `1983-12-31T08:00:00` → aucune date, diagnostic.
@@ -328,6 +340,24 @@ Bloc réservé à la lecture et à l'écriture MSPDI (`planrs-mspdi`) ; R-087 à
 - **Source** : schéma MSPDI (S1) ; support.microsoft.com, « Set the general working days and times for a project » (S13).
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r082_work_weeks_import.rs` (`r082_*`).
+
+## R-083 — Valeurs enregistrées, marges en dixièmes
+- **Formulation** : `Start`, `Finish`, `EarlyStart`, `EarlyFinish`, `LateStart`, `LateFinish`, `TotalSlack`, `FreeSlack`, `Critical`, `Summary`, `Duration`, `LevelingDelay` de chaque tâche (UID 0 compris) vont dans `RecordedSchedule`, jamais dans le `Project` ; marges et `LevelingDelay` lues en `Tenths` sans arrondi (la comparaison du corpus se fait en dixièmes, moteur × 10) ; `LevelingDelay` ≠ 0 → `mspdi.unsupported` (`leveling_delay`, J5), jamais appliqué ; affectations comptées par `TaskUID` (inconnu : `mspdi.dangling_reference`). Exemples : 9 600 = 960 min ; 43 200 = 4 320 min ; 768 = 76,8 min, gardé tel quel.
+- **Source** : learn.microsoft.com, « TotalSlack Element », « FreeSlack Element » (dixièmes de minute, S4) ; observé O2 (345 600 = 72 j).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r083_recorded_slack_tenths.rs` (`r083_*`) ; propriété P19 « pas de fuite » dans `crates/planrs-mspdi/tests/no_leak.rs`.
+
+## R-084 — Récapitulative du projet, ordre et identité des tâches
+- **Formulation** : UID 0 (`OutlineLevel 0`) → `summary_task`, au premier niveau du modèle ; ordre des tâches = ordre du document (l'ID se déduit de la position) ; `ID` ≠ position → `mspdi.inconsistent` ; `OutlineLevel` absent → 1 ; `OutlineLevel 0` hors UID 0 → 1 et `mspdi.inconsistent` ; drapeau `Summary` contraire à la hiérarchie (R-052) → `mspdi.inconsistent` ; `IsNull 1` → ligne vide ; UID absent, négatif ou en double → tâche ignorée et signalée. Exemple : fixture de 11 lignes dont 5 `IsNull` → ID 1 à 11, 6 tâches calculées.
+- **Source** : learn.microsoft.com, « Task Element » (S4) ; ADR-0008.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r084_project_summary_and_task_identity.rs` (`r084_*`), fixture `tests/fixtures/mspdi/null_rows.xml`.
+
+## R-085 — Tâches manuelles
+- **Formulation** : `Manual 1` → `SchedulingMode::Manual { start, finish, duration }` depuis `ManualStart`, `ManualFinish`, `ManualDuration` (lus comme `dateTime` et durée ISO malgré leur type `xsd:string`), à défaut `Start`, `Finish`, `Duration` (unité et base de la tâche) ; ce sont des entrées, gardées même pour une récapitulative. Exemples : un fichier du corpus (A7) UID 7 → manuelle 12/10/2024 09:00 – 18/10/2024 18:00 ; fixture : `ManualDuration` 23 h l'emporte sur `Duration` 16 h ; sans `Manual*`, `Start`/`Finish`/`Duration`.
+- **Source** : schéma `mspdi_pj15.xsd` ; observé O9 (A7).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r085_manual_tasks_import.rs` (`r085_*`), fixture `tests/fixtures/mspdi/manual.xml`.
 
 ## R-086 — Options du chemin critique
 - **Formulation** : `CriticalSlackLimit` (jours, entier ≥ 0 ; négatif, au-delà de `u32::MAX` ou illisible → 0 et `mspdi.invalid_value`) → `critical_slack_limit_days` ; `MultipleCriticalPaths` → `multiple_critical_paths` ; absents → 0 et faux (R-076). Exemple : 10 → seuil de 4 800 min avec 480 min/jour (R-050).

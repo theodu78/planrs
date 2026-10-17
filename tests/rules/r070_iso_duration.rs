@@ -56,3 +56,30 @@ fn r070_negative_is_read_signed() {
     // −8 h se lit −480 ; c'est la tâche qui refuse une durée négative.
     assert_eq!(minutes("-PT8H"), -480);
 }
+
+/// Tâches de la fixture `tasks.xml`.
+fn tasks_fixture() -> planrs_mspdi::MspdiDocument {
+    let bytes = std::fs::read(planrs_tests::tests_path("fixtures/mspdi/tasks.xml")).unwrap();
+    planrs_mspdi::read(
+        &bytes,
+        &planrs_mspdi::ReadOptions::new(planrs_tests::moment("2026-01-01T00:00")),
+    )
+    .unwrap()
+}
+
+#[test]
+fn r070_task_duration_refusals() {
+    // UID 6 : `-PT8H0M0S` → durée 0, signalée ; UID 8 : `P1M` → 0, signalée.
+    let doc = tasks_fixture();
+    for uid in [6, 8] {
+        let t = doc.project.tasks.get(planrs_core::TaskUid::new(uid)).unwrap();
+        assert!(t.duration.is_zero(), "{uid}");
+    }
+    let invalid: Vec<Option<&str>> = doc
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == planrs_mspdi::ImportCode::InvalidValue && d.element == "Tasks/Task/Duration")
+        .map(|d| d.value.as_deref())
+        .collect();
+    assert_eq!(invalid, [Some("-PT8H0M0S"), Some("P1M")]);
+}

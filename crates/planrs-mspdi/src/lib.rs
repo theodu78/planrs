@@ -31,6 +31,7 @@ mod calendar;
 mod fields;
 mod project;
 mod recorded;
+mod task;
 mod xml;
 
 use planrs_core::{Moment, Project};

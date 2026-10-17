@@ -135,10 +135,20 @@ impl Calc<'_, '_> {
             .net
             .scale(l.sigma)
             .ok_or(Fail::Internal("échelle hors bornes"))?;
-        let bound = transfer::backward(*sigma, anchor, lag)?;
-        let mine = match l.ty {
-            LinkType::FinishToStart | LinkType::FinishToFinish => own.finish,
-            LinkType::StartToStart | LinkType::StartToFinish => own.start,
+        let bound = transfer::backward(*sigma, anchor, lag, self.reads_raw(arc.to, l.sigma))?;
+        let (mine, bound) = match l.ty {
+            LinkType::FinishToStart | LinkType::FinishToFinish => (own.finish, bound),
+            // Borne de début d'une feuille : dernier début plaçable (R-047,
+            // R-049), comme son plafond en passe arrière.
+            LinkType::StartToStart | LinkType::StartToFinish => {
+                let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+                let bound = if node.kind == NodeKind::Leaf || node.fixed.is_some() {
+                    m.latest_start(bound, node.duration)?
+                } else {
+                    bound
+                };
+                (own.start, bound)
+            }
         };
         Ok(Some(m.between(mine, bound)?))
     }

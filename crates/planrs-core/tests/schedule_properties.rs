@@ -18,9 +18,15 @@
 //! - **P13** (composite) : (a) liens respectés ; (b) `TF ≥ FS ≥ 0` ;
 //!   (c) `ES ≤ EF`, `LS ≤ LF`, récapitulatives = enveloppe de leurs enfants ;
 //!   (d) déterminisme (clone, JSON) et permutation des liens (tout identique
-//!   sauf `driver`) ; (e) point fixe ; (f) `order` topologique.
+//!   sauf `driver`) ; (e) point fixe ; (f) `order` topologique ; (g) dates
+//!   au plus tard réalisables : feuilles placées à leurs dates au plus tard,
+//!   aucun lien violé, fin du projet inchangée ; (h) retards sans effet :
+//!   une feuille retardée de sa marge totale ne décale pas la fin du projet,
+//!   de sa marge libre aucune autre feuille (échantillon de deux feuilles par
+//!   sorte de marge).
 //! - **P14** : chaîne de marge nulle (ADR-0005 amendée par l'ADR-0009).
-//! - **P15** : oracle indépendant en temps ouvré (plus long chemin entier).
+//! - **P15** : oracle indépendant en temps ouvré (plus long chemin entier),
+//!   sur un réseau sans jalon (un jalon lit sa borne en brut, R-031, R-047).
 //! - **P16** : monotonie de la fin du projet (liens FS et SS).
 //! - **P17** : chaos, aucune panique, cycles signalés, (a) et (b) hors des
 //!   tâches dégradées et des composantes qui contiennent une manuelle.
@@ -103,6 +109,9 @@ struct Shape {
     percent_from_summary: bool,
     /// Options CPM tirées (seuil 0 ou 1 j, plusieurs chemins 20 %).
     cpm_options: bool,
+    /// Jalons (10 % des tâches) : exclus pour P15, dont l'oracle raisonne
+    /// en temps ouvré, alors qu'un jalon lit sa borne en brut (R-031, R-047).
+    milestones: bool,
 }
 
 const ALL_KINDS: &[LinkType] = &[
@@ -124,9 +133,10 @@ const GENERAL: Shape = Shape {
     percent_min: -10_000,
     percent_from_summary: true,
     cpm_options: true,
+    milestones: true,
 };
 
-/// P14, P15 : réseau plat, un seul calendrier ouvré, décalages ouvrés.
+/// P14 : réseau plat, un seul calendrier ouvré, décalages ouvrés.
 const FLAT: Shape = Shape {
     hierarchy: false,
     kinds: ALL_KINDS,
@@ -136,6 +146,13 @@ const FLAT: Shape = Shape {
     percent_min: -10_000,
     percent_from_summary: true,
     cpm_options: false,
+    milestones: true,
+};
+
+/// P15 : comme [`FLAT`], sans jalon.
+const FLAT_NO_MILESTONE: Shape = Shape {
+    milestones: false,
+    ..FLAT
 };
 
 /// P16 : liens FS et SS, pourcentages positifs.
@@ -148,6 +165,7 @@ const MONOTONE: Shape = Shape {
     percent_min: 0,
     percent_from_summary: false,
     cpm_options: false,
+    milestones: true,
 };
 
 /// Calendrier de base aléatoire (UID 4) : chaque jour chômé une fois sur
@@ -240,7 +258,11 @@ fn generate(seed: u64, shape: Shape) -> Project {
     for i in 1..=n {
         let uid = TaskUid::new(u32::try_from(i).unwrap());
         let mut t = Task::new(uid, format!("T{i}"), &options);
-        let minutes = if r.chance(10) { 0 } else { r.range(1, 4_800) };
+        let minutes = if r.chance(10) && shape.milestones {
+            0
+        } else {
+            r.range(1, 4_800)
+        };
         let basis = if shape.elapsed && r.chance(10) {
             TimeBasis::Elapsed
         } else {
@@ -668,6 +690,130 @@ fn p13(p: &Project) {
         "point fixe : {:?}",
         f.diagnostics
     );
+    // (g) Dates au plus tard réalisables (S16, S17, R-047) : feuilles
+    // actives placées à leurs dates au plus tard, aucun lien violé et fin du
+    // projet inchangée.
+    if s.tasks
+        .values()
+        .any(|o| matches!(o, TaskOutcome::Scheduled(ts) if ts.degraded))
+    {
+        return;
+    }
+    let mut late = p.clone();
+    for uid in late.tasks.iter().map(Task::uid).collect::<Vec<_>>() {
+        let t = late.tasks.get_mut(uid).unwrap();
+        if let Some(TaskOutcome::Scheduled(ts)) = s.get(uid)
+            && ts.role == TaskRole::Leaf
+            && t.active
+        {
+            t.mode = SchedulingMode::Manual {
+                start: Some(ts.late.start),
+                finish: Some(ts.late.finish),
+                duration: None,
+            };
+        }
+    }
+    let l = schedule(&late);
+    // Décalage en % depuis une récapitulative : sa durée R-054 change quand
+    // ses sous-tâches sont déplacées, le décalage aussi (comme pour P16).
+    let par = parents(p);
+    let summary_percent: BTreeSet<(TaskUid, TaskUid)> = p
+        .tasks
+        .iter()
+        .flat_map(|t| t.predecessors.iter().map(move |lk| (lk, t.uid())))
+        .filter(|(lk, _)| matches!(lk.lag.value, LagValue::Percent { .. }))
+        .filter(|(lk, _)| {
+            p.tasks
+                .position(lk.predecessor)
+                .is_some_and(|q| is_summary(&par, q))
+        })
+        .map(|(lk, s)| (lk.predecessor, s))
+        .collect();
+    let broken: Vec<&Diagnostic> = l
+        .diagnostics
+        .iter()
+        .filter(|d| match d {
+            Diagnostic::LinkManualNotHonored {
+                predecessor,
+                successor,
+            } => !summary_percent.contains(&(*predecessor, *successor)),
+            _ => false,
+        })
+        .collect();
+    assert!(broken.is_empty(), "dates au plus tard : {broken:?}");
+    assert_eq!(
+        l.project_finish, s.project_finish,
+        "dates au plus tard : fin du projet"
+    );
+    // (h) Retards sans effet (S16, S17) : une feuille retardée de sa marge
+    // totale ne décale pas la fin du projet ; retardée de sa marge libre,
+    // elle ne décale aucune autre feuille. Échantillon : la plus grande marge
+    // de chaque sorte, et une feuille tirée par la taille du réseau.
+    if summary_percent.is_empty() {
+        delays(p, &s, &par);
+    }
+}
+
+/// P13 (h) : retard d'une feuille de sa marge totale, puis de sa marge libre.
+fn delays(p: &Project, s: &Schedule, par: &[Option<usize>]) {
+    let cals = Cals::new(p);
+    for total in [true, false] {
+        let slack = |ts: &TaskSchedule| if total { ts.total_slack } else { ts.free_slack };
+        let eligible: Vec<(usize, TaskSchedule)> = p
+            .tasks
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| match s.get(t.uid()) {
+                Some(TaskOutcome::Scheduled(ts))
+                    if ts.role == TaskRole::Leaf && t.active && !ts.manual && slack(ts) > Minutes::ZERO =>
+                {
+                    Some((i, *ts))
+                }
+                _ => None,
+            })
+            .collect();
+        let Some(&largest) = eligible
+            .iter()
+            .max_by_key(|(i, ts)| (slack(ts), std::cmp::Reverse(*i)))
+        else {
+            continue;
+        };
+        let other = eligible[p.tasks.len() % eligible.len()];
+        for (i, ts) in [largest, other] {
+            let t = p.tasks.at(i).unwrap();
+            let m = cals.place(p, t).unwrap();
+            let span = m
+                .forward_span(m.add(ts.early.start, slack(&ts)).unwrap(), ts.duration)
+                .unwrap();
+            let mut q = p.clone();
+            q.tasks.get_mut(t.uid()).unwrap().mode = SchedulingMode::Manual {
+                start: Some(span.start),
+                finish: Some(span.finish),
+                duration: None,
+            };
+            let r = schedule(&q);
+            if total {
+                assert_eq!(r.project_finish, s.project_finish, "retard de TF de {}", t.uid());
+                continue;
+            }
+            for (k, o) in p.tasks.iter().enumerate() {
+                if k == i || is_summary(par, k) {
+                    continue;
+                }
+                if let (Some(TaskOutcome::Scheduled(a)), Some(TaskOutcome::Scheduled(b))) =
+                    (s.get(o.uid()), r.get(o.uid()))
+                {
+                    assert_eq!(
+                        a.early,
+                        b.early,
+                        "retard de FS de {} : {} déplacée",
+                        t.uid(),
+                        o.uid()
+                    );
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1009,7 +1155,7 @@ proptest! {
 
     #[test]
     fn p15_matches_working_time_oracle(seed in any::<u64>()) {
-        p15(&generate(seed, FLAT));
+        p15(&generate(seed, FLAT_NO_MILESTONE));
     }
 
     #[test]
@@ -1033,7 +1179,7 @@ fn fixed_seeds() {
     for seed in 0..100 {
         p13(&generate(seed, GENERAL));
         p14(&generate(seed, FLAT));
-        p15(&generate(seed, FLAT));
+        p15(&generate(seed, FLAT_NO_MILESTONE));
         p16(&generate(seed, MONOTONE), seed);
         p17(&chaos(seed));
     }

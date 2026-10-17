@@ -79,9 +79,13 @@ impl Calc<'_, '_> {
     }
 
     /// R-051 : vrai, par position, si la tâche a un successeur effectif
-    /// (lien non coupé vers une tâche active), en propre ou hérité d'une
-    /// récapitulative ancêtre (sauf à travers une récapitulative manuelle
-    /// datée, R-064). Parents avant enfants : un seul passage.
+    /// (lien non coupé vers une tâche active et planifiée), en propre ou
+    /// hérité d'une récapitulative ancêtre (sauf à travers une
+    /// récapitulative manuelle datée, R-064). Parents avant enfants : un seul
+    /// passage, après la passe avant. Un lien vers une cible sans dates au
+    /// plus tôt (non planifiable, récapitulative vide dont l'agrégat n'a pas
+    /// de dates, porte en échec) a été ignoré (`link.excluded_endpoint`) :
+    /// ce n'est pas un successeur, même filtre que [`Self::out_caps`].
     fn has_successors(&self) -> Vec<bool> {
         let mut out = vec![false; self.net.tasks.len()];
         for p in 0..self.net.tasks.len() {
@@ -103,11 +107,9 @@ impl Calc<'_, '_> {
                 .is_some_and(|out_arcs| {
                     out_arcs.iter().any(|&a| {
                         !self.net.is_cut(a)
-                            && self
-                                .net
-                                .arc(a)
-                                .and_then(|arc| arc.link)
-                                .is_some_and(|l| !l.to_inactive)
+                            && self.net.arc(a).is_some_and(|arc| {
+                                arc.link.is_some_and(|l| !l.to_inactive) && self.applied_target(arc.to)
+                            })
                     })
                 });
             if let Some(slot) = out.get_mut(p) {
@@ -115,6 +117,17 @@ impl Calc<'_, '_> {
             }
         }
         out
+    }
+
+    /// Cible d'un arc de lien effectivement appliqué en passe avant : elle a
+    /// des dates au plus tôt et, pour une porte, l'agrégat jumeau aussi (une
+    /// récapitulative vide n'en a pas, R-053).
+    fn applied_target(&self, target: NodeIx) -> bool {
+        let has_early = |v: NodeIx| self.state(v).is_some_and(|s| s.early.is_some());
+        let Some(node) = self.net.node(target) else {
+            return false;
+        };
+        has_early(target) && (node.kind != NodeKind::Gate || node.twin.is_some_and(has_early))
     }
 
     /// Plafonds des arcs de lien sortants du nœud `v` (R-047) : FS
@@ -154,7 +167,7 @@ impl Calc<'_, '_> {
                 LinkType::FinishToStart | LinkType::StartToStart => tl.start,
                 LinkType::FinishToFinish | LinkType::StartToFinish => self.finish_anchor(arc.to, tl.finish),
             };
-            let y = transfer::backward(*sigma, anchor, lag)?;
+            let y = transfer::backward(*sigma, anchor, lag, self.reads_raw(arc.to, l.sigma))?;
             match l.ty {
                 LinkType::FinishToStart | LinkType::FinishToFinish => {
                     caps.finish = Some(min_opt(caps.finish, y));
@@ -204,8 +217,13 @@ impl Calc<'_, '_> {
             .net
             .scale(place)
             .ok_or(Fail::Internal("échelle hors bornes"))?;
+        // Plafond de début `y` : la tâche doit commencer au plus tard en `y`
+        // en brut ; `y` peut tomber hors du temps ouvré de P(t) (décalage
+        // écoulé, successeur sur un autre calendrier, K(S)) : dernier début
+        // plaçable avant la conversion (R-047).
         for y in caps.starts {
-            lf = lf.min(scale.forward_span(y, duration)?.finish);
+            let x = scale.latest_start(y, duration)?;
+            lf = lf.min(scale.forward_span(x, duration)?.finish);
         }
         Ok(scale.backward_span(lf, duration)?)
     }

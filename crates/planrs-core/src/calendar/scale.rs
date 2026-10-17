@@ -115,6 +115,46 @@ impl TimeScale<'_> {
         }
     }
 
+    /// Dernier instant `x ≤ y` dont le placement au plus tôt commence au plus
+    /// tard en `y` (en `Moment` brut) : `forward_span(x, d).start ≤ y`, avec
+    /// `x` le plus grand possible (R-047). Sert à convertir un plafond de
+    /// début, qui peut tomber hors du temps ouvré de l'échelle (décalage
+    /// écoulé, successeur sur un autre calendrier, plafond hérité d'une
+    /// récapitulative) :
+    /// - temps écoulé : `y` ;
+    /// - temps ouvré, `d > 0` : `y` s'il commence une minute ouvrée
+    ///   (`next_working_moment(y) == y`), sinon le début de la dernière minute
+    ///   ouvrée avant `y` (`previous_working_moment(y) − 1 min`) ;
+    /// - temps ouvré, `d = 0` (jalon, R-031) : `y` s'il termine une minute
+    ///   ouvrée ou en commence une, sinon `previous_working_moment(y)`.
+    ///
+    /// Exemple (Standard) : `y` = mer 22:00, `d` = 480 → mer 16:59 (placé à
+    /// jeu 08:00, la tâche commencerait après `y`).
+    ///
+    /// # Errors
+    ///
+    /// [`CalendarError::NegativeSpan`] si `d < 0` ; erreurs des conversions
+    /// (aucun temps ouvré avant `y` : `OutOfDomain { Before }`).
+    pub fn latest_start(&self, y: Moment, d: Minutes) -> Result<Moment, CalendarError> {
+        if d.is_negative() {
+            return Err(CalendarError::NegativeSpan);
+        }
+        let Self::Working(c) = self else { return Ok(y) };
+        if c.next_working_moment(y) == Ok(y) {
+            return Ok(y);
+        }
+        let previous = c.previous_working_moment(y)?;
+        if d == Minutes::ZERO {
+            return Ok(previous);
+        }
+        previous
+            .checked_add(Minutes::new(-1))
+            .map_err(|_| CalendarError::OutOfDomain {
+                calendar: c.uid(),
+                direction: Direction::Before,
+            })
+    }
+
     /// Passe arrière, symétrique : placement d'une durée `d >= 0` au plus tard
     /// avant `to`.
     /// - temps ouvré, `d > 0` (R-030) : fin = instant ouvré précédant `to`,
@@ -272,5 +312,62 @@ mod tests {
                 direction: Direction::Before
             })
         );
+    }
+
+    #[test]
+    fn latest_start_never_places_after_the_cap() {
+        let c = std_cal();
+        let w = TimeScale::Working(&c);
+        let day = Minutes::new(480);
+        // Mer 22:00 hors temps ouvré : dernière minute ouvrée mer 16:59 ;
+        // placée là, la tâche commence à 16:59 ≤ 22:00.
+        assert_eq!(
+            w.latest_start(m("2026-10-21T22:00"), day),
+            Ok(m("2026-10-21T16:59"))
+        );
+        // Jeu 01:00 : même réponse ; jeu 08:00 commence une minute ouvrée.
+        assert_eq!(
+            w.latest_start(m("2026-10-22T01:00"), day),
+            Ok(m("2026-10-21T16:59"))
+        );
+        assert_eq!(
+            w.latest_start(m("2026-10-22T08:00"), day),
+            Ok(m("2026-10-22T08:00"))
+        );
+        // Pause de midi : 12:30 → 11:59.
+        assert_eq!(
+            w.latest_start(m("2026-10-22T12:30"), day),
+            Ok(m("2026-10-22T11:59"))
+        );
+        for y in ["2026-10-21T22:00", "2026-10-22T12:30", "2026-10-24T10:00"] {
+            let start = w.latest_start(m(y), day).unwrap();
+            assert!(w.forward_span(start, day).unwrap().start <= m(y), "{y}");
+            let next = start.checked_add(Minutes::new(1)).unwrap();
+            assert!(w.forward_span(next, day).unwrap().start > m(y), "{y}");
+        }
+        // Jalon : 17:00 termine une minute ouvrée, 08:00 en commence une ;
+        // 22:00 → 17:00 (R-031).
+        let zero = Minutes::ZERO;
+        assert_eq!(
+            w.latest_start(m("2026-10-21T17:00"), zero),
+            Ok(m("2026-10-21T17:00"))
+        );
+        assert_eq!(
+            w.latest_start(m("2026-10-22T08:00"), zero),
+            Ok(m("2026-10-22T08:00"))
+        );
+        assert_eq!(
+            w.latest_start(m("2026-10-21T22:00"), zero),
+            Ok(m("2026-10-21T17:00"))
+        );
+        // Temps écoulé : identité ; durée négative refusée.
+        let cap = m("2026-10-21T22:00");
+        assert_eq!(TimeScale::Elapsed.latest_start(cap, day), Ok(cap));
+        assert_eq!(
+            w.latest_start(cap, Minutes::new(-1)),
+            Err(CalendarError::NegativeSpan)
+        );
+        // Aucun temps ouvré avant : erreur, jamais de panique.
+        assert!(w.latest_start(m("1984-01-02T07:00"), day).is_err());
     }
 }

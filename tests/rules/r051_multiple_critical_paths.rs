@@ -36,3 +36,24 @@ fn r051_each_final_task_closes_its_path() {
     assert_eq!(r.at("B").total_slack, Minutes::ZERO);
     assert!(r.at("A").critical && r.at("B").critical && r.at("C").critical);
 }
+
+#[test]
+fn r051_link_to_empty_summary_is_not_a_successor() {
+    // X 1 j FS → S {I inactive} ; Y 3 j seule ; option active. S est vide
+    // (`EmptySummary`) : le lien X → S est ignoré (`link.excluded_endpoint`),
+    // X n'a donc aucun successeur effectif → LF(X) = EF(X), TF 0, critique.
+    let run = Net::new("2026-10-19T08:00")
+        .task("X", 480)
+        .task("S", 0)
+        .task("I", 480)
+        .level("I", 2)
+        .inactive("I")
+        .task("Y", 1_440)
+        .fs("X", "S")
+        .options(|o| o.multiple_critical_paths = true)
+        .run();
+    assert!(run.codes().contains(&"link.excluded_endpoint"));
+    assert_eq!(run.at("X").late, run.at("X").early);
+    assert_eq!(run.at("X").total_slack, Minutes::ZERO);
+    assert!(run.at("X").critical);
+}

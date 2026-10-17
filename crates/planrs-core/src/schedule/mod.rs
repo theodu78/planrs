@@ -174,11 +174,52 @@ impl Calc<'_, '_> {
     /// ramenée à 17:00 alors que la borne tombait à 17:06). Plus aucun temps
     /// ouvré après `y` (fin du domaine) : tout instant jusqu'à la fin du
     /// domaine a le même temps ouvré, l'ancre est `Moment::MAX`.
+    ///
+    /// Jalon (R-031) : une borne de fin `b` le place en `b` si `b` commence
+    /// une minute ouvrée, sinon à l'instant ouvré précédent. Il ne dépasse
+    /// donc pas `y` tant que `b < next_working_moment(y)` : l'ancre est `y`
+    /// s'il commence une minute ouvrée, sinon `next_working_moment(y) − 1
+    /// min` (et non `next_working_moment(y)`, qui le placerait au début de la
+    /// plage suivante).
     fn finish_anchor(&self, target: NodeIx, y: Moment) -> Moment {
-        let scale = self.net.node(target).and_then(|n| self.net.scale(n.place));
-        match scale {
-            Some(crate::calendar::TimeScale::Working(c)) => c.next_working_moment(y).unwrap_or(Moment::MAX),
+        let Some(node) = self.net.node(target) else {
+            return y;
+        };
+        let milestone = node.duration == Minutes::ZERO;
+        match self.net.scale(node.place) {
+            Some(crate::calendar::TimeScale::Working(c)) => match c.next_working_moment(y) {
+                Ok(next) if milestone && next != y => next.checked_add(Minutes::new(-1)).unwrap_or(y),
+                Ok(next) => next,
+                Err(_) => Moment::MAX,
+            },
             _ => y,
+        }
+    }
+
+    /// R-047 : la cible `target` d'un lien d'échelle `sigma` lit sa borne en
+    /// `Moment` brut et non en temps ouvré de `σ` : porte d'une
+    /// récapitulative (borne non recalée), jalon (R-031 : il reste sur une
+    /// fin de minute ouvrée mais avance au début de la minute ouvrée
+    /// suivante sinon), feuille placée sur une autre échelle (calendrier
+    /// propre différent, durée écoulée). Le transfert arrière doit alors
+    /// être l'adjoint en brut ([`transfer::backward`], `raw`). Une feuille de
+    /// durée > 0 placée sur `σ` commence à `next_working(borne)`, qui ne
+    /// dépend que du temps ouvré de la borne.
+    fn reads_raw(&self, target: NodeIx, sigma: u32) -> bool {
+        let Some(node) = self.net.node(target) else {
+            return true;
+        };
+        if node.kind == network::NodeKind::Gate || node.duration == Minutes::ZERO {
+            return true;
+        }
+        if node.place == sigma {
+            return false;
+        }
+        match (self.net.scale(node.place), self.net.scale(sigma)) {
+            (Some(crate::calendar::TimeScale::Working(a)), Some(crate::calendar::TimeScale::Working(b))) => {
+                !std::ptr::eq(*a, *b)
+            }
+            _ => true,
         }
     }
 

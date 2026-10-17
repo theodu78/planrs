@@ -33,9 +33,12 @@
 //!   réalisables : feuilles placées à leurs dates au plus tard, aucun lien
 //!   violé sauf ceux qui partent d'une épingle (ou d'une récapitulative qui
 //!   en contient une), fin du projet jamais retardée (inchangée sans
-//!   plafond) ; (h) retards sans effet : une feuille non contrainte retardée
-//!   de sa marge totale ne décale pas la fin du projet, de sa marge libre
-//!   aucune autre feuille (échantillon de deux feuilles par sorte de marge).
+//!   plafond, en temps ouvré du calendrier du projet) ; (h) retards sans
+//!   effet : une feuille non contrainte retardée de sa marge totale ne
+//!   décale pas la fin du projet, de sa marge libre aucune autre feuille
+//!   (en temps ouvré de leur échelle : la fin d'un plancher de fin peut être
+//!   le début d'une plage, R-090 ; échantillon de deux feuilles par sorte
+//!   de marge).
 //!   (e) et (h) ne s'appliquent pas après une épingle ALAP qui déplace une
 //!   tâche : la repasse fige `K(S)` et R-051 sur la passe principale
 //!   (R-092).
@@ -1044,9 +1047,15 @@ fn p13(p: &Project) {
         l.project_finish <= s.project_finish,
         "dates au plus tard : fin du projet"
     );
-    if cap_closure(p).is_empty() {
+    // Égalité en temps ouvré du calendrier du projet : la fin au plus tôt
+    // d'un FNET peut être le début d'une plage (R-090, O14), la fin au plus
+    // tard le dernier instant ouvré avant elle (R-030), même temps ouvré.
+    if cap_closure(p).is_empty()
+        && let Some(cal) = Cals::new(p).usable(p.calendar)
+    {
         assert_eq!(
-            l.project_finish, s.project_finish,
+            cal.working_between(l.project_finish, s.project_finish).unwrap(),
+            Minutes::ZERO,
             "dates au plus tard : fin du projet"
         );
     }
@@ -1109,8 +1118,16 @@ fn delays(p: &Project, s: &Schedule, par: &[Option<usize>]) {
                 duration: None,
             };
             let r = schedule(&q);
+            // Comparaisons en temps ouvré : une fin au plus tôt posée par un
+            // plancher de fin (FNET, MFO en fenêtre) est le début d'une plage
+            // (R-090, O14) ; placée par ses bornes, la même tâche finit à la
+            // fin de la plage précédente, même temps ouvré (R-030).
             if total {
-                assert_eq!(r.project_finish, s.project_finish, "retard de TF de {}", t.uid());
+                let project = cals.usable(p.calendar).map(TimeScale::Working);
+                let same = project.map_or(r.project_finish == s.project_finish, |c| {
+                    c.between(r.project_finish, s.project_finish).unwrap() == Minutes::ZERO
+                });
+                assert!(same, "retard de TF de {}", t.uid());
                 continue;
             }
             for (k, o) in p.tasks.iter().enumerate() {
@@ -1120,12 +1137,16 @@ fn delays(p: &Project, s: &Schedule, par: &[Option<usize>]) {
                 if let (Some(TaskOutcome::Scheduled(a)), Some(TaskOutcome::Scheduled(b))) =
                     (s.get(o.uid()), r.get(o.uid()))
                 {
-                    assert_eq!(
-                        a.early,
-                        b.early,
-                        "retard de FS de {} : {} déplacée",
+                    let place = cals.place(p, o).unwrap();
+                    let w = |x: Moment, y: Moment| place.between(x, y).unwrap();
+                    assert!(
+                        w(a.early.start, b.early.start) == Minutes::ZERO
+                            && w(a.early.finish, b.early.finish) == Minutes::ZERO,
+                        "retard de FS de {} : {} déplacée {:?} → {:?}",
                         t.uid(),
-                        o.uid()
+                        o.uid(),
+                        a.early,
+                        b.early
                     );
                 }
             }

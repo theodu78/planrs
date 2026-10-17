@@ -11,9 +11,9 @@ use std::collections::BTreeMap;
 
 use planrs_core::calendar::BuiltinCalendarNames;
 use planrs_core::{
-    CalendarUid, Duration, DurationUnit, Lag, LagValue, Link, LinkType, Minutes, OutlineLevel, Project,
-    ProjectInit, ProjectOptions, Schedule, ScheduleAnchor, SchedulingMode, SignedPercent, Task, TaskOutcome,
-    TaskSchedule, TaskUid, TimeBasis,
+    CalendarUid, Constraint, Duration, DurationUnit, Lag, LagValue, Link, LinkType, Minutes, OutlineLevel,
+    Project, ProjectInit, ProjectOptions, Schedule, ScheduleAnchor, SchedulingMode, SignedPercent, Task,
+    TaskOutcome, TaskSchedule, TaskUid, TimeBasis,
 };
 
 use crate::moment;
@@ -161,6 +161,13 @@ impl Net {
     #[must_use]
     pub fn inactive(mut self, name: &str) -> Self {
         self.task_mut(name).active = false;
+        self
+    }
+
+    /// Contrainte de la tâche (R-090 à R-105).
+    #[must_use]
+    pub fn constraint(mut self, name: &str, c: Constraint) -> Self {
+        self.task_mut(name).constraint = c;
         self
     }
 

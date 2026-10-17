@@ -19,8 +19,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use planrs_core::calendar::CalendarKind;
 use planrs_core::{
-    Constraint, Driver, Exclusion, LagValue, LinkType, Minutes, Moment, Project, Schedule, SchedulingMode,
-    Task, TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis,
+    Constraint, ConstraintKind, Driver, Exclusion, LagValue, LinkType, Minutes, Moment, Project, Schedule,
+    SchedulingMode, Task, TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis,
 };
 use planrs_mspdi::{MspdiDocument, RecordedTask, Tenths};
 use serde::Serialize;
@@ -697,6 +697,21 @@ fn rules(
             if outline.summaries.contains(&predecessor) {
                 out.insert("R-057");
             }
+        }
+        Driver::Constraint { kind } => {
+            // Contrainte qui pilote le début (ADR-0010) : normalisation de
+            // la date (R-090) et règle du type.
+            out.insert("R-090");
+            out.insert(match kind {
+                ConstraintKind::AsSoonAsPossible => "R-091",
+                ConstraintKind::AsLateAsPossible => "R-092",
+                ConstraintKind::StartNoEarlierThan => "R-093",
+                ConstraintKind::FinishNoEarlierThan => "R-094",
+                ConstraintKind::StartNoLaterThan => "R-095",
+                ConstraintKind::FinishNoLaterThan => "R-096",
+                ConstraintKind::MustStartOn => "R-097",
+                ConstraintKind::MustFinishOn => "R-098",
+            });
         }
         Driver::Manual | Driver::Rollup => {}
     }

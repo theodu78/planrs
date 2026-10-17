@@ -11,7 +11,7 @@ use crate::calendar::Span;
 use crate::diagnostic::Diagnostic;
 use crate::duration::Minutes;
 use crate::ids::TaskUid;
-use crate::model::LinkType;
+use crate::model::{ConstraintKind, LinkType};
 use crate::quantity::Percent;
 use crate::time::Moment;
 
@@ -171,6 +171,13 @@ pub enum Driver {
     Manual,
     /// Agrégat des sous-tâches (récapitulative, R-053).
     Rollup,
+    /// Contrainte de date qui déplace le début placé (R-044, R-093, R-094).
+    Constraint {
+        /// Type de la contrainte (`constraint` en JSON : le champ `kind`
+        /// porte déjà la variante).
+        #[serde(rename = "constraint")]
+        kind: ConstraintKind,
+    },
 }
 
 /// Cause de la fin au plus tard d'une tâche (R-047) : le premier plafond

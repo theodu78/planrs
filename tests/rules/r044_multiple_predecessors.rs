@@ -3,7 +3,7 @@
 //! parent, liens dans l'ordre de stockage. Source : S22 ; départage :
 //! hypothèse.
 
-use planrs_core::{Driver, LinkType};
+use planrs_core::{Constraint, ConstraintKind, Driver, LinkType};
 use planrs_tests::moment;
 use planrs_tests::net::Net;
 
@@ -46,4 +46,53 @@ fn r044_tie_keeps_first_stored_link() {
     assert_eq!(ab.at("C").driver, driver(&ab, "A"));
     assert_eq!(ba.at("C").driver, driver(&ba, "B"));
     assert_eq!(ab.at("C").early, ba.at("C").early);
+}
+
+#[test]
+fn r044_constraint_driver() {
+    // Amendement J3 : une contrainte n'est pas une borne brute ; elle ne
+    // pilote que si elle déplace le début placé. A 1 j FS → B 1 j SNET mar
+    // 20/10 07:00 : la date (mar 07:00) dépasse en brut la borne du lien
+    // (lun 17:00), mais les deux se placent mar 08:00 → B mar 08:00, pilote
+    // le lien.
+    let run = Net::new("2026-10-19T08:00")
+        .task("A", 480)
+        .task("B", 480)
+        .fs("A", "B")
+        .constraint(
+            "B",
+            Constraint::StartNoEarlierThan {
+                date: moment("2026-10-20T07:00"),
+            },
+        )
+        .run();
+    assert_eq!(run.at("B").early.start, moment("2026-10-20T08:00"));
+    assert_eq!(
+        run.at("B").driver,
+        Driver::Link {
+            predecessor: run.uid("A"),
+            link: LinkType::FinishToStart
+        }
+    );
+    // SNET mar 09:00 : s* = mar 09:00 > mar 08:00 → B mar 09:00 – mer
+    // 09:00, pilote la contrainte.
+    let run = Net::new("2026-10-19T08:00")
+        .task("A", 480)
+        .task("B", 480)
+        .fs("A", "B")
+        .constraint(
+            "B",
+            Constraint::StartNoEarlierThan {
+                date: moment("2026-10-20T09:00"),
+            },
+        )
+        .run();
+    assert_eq!(run.at("B").early.start, moment("2026-10-20T09:00"));
+    assert_eq!(run.at("B").early.finish, moment("2026-10-21T09:00"));
+    assert_eq!(
+        run.at("B").driver,
+        Driver::Constraint {
+            kind: ConstraintKind::StartNoEarlierThan
+        }
+    );
 }

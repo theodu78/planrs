@@ -6,9 +6,10 @@
 //! (R-044 : début du projet, porte du parent, liens dans l'ordre de
 //! stockage).
 
+use super::constraint::{ConstraintRule, Side};
 use super::network::{Fail, NodeIx, NodeKind};
 use super::{Calc, Driver, Pass, PassRole, transfer};
-use crate::calendar::Span;
+use crate::calendar::{Span, TimeScale};
 use crate::diagnostic::Diagnostic;
 use crate::model::LinkType;
 use crate::time::Moment;
@@ -236,17 +237,62 @@ impl Calc<'_, '_> {
         let (early, driver) = if let Some(f) = fixed {
             (f, Driver::Manual)
         } else {
-            let scale = self
+            let scale = *self
                 .net
                 .scale(place)
                 .ok_or(Fail::Internal("échelle hors bornes"))?;
-            (scale.forward_span(b.start, duration)?, b.driver)
+            let natural = scale.forward_span(b.start, duration)?;
+            self.constrain(v, scale, natural, b.driver)?
         };
         let s = self.state_mut(v).ok_or(Fail::Internal("nœud hors bornes"))?;
         s.early = Some(early);
         s.driver = driver;
         s.degraded = b.degraded;
         Ok(())
+    }
+
+    /// Contrainte d'une feuille automatique en passe avant (ADR-0010), sur
+    /// le placement `natural` de ses bornes (R-044) : un plancher (R-093,
+    /// R-094) ne pilote que s'il déplace le début placé ; une date de
+    /// contrainte plus grande en brut mais de même temps ouvré ne change
+    /// rien.
+    /// - plancher de début : `s* > natural.start` (deux débuts placés,
+    ///   comparés en brut) → `early = A` ;
+    /// - plancher de fin : `P.between(natural.finish, f*) > 0` → `early = A`
+    ///   (fin = `f*`, O14, et non `forward_span(A.start, d)`).
+    fn constrain(
+        &mut self,
+        v: NodeIx,
+        scale: TimeScale<'_>,
+        natural: Span,
+        driver: Driver,
+    ) -> Result<(Span, Driver), Fail> {
+        let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+        let Some(c) = node.constraint else {
+            return Ok((natural, driver));
+        };
+        let pinned = Driver::Constraint { kind: c.kind };
+        match c.rule {
+            ConstraintRule::Floor(Side::Start) => {
+                let a = c.span()?;
+                if a.start > natural.start {
+                    return Ok((a, pinned));
+                }
+            }
+            ConstraintRule::Floor(Side::Finish) => {
+                let a = c.span()?;
+                if scale.between(natural.finish, a.finish)?.get() > 0 {
+                    return Ok((a, pinned));
+                }
+            }
+            ConstraintRule::None
+            | ConstraintRule::Opposite
+            | ConstraintRule::Cap(_)
+            | ConstraintRule::Window(_)
+            | ConstraintRule::Clamped(_)
+            | ConstraintRule::Pin(_) => {}
+        }
+        Ok((natural, driver))
     }
 
     /// Agrégat d'une récapitulative (R-053) : min des débuts, max des fins

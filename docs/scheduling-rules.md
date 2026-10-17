@@ -14,7 +14,7 @@ Les identifiants ne sont jamais réattribués. Une règle abandonnée garde son 
 
 ## Règles
 
-Sources citées : pages Microsoft uniquement ; « Q » = Microsoft Q&A, communautaire, jamais suffisant pour le statut « vérifié ». Aucune source tierce (MPXJ, ProjectLibre, GanttProject, autres clones) n'a été lue. Les codes S1 à S26 et Q1 à Q9 renvoient à la table ci-dessous, les codes O1 à O12 aux observations du corpus (données de fichiers enregistrés par MS Project, lues comme des données) ; chaque règle reprend aussi le nom de la page. Repère : 1984-01-01 est un dimanche ; `Moment(2026-10-19T08:00)` = 22 510 560.
+Sources citées : pages Microsoft uniquement ; « Q » = Microsoft Q&A, communautaire, jamais suffisant pour le statut « vérifié ». Aucune source tierce (MPXJ, ProjectLibre, GanttProject, autres clones) n'a été lue. Les codes S1 à S26 et Q1 à Q9 (J1, J2), S27 et suivants (J3) renvoient à la table ci-dessous, les codes O1 à O13 (J2) et O14 et suivants (J3) aux observations du corpus (données de fichiers enregistrés par MS Project, lues comme des données) ; chaque règle reprend aussi le nom de la page. Repère : 1984-01-01 est un dimanche ; `Moment(2026-10-19T08:00)` = 22 510 560.
 
 | Réf. | Page | Utilisée pour |
 |---|---|---|
@@ -44,6 +44,11 @@ Sources citées : pages Microsoft uniquement ; « Q » = Microsoft Q&A, communau
 | S24 | learn.microsoft.com, « Tasks aren't scheduled as expected in Microsoft Project » | Une sous-tâche ne commence pas avant sa récapitulative liée |
 | S25 | support.microsoft.com, « Inactivate a task » | Une tâche inactive n'affecte pas le planning |
 | S26 | support.microsoft.com, « Percent (%) Complete fields », « Actual Duration (task field) » | Durée réelle = durée × % achevé |
+| S27 | learn.microsoft.com, « Definition of Microsoft Project constraints » (KB 74978) | ALAP « ES=(Calculated)LS » ; ASAP « (Scheduled)ES=(Calculated)ES + Delay » ; FNET « EF=CD » ; FNLT « LF=CD » ; MFO « EF,LF,SF=CD » ; MSO « ES,LS,SS=CD » ; SNET « ES=CD » ; SNLT « LS=CD ». Les conditions écrites pour FNET et SNET (« if Date<EF », « if Date<ES ») sont inversées : erreur de la page, consignée comme celle de S21 |
+| S28 | support.microsoft.com, « Set a task start or finish date (constraint) for a task » | Catégories flexible / semi-flexible / inflexible ; ASAP par défaut depuis le début ; ALAP « the default constraint when you schedule from the project finish date » |
+| S29 | support.microsoft.com, « Constraint Type (task field) » | Défauts ASAP/ALAP selon le sens ; « All the constraints except As Soon As Possible and As Late As Possible require a date » |
+| S30 | learn.microsoft.com, blog archivé « Back to Basics: Working with task date constraints » (2008) | Date saisie à la main → SNET ou FNET ; exemple MFO : « Project warns us of the scheduling conflict, and then overlaps the tasks » |
+| S34 | learn.microsoft.com, schéma MSPDI (élément Project, `HonorConstraints`, `ScheduleFromStart`, `FinishDate`, `ConstraintType`) | `HonorConstraints` `default="true"` ; `ScheduleFromStart` `default="true"` ; `FinishDate` « Required if ScheduleFromStart is false » ; `ConstraintType` 0 à 7 |
 | Q1 | Microsoft Q&A (communautaire), « Quick switch from mons to emons » | emo = 30 jours calendaires |
 | Q2 | Microsoft Q&A (communautaire), « Microsoft Project task duration days not displaying » | Changer les heures par jour réinterprète l'affichage, pas les heures stockées |
 | Q3 | Microsoft Q&A (communautaire), « Project 2016 milestone tasks ignore non-working time » | Une durée nulle ne consomme pas de temps ouvré |
@@ -71,6 +76,8 @@ Observations du corpus (fichiers du manifeste `tests/corpus/manifest.toml`, ADR-
 | O11 | A4 | Calendrier du projet dérivé ; marge libre de 2 h entre une fin à 17:00 et un début le matin ouvré suivant : cause non établie, divergence attendue |
 | O12 | A6 | Calendrier du projet ouvré le samedi, tâches affectées jamais placées le samedi : calendrier de ressource probable (J5), divergence attendue |
 | O13 | A4 UID 0, 1, 5, 8, 12… (récapitulatives) ; UID 14, 20, 21, 24… (feuilles affectées) | Mesuré par le harnais : `Duration` enregistrée = durée du moteur − 120 min sur les 11 récapitulatives et l'UID 0 ; `FreeSlack` 1 200 (2 h) sur 8 feuilles affectées là où le moteur donne 0 (O11). Les deux écarts sont ceux d'une mesure sur le calendrier de base UID 2 (09:00-13:00, 15:00-19:00) : dernier jour terminé à 17:00 = 6 h au lieu de 8 h ; de 17:00 au matin ouvré suivant = 2 h. Hypothèse, non retenue sans second cas : un calendrier de projet dérivé (que MS Project n'accepte pas comme calendrier de projet) fait mesurer durées des récapitulatives et marges libres sur sa base, les feuilles étant placées par le calendrier UID 1 de leurs ressources (J5) |
+| O14 | A7 UID 15 à 21, 32 | Feuilles automatiques FNET (`ConstraintType` 6), sans lien, avec une affectation à la ressource −65535 ; calendrier du projet 5 (ven 18:00-20:00 et 21:00-23:00, sam 09:00-13:00 et 14:00-18:00). `EarlyFinish` = `Finish` = `ConstraintDate` brute (ven 18:00, début d'une plage) ; `EarlyStart` = `add(date, −d)`. UID 15 : FNET ven 18/10/2024 18:00, 8 h → sam 12/10 09:00 – ven 18/10 18:00 ; UID 21 : 12 h, FNET ven 29/11 18:00 → ven 22/11 18:00 – ven 29/11 18:00. Dates au plus tard tirées de la fin du projet ven 20/12 18:00 par R-030 (LF sam 14/12 18:00) : le FNET n'agit pas en passe arrière. TF = FS (64 800 dixièmes pour UID 15). Les dates au plus tard étaient déjà identiques en J2 ; seules les dates au plus tôt et les marges divergeaient |
+| O17 | A6 UID 7 | FNET jeu 14/11/2024 17:00 avec un prédécesseur FF et une porte qui donnent une fin plus tardive : la contrainte ne lie pas |
 
 ### Point fixe et temps
 
@@ -353,10 +360,10 @@ Le moteur (`planrs_core::schedule`, ADR-0009) calcule un `Schedule` hors du mod�
 - **Tests** : `tests/rules/r043_percent_lag.rs` (`r043_*`).
 
 ## R-044 — Plusieurs prédécesseurs et pilote
-- **Formulation** : ES0 = plus grande des bornes en `Moment` brut ; le pilote (`driver`) est la première borne maximale dans l'ordre : début du projet, porte du parent, liens dans l'ordre de stockage (bornes FF/SF converties comprises). Exemples : A 1 j lun, B 2 j lun – mar, C FS de A et de B, 1 j → mer 08:00 – 17:00, pilote `Link { B, FS }` ; A et B de 1 j : pilote = premier lien stocké.
+- **Formulation** : ES0 = plus grande des bornes en `Moment` brut ; le pilote (`driver`) est la première borne maximale dans l'ordre : début du projet, porte du parent, liens dans l'ordre de stockage (bornes FF/SF converties comprises). Exemples : A 1 j lun, B 2 j lun – mar, C FS de A et de B, 1 j → mer 08:00 – 17:00, pilote `Link { B, FS }` ; A et B de 1 j : pilote = premier lien stocké. Amendement J3 (ADR-0010) : une contrainte de date n'est pas une borne brute ; elle se compare au placement des autres bornes (R-093, R-094) et ne pilote (`Constraint { kind }`) que si elle déplace le début placé : une date de contrainte plus grande en brut mais de même temps ouvré ne change ni les dates ni le pilote. Exemple : A 1 j FS → B 1 j SNET mar 20/10 07:00 : la date dépasse en brut la borne du lien (lun 17:00), les deux se placent mar 08:00 → B mar 08:00, pilote `Link { A, FS }` ; SNET mar 09:00 → B mar 09:00 – mer 09:00, pilote `Constraint { StartNoEarlierThan }`.
 - **Source** : S22 ; départage : hypothèse.
 - **Statut** : `vérifié contre MS Project` pour la borne retenue (max des prédécesseurs, corpus A1 UID 59, 109, 110, 113 ; A2 UID 17 ; A4 UID 22, 37, 38) ; choix du pilote en cas d'égalité : `hypothèse` (MSPDI n'enregistre pas le pilote).
-- **Tests** : `tests/rules/r044_multiple_predecessors.rs` (`r044_*`).
+- **Tests** : `tests/rules/r044_multiple_predecessors.rs` (`r044_*`, dont `r044_constraint_driver`).
 
 ## R-045 — Fin du projet
 - **Formulation** : max des fins au plus tôt des feuilles actives planifiées (manuelles comprises, inactives exclues) et des récapitulatives manuelles datées (R-064) ; sans tâche planifiée : début du projet brut. Exemples : réseau N1 (A 1 j ; B 2 j ; C 1 j FS de A et de B ; D 1 j seul) → mer 21/10 17:00 ; projet vide commençant sam 17/10 10:00 → sam 17/10 10:00.
@@ -509,6 +516,34 @@ Le moteur (`planrs_core::schedule`, ADR-0009) calcule un `Schedule` hors du mod�
 - **Tests** : `tests/rules/r069_unschedulable_task.rs` (`r069_*`) ; propriété P17 (chaos : dates près de 1984 et 2149, décalages géants ; régressions rejouées par `p17_regressions`).
 
 Planification à rebours (`FromFinish`) : toutes les tâches non vides sont exclues (`UnsupportedAnchor`) avec `schedule.from_finish_unsupported` (J3, ADR-0009 A13) ; aucune règle de calcul n'est encore posée.
+
+### Moteur : contraintes, échéances, planification à rebours (R-090 à R-112)
+
+Spécification J3 et ADR-0010. Notations de R-035 à R-069 ; en plus : `c` = date saisie d'une contrainte (brute) ; `A` = son ancrage normalisé sur `P(t)` (R-090), `s* = A.start` pour une contrainte de début (MSO, SNET, SNLT), `f* = A.finish` pour une contrainte de fin (MFO, FNET, FNLT). Une table dérive, une fois par feuille automatique active, l'effet de sa contrainte selon le type, le sens de planification et l'option « les tâches respectent toujours leurs dates de contrainte » (R-099) : aucun, opposé (ALAP depuis le début), plancher, plafond, fenêtre, serrage, épingle ; les passes ne lisent que cette règle. Depuis le début : SNET et FNET sont des planchers (R-093, R-094). Sauf mention contraire : option active, depuis le début. Sources ajoutées : S27 à S30, S34 ; observations O14, O17.
+
+## R-090 — Normalisation des dates de contrainte
+- **Formulation** : sur l'échelle de placement `P(t)` de la feuille (calendrier effectif, temps civil pour une durée écoulée), durée `d`. Contrainte de début (MSO, SNET, SNLT) : `A = P.forward_span(c, d)`, `s* = A.start` (S9 : un début saisi à 07:00 sur un calendrier à 08:00 commence à 08:00 ; jalon : R-031 en passe avant). Contrainte de fin (MFO, FNET, FNLT) : `f* = P.backward_span(c, 0).finish` (R-031 en passe arrière : `c` gardé s'il commence une minute ouvrée ou tombe dans une plage, sinon l'instant ouvré précédent), puis `A = (P.add(f*, −d), f*)` (R-022). Temps écoulé : `A = (c, c + d)` ou `(c − d, c)`, aucun recalage. Comparaisons aux autres bornes : un début en brut (`s*` commence une minute ouvrée), une fin en temps ouvré (`P.between(f*, x) > 0`), car `f*` peut être le début d'une plage (O14 : ven 18:00 vaut sam 18:00 en temps ouvré). Une conversion impossible rend la feuille non planifiable dans la passe qui utilise l'ancrage (R-069). Aucune nouvelle primitive de calendrier (ADR-0010). Exemples : SNET sam 24/10 10:00, 1 j → lun 26/10 08:00 – 17:00 ; SNET mer 21/10 07:00 → mer 08:00 ; FNET ven 23/10 17:00, 1 j → ven 08:00 – 17:00 ; FNET lun 26/10 08:00, 1 j → `f*` = lun 08:00, A = ven 23/10 08:00 – lun 26/10 08:00 (R-030 donnerait ven 17:00 : cas qui discrimine) ; FNET sam 24/10 10:00 → ven 08:00 – 17:00 ; calendrier « A7 » (ven 18:00-20:00, 21:00-23:00 ; sam 09:00-13:00, 14:00-18:00) : FNET ven 18/10/2024 18:00, 8 h → sam 12/10 09:00 – ven 18/10 18:00 ; 12 h, ven 29/11 18:00 → ven 22/11 18:00 – ven 29/11 18:00 ; durée écoulée 1 ej, FNET mer 21/10 10:00 → mar 20/10 10:00 – mer 10:00.
+- **Source** : learn.microsoft.com, « Definition of Microsoft Project constraints » (S27 : « EF=CD ») ; support.microsoft.com, « Change default times for entered start or finish dates » (S9) ; observé O14 (A7 UID 15 à 21, 32 : fin = date de contrainte au début d'une plage). Hypothèse concurrente : fin = date brute même en temps chômé.
+- **Statut** : `hypothèse`. Côté fin reproduit par le harnais (A7 UID 15 à 21, 32 : 8 cas identiques, mesuré le 2026-10-17, parité 99/159) : passage à `vérifié contre MS Project` au relevé des planchers.
+- **Tests** : `tests/rules/r090_constraint_date_normalization.rs` (`r090_*`) ; tests unitaires de `crates/planrs-core/src/schedule/constraint.rs` (table de dérivation, ancrage).
+
+## R-091 — Le plus tôt possible (ASAP)
+- **Formulation** : depuis le début, aucune borne : la tâche est placée par ses liens, la porte de son parent et le début du projet (R-036 à R-044), comme en J2. Exemple : réseau N1 de R-045, toutes ASAP : A lun, B lun – mar, C mer, D lun ; TF A 480, B 0, C 0, D 960.
+- **Source** : S27 (« (Scheduled)ES=(Calculated)ES + Delay »), support.microsoft.com, « Set a task start or finish date (constraint) for a task » (S28 : défaut depuis le début).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r091_as_soon_as_possible.rs` (`r091_*`).
+
+## R-093 — Ne pas commencer avant le (SNET)
+- **Formulation** : plancher `s*` (R-090) en passe avant, comparé au début placé par les autres bornes (R-044 amendée) : si `s* >` ce début, `early = A`, pilote `Constraint { StartNoEarlierThan }` ; sinon rien ne change, pas même le pilote. Aucun effet en passe arrière depuis le début (l'option R-099 n'y change rien : un plancher ne crée pas de marge négative). Exemples : A 2 j FS → B 1 j SNET mer 21/10 13:00 → B mer 13:00 – jeu 22/10 12:00, pilote la contrainte, TF(B) 0 ; A au plus tard lun 13:00 – mer 12:00, TF(A) = FS(A) = 240. P 3 j FS → A SNET mar 20/10 08:00 → A jeu 08:00, pilote `Link { P, FS }`. Sans effet : A 1 j FS → B SNET mar 20/10 08:00 → borne du lien lun 17:00 (brute), placée mar 08:00 = `s*` → B mar 08:00, pilote `Link { A, FS }`. A 1 j SNET mar 20/10 08:00, C 4 j seule → A au plus tard jeu 08:00, TF 960.
+- **Source** : S27 (« ES=CD »), S28, learn.microsoft.com, « Back to Basics: Working with task date constraints » (S30 : une date saisie à la main devient SNET).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r093_start_no_earlier_than.rs` (`r093_*`).
+
+## R-094 — Ne pas finir avant le (FNET)
+- **Formulation** : plancher de fin `f*` (R-090) en passe avant : si `P.between(fin placée, f*) > 0`, `early = A` (fin = `f*`, O14 ; et non `forward_span(A.start, d)`), pilote `Constraint { FinishNoEarlierThan }` ; sinon rien ne change. Aucun effet en passe arrière depuis le début. Exemples : A 1 j FS → B 1 j FNET jeu 22/10 17:00 → B jeu 08:00 – 17:00, TF(B) 0, TF(A) = FS(A) = 960. A 2 j FNET mar 20/10 12:00 → début candidat ven 16/10 13:00, la fin placée depuis le début du projet (mar 17:00) dépasse déjà `f*` → A lun 08:00 – mar 17:00, pilote `ProjectStart`. A 1 j FNET lun 26/10 08:00 → ven 23/10 08:00 – lun 26/10 08:00 ; B FS → lun 26/10 08:00 – 17:00. Calendrier « A7 » : FNET ven 18/10/2024 18:00, 8 h, fin du projet ven 20/12 18:00 → ES sam 12/10 09:00, EF ven 18/10 18:00, LS sam 14/12 09:00, LF sam 14/12 18:00, TF = FS = 6 480.
+- **Source** : S27 (« EF=CD »), S28, S30 ; observé O14 (A7 UID 15 à 21, 32), O17 (A6 UID 7 : FNET qui ne lie pas).
+- **Statut** : `hypothèse`. Reproduit par le harnais (A7 UID 15 à 21, 32 : 8 cas identiques, mesuré le 2026-10-17) : passage à `vérifié contre MS Project` au relevé des planchers.
+- **Tests** : `tests/rules/r094_finish_no_earlier_than.rs` (`r094_*`).
 
 ### Import MSPDI (R-070 à R-089)
 

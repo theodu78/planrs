@@ -21,6 +21,7 @@
 //! adjoint `h` en passe arrière, R-047).
 
 mod backward;
+mod constraint;
 mod forward;
 mod network;
 mod order;
@@ -41,6 +42,7 @@ use crate::duration::Minutes;
 use crate::ids::TaskUid;
 use crate::model::{Project, ScheduleAnchor};
 use crate::time::Moment;
+use constraint::{Mode, PassRole};
 use network::{Fail, Network, NodeIx, pos};
 
 /// État calculé d'un nœud canonique.
@@ -93,27 +95,6 @@ impl NodeState {
         total_slack: Minutes::ZERO,
         free_slack: Minutes::ZERO,
     };
-}
-
-/// Sens de planification (ADR-0010) : depuis le début, passe avant
-/// principale ; à rebours, passe arrière principale.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Mode {
-    /// Depuis la date de début du projet.
-    FromStart,
-    /// À rebours depuis la date de fin du projet (J3, commit suivant).
-    FromFinish,
-}
-
-/// Rôle d'une passe (ADR-0010) : la passe principale place les tâches
-/// (passe avant depuis le début), la passe secondaire calcule les dates
-/// opposées et les marges (passe arrière depuis le début).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PassRole {
-    /// Passe principale.
-    Primary,
-    /// Passe secondaire.
-    Secondary,
 }
 
 /// Calcul en cours : réseau, états des nœuds, décalages convertis.
@@ -352,7 +333,7 @@ pub fn schedule(project: &Project) -> Schedule {
     };
     let sc = network::scales(project, &set, project_cal, &mut diags);
     // Étapes 1 à 5.
-    let Some(mut net) = network::build(project, sc, &mut diags) else {
+    let Some(mut net) = network::build(project, sc, mode, &mut diags) else {
         return internal_failure(project, start, diags, "construction du réseau");
     };
     let Some(order) = order::order(&mut net, &mut diags) else {

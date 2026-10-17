@@ -16,6 +16,7 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
+use super::constraint::{ConstraintRule, Mode, NodeConstraint, anchor, derive};
 use crate::calendar::{CalendarSet, CompiledCalendar, Span, TimeScale};
 use crate::diagnostic::{Diagnostic, Diagnostics};
 use crate::duration::{LagValue, Minutes, TimeBasis};
@@ -141,6 +142,9 @@ pub(super) struct Node {
     /// Feuille manuelle active (R-063) ou agrégat d'une récapitulative
     /// manuelle datée (R-064) : dates saisies, ou l'échec de leur calcul.
     pub fixed: Option<Result<Span, Fail>>,
+    /// Contrainte d'une feuille automatique active (ADR-0010, R-090 à
+    /// R-099) ; `None` sans effet (ASAP depuis le début).
+    pub constraint: Option<NodeConstraint>,
     /// Agrégat de la récapitulative parente.
     pub parent_rollup: Option<NodeIx>,
     /// Porte : son agrégat ; agrégat : sa porte.
@@ -458,6 +462,72 @@ fn manual_span(
     }
 }
 
+/// Sens de planification et option « respecter les contraintes » (R-099),
+/// lus une fois pour la construction du réseau.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct BuildCtx {
+    /// Sens de planification.
+    pub mode: Mode,
+    /// Option « les tâches respectent toujours leurs dates de contrainte ».
+    pub honor: bool,
+}
+
+/// Contrainte d'une feuille automatique active de durée `d` sur son échelle
+/// de placement : règle dérivée (R-099) et ancrage R-090. `None` si la
+/// contrainte est sans effet (ASAP depuis le début).
+fn leaf_constraint(task: &Task, scale: TimeScale<'_>, d: Minutes, ctx: BuildCtx) -> Option<NodeConstraint> {
+    let kind = task.constraint.kind();
+    let rule = derive(kind, ctx.mode, ctx.honor);
+    if rule == ConstraintRule::None {
+        return None;
+    }
+    let date = task.constraint.date();
+    let anchor = date.map(|date| anchor(scale, kind, date, d).map_err(Fail::from));
+    Some(NodeConstraint {
+        kind,
+        rule,
+        date,
+        anchor,
+    })
+}
+
+/// Nœud d'une feuille en position `p` : échelle de placement, dates saisies
+/// d'une manuelle (R-063), contrainte d'une automatique active (R-090 à
+/// R-099 ; inactive : ignorée sans diagnostic).
+fn leaf_node(
+    task: &Task,
+    p: usize,
+    info: &TaskInfo,
+    scales: &[TimeScale<'_>],
+    ctx: BuildCtx,
+    diags: &mut Diagnostics,
+) -> Option<Node> {
+    let place = place_of(task, info.cal);
+    let scale = *scales.get(pos(place)?)?;
+    let (fixed, duration) = if info.inactive() {
+        (None, task.duration.minutes())
+    } else {
+        manual_span(task, scale, diags)
+    };
+    let constraint = if info.inactive() || fixed.is_some() {
+        None
+    } else {
+        leaf_constraint(task, scale, duration, ctx)
+    };
+    Some(Node {
+        kind: NodeKind::Leaf,
+        task: p,
+        uid: info.uid,
+        inactive: info.inactive(),
+        place,
+        duration,
+        fixed,
+        constraint,
+        parent_rollup: None,
+        twin: None,
+    })
+}
+
 /// Récapitulative ouverte pendant la numérotation : position, et dates
 /// saisies et durée utilisée d'une récapitulative manuelle datée (R-064).
 type OpenSummary = (usize, Option<Result<Span, Fail>>, Minutes);
@@ -467,6 +537,7 @@ fn number_nodes(
     project: &Project,
     tasks: &mut [TaskInfo],
     scales: &[TimeScale<'_>],
+    ctx: BuildCtx,
     diags: &mut Diagnostics,
 ) -> Option<Vec<Node>> {
     let mut nodes: Vec<Node> = Vec::with_capacity(tasks.len().checked_add(tasks.len() / 4)?);
@@ -486,6 +557,7 @@ fn number_nodes(
                 place: info.cal,
                 duration,
                 fixed,
+                constraint: None,
                 parent_rollup: None,
                 twin: Some(gate),
             });
@@ -530,29 +602,14 @@ fn number_nodes(
                 place: info.cal,
                 duration: Minutes::ZERO,
                 fixed: None,
+                constraint: None,
                 parent_rollup: None,
                 twin: None,
             });
             info.entry = Some(v);
             open.push((p, fixed, duration));
         } else {
-            let place = place_of(task, info.cal);
-            let (fixed, duration) = if info.inactive() {
-                (None, task.duration.minutes())
-            } else {
-                manual_span(task, *scales.get(pos(place)?)?, diags)
-            };
-            nodes.push(Node {
-                kind: NodeKind::Leaf,
-                task: p,
-                uid: info.uid,
-                inactive: info.inactive(),
-                place,
-                duration,
-                fixed,
-                parent_rollup: None,
-                twin: None,
-            });
+            nodes.push(leaf_node(task, p, info, scales, ctx, diags)?);
             info.entry = Some(v);
             info.exit = Some(v);
         }
@@ -769,9 +826,18 @@ fn csr(node_count: usize, arcs: Vec<Arc>) -> Option<Csr> {
 
 /// Étapes 1 à 4 : réseau complet. `None` si un invariant est violé (jamais
 /// attendu) ; l'appelant le signale.
-pub(super) fn build<'a>(project: &Project, sc: Scales<'a>, diags: &mut Diagnostics) -> Option<Network<'a>> {
+pub(super) fn build<'a>(
+    project: &Project,
+    sc: Scales<'a>,
+    mode: Mode,
+    diags: &mut Diagnostics,
+) -> Option<Network<'a>> {
+    let ctx = BuildCtx {
+        mode,
+        honor: project.options.honor_constraints,
+    };
     let mut tasks = classify(project, &sc.task_cal, diags)?;
-    let nodes = number_nodes(project, &mut tasks, &sc.scales, diags)?;
+    let nodes = number_nodes(project, &mut tasks, &sc.scales, ctx, diags)?;
     let mut builder = ArcBuilder {
         project,
         arcs: Vec::new(),

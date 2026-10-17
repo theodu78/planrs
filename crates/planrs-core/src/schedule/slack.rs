@@ -59,7 +59,13 @@ impl Calc<'_, '_> {
     /// Marge totale et marge libre du nœud `v`.
     fn node_slack(&mut self, v: NodeIx, early: Span, late: Span) -> Result<(Minutes, Minutes), Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+        // Échelle de mesure (R-048, R-113) ; le dernier début plaçable d'un
+        // lien SS/SF reste sur l'échelle de placement.
         let m = *self
+            .net
+            .scale(self.net.measure(node.place))
+            .ok_or(Fail::Internal("échelle hors bornes"))?;
+        let place = *self
             .net
             .scale(node.place)
             .ok_or(Fail::Internal("échelle hors bornes"))?;
@@ -76,7 +82,9 @@ impl Calc<'_, '_> {
         while let Some(o) = owner {
             let anc_start = self.state(o).and_then(|s| s.early).map(|e| e.start);
             for &a in net.outgoing(o).unwrap_or_default() {
-                if let Some(gap) = self.gap(v, a, m, early, !first && anc_start != Some(early.start))? {
+                if let Some(gap) =
+                    self.gap(v, a, m, place, early, !first && anc_start != Some(early.start))?
+                {
                     fs = fs.min(gap);
                 }
             }
@@ -172,7 +180,8 @@ impl Calc<'_, '_> {
     }
 
     /// Écart de l'arc de lien `a` pour le nœud `v` (R-049) : `M.between(ancre propre,
-    /// h(ancre au plus tôt du successeur))`. `None` pour un arc ignoré
+    /// h(ancre au plus tôt du successeur))`, `M` échelle de mesure, `place`
+    /// échelle de placement (dernier début plaçable, R-113). `None` pour un arc ignoré
     /// (hiérarchie, coupé, vers une tâche inactive, cible sans dates, ou arc
     /// SS/SF hérité écarté).
     fn gap(
@@ -180,6 +189,7 @@ impl Calc<'_, '_> {
         v: NodeIx,
         a: u32,
         m: TimeScale<'_>,
+        place: TimeScale<'_>,
         own: Span,
         skip_start_kind: bool,
     ) -> Result<Option<Minutes>, Fail> {
@@ -225,7 +235,7 @@ impl Calc<'_, '_> {
             LinkType::StartToStart | LinkType::StartToFinish => {
                 let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
                 let bound = if node.kind == NodeKind::Leaf || node.fixed.is_some() {
-                    m.latest_start(bound, node.duration)?
+                    place.latest_start(bound, node.duration)?
                 } else {
                     bound
                 };

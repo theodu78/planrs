@@ -438,7 +438,12 @@ fn case_for(
         return Err(Excluded::NoComparableValue);
     }
     let causes = causes(project, outline, task, kind, recorded);
-    let rules = rules(outline, task, kind, ts, &compared);
+    let mut rules = rules(outline, task, kind, ts, &compared);
+    // Calendrier du projet dérivé (R-113) : mesure sur sa base, placement
+    // sur le calendrier désigné, pour une tâche sans calendrier propre.
+    if causes.contains(&Cause::ProjectCalendarDerived) && task.calendar.is_none() {
+        rules.insert("R-113");
+    }
     let id = if kind == CaseKind::ProjectSummary {
         Some(0)
     } else {

@@ -127,6 +127,7 @@ mod r109_from_finish_constraints;
 mod r110_from_finish_slack_and_summaries;
 mod r111_from_finish_unschedulable;
 mod r112_summary_scheduled_dates;
+mod r113_derived_project_calendar;
 mod r120_mspdi_write_form;
 mod r121_element_order_profiles;
 mod r122_computed_values_written;

@@ -52,8 +52,8 @@ size = 292938
 sha256 = "fa066ebe350248171360810271de7747d3267e0535bd6f35a5d4b94199e0fb06"
 producer = "msproject"
 save_version = 14
-note = "41 tâches, 11 récapitulatives, 32 FS ; calendrier du projet dérivé (UID 1, base 2) : marges libres de 2 h attendues en divergence."
-floor = 22
+note = "41 tâches, 11 récapitulatives, 32 FS ; calendrier du projet dérivé (UID 1, calendrier de ressource des 30 feuilles, base 2) : durées des récapitulatives et marges libres mesurées sur la base (R-113, O13), 42/42 en J3."
+floor = 42
 
 [[file]]
 name = "takeout-system-zh.xml"

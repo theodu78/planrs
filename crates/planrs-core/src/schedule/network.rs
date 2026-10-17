@@ -30,7 +30,10 @@ pub(super) type NodeIx = u32;
 
 /// Indice de l'échelle « temps écoulé » dans [`Network::scales`].
 pub(super) const ELAPSED: u32 = 0;
-/// Indice de l'échelle du calendrier du projet dans [`Network::scales`].
+/// Indice de l'échelle du calendrier du projet dans [`Network::scales`] :
+/// toujours un calendrier de base (R-113), échelle de mesure des durées des
+/// récapitulatives, des marges et des décalages des tâches sans calendrier
+/// propre.
 pub(super) const PROJECT: u32 = 1;
 
 /// Échec du calcul d'un nœud : conversion impossible (code stable de
@@ -197,9 +200,13 @@ pub(super) struct Arc {
 
 /// Réseau prêt pour les passes.
 pub(super) struct Network<'a> {
-    /// Échelles : `[0]` temps écoulé, `[1]` calendrier du projet, puis les
-    /// calendriers de tâche utilisés, dans l'ordre des UID.
+    /// Échelles : `[0]` temps écoulé, `[1]` calendrier du projet (de base,
+    /// R-113), `[2]` calendrier dérivé désigné par le projet s'il y en a un,
+    /// puis les calendriers de tâche utilisés, dans l'ordre des UID.
     pub scales: Vec<TimeScale<'a>>,
+    /// Échelle de placement d'une tâche sans calendrier propre : `PROJECT`,
+    /// ou le calendrier dérivé désigné par le projet (R-113).
+    pub default_place: u32,
     /// Classification, par position.
     pub tasks: Vec<TaskInfo>,
     /// Nœuds canoniques.
@@ -248,6 +255,13 @@ impl<'a> Network<'a> {
         self.scales.get(pos(i)?)
     }
 
+    /// Échelle de mesure `M` d'une échelle de placement (R-048, R-049,
+    /// R-054, R-113) : le calendrier du projet (de base) pour le calendrier
+    /// dérivé qu'il désigne ; l'échelle elle-même sinon.
+    pub fn measure(&self, place: u32) -> u32 {
+        measure_of(self.default_place, place)
+    }
+
     /// Classification de la tâche en position `p`.
     pub fn task(&self, p: usize) -> Option<&TaskInfo> {
         self.tasks.get(p)
@@ -286,27 +300,46 @@ impl<'a> Network<'a> {
 /// Calendriers résolus pour le calcul (§ 3.1, R-066).
 pub(super) struct Scales<'a> {
     /// Échelles (voir [`Network::scales`]).
-    pub scales: Vec<TimeScale<'a>>,
+    pub table: Vec<TimeScale<'a>>,
     /// Échelle ouvrée de chaque tâche, par position.
     pub task_cal: Vec<u32>,
+    /// Voir [`Network::default_place`].
+    pub default_place: u32,
+}
+
+/// Échelle de mesure d'une échelle de placement (voir [`Network::measure`]).
+fn measure_of(default_place: u32, place: u32) -> u32 {
+    if place == default_place { PROJECT } else { place }
 }
 
 /// Table des échelles : temps écoulé, calendrier du projet (déjà résolu,
-/// replis compris), puis un calendrier compilé par UID de tâche utilisé.
-/// Un calendrier de tâche inutilisable (inconnu, en échec, sans temps ouvré)
-/// est remplacé par celui du projet, avec `task.calendar_fallback`.
+/// replis compris ; de base, R-113), le calendrier dérivé désigné par le
+/// projet (`designated`, R-113) s'il y en a un, puis un calendrier compilé
+/// par UID de tâche utilisé. Une tâche sans calendrier propre est placée sur
+/// le calendrier désigné s'il existe, sinon sur celui du projet ; un
+/// calendrier de tâche inutilisable (inconnu, en échec, sans temps ouvré) est
+/// remplacé de même, avec `task.calendar_fallback`.
 pub(super) fn scales<'a>(
     project: &Project,
     set: &'a CalendarSet,
     project_cal: &'a CompiledCalendar,
+    designated: Option<&'a CompiledCalendar>,
     diags: &mut Diagnostics,
 ) -> Scales<'a> {
     let mut scales = vec![TimeScale::Elapsed, TimeScale::Working(project_cal)];
+    let default_place = match designated {
+        Some(c) => {
+            let i = ix(scales.len()).unwrap_or(PROJECT);
+            scales.push(TimeScale::Working(c));
+            i
+        }
+        None => PROJECT,
+    };
     let mut index: BTreeMap<CalendarUid, Option<u32>> = BTreeMap::new();
     let mut task_cal = Vec::with_capacity(project.tasks.len());
     for task in &project.tasks {
         let Some(uid) = task.calendar.filter(|_| !task.is_null) else {
-            task_cal.push(PROJECT);
+            task_cal.push(default_place);
             continue;
         };
         let slot = *index.entry(uid).or_insert_with(|| match set.get(uid) {
@@ -326,10 +359,14 @@ pub(super) fn scales<'a>(
                 task: task.uid(),
                 calendar: uid,
             });
-            task_cal.push(PROJECT);
+            task_cal.push(default_place);
         }
     }
-    Scales { scales, task_cal }
+    Scales {
+        table: scales,
+        task_cal,
+        default_place,
+    }
 }
 
 /// Étapes 1 et 2 : hiérarchie (R-052) et activité (R-062). Le parent est la
@@ -742,6 +779,8 @@ fn number_nodes(
 struct ArcBuilder<'p> {
     project: &'p Project,
     mode: Mode,
+    /// Voir [`Network::default_place`].
+    default_place: u32,
     arcs: Vec<Arc>,
 }
 
@@ -863,7 +902,9 @@ impl ArcBuilder<'_> {
                 };
                 let sigma = match link.lag.basis {
                     TimeBasis::Elapsed => ELAPSED,
-                    TimeBasis::Working => succ.cal,
+                    // R-041 : calendrier de tâche du successeur, sinon le
+                    // calendrier du projet (de base, R-113).
+                    TimeBasis::Working => measure_of(self.default_place, succ.cal),
                 };
                 let arc = |to: NodeIx, to_inactive: bool| Arc {
                     from,
@@ -976,10 +1017,11 @@ pub(super) fn build<'a>(
         honor: project.options.honor_constraints,
     };
     let mut tasks = classify(project, &sc.task_cal, diags)?;
-    let nodes = number_nodes(project, &mut tasks, &sc.scales, ctx, diags)?;
+    let nodes = number_nodes(project, &mut tasks, &sc.table, ctx, diags)?;
     let mut builder = ArcBuilder {
         project,
         mode,
+        default_place: sc.default_place,
         arcs: Vec::new(),
     };
     builder.hierarchy(&tasks)?;
@@ -987,7 +1029,8 @@ pub(super) fn build<'a>(
     let arc_count = builder.arcs.len();
     let c = csr(nodes.len(), builder.arcs)?;
     Some(Network {
-        scales: sc.scales,
+        scales: sc.table,
+        default_place: sc.default_place,
         tasks,
         nodes,
         arcs: c.arcs,

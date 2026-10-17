@@ -227,7 +227,9 @@ impl Calc<'_, '_> {
             let duration = if fixed {
                 node.map(|n| n.duration)
             } else {
-                node.and_then(|n| self.net.scale(n.place))
+                // R-113 : mesurée sur le calendrier du projet (de base) pour
+                // une récapitulative sans calendrier propre.
+                node.and_then(|n| self.net.scale(self.net.measure(n.place)))
                     .and_then(|s| s.between(planned.start, planned.finish).ok())
             };
             if duration.is_none() {

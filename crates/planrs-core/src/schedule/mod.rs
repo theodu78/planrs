@@ -42,7 +42,7 @@ pub use crate::diagnostic::Pass;
 pub use types::{Driver, Exclusion, LateDriver, Schedule, TaskOutcome, TaskRole, TaskSchedule};
 
 use crate::arena::Arena;
-use crate::calendar::{CalendarSet, CompiledCalendar, Span, builtin};
+use crate::calendar::{CalendarKind, CalendarSet, CompiledCalendar, Span, builtin};
 use crate::diagnostic::{Diagnostic, Diagnostics};
 use crate::duration::Minutes;
 use crate::ids::TaskUid;
@@ -323,7 +323,7 @@ impl Calc<'_, '_> {
 
     /// Durée d'un nœud prédécesseur : feuille (manuelle : durée utilisée) ;
     /// agrégat : temps ouvré entre son début et sa fin sur le calendrier de
-    /// la récapitulative (R-054) ; récapitulative manuelle datée : durée
+    /// la récapitulative, sinon du projet (R-054, R-113) ; récapitulative manuelle datée : durée
     /// utilisée (R-064).
     fn duration_of(&self, v: NodeIx) -> Result<Minutes, Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
@@ -343,7 +343,7 @@ impl Calc<'_, '_> {
                 let e = self.state(v).and_then(|s| s.early).ok_or(missing)?;
                 let scale = self
                     .net
-                    .scale(node.place)
+                    .scale(self.net.measure(node.place))
                     .ok_or(Fail::Internal("échelle hors bornes"))?;
                 Ok(scale.between(e.start, e.finish)?)
             }
@@ -389,7 +389,16 @@ pub fn schedule(project: &Project) -> Schedule {
             "calendrier Standard intégré non compilable",
         );
     };
-    let sc = network::scales(project, &set, project_cal, &mut diags);
+    // R-113 : le calendrier du projet est un calendrier de base. S'il en
+    // désigne un dérivé (calendrier de ressource), sa base mesure durées des
+    // récapitulatives, marges et décalages ; le calendrier désigné place les
+    // tâches sans calendrier propre (substitut des calendriers de ressource,
+    // J5).
+    let (project_cal, designated) = match (&fallback, derived_base(project, &set)) {
+        (None, Some(base)) => (base, Some(project_cal)),
+        _ => (project_cal, None),
+    };
+    let sc = network::scales(project, &set, project_cal, designated, &mut diags);
     // Étapes 1 à 5.
     let Some(mut net) = network::build(project, sc, mode, &mut diags) else {
         return internal_failure(project, start, diags, "construction du réseau");
@@ -441,6 +450,17 @@ pub fn schedule(project: &Project) -> Schedule {
     calc.slack();
     calc.check_constraints();
     calc.output(&order)
+}
+
+/// R-113 : calendrier de base du calendrier du projet quand celui-ci est
+/// dérivé, compilé et doté de temps ouvré ; `None` sinon (calendrier du
+/// projet de base, base inutilisable : le calendrier désigné sert à tout).
+fn derived_base<'s>(project: &Project, set: &'s CalendarSet) -> Option<&'s CompiledCalendar> {
+    let calendar = project.calendars.get(project.calendar)?;
+    let CalendarKind::Derived { base, .. } = calendar.kind() else {
+        return None;
+    };
+    set.get(*base).ok().filter(|c| c.has_working_time())
 }
 
 /// Calendrier Standard intégré, compilé seul, sous l'UID du calendrier du

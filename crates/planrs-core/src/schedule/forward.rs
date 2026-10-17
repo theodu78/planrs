@@ -1,5 +1,8 @@
 //! Passe avant (spécification J2 § 3.7, R-036 à R-045, R-062, R-063,
-//! R-069), dans l'ordre topologique.
+//! R-069 ; spécification J3 § 3.7, R-090 à R-110), dans l'ordre
+//! topologique. Depuis le début, c'est la passe principale (puis sa repasse,
+//! R-092) ; à rebours, la passe secondaire, depuis le début calculé `S*`
+//! (R-107).
 //!
 //! Chaque arc entrant donne une borne candidate ; la plus grande en
 //! `Moment` brut gagne, et à égalité la première atteinte reste pilote
@@ -16,14 +19,17 @@ use crate::model::{ConstraintKind, LinkType};
 use crate::time::Moment;
 
 /// Bornes d'un nœud : plus grande borne de début et son pilote, drapeau
-/// `degraded` transmis par les arcs entrants.
+/// `degraded` transmis par les arcs entrants, présence d'un prédécesseur
+/// effectif (lien appliqué, propre ou hérité d'une porte, R-110).
 struct Bounds {
     start: Moment,
     driver: Driver,
     degraded: bool,
+    linked: bool,
 }
 
 /// Une borne candidate.
+#[derive(Clone, Copy)]
 enum Candidate {
     /// Borne de début (porte, FS, SS).
     Start(Moment),
@@ -33,7 +39,12 @@ enum Candidate {
 
 impl Calc<'_, '_> {
     /// Passe avant complète, puis fin du projet (R-045). Depuis le début,
-    /// c'est la passe principale (`role` = `Primary`).
+    /// c'est la passe principale (`role` = `Primary`) ou sa repasse
+    /// (`Replay`, R-092) ; à rebours, la passe secondaire (`Secondary`,
+    /// R-107) : les tâches exclues par la passe arrière principale (R-111)
+    /// sont sautées, une conversion impossible donne des dates au plus tôt
+    /// de repli égales aux dates au plus tard (miroir de R-069), et la fin
+    /// du projet reste l'ancre `F`.
     pub(super) fn forward(&mut self, order: &[NodeIx], role: PassRole) {
         self.role = role;
         self.quiet = role == PassRole::Replay;
@@ -46,8 +57,12 @@ impl Calc<'_, '_> {
             };
             let (kind, uid) = (node.kind, node.uid);
             // Repasse : un nœud en échec dans la passe principale le reste
-            // (ses voisins l'ont déjà ignoré).
-            if self.quiet && self.state(v).is_some_and(|s| s.failed) {
+            // (ses voisins l'ont déjà ignoré) ; à rebours, une tâche exclue
+            // par la passe arrière principale n'a pas de dates (R-111).
+            if self
+                .state(v)
+                .is_some_and(|s| (self.quiet && s.failed) || s.back_failed)
+            {
                 continue;
             }
             let result = match kind {
@@ -56,17 +71,26 @@ impl Calc<'_, '_> {
                 NodeKind::Rollup => self.rollup(v),
             };
             if let Err(fail) = result {
+                let secondary = role == PassRole::Secondary;
                 if let Some(s) = self.state_mut(v) {
-                    s.early = None;
-                    s.failed = true;
+                    if secondary {
+                        // Miroir de R-069 à rebours : dates au plus tôt de
+                        // repli, égales aux dates au plus tard.
+                        s.early = s.late;
+                        s.degraded = true;
+                    } else {
+                        s.early = None;
+                        s.failed = true;
+                    }
                 }
                 self.report(uid, Pass::Forward, fail);
             }
         }
         // Repasse : la fin du projet de la passe principale est gardée (les
-        // épingles ne la déplacent pas, R-092).
-        if role == PassRole::Replay {
-            self.quiet = false;
+        // épingles ne la déplacent pas, R-092) ; à rebours, la fin du projet
+        // est l'ancre `F` (R-106).
+        self.quiet = false;
+        if role != PassRole::Primary {
             return;
         }
         // R-045 : fin du projet = max des fins au plus tôt des feuilles
@@ -96,26 +120,29 @@ impl Calc<'_, '_> {
             start: self.start,
             driver: Driver::ProjectStart,
             degraded: false,
+            linked: false,
         };
         let incoming = self
             .net
             .incoming(v)
             .ok_or(Fail::Internal("arcs entrants hors bornes"))?;
         for a in incoming {
-            if self.net.is_cut(a) {
+            // Arc coupé (R-065) ; lien non appliqué par la passe arrière
+            // principale à rebours (R-110).
+            if self.net.is_cut(a) || (self.role == PassRole::Secondary && self.is_dropped(a)) {
                 continue;
             }
             let arc = *self.net.arc(a).ok_or(Fail::Internal("arc hors bornes"))?;
             let src = *self.state(arc.from).ok_or(Fail::Internal("nœud hors bornes"))?;
             let Some(se) = src.early else {
-                // Origine non planifiée (R-069) ou récapitulative vide.
+                // Origine non planifiée (R-069, R-111) ou récapitulative vide.
                 if let Some(l) = arc.link {
                     self.emit(Diagnostic::LinkExcludedEndpoint {
                         predecessor: l.pred,
                         successor: l.succ,
                     });
                 }
-                b.degraded |= src.failed || src.degraded;
+                b.degraded |= src.failed || src.back_failed || src.degraded;
                 continue;
             };
             b.degraded |= src.degraded;
@@ -154,32 +181,17 @@ impl Calc<'_, '_> {
                     )
                 }
             };
+            // R-110 : prédécesseur effectif (lien appliqué), propre ou hérité
+            // de la porte du parent.
+            b.linked |= arc.link.is_some() || src.linked;
             let scale = self
                 .net
                 .scale(place)
                 .ok_or(Fail::Internal("échelle hors bornes"))?;
             let start = match (cand, fixed) {
                 // Feuille manuelle : la borne ne la déplace pas (R-063).
-                (Candidate::Start(x), Some(f)) => {
-                    if x > f.start
-                        && let Some(l) = arc.link
-                    {
-                        self.emit(Diagnostic::LinkManualNotHonored {
-                            predecessor: l.pred,
-                            successor: l.succ,
-                        });
-                    }
-                    continue;
-                }
-                (Candidate::Finish(x), Some(f)) => {
-                    if scale.between(f.finish, x)?.get() > 0
-                        && let Some(l) = arc.link
-                    {
-                        self.emit(Diagnostic::LinkManualNotHonored {
-                            predecessor: l.pred,
-                            successor: l.succ,
-                        });
-                    }
+                (_, Some(f)) => {
+                    self.manual_bound(arc.link, cand, f, *scale)?;
                     continue;
                 }
                 // R-039, R-040 : borne de fin convertie en borne de début.
@@ -194,6 +206,34 @@ impl Calc<'_, '_> {
             }
         }
         Ok(b)
+    }
+
+    /// R-063 : borne `cand` d'un lien entrant d'une feuille manuelle de
+    /// dates saisies `f` : elle ne la déplace pas ; si elle est violée (début
+    /// en brut, fin en temps ouvré), `link.manual_not_honored`, signalé par
+    /// la passe principale seulement (à rebours, par la passe arrière
+    /// principale, sur les liens sortants, R-106).
+    fn manual_bound(
+        &mut self,
+        link: Option<super::network::LinkArc>,
+        cand: Candidate,
+        f: Span,
+        scale: TimeScale<'_>,
+    ) -> Result<(), Fail> {
+        let Some(l) = link.filter(|_| self.role == PassRole::Primary) else {
+            return Ok(());
+        };
+        let violated = match cand {
+            Candidate::Start(x) => x > f.start,
+            Candidate::Finish(x) => scale.between(f.finish, x)?.get() > 0,
+        };
+        if violated {
+            self.emit(Diagnostic::LinkManualNotHonored {
+                predecessor: l.pred,
+                successor: l.succ,
+            });
+        }
+        Ok(())
     }
 
     /// Borne `g(ancre)` de l'arc de lien `a` (R-037 à R-043) : fin ou début
@@ -246,6 +286,7 @@ impl Calc<'_, '_> {
         });
         s.driver = b.driver;
         s.degraded = b.degraded || (replay && s.degraded);
+        s.linked = b.linked;
         Ok(())
     }
 
@@ -259,8 +300,21 @@ impl Calc<'_, '_> {
             Some(r) => Some(r?),
             None => None,
         };
-        let b = self.bounds(v, fixed)?;
-        let pin = self.state(v).and_then(|s| s.pin);
+        let mut b = self.bounds(v, fixed)?;
+        let (pin, late) = self.state(v).map_or((None, None), |s| (s.pin, s.late));
+        // R-110 (miroir de R-051) : à rebours, option « plusieurs chemins
+        // critiques » active, une feuille automatique sans prédécesseur
+        // effectif commence au plus tôt à son début au plus tard.
+        if self.mode == Mode::FromFinish
+            && self.project.options.multiple_critical_paths
+            && fixed.is_none()
+            && !b.linked
+            && let Some(l) = late
+            && l.start > b.start
+        {
+            b.start = l.start;
+            b.driver = Driver::ProjectStart;
+        }
         let (early, driver) = if let Some(f) = fixed {
             (f, Driver::Manual)
         } else {
@@ -284,6 +338,7 @@ impl Calc<'_, '_> {
         s.driver = driver;
         // Repasse : les drapeaux posés par la passe arrière sont gardés.
         s.degraded = b.degraded || (replay && s.degraded);
+        s.linked = b.linked;
         Ok(())
     }
 
@@ -334,23 +389,26 @@ impl Calc<'_, '_> {
                 }
             }
             // Plancher : SNET, FNET ; MSO, MFO option inactive (fenêtre,
-            // R-097, R-098).
-            ConstraintRule::Floor(Side::Start) | ConstraintRule::Window(Side::Start) => {
+            // R-097, R-098) ; à rebours, SNET et FNET serrés en passe
+            // principale (option active) restent des planchers de la passe
+            // avant secondaire (R-109).
+            ConstraintRule::Floor(Side::Start)
+            | ConstraintRule::Window(Side::Start)
+            | ConstraintRule::Clamped(Side::Start) => {
                 let a = c.span()?;
                 if a.start > natural.start {
                     return Ok((a, pinned));
                 }
             }
-            ConstraintRule::Floor(Side::Finish) | ConstraintRule::Window(Side::Finish) => {
+            ConstraintRule::Floor(Side::Finish)
+            | ConstraintRule::Window(Side::Finish)
+            | ConstraintRule::Clamped(Side::Finish) => {
                 let a = c.span()?;
                 if scale.between(natural.finish, a.finish)?.get() > 0 {
                     return Ok((a, pinned));
                 }
             }
-            ConstraintRule::None
-            | ConstraintRule::Opposite
-            | ConstraintRule::Cap(_)
-            | ConstraintRule::Clamped(_) => {}
+            ConstraintRule::None | ConstraintRule::Opposite | ConstraintRule::Cap(_) => {}
         }
         Ok((natural, driver))
     }

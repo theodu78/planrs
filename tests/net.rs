@@ -90,6 +90,8 @@ impl Net {
         let options = self.project.options;
         let mut t = Task::new(TaskUid::new(uid), name.to_owned(), &options);
         t.duration = duration(minutes, TimeBasis::Working);
+        // R-108 : ALAP par défaut à rebours.
+        t.constraint = Constraint::default_for(&self.project.anchor);
         if let Err(e) = self.project.tasks.push(t) {
             panic!("tâche de test « {name} » : {e}");
         }
@@ -175,6 +177,15 @@ impl Net {
     #[must_use]
     pub fn deadline(mut self, name: &str, date: &str) -> Self {
         self.task_mut(name).deadline = Some(moment(date));
+        self
+    }
+
+    /// Planification à rebours depuis la fin `finish` (R-106) ; les tâches
+    /// ajoutées ensuite sont ALAP (contrainte par défaut à rebours, R-108).
+    /// À appeler avant d'ajouter les tâches.
+    #[must_use]
+    pub fn from_finish(mut self, finish: &str) -> Self {
+        self.project.anchor = ScheduleAnchor::FromFinish(moment(finish));
         self
     }
 

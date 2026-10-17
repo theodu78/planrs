@@ -741,6 +741,7 @@ fn number_nodes(
 /// Contexte de construction des arcs.
 struct ArcBuilder<'p> {
     project: &'p Project,
+    mode: Mode,
     arcs: Vec<Arc>,
 }
 
@@ -769,6 +770,26 @@ impl ArcBuilder<'_> {
             }
         }
         Some(())
+    }
+
+    /// R-110 (miroir de R-058) : à rebours, le plafond de début `K(S)` d'un
+    /// lien SS ou SF depuis une récapitulative automatique active (en
+    /// position `p_pos`) s'applique à toutes ses sous-tâches, avec
+    /// `link.start_from_summary` ; une récapitulative manuelle datée ne
+    /// transmet pas ses liens (R-064).
+    fn start_from_summary(&self, kind: LinkType, p_pos: usize, pred: &TaskInfo) -> bool {
+        let start_kind = matches!(kind, LinkType::StartToStart | LinkType::StartToFinish);
+        let dated_manual = self.project.tasks.at(p_pos).is_some_and(|t| {
+            matches!(
+                t.mode,
+                SchedulingMode::Manual { start, finish, .. } if start.is_some() || finish.is_some()
+            )
+        });
+        self.mode == Mode::FromFinish
+            && start_kind
+            && pred.role == Role::Summary
+            && !dated_manual
+            && !pred.inactive()
     }
 
     /// Étape 4 : liens effectifs (§ 3.5), dans l'ordre des successeurs puis
@@ -877,6 +898,12 @@ impl ArcBuilder<'_> {
                 } else {
                     self.arcs.push(arc(succ.entry?, succ.inactive()));
                 }
+                if self.start_from_summary(link.kind, p_pos, pred) {
+                    diags.push(Diagnostic::LinkStartFromSummary {
+                        predecessor: p_uid,
+                        successor: s_uid,
+                    });
+                }
             }
         }
         Some(())
@@ -952,6 +979,7 @@ pub(super) fn build<'a>(
     let nodes = number_nodes(project, &mut tasks, &sc.scales, ctx, diags)?;
     let mut builder = ArcBuilder {
         project,
+        mode,
         arcs: Vec::new(),
     };
     builder.hierarchy(&tasks)?;

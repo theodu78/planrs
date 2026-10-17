@@ -1755,11 +1755,17 @@ fn p17(p: &Project) {
     let s = schedule(p);
     check_shape(p, &s);
     if matches!(p.anchor, ScheduleAnchor::FromFinish(_)) {
-        assert!(
-            s.tasks
-                .values()
-                .all(|o| matches!(o, TaskOutcome::Excluded { .. }))
-        );
+        // À rebours (R-106) : dates cohérentes, dates planifiées = au plus
+        // tard (contrôles complets : P13 à rebours).
+        for (uid, o) in &s.tasks {
+            if let TaskOutcome::Scheduled(ts) = o {
+                assert!(ts.late.start <= ts.late.finish, "{uid}");
+                if !ts.degraded {
+                    assert!(ts.early.start <= ts.early.finish, "{uid}");
+                }
+                assert_eq!((ts.start, ts.finish), (ts.late.start, ts.late.finish), "{uid}");
+            }
+        }
         return;
     }
     for (uid, o) in &s.tasks {

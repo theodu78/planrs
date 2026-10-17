@@ -327,6 +327,16 @@ pub enum Diagnostic {
         /// Successeur (récapitulative).
         successor: TaskUid,
     },
+    /// Lien SS ou SF depuis une récapitulative, à rebours : son plafond de
+    /// début s'applique à toutes ses sous-tâches (avertissement, R-110,
+    /// miroir de R-058).
+    #[serde(rename = "link.start_from_summary")]
+    LinkStartFromSummary {
+        /// Prédécesseur (récapitulative).
+        predecessor: TaskUid,
+        /// Successeur.
+        successor: TaskUid,
+    },
     /// Lien dont le prédécesseur est inactif : sans effet (info, R-062).
     #[serde(rename = "link.inactive")]
     LinkInactive {
@@ -458,10 +468,6 @@ pub enum Diagnostic {
         /// Fin planifiée.
         finish: Moment,
     },
-    /// Planification à rebours non prise en charge (J3) : aucune tâche
-    /// planifiée (erreur).
-    #[serde(rename = "schedule.from_finish_unsupported")]
-    ScheduleFromFinishUnsupported,
     /// Invariant interne du calcul violé : jamais attendu, anomalie à
     /// signaler (erreur).
     #[serde(rename = "schedule.internal")]
@@ -528,7 +534,6 @@ impl Diagnostic {
             | Self::ProjectCalendarFallback { .. }
             | Self::TaskUnschedulable { .. }
             | Self::LinkUnschedulable { .. }
-            | Self::ScheduleFromFinishUnsupported
             | Self::ScheduleInternal { .. } => Severity::Error,
             Self::CalendarExceptionsOverlap { .. }
             | Self::CalendarWorkWeeksOverlap { .. }
@@ -537,6 +542,7 @@ impl Diagnostic {
             | Self::TaskNullWithData { .. }
             | Self::LinkIgnoredInCycle { .. }
             | Self::LinkFinishToSummary { .. }
+            | Self::LinkStartFromSummary { .. }
             | Self::LinkManualNotHonored { .. }
             | Self::TaskCalendarFallback { .. }
             | Self::ConstraintOverride { .. }
@@ -568,7 +574,6 @@ impl Diagnostic {
             }
             Self::ProjectCalendarNotBase { .. }
             | Self::ProjectCalendarFallback { .. }
-            | Self::ScheduleFromFinishUnsupported
             | Self::ScheduleInternal { .. } => Subject::Project,
             Self::TaskReservedUid => Subject::Task(TaskUid::PROJECT_SUMMARY),
             Self::TaskOutlineJump { task }
@@ -605,6 +610,10 @@ impl Diagnostic {
                 successor,
             }
             | Self::LinkFinishToSummary {
+                predecessor,
+                successor,
+            }
+            | Self::LinkStartFromSummary {
                 predecessor,
                 successor,
             }
@@ -661,6 +670,7 @@ impl Diagnostic {
             Self::LinkIgnoredInCycle { .. } => "link.ignored_in_cycle",
             Self::LinkSummaryDescendant { .. } => "link.summary_descendant",
             Self::LinkFinishToSummary { .. } => "link.finish_to_summary",
+            Self::LinkStartFromSummary { .. } => "link.start_from_summary",
             Self::LinkInactive { .. } => "link.inactive",
             Self::LinkExcludedEndpoint { .. } => "link.excluded_endpoint",
             Self::LinkManualNotHonored { .. } => "link.manual_not_honored",
@@ -675,7 +685,6 @@ impl Diagnostic {
             Self::ConstraintSummaryIgnored { .. } => "constraint.summary_ignored",
             Self::ConstraintManualIgnored { .. } => "constraint.manual_ignored",
             Self::TaskDeadlineMissed { .. } => "task.deadline_missed",
-            Self::ScheduleFromFinishUnsupported => "schedule.from_finish_unsupported",
             Self::ScheduleInternal { .. } => "schedule.internal",
         }
     }
@@ -819,6 +828,14 @@ impl fmt::Display for Diagnostic {
                 "le lien {predecessor} → {successor} (fin à fin ou début à fin) vers une récapitulative \
                  s'applique à chacune de ses sous-tâches"
             ),
+            Self::LinkStartFromSummary {
+                predecessor,
+                successor,
+            } => write!(
+                f,
+                "le lien {predecessor} → {successor} (début à début ou début à fin) depuis une \
+                 récapitulative plafonne le début de chacune de ses sous-tâches (planification à rebours)"
+            ),
             Self::LinkInactive {
                 predecessor,
                 successor,
@@ -893,10 +910,6 @@ impl fmt::Display for Diagnostic {
             } => write!(
                 f,
                 "la tâche {task} finit le {finish}, après son échéance du {deadline}"
-            ),
-            Self::ScheduleFromFinishUnsupported => f.write_str(
-                "la planification à partir de la date de fin n'est pas encore prise en charge : \
-                 aucune tâche n'est planifiée",
             ),
             Self::ScheduleInternal { detail } => {
                 write!(
@@ -1106,7 +1119,12 @@ mod tests {
                 pass: Pass::Forward,
                 cause: "calendar.out_of_domain".to_owned(),
             },
-            Diagnostic::ScheduleFromFinishUnsupported,
+            // Planification à rebours (J3), indice 33 (code retiré
+            // `schedule.from_finish_unsupported`, jamais réattribué).
+            Diagnostic::LinkStartFromSummary {
+                predecessor: TaskUid::new(1),
+                successor: t,
+            },
             Diagnostic::ScheduleInternal {
                 detail: "nœud non visité".to_owned(),
             },
@@ -1183,6 +1201,7 @@ mod tests {
                 "link.finish_to_summary",
                 "link.manual_not_honored",
                 "task.calendar_fallback",
+                "link.start_from_summary",
                 "constraint.override",
                 "constraint.not_honored",
                 "task.deadline_missed",
@@ -1261,9 +1280,17 @@ mod tests {
         for i in [28, 29, 30, 32] {
             assert_eq!(all()[i].subject(), Subject::Task(t));
         }
-        for i in [31, 33, 34] {
+        for i in [31, 34] {
             assert_eq!(all()[i].subject(), Subject::Project);
         }
+        assert_eq!(
+            all()[33].subject(),
+            Subject::Link {
+                predecessor: TaskUid::new(1),
+                successor: t
+            }
+        );
+        assert_eq!(all()[33].severity(), Severity::Warning);
         assert_eq!(all()[32].severity(), Severity::Error);
         assert_eq!(
             all()[32].to_string(),

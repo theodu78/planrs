@@ -209,7 +209,6 @@ impl Excluded {
                     Exclusion::ManualUndated => "manual_undated",
                     Exclusion::EmptySummary => "empty_summary",
                     Exclusion::Unschedulable => "unschedulable",
-                    Exclusion::UnsupportedAnchor => "unsupported_anchor",
                 }
             ),
         }

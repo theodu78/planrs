@@ -95,47 +95,79 @@ impl Calc<'_, '_> {
         Ok((tf, fs.min(tf).max(Minutes::ZERO)))
     }
 
-    /// Échéances dépassées (R-102) et contraintes non tenues (R-099), après
-    /// les marges. Contraintes : depuis le début,
-    /// un plafond ou une fenêtre (option inactive) dont la date au plus tôt
-    /// dépasse l'ancrage : début en brut (`ES > s*`), fin en temps ouvré
-    /// (`P.between(f*, EF) > 0`) ; `constraint.not_honored` avec la date
-    /// saisie.
+    /// Échéances dépassées (R-102) et contraintes non tenues (R-099, R-103,
+    /// R-109), après les marges, sur les dates planifiées (au plus tôt depuis
+    /// le début, au plus tard à rebours ; une porte lit les dates de sa
+    /// récapitulative). Une échéance est dépassée si la fin planifiée la
+    /// dépasse en temps ouvré de l'échelle. Une contrainte n'est pas tenue
+    /// (`constraint.not_honored`, avec la date saisie) : depuis le début, un
+    /// plafond ou une fenêtre (option inactive) dont la date planifiée
+    /// dépasse l'ancrage ; à rebours, un plancher ou une fenêtre dont la date
+    /// planifiée le précède, ou un plafond dépassé (FNLT d'une
+    /// récapitulative). Début comparé en brut, fin en temps ouvré ; la porte
+    /// d'une récapitulative (SNET, R-103) compare son début à la date brute.
     pub(super) fn check_constraints(&mut self) {
+        let from_finish = self.mode == Mode::FromFinish;
+        let planned_of = |s: &super::NodeState| if from_finish { s.late } else { s.early };
+        let mut found = Vec::new();
         for (node, s) in self.net.nodes.iter().zip(&self.st) {
-            let Some(early) = s.early else { continue };
-            // R-102 : échéance dépassée, jugée sur la fin planifiée (depuis
-            // le début : la fin au plus tôt), en temps ouvré de l'échelle.
-            if let (Some(deadline), Some(scale)) = (node.deadline, self.net.scale(node.place))
-                && scale.between(deadline, early.finish).is_ok_and(|m| m.get() > 0)
+            let planned = if node.kind == NodeKind::Gate {
+                node.twin.and_then(|r| self.state(r)).and_then(planned_of)
+            } else {
+                planned_of(s)
+            };
+            let (Some(planned), Some(scale)) = (planned, self.net.scale(node.place)) else {
+                continue;
+            };
+            let after = |a: crate::time::Moment, b: crate::time::Moment| {
+                scale.between(a, b).is_ok_and(|m| m.get() > 0)
+            };
+            // R-102 : échéance dépassée, jugée sur la fin planifiée, en temps
+            // ouvré de l'échelle.
+            if let Some(deadline) = node.deadline
+                && after(deadline, planned.finish)
             {
-                self.diags.push(Diagnostic::TaskDeadlineMissed {
+                found.push(Diagnostic::TaskDeadlineMissed {
                     task: node.uid,
                     deadline,
-                    finish: early.finish,
+                    finish: planned.finish,
                 });
             }
             let Some(c) = node.constraint else { continue };
-            let (ConstraintRule::Cap(side) | ConstraintRule::Window(side), Mode::FromStart) =
-                (c.rule, self.mode)
-            else {
-                continue;
+            let Some(date) = c.date else { continue };
+            let a = match c.anchor {
+                Some(Ok(a)) => a,
+                // Porte d'une récapitulative : date brute (R-103).
+                None => Span {
+                    start: date,
+                    finish: date,
+                },
+                Some(Err(_)) => continue,
             };
-            let (Some(date), Some(Ok(a)), Some(scale)) = (c.date, c.anchor, self.net.scale(node.place))
-            else {
-                continue;
+            let exceeds = |side: Side| match side {
+                Side::Start => planned.start > a.start,
+                Side::Finish => after(a.finish, planned.finish),
             };
-            let late = match side {
-                Side::Start => early.start > a.start,
-                Side::Finish => scale.between(a.finish, early.finish).is_ok_and(|m| m.get() > 0),
+            let precedes = |side: Side| match side {
+                Side::Start => planned.start < a.start,
+                Side::Finish => after(planned.finish, a.finish),
             };
-            if late {
-                self.diags.push(Diagnostic::ConstraintNotHonored {
+            let violated = match (c.rule, from_finish) {
+                (ConstraintRule::Cap(side) | ConstraintRule::Window(side), false)
+                | (ConstraintRule::Cap(side), true) => exceeds(side),
+                (ConstraintRule::Floor(side) | ConstraintRule::Window(side), true) => precedes(side),
+                _ => false,
+            };
+            if violated {
+                found.push(Diagnostic::ConstraintNotHonored {
                     task: node.uid,
                     kind: c.kind,
                     date,
                 });
             }
+        }
+        for d in found {
+            self.diags.push(d);
         }
     }
 

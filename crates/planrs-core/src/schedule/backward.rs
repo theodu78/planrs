@@ -1,5 +1,9 @@
 //! Passe arrière (spécification J2 § 3.8, R-046, R-047, R-051, R-057,
-//! R-061, R-069), dans l'ordre topologique inverse.
+//! R-061, R-069 ; spécification J3 § 3.8, R-095 à R-111), dans l'ordre
+//! topologique inverse. Depuis le début, c'est la passe secondaire (dates au
+//! plus tard sous la fin du projet) ; à rebours, la passe principale (dates
+//! planifiées sous l'ancre `F`, R-106), puis éventuellement sa repasse
+//! (R-108).
 //!
 //! Les plafonds passent par le transfert adjoint `h` (R-047). Un agrégat est
 //! traité avant ses enfants (il les suit dans l'ordre topologique) : il leur
@@ -9,25 +13,42 @@
 //! débuts au plus tard de ses enfants actifs, lu par les liens FS/SS qui la
 //! visent.
 
-use super::constraint::{ConstraintRule, Mode};
+use super::constraint::{ConstraintRule, Mode, Side};
 use super::network::{Fail, NodeIx, NodeKind, pos};
 use super::{Calc, LateDriver, Pass, PassRole, transfer};
-use crate::calendar::Span;
+use crate::calendar::{Span, TimeScale};
+use crate::diagnostic::{Diagnostic, OverriddenBound};
 use crate::ids::TaskUid;
-use crate::model::LinkType;
+use crate::model::{ConstraintKind, LinkType};
 use crate::time::Moment;
 
 /// Plafonds lus sur les arcs de lien sortants d'un nœud, avec leur cause
-/// (R-047).
+/// (R-047), dans l'ordre des arcs.
 #[derive(Default)]
 struct Caps {
-    /// Plus petit plafond de fin (FS, FF) ; à égalité, le premier arc.
-    finish: Option<(Moment, LateDriver)>,
+    /// Plafonds de fin (FS, FF).
+    finishes: Vec<(Moment, LateDriver)>,
     /// Plafonds de début (SS, SF), à convertir pour une feuille.
     starts: Vec<(Moment, LateDriver)>,
     /// Un successeur est peu sûr (dégradé, en échec) : dates au plus tard
     /// de repli (R-069).
     unreliable: bool,
+}
+
+impl Caps {
+    /// Plus petit plafond de fin ; à égalité, le premier arc.
+    fn finish(&self) -> Option<(Moment, LateDriver)> {
+        self.finishes.iter().fold(None, |acc, &c| Some(min_cap(acc, c)))
+    }
+}
+
+/// Plafond de fin d'une feuille, avec sa cause (R-047).
+#[derive(Clone, Copy)]
+struct Cap {
+    /// Plafond de fin.
+    at: Moment,
+    /// Cause, si c'est le plus petit plafond.
+    driver: LateDriver,
 }
 
 /// Minimum d'un plafond optionnel et d'un plafond.
@@ -65,19 +86,33 @@ impl LateCap {
 impl Calc<'_, '_> {
     /// Passe arrière complète. Depuis le début, c'est la passe secondaire
     /// (`role` = `Secondary`) : elle ne visite que les nœuds atteints par la
-    /// passe avant (`reached`).
+    /// passe avant (`reached`). À rebours, c'est la passe principale
+    /// (`Primary`, tous les nœuds actifs, sous l'ancre `F`, R-106) ou sa
+    /// repasse (`Replay`, après l'épingle des tâches ASAP, R-108 : aucun
+    /// diagnostic sauf un invariant violé).
     pub(super) fn backward(&mut self, order: &[NodeIx], role: PassRole) {
         self.role = role;
-        let has_succ = self.has_successors();
+        self.quiet = role == PassRole::Replay;
+        // R-051 : seulement depuis le début (son miroir à rebours est en
+        // passe avant, R-110).
+        let has_succ = if self.mode == Mode::FromStart {
+            self.has_successors()
+        } else {
+            Vec::new()
+        };
         for &v in order.iter().rev() {
             let Some(node) = self.net.node(v) else { continue };
             if node.inactive || !self.reached(v) {
                 continue;
             }
             let (kind, uid) = (node.kind, node.uid);
-            let Some(early) = self.state(v).and_then(|s| s.early) else {
+            let early = self.state(v).and_then(|s| s.early);
+            // Depuis le début, un nœud sans dates au plus tôt n'est pas
+            // atteint (`reached`) ; à rebours, la passe principale n'en a
+            // pas encore.
+            if self.mode == Mode::FromStart && early.is_none() {
                 continue;
-            };
+            }
             // R-064 : une récapitulative manuelle datée se traite comme une
             // feuille manuelle ; ses enfants n'héritent d'aucun plafond.
             let leaf_like = kind == NodeKind::Leaf || node.fixed.is_some();
@@ -90,20 +125,16 @@ impl Calc<'_, '_> {
                             s.late_driver = driver;
                         }
                     }
-                    Err(fail) => {
-                        // R-069 : dates au plus tard de repli.
-                        if let Some(s) = self.state_mut(v) {
-                            s.late = Some(early);
-                            s.late_driver = LateDriver::Fallback;
-                            s.degraded = true;
-                        }
-                        self.report(uid, Pass::Backward, fail);
-                    }
+                    Err(fail) => self.late_failed(v, uid, early, fail),
                 }
             } else if kind == NodeKind::Rollup {
                 if let Err(fail) = self.rollup_caps(v, early) {
+                    let from_finish = self.mode == Mode::FromFinish;
                     if let Some(s) = self.state_mut(v) {
                         s.degraded = true;
+                        // À rebours, ses sous-tâches n'ont pas tous leurs
+                        // plafonds hérités : dates de repli (R-111).
+                        s.late_degraded |= from_finish;
                     }
                     self.report(uid, Pass::Backward, fail);
                 }
@@ -111,6 +142,51 @@ impl Calc<'_, '_> {
                 self.gate_late(v);
             }
         }
+        self.quiet = false;
+    }
+
+    /// Échec du calcul des dates au plus tard du nœud `v`. Depuis le début
+    /// (R-069) : dates au plus tard de repli, égales aux dates au plus tôt,
+    /// `degraded`. À rebours, en passe principale (R-111) : la tâche est
+    /// exclue (`back_failed`, aucune date), ses prédécesseurs l'ignorent
+    /// (`link.excluded_endpoint`) et sont dégradés ; en repasse, un échec
+    /// est un invariant violé (`schedule.internal`, par [`Calc::report`]),
+    /// les dates de la passe principale sont gardées.
+    fn late_failed(&mut self, v: NodeIx, uid: TaskUid, early: Option<Span>, fail: Fail) {
+        match (self.mode, self.role) {
+            (Mode::FromFinish, PassRole::Primary) => {
+                if let Some(s) = self.state_mut(v) {
+                    s.late = None;
+                    s.back_failed = true;
+                }
+            }
+            (Mode::FromFinish, _) => {}
+            (Mode::FromStart, _) => {
+                if let Some(s) = self.state_mut(v) {
+                    s.late = early;
+                    s.late_driver = LateDriver::Fallback;
+                    s.degraded = true;
+                }
+            }
+        }
+        self.report(uid, Pass::Backward, fail);
+    }
+
+    /// R-107 : début calculé `S*` à rebours, plancher de la passe avant
+    /// secondaire : min des débuts au plus tard des feuilles actives
+    /// planifiées (manuelles comprises) et des récapitulatives manuelles
+    /// datées (R-064) ; l'ancre `F` s'il n'y en a aucune.
+    pub(super) fn earliest_late_start(&self) -> Moment {
+        self.net
+            .nodes
+            .iter()
+            .zip(&self.st)
+            .filter(|(node, s)| {
+                (node.kind == NodeKind::Leaf || node.fixed.is_some()) && !node.inactive && !s.back_failed
+            })
+            .filter_map(|(_, s)| s.late.map(|l| l.start))
+            .min()
+            .unwrap_or(self.finish)
     }
 
     /// R-051 : vrai, par position, si la tâche a un successeur effectif
@@ -168,8 +244,14 @@ impl Calc<'_, '_> {
     /// Plafonds des arcs de lien sortants du nœud `v` (R-047) : FS
     /// `h(LS_s)`, FF `h(LF_s)` en fin ; SS `h(LS_s)`, SF `h(LF_s)` en début.
     /// Les arcs coupés, vers une tâche inactive ou vers un nœud sans dates
-    /// (au plus tôt ou au plus tard) sont ignorés.
-    fn out_caps(&mut self, v: NodeIx) -> Result<Caps, Fail> {
+    /// (au plus tôt ou au plus tard) sont ignorés. À rebours, un lien vers
+    /// une tâche exclue par la passe arrière principale est signalé
+    /// (`link.excluded_endpoint`, R-111). `drop` : un plafond qui ne se
+    /// calcule pas ignore son lien (`link.unschedulable`, la cible
+    /// dégradée) au lieu de faire échouer le nœud — agrégat d'une
+    /// récapitulative à rebours, miroir de la porte en passe avant (R-069,
+    /// R-110).
+    fn out_caps(&mut self, v: NodeIx, drop: bool) -> Result<Caps, Fail> {
         let mut caps = Caps::default();
         // Référence au réseau copiée : aucune copie des arcs sortants.
         let net = self.net;
@@ -186,6 +268,14 @@ impl Calc<'_, '_> {
                 continue;
             }
             caps.unreliable |= self.unreliable(arc.to);
+            // R-111 : cible exclue par la passe arrière principale.
+            if self.mode == Mode::FromFinish && !self.reached(arc.to) {
+                self.emit(Diagnostic::LinkExcludedEndpoint {
+                    predecessor: l.pred,
+                    successor: l.succ,
+                });
+                continue;
+            }
             // Cible sans dates au plus tard, ou porte dont la borne n'a pas pu
             // se calculer en passe avant (R-069) : le lien n'a pas été
             // appliqué, il ne plafonne rien.
@@ -196,48 +286,105 @@ impl Calc<'_, '_> {
             else {
                 continue;
             };
-            let lag = self.lag_minutes(a)?;
-            let sigma = net.scale(l.sigma).ok_or(Fail::Internal("échelle hors bornes"))?;
-            let anchor = match l.ty {
-                LinkType::FinishToStart | LinkType::StartToStart => tl.start,
-                LinkType::FinishToFinish | LinkType::StartToFinish => self.finish_anchor(arc.to, tl.finish),
+            let y = match self.link_cap(a, l, arc.to, tl) {
+                Ok(y) => y,
+                Err(Fail::Conversion(cause)) if drop => {
+                    self.drop_cap(a, l, cause);
+                    caps.unreliable = true;
+                    continue;
+                }
+                Err(fail) => return Err(fail),
             };
-            let y = transfer::backward(*sigma, anchor, lag, self.reads_raw(arc.to, l.sigma))?;
             let driver = LateDriver::Successor {
                 successor: l.succ,
                 link: l.ty,
             };
             match l.ty {
-                LinkType::FinishToStart | LinkType::FinishToFinish => {
-                    caps.finish = Some(min_cap(caps.finish, (y, driver)));
-                }
+                LinkType::FinishToStart | LinkType::FinishToFinish => caps.finishes.push((y, driver)),
                 LinkType::StartToStart | LinkType::StartToFinish => caps.starts.push((y, driver)),
             }
         }
         Ok(caps)
     }
 
+    /// Plafond `h(ancre au plus tard de la cible)` de l'arc de lien `a`
+    /// (R-047).
+    fn link_cap(
+        &mut self,
+        a: u32,
+        l: super::network::LinkArc,
+        target: NodeIx,
+        tl: Span,
+    ) -> Result<Moment, Fail> {
+        let lag = self.lag_minutes(a)?;
+        let sigma = *self
+            .net
+            .scale(l.sigma)
+            .ok_or(Fail::Internal("échelle hors bornes"))?;
+        let anchor = match l.ty {
+            LinkType::FinishToStart | LinkType::StartToStart => tl.start,
+            LinkType::FinishToFinish | LinkType::StartToFinish => self.finish_anchor(target, tl.finish),
+        };
+        Ok(transfer::backward(
+            sigma,
+            anchor,
+            lag,
+            self.reads_raw(target, l.sigma),
+        )?)
+    }
+
+    /// R-069, R-110 : arc de lien `a` depuis l'agrégat d'une récapitulative
+    /// non appliqué à rebours (`link.unschedulable`) ; ignoré ensuite par la
+    /// passe avant secondaire et par la marge libre.
+    fn drop_cap(&mut self, a: u32, l: super::network::LinkArc, cause: &str) {
+        if let Some(slot) = pos(a).and_then(|i| self.dropped.get_mut(i)) {
+            *slot = true;
+        }
+        self.emit(Diagnostic::LinkUnschedulable {
+            predecessor: l.pred,
+            successor: l.succ,
+            cause: cause.to_owned(),
+        });
+    }
+
     /// Dates au plus tard d'une feuille active (automatique ou manuelle) ou
     /// d'une récapitulative manuelle datée (R-064), et leur cause :
-    /// plafond de fin = min(fin du projet ; EF si plusieurs chemins critiques
-    /// et aucun successeur ; `C(parent)` ; liens FS/FF) ; plafonds de début
+    /// plafond de fin = min(plafond commun : fin du projet, ou ancre `F` à
+    /// rebours ; EF si plusieurs chemins critiques et aucun successeur,
+    /// depuis le début ; `C(parent)` ; liens FS/FF) ; plafonds de début
     /// (`K(parent)` si `k_applies`, liens SS/SF) convertis par
-    /// `forward_span(y, d).finish` ; `late = backward_span(plafond, d)`
-    /// (R-030, R-031 pour un jalon, R-061). Le premier minimum strict, dans
-    /// cet ordre, donne la cause (`LateDriver`, R-047).
-    fn leaf_late(&mut self, v: NodeIx, early: Span, has_succ: bool) -> Result<(Span, LateDriver), Fail> {
+    /// `forward_span(y, d).finish` ; contrainte ; échéance ;
+    /// `late = backward_span(plafond, d)` (R-030, R-031 pour un jalon,
+    /// R-061). Le premier minimum strict, dans cet ordre, donne la cause
+    /// (`LateDriver`, R-047).
+    ///
+    /// À rebours (passe principale, R-106) : une tâche manuelle garde ses
+    /// dates saisies (R-063, R-064, `link.manual_not_honored` pour chaque
+    /// lien sortant violé) ; une épingle (MSO, MFO, option active, R-097,
+    /// R-098, R-109 ; tâche ASAP épinglée en repasse, R-108) et un serrage
+    /// (SNET, FNET, option active, R-109) donnent `constraint.override` par
+    /// plafond violé (R-100).
+    fn leaf_late(
+        &mut self,
+        v: NodeIx,
+        early: Option<Span>,
+        has_succ: bool,
+    ) -> Result<(Span, LateDriver), Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
-        let (place, duration, parent, constraint, deadline) = (
+        let (uid, place, duration, constraint, deadline, fixed) = (
+            node.uid,
             node.place,
             node.duration,
-            node.parent_rollup,
             node.constraint,
             node.deadline,
+            node.fixed,
         );
+        let from_finish = self.mode == Mode::FromFinish;
         // R-097, R-098 : une feuille épinglée (MSO, MFO, option active) a
         // ses dates au plus tard sur l'ancrage, sans plafond : une borne
         // violée s'exprime par la marge négative de l'amont.
-        if let Some(c) = constraint
+        if !from_finish
+            && let Some(c) = constraint
             && let ConstraintRule::Pin(_) = c.rule
         {
             return Ok((c.span()?, LateDriver::Constraint { kind: c.kind }));
@@ -246,44 +393,42 @@ impl Calc<'_, '_> {
             .net
             .scale(place)
             .ok_or(Fail::Internal("échelle hors bornes"))?;
-        // Plafond de début `y` : la tâche doit commencer au plus tard en `y`
-        // en brut ; `y` peut tomber hors du temps ouvré de P(t) (décalage
-        // écoulé, successeur sur un autre calendrier, K(S)) : dernier début
-        // plaçable avant la conversion (R-047).
-        let start_cap = |y: Moment| -> Result<Moment, Fail> {
-            let x = scale.latest_start(y, duration)?;
-            Ok(scale.forward_span(x, duration)?.finish)
-        };
+        if from_finish {
+            // R-106 (R-063, R-064) : dates saisies, prises comme dates au
+            // plus tard ; elles plafonnent ses prédécesseurs.
+            if let Some(f) = fixed {
+                let f = f?;
+                self.manual_successors(v, uid, scale, f);
+                return Ok((f, LateDriver::Manual));
+            }
+            let pin = self.state(v).and_then(|s| s.pin);
+            let forced = match (constraint, pin) {
+                (Some(c), _) if matches!(c.rule, ConstraintRule::Pin(_)) => Some((c.span()?, c.kind, false)),
+                (Some(c), Some(p)) => Some((p, c.kind, true)),
+                _ => None,
+            };
+            if let Some((a, kind, opposite)) = forced {
+                self.late_overrides(v, scale, a, kind, opposite);
+                return Ok((a, LateDriver::Constraint { kind }));
+            }
+        }
         let mut lf = LateCap {
             finish: self.finish,
             driver: LateDriver::ProjectFinish,
         };
-        if self.project.options.multiple_critical_paths && !has_succ {
-            lf.apply(early.finish, LateDriver::MultipleCriticalPaths);
-        }
-        let mut caps = self.out_caps(v)?;
-        if let Some(pr) = parent {
-            let ps = *self.state(pr).ok_or(Fail::Internal("nœud hors bornes"))?;
-            if let Some((c, summary)) = ps.cap_finish {
-                lf.apply(c, LateDriver::SummaryCap { summary });
-            }
-            if let Some((k, summary)) = ps.cap_start
-                && self.k_applies(ps.early.map(|e| e.start), early.start)
-            {
-                lf.apply(start_cap(k)?, LateDriver::SummaryCap { summary });
-            }
-            caps.unreliable |= ps.late_degraded && !self.net.is_fixed_rollup(pr);
-        }
-        if caps.unreliable
-            && let Some(s) = self.state_mut(v)
+        if !from_finish
+            && self.project.options.multiple_critical_paths
+            && !has_succ
+            && let Some(e) = early
         {
+            lf.apply(e.finish, LateDriver::MultipleCriticalPaths);
+        }
+        let (caps, unreliable) = self.leaf_caps(v, early, scale, duration)?;
+        if unreliable && let Some(s) = self.state_mut(v) {
             s.late_degraded = true;
         }
-        if let Some((c, driver)) = caps.finish {
-            lf.apply(c, driver);
-        }
-        for (y, driver) in caps.starts {
-            lf.apply(start_cap(y)?, driver);
+        for cap in &caps {
+            lf.apply(cap.at, cap.driver);
         }
         // Contrainte côté plafond (R-095, R-096) : `A.finish`, où `A` est
         // l'ancrage R-090 (pour SNLT, `A.finish = forward_span(s*, d).finish`,
@@ -298,7 +443,216 @@ impl Calc<'_, '_> {
         if let Some(d) = deadline {
             lf.apply(d, LateDriver::Deadline);
         }
-        Ok((scale.backward_span(lf.finish, duration)?, lf.driver))
+        let natural = scale.backward_span(lf.finish, duration)?;
+        // R-109 : à rebours, option active, SNET et FNET serrent la passe
+        // principale : si le placement sous les plafonds commence (finit)
+        // avant l'ancrage, la feuille est placée sur l'ancrage et chaque
+        // plafond violé est signalé (R-100).
+        if from_finish
+            && let Some(c) = constraint
+            && let ConstraintRule::Clamped(side) = c.rule
+        {
+            let a = c.span()?;
+            let early_side = match side {
+                Side::Start => natural.start < a.start,
+                Side::Finish => scale.between(natural.finish, a.finish)?.get() > 0,
+            };
+            if early_side {
+                self.late_overrides(v, scale, a, c.kind, false);
+                return Ok((a, LateDriver::Constraint { kind: c.kind }));
+            }
+        }
+        Ok((natural, lf.driver))
+    }
+
+    /// Plafonds d'une feuille, dans l'ordre de R-047 (`C(parent)`,
+    /// `K(parent)` si `k_applies`, liens FS/FF puis SS/SF dans l'ordre des
+    /// arcs), chacun converti en plafond de fin : un plafond de début `y`
+    /// devient `P.forward_span(P.latest_start(y, d), d).finish` (dernier début
+    /// plaçable, R-047). Rend aussi le drapeau « successeur ou plafond
+    /// hérité peu sûr » (R-069).
+    fn leaf_caps(
+        &mut self,
+        v: NodeIx,
+        early: Option<Span>,
+        scale: TimeScale<'_>,
+        duration: crate::duration::Minutes,
+    ) -> Result<(Vec<Cap>, bool), Fail> {
+        // Plafond de début `y` : la tâche doit commencer au plus tard en `y`
+        // en brut ; `y` peut tomber hors du temps ouvré de P(t) (décalage
+        // écoulé, successeur sur un autre calendrier, K(S)) : dernier début
+        // plaçable avant la conversion (R-047).
+        let start_cap = |y: Moment| -> Result<Moment, Fail> {
+            let x = scale.latest_start(y, duration)?;
+            Ok(scale.forward_span(x, duration)?.finish)
+        };
+        let parent = self
+            .net
+            .node(v)
+            .ok_or(Fail::Internal("nœud hors bornes"))?
+            .parent_rollup;
+        let mut out = Vec::new();
+        let links = self.out_caps(v, false)?;
+        let mut unreliable = links.unreliable;
+        if let Some(pr) = parent {
+            let ps = *self.state(pr).ok_or(Fail::Internal("nœud hors bornes"))?;
+            if let Some((c, summary)) = ps.cap_finish {
+                out.push(Cap {
+                    at: c,
+                    driver: LateDriver::SummaryCap { summary },
+                });
+            }
+            if let Some((k, summary)) = ps.cap_start
+                && self.k_applies(ps.early.map(|e| e.start), early.map(|e| e.start))
+            {
+                out.push(Cap {
+                    at: start_cap(k)?,
+                    driver: LateDriver::SummaryCap { summary },
+                });
+            }
+            unreliable |= ps.late_degraded && !self.net.is_fixed_rollup(pr);
+        }
+        for &(at, driver) in &links.finishes {
+            out.push(Cap { at, driver });
+        }
+        for &(y, driver) in &links.starts {
+            out.push(Cap {
+                at: start_cap(y)?,
+                driver,
+            });
+        }
+        Ok((out, unreliable))
+    }
+
+    /// R-100 à rebours : la feuille `v`, placée de force sur `a` par sa
+    /// contrainte de type `kind` (épingle, serrage ; `opposite` : épingle
+    /// d'une tâche ASAP en repasse, R-108), viole ces bornes : l'ancre `F`
+    /// (`ProjectFinish`, fin en temps ouvré de son échelle), les plafonds
+    /// hérités de sa récapitulative (`SummaryCap` : `C(S)` en fin, en temps
+    /// ouvré ; `K(S)` en début, en brut sur son dernier début plaçable), et
+    /// chaque lien sortant propre (`Successor`) que ses dates violent face
+    /// aux dates au plus tard du successeur, lues comme en passe avant
+    /// (borne `g` de son ancre ; FS, SS : début du successeur en brut ; FF,
+    /// SF : fin en temps ouvré de son échelle). Un `constraint.override` par
+    /// borne violée, en passe principale seulement ; en repasse, seule une
+    /// épingle de tâche ASAP est contrôlée, et une violation est un invariant
+    /// violé. Une conversion impossible ne signale rien.
+    fn late_overrides(
+        &mut self,
+        v: NodeIx,
+        scale: TimeScale<'_>,
+        a: Span,
+        kind: ConstraintKind,
+        opposite: bool,
+    ) {
+        if self.mode != Mode::FromFinish
+            || self.role == PassRole::Secondary
+            || (self.role == PassRole::Replay && !opposite)
+        {
+            return;
+        }
+        let Some(node) = self.net.node(v) else { return };
+        let (task, duration, parent) = (node.uid, node.duration, node.parent_rollup);
+        let exceeds = |cap: Moment| scale.between(cap, a.finish).is_ok_and(|m| m.get() > 0);
+        let mut violated: Vec<OverriddenBound> = Vec::new();
+        if exceeds(self.finish) {
+            violated.push(OverriddenBound::ProjectFinish);
+        }
+        if let Some(ps) = parent.and_then(|pr| self.state(pr)).copied() {
+            if let Some((c, summary)) = ps.cap_finish
+                && exceeds(c)
+            {
+                violated.push(OverriddenBound::SummaryCap { summary });
+            }
+            if let Some((k, summary)) = ps.cap_start
+                && scale.latest_start(k, duration).is_ok_and(|x| a.start > x)
+            {
+                violated.push(OverriddenBound::SummaryCap { summary });
+            }
+        }
+        let net = self.net;
+        for &arc_ix in net.outgoing(v).unwrap_or_default() {
+            if net.is_cut(arc_ix) || self.is_dropped(arc_ix) {
+                continue;
+            }
+            let Some(arc) = net.arc(arc_ix).copied() else {
+                continue;
+            };
+            let Some(l) = arc.link.filter(|l| !l.to_inactive) else {
+                continue;
+            };
+            let Some(tl) = self
+                .state(arc.to)
+                .filter(|_| self.reached(arc.to))
+                .and_then(|s| s.late)
+            else {
+                continue;
+            };
+            let Some(target_scale) = net.node(arc.to).and_then(|n| net.scale(n.place)).copied() else {
+                continue;
+            };
+            let (Ok(lag), Some(sigma)) = (self.lag_minutes(arc_ix), net.scale(l.sigma).copied()) else {
+                continue;
+            };
+            let anchor = match l.ty {
+                LinkType::FinishToStart | LinkType::FinishToFinish => a.finish,
+                LinkType::StartToStart | LinkType::StartToFinish => a.start,
+            };
+            let Ok(x) = transfer::forward(sigma, anchor, lag) else {
+                continue;
+            };
+            let broken = match l.ty {
+                LinkType::FinishToStart | LinkType::StartToStart => x > tl.start,
+                LinkType::FinishToFinish | LinkType::StartToFinish => {
+                    target_scale.between(tl.finish, x).is_ok_and(|m| m.get() > 0)
+                }
+            };
+            if broken {
+                violated.push(OverriddenBound::Successor {
+                    successor: l.succ,
+                    link: l.ty,
+                });
+            }
+        }
+        for bound in violated {
+            if self.role == PassRole::Replay {
+                self.emit(Diagnostic::ScheduleInternal {
+                    detail: format!("tâche {task} : épingle en repasse, {bound} est violé(e)"),
+                });
+            } else {
+                self.emit(Diagnostic::ConstraintOverride { task, kind, bound });
+            }
+        }
+    }
+
+    /// R-106 (miroir de R-063) : tâche manuelle à rebours, dates saisies
+    /// `f` ; `link.manual_not_honored` pour chaque lien sortant propre dont
+    /// le plafond est violé (fin en temps ouvré pour FS/FF, début en brut
+    /// pour SS/SF), en passe principale seulement.
+    fn manual_successors(&mut self, v: NodeIx, uid: TaskUid, scale: TimeScale<'_>, f: Span) {
+        if self.role != PassRole::Primary {
+            return;
+        }
+        let Ok(caps) = self.out_caps(v, false) else {
+            return;
+        };
+        let finish_late = |y: Moment| scale.between(y, f.finish).is_ok_and(|m| m.get() > 0);
+        let broken = caps
+            .finishes
+            .iter()
+            .filter(|(y, _)| finish_late(*y))
+            .chain(caps.starts.iter().filter(|(y, _)| f.start > *y))
+            .filter_map(|(_, d)| match d {
+                LateDriver::Successor { successor, .. } => Some(*successor),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for successor in broken {
+            self.emit(Diagnostic::LinkManualNotHonored {
+                predecessor: uid,
+                successor,
+            });
+        }
     }
 
     /// La règle `rule` plafonne la fin au plus tard dans la passe arrière
@@ -316,9 +670,10 @@ impl Calc<'_, '_> {
     }
 
     /// Plafonds hérités d'un agrégat (R-057) : `C(S) = min(C(parent), FS/FF
-    /// sortants, FNLT et échéance de la récapitulative (R-103))` ; `K(S) = min(SS/SF sortants, K(parent) si ES_S ==
-    /// ES_parent)`.
-    fn rollup_caps(&mut self, v: NodeIx, early: Span) -> Result<(), Fail> {
+    /// sortants, FNLT et échéance de la récapitulative (R-103))` ;
+    /// `K(S) = min(SS/SF sortants, K(parent) si ES_S == ES_parent)` (à
+    /// rebours : toujours, R-110).
+    fn rollup_caps(&mut self, v: NodeIx, early: Option<Span>) -> Result<(), Fail> {
         let parent = self
             .net
             .node(v)
@@ -326,8 +681,11 @@ impl Calc<'_, '_> {
             .parent_rollup;
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
         let (uid, constraint, deadline) = (node.uid, node.constraint, node.deadline);
-        let caps = self.out_caps(v)?;
-        let mut c = caps.finish.map(|(m, _)| (m, uid));
+        // À rebours, un lien dont le plafond ne se calcule pas est ignoré
+        // (`link.unschedulable`), miroir de la porte en passe avant (R-069,
+        // R-110).
+        let caps = self.out_caps(v, self.mode == Mode::FromFinish)?;
+        let mut c = caps.finish().map(|(m, _)| (m, uid));
         // R-103 : FNLT de la récapitulative (`f*` sur son calendrier) et son
         // échéance (brute) contribuent à `C(S)`.
         if let Some(nc) = constraint
@@ -350,14 +708,23 @@ impl Calc<'_, '_> {
                 c = Some(min_cap(c, pc));
             }
             if let Some(pk) = ps.cap_start
-                && self.k_applies(ps.early.map(|e| e.start), early.start)
+                && self.k_applies(ps.early.map(|e| e.start), early.map(|e| e.start))
             {
                 k = Some(min_cap(k, pk));
             }
         }
+        // R-108 : la repasse arrière fige `K(S)` sur la passe principale.
+        // Une tâche ASAP épinglée sur ses dates au plus tôt ne respecte le
+        // lien SS/SF depuis la récapitulative que pour son début agrégé (le
+        // plus petit début de ses feuilles) : recalculé, `K(S)` plafonnerait
+        // aussi les feuilles qui commencent plus tard, au-delà de leurs dates
+        // au plus tôt (marge négative sans contrainte).
+        let freeze = self.role == PassRole::Replay;
         let s = self.state_mut(v).ok_or(Fail::Internal("nœud hors bornes"))?;
         s.cap_finish = c;
-        s.cap_start = k;
+        if !freeze {
+            s.cap_start = k;
+        }
         s.late_degraded |= unreliable;
         Ok(())
     }

@@ -157,10 +157,11 @@ impl NodeConstraint {
 
 impl Calc<'_, '_> {
     /// R-092 (R-108 à rebours) : après la passe secondaire, chaque feuille
-    /// automatique active de règle `Opposite` (ALAP depuis le début), non
-    /// dégradée, de marge totale ≥ 0 (R-048 sur son échelle) et dont les
-    /// dates secondaires ne précèdent pas les dates principales en brut, est
-    /// épinglée sur ses dates secondaires (`pin`) ; la repasse de la passe
+    /// automatique active de règle `Opposite` (ALAP depuis le début, ASAP à
+    /// rebours), non dégradée, de marge totale ≥ 0 (R-048 sur son échelle) et
+    /// dont les dates au plus tard ne précèdent pas les dates au plus tôt en
+    /// brut, est épinglée sur ses dates secondaires (`pin` : au plus tard
+    /// depuis le début, au plus tôt à rebours) ; la repasse de la passe
     /// principale les tient pour fixes. Rend vrai si au moins une épingle
     /// déplace une tâche. Une tâche à marge négative n'est pas épinglée
     /// (S8 : une ALAP avec échéance « could still finish after its deadline
@@ -189,7 +190,7 @@ impl Calc<'_, '_> {
             let (Some(early), Some(late)) = (state.early, state.late) else {
                 continue;
             };
-            if state.degraded || state.late_degraded || state.failed || early == late {
+            if state.degraded || state.late_degraded || state.failed || state.back_failed || early == late {
                 continue;
             }
             let tf = match (

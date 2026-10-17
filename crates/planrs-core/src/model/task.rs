@@ -163,6 +163,18 @@ impl Constraint {
             _ => return None,
         })
     }
+
+    /// R-108 : contrainte par défaut d'une nouvelle tâche selon le sens de
+    /// planification : « le plus tôt possible » depuis le début, « le plus
+    /// tard possible » à rebours (S28, S29, S33). Pour l'ajout d'une tâche
+    /// (J4) et l'import CSV ; [`Task::new`] reste ASAP.
+    #[must_use]
+    pub const fn default_for(anchor: &crate::model::ScheduleAnchor) -> Self {
+        match anchor {
+            crate::model::ScheduleAnchor::FromStart(_) => Self::AsSoonAsPossible,
+            crate::model::ScheduleAnchor::FromFinish(_) => Self::AsLateAsPossible,
+        }
+    }
 }
 
 /// Mode de planification. Une tâche manuelle est stockée, pas recalculée

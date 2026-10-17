@@ -8,7 +8,7 @@ use planrs_core::calendar::{
 use planrs_core::{DayRange, Moment, Subject, TimeOfDay, Weekday};
 
 use super::emit::Emitter;
-use super::{OrderProfile, entity, max_len};
+use super::{NO_EXTRAS, OrderProfile, entity, max_len, plan, unscoped};
 use crate::codes;
 use crate::scalar::{format_bool, format_datetime, format_time};
 use crate::schema::Parent;
@@ -16,32 +16,41 @@ use crate::schema::Parent;
 /// Écrit un calendrier.
 pub(crate) fn write(em: &mut Emitter, c: &Calendar, profile: OrderProfile) {
     em.subject = Some(Subject::Calendar(c.uid()));
-    entity(em, "Calendar", Parent::Calendar, profile, |em, name| match name {
-        "UID" => em.leaf(name, &c.uid().get().to_string()),
-        "GUID" => em.opt_leaf(name, c.guid.map(|g| g.to_string())),
-        "Name" => em.text(name, &c.name, max_len(Parent::Calendar, name)),
-        "IsBaseCalendar" => em.leaf(name, format_bool(c.is_base())),
-        "BaseCalendarUID" => match c.kind() {
-            CalendarKind::Base { .. } => em.leaf(name, "-1"),
-            CalendarKind::Derived { base, .. } => em.leaf(name, &base.get().to_string()),
+    let planned = plan(em, "Calendar", Parent::Calendar, &c.extras, &[], profile);
+    let top = unscoped(&planned);
+    entity(
+        em,
+        "Calendar",
+        Parent::Calendar,
+        profile,
+        &top,
+        |em, name| match name {
+            "UID" => em.leaf(name, &c.uid().get().to_string()),
+            "GUID" => em.opt_leaf(name, c.guid.map(|g| g.to_string())),
+            "Name" => em.text(name, &c.name, max_len(Parent::Calendar, name)),
+            "IsBaseCalendar" => em.leaf(name, format_bool(c.is_base())),
+            "BaseCalendarUID" => match c.kind() {
+                CalendarKind::Base { .. } => em.leaf(name, "-1"),
+                CalendarKind::Derived { base, .. } => em.leaf(name, &base.get().to_string()),
+            },
+            "WeekDays" => week_days(em, c),
+            "Exceptions" if !c.exceptions().is_empty() => {
+                em.open(name);
+                for e in c.exceptions() {
+                    exception(em, e, profile);
+                }
+                em.close();
+            }
+            "WorkWeeks" if !c.work_weeks().is_empty() => {
+                em.open(name);
+                for w in c.work_weeks() {
+                    work_week(em, w, profile);
+                }
+                em.close();
+            }
+            _ => {}
         },
-        "WeekDays" => week_days(em, c),
-        "Exceptions" if !c.exceptions().is_empty() => {
-            em.open(name);
-            for e in c.exceptions() {
-                exception(em, e, profile);
-            }
-            em.close();
-        }
-        "WorkWeeks" if !c.work_weeks().is_empty() => {
-            em.open(name);
-            for w in c.work_weeks() {
-                work_week(em, w, profile);
-            }
-            em.close();
-        }
-        _ => {}
-    });
+    );
     em.subject = None;
 }
 
@@ -117,6 +126,7 @@ fn exception(em: &mut Emitter, e: &CalendarException, profile: OrderProfile) {
         "Exception",
         Parent::Exception,
         profile,
+        NO_EXTRAS,
         |em, name| match name {
             "EnteredByOccurrences" => em.leaf(name, format_bool(e.occurrences.is_some())),
             "TimePeriod" => time_period(em, e.period),
@@ -197,27 +207,34 @@ fn work_week(em: &mut Emitter, w: &WorkWeek, profile: OrderProfile) {
         .map(|d| (*d, w.days.get(*d)))
         .filter(|(_, r)| !matches!(r, DayRule::Inherit))
         .collect();
-    entity(em, "WorkWeek", Parent::WorkWeek, profile, |em, name| match name {
-        "TimePeriod" => time_period(em, w.period),
-        "Name" => em.text(name, &w.name, max_len(Parent::WorkWeek, name)),
-        "WeekDays" => {
-            if !days.is_empty() {
-                em.open("WeekDays");
-                for (d, rule) in &days {
-                    em.open("WeekDay");
-                    day(em, *d, rule, true);
+    entity(
+        em,
+        "WorkWeek",
+        Parent::WorkWeek,
+        profile,
+        NO_EXTRAS,
+        |em, name| match name {
+            "TimePeriod" => time_period(em, w.period),
+            "Name" => em.text(name, &w.name, max_len(Parent::WorkWeek, name)),
+            "WeekDays" => {
+                if !days.is_empty() {
+                    em.open("WeekDays");
+                    for (d, rule) in &days {
+                        em.open("WeekDay");
+                        day(em, *d, rule, true);
+                        em.close();
+                    }
                     em.close();
                 }
-                em.close();
             }
-        }
-        "WeekDay" => {
-            for (d, rule) in &days {
-                em.open("WeekDay");
-                day(em, *d, rule, false);
-                em.close();
+            "WeekDay" => {
+                for (d, rule) in &days {
+                    em.open("WeekDay");
+                    day(em, *d, rule, false);
+                    em.close();
+                }
             }
-        }
-        _ => {}
-    });
+            _ => {}
+        },
+    );
 }

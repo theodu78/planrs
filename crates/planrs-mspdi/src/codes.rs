@@ -537,6 +537,37 @@ pub const fn days_of_week_mask(w: &Week<bool>) -> i64 {
     mask
 }
 
+/// `StandardRateFormat` / `OvertimeRateFormat` (inverse de
+/// [`rate_format`]).
+#[must_use]
+pub const fn rate_format_code(unit: RateUnit) -> i64 {
+    match unit {
+        RateUnit::Minute => 1,
+        RateUnit::Hour => 2,
+        RateUnit::Day => 3,
+        RateUnit::Week => 4,
+        RateUnit::Month => 5,
+        RateUnit::Year => 7,
+        RateUnit::MaterialUnit => 8,
+    }
+}
+
+/// `WorkContour` (inverse de [`work_contour`]).
+#[must_use]
+pub const fn work_contour_code(c: WorkContour) -> i64 {
+    match c {
+        WorkContour::Flat => 0,
+        WorkContour::BackLoaded => 1,
+        WorkContour::FrontLoaded => 2,
+        WorkContour::DoublePeak => 3,
+        WorkContour::EarlyPeak => 4,
+        WorkContour::LatePeak => 5,
+        WorkContour::Bell => 6,
+        WorkContour::Turtle => 7,
+        WorkContour::Contoured => 8,
+    }
+}
+
 /// `Exception/Type` d'une récurrence ; `Period` (chaque jour de la
 /// période) s'écrit `1` (quotidienne de pas 1, forme de MS Project pour un
 /// férié, D15 ; relue `Daily { every: 1 }`, mêmes jours).
@@ -854,5 +885,16 @@ mod tests {
             })),
             Some(ExceptionType::YearlyByDay)
         );
+    }
+
+    #[test]
+    fn r124_r125_inverse_codes() {
+        use super::{rate_format, rate_format_code, work_contour, work_contour_code};
+        for code in [1, 2, 3, 4, 5, 7, 8] {
+            assert_eq!(rate_format_code(rate_format(code).unwrap()), code);
+        }
+        for code in 0..9 {
+            assert_eq!(work_contour_code(work_contour(code).unwrap()), code);
+        }
     }
 }

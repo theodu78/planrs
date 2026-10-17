@@ -28,6 +28,8 @@
 use std::fmt;
 
 use planrs_core::{ExtraEntry, Extras};
+use quick_xml::Reader;
+use quick_xml::events::Event;
 
 use crate::schema::{Class, Parent, Profile, sequence};
 use crate::xml::Element;
@@ -153,6 +155,19 @@ pub fn is_static_anchor(parent: Parent, name: &str) -> bool {
 /// parcours unique, l'ancre courante est le dernier enfant du schéma
 /// toujours réécrit ou capturé. `scope` : ligne de base n.
 pub(crate) fn collect(children: &[Element<'_>], parent: Parent, scope: Option<u8>) -> Vec<ExtraEntry> {
+    collect_with(children, parent, scope, |_| false)
+}
+
+/// Comme [`collect`], avec des éléments M? que l'on sait réécrits
+/// (`written`) : ils servent aussi d'ancre. Projet : `Calendars`,
+/// `Resources`, `Assignments` quand le modèle en a (ils sont alors
+/// toujours réécrits, R-130).
+pub(crate) fn collect_with(
+    children: &[Element<'_>],
+    parent: Parent,
+    scope: Option<u8>,
+    written: impl Fn(&str) -> bool,
+) -> Vec<ExtraEntry> {
     let mut out = Vec::new();
     let mut anchor: Option<&str> = None;
     for child in children {
@@ -179,7 +194,7 @@ pub(crate) fn collect(children: &[Element<'_>], parent: Parent, scope: Option<u8
                 }
             }
             None => {
-                if is_static_anchor(parent, name) {
+                if is_static_anchor(parent, name) || written(name) {
                     anchor = Some(name);
                 }
             }
@@ -253,6 +268,61 @@ pub fn canonical_order(extras: &mut Extras, parent: Parent) {
     });
 }
 
+/// Profondeur maximale d'une charge réécrite.
+const MAX_PAYLOAD_DEPTH: u32 = 64;
+
+/// R-123 : une charge se réécrit telle quelle si c'est du XML bien formé fait
+/// d'un seul élément racine de nom local `name` (préfixe admis), sans rien
+/// autour (ni espace, ni commentaire, ni déclaration, ni DOCTYPE), sans
+/// caractère interdit par XML 1.0, de profondeur au plus 64 : elle est alors
+/// relue à l'identique (la capture va de `<` à la fin de la balise
+/// fermante).
+#[must_use]
+pub fn valid_payload(name: &str, payload: &str) -> bool {
+    if !payload.chars().all(crate::write::is_xml_char) || payload.trim() != payload {
+        return false;
+    }
+    let mut reader = Reader::from_str(payload);
+    reader.config_mut().check_end_names = true;
+    let mut depth: u32 = 0;
+    let mut roots: u32 = 0;
+    loop {
+        let Ok(event) = reader.read_event() else {
+            return false;
+        };
+        let root = |e: &quick_xml::events::BytesStart<'_>, roots: &mut u32| {
+            *roots = roots.saturating_add(1);
+            *roots == 1 && e.local_name().as_ref() == name
+        };
+        match event {
+            Event::Start(e) => {
+                if depth == 0 && !root(&e, &mut roots) {
+                    return false;
+                }
+                depth = depth.saturating_add(1);
+                if depth > MAX_PAYLOAD_DEPTH {
+                    return false;
+                }
+            }
+            Event::Empty(e) => {
+                if depth == 0 && !root(&e, &mut roots) {
+                    return false;
+                }
+            }
+            Event::End(_) => depth = depth.saturating_sub(1),
+            Event::Text(t) => {
+                if depth == 0 && !t.xml10_content().trim().is_empty() {
+                    return false;
+                }
+            }
+            Event::CData(_) | Event::GeneralRef(_) | Event::Comment(_) if depth == 0 => return false,
+            Event::Decl(_) | Event::DocType(_) | Event::PI(_) => return false,
+            Event::Eof => return depth == 0 && roots == 1,
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -318,5 +388,35 @@ mod tests {
         assert_eq!(placement(Parent::Calendar, "Baseline#2/TimephasedData"), None);
         assert_eq!(placement(Parent::Project, "@xmlns:p"), Some((-2, 0, 0)));
         assert_eq!(task("@xmlns:p"), None);
+    }
+
+    #[test]
+    fn r123_payload_validation() {
+        use super::valid_payload;
+        assert!(valid_payload("Name", "<Name>x</Name>"));
+        assert!(valid_payload("X", "<X/>"));
+        assert!(valid_payload(
+            "ExtendedAttribute",
+            "<p:ExtendedAttribute><p:FieldID>1</p:FieldID></p:ExtendedAttribute>"
+        ));
+        assert!(valid_payload("Notes", "<Notes>a &amp; b<!-- c --></Notes>"));
+        for (name, bad) in [
+            ("Name", "<Name>x</Name><Evil/>"),
+            ("Name", "<Other>x</Other>"),
+            ("Name", "<Name>x</Nom>"),
+            ("Name", "<Name>x"),
+            ("Name", "texte"),
+            ("Name", "x<Name/>"),
+            ("Name", ""),
+            ("Name", "<?xml version=\"1.0\"?><Name/>"),
+            ("Name", "<!DOCTYPE a><Name/>"),
+            ("Name", " <Name/>"),
+            ("Name", "<!-- c --><Name/>"),
+            ("Name", "<Name>\u{1}</Name>"),
+        ] {
+            assert!(!valid_payload(name, bad), "{bad}");
+        }
+        let deep = format!("<A>{}{}</A>", "<b>".repeat(70), "</b>".repeat(70));
+        assert!(!valid_payload("A", &deep));
     }
 }

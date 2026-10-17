@@ -123,6 +123,7 @@ mod r112_summary_scheduled_dates;
 mod r120_mspdi_write_form;
 mod r121_element_order_profiles;
 mod r122_computed_values_written;
+mod r123_extras_write;
 mod r124_resources_mspdi;
 mod r125_assignments_mspdi;
 mod r126_baselines_mspdi;

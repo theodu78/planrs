@@ -52,3 +52,45 @@ fn r126_resource_and_assignment_baselines() {
     assert_eq!(b.work.unwrap().minutes(), Minutes::new(960));
     assert_eq!(b.cost, Some(Money::new(6_654).unwrap()));
 }
+
+#[test]
+fn r126_baselines_are_written_by_number() {
+    use planrs_core::{Duration, Task, TaskBaseline, Work};
+    use planrs_tests::mspdi::{compact, new_project, reread, text, written};
+    let mut proj = new_project("2026-10-19T08:00");
+    let mut t = Task::new(TaskUid::new(1), "A".to_owned(), &proj.options);
+    t.baselines.insert(
+        BaselineNumber::new(3).unwrap(),
+        TaskBaseline {
+            work: Some(Work::new(Minutes::new(60)).unwrap()),
+            ..TaskBaseline::default()
+        },
+    );
+    t.baselines.insert(
+        zero(),
+        TaskBaseline {
+            start: Some(moment("2026-10-19T08:00")),
+            finish: Some(moment("2026-10-23T17:00")),
+            duration: Some(
+                Duration::new(Minutes::new(2_400), DurationUnit::Day, TimeBasis::Working, false).unwrap(),
+            ),
+            work: Some(Work::new(Minutes::new(2_400)).unwrap()),
+            cost: Some(Money::new(83_175).unwrap()),
+            fixed_cost: None,
+        },
+    );
+    proj.tasks.push(t).unwrap();
+    let out = written(&proj);
+    let xml = compact(&text(&out));
+    assert!(xml.contains(
+        "<Baseline><Number>0</Number><Start>2026-10-19T08:00:00</Start><Finish>2026-10-23T17:00:00</Finish>\
+         <Duration>PT40H0M0S</Duration><DurationFormat>7</DurationFormat><EstimatedDuration>0</EstimatedDuration>\
+         <Work>PT40H0M0S</Work><Cost>83175</Cost></Baseline><Baseline><Number>3</Number><Work>PT1H0M0S</Work></Baseline>"
+    ));
+    let back = reread(&out.xml).project;
+    assert_eq!(
+        back.tasks.get(TaskUid::new(1)).unwrap().baselines,
+        proj.tasks.get(TaskUid::new(1)).unwrap().baselines
+    );
+    let _ = (AssignmentUid::new(0), ResourceUid::new(0));
+}

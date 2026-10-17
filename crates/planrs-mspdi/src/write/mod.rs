@@ -1,4 +1,4 @@
-//! Écriture MSPDI (R-120, R-121, R-127 à R-132 ; ADR-0010, D11).
+//! Écriture MSPDI (R-120 à R-132 ; ADR-0010, D11).
 //!
 //! [`write`] est infaillible (règle 10) : toute anomalie (valeur arrondie,
 //! chaîne tronquée, caractère interdit) devient un [`WriteDiagnostic`].
@@ -12,18 +12,25 @@
 //!
 //! Aucune E/S : la sortie est en octets (UTF-8 sans BOM).
 
+mod assignment;
+mod baseline;
 mod calendar;
 mod computed;
 mod emit;
 mod project;
+mod resource;
 mod task;
 
-use planrs_core::{Percent, Project, Subject, round_div};
+use std::collections::BTreeMap;
 
+use planrs_core::{Extras, Percent, Project, Subject, round_div};
+
+use crate::extras::{self, Anchor, ExtraKey, ORIGIN};
 pub use crate::schema::Profile as OrderProfile;
 use crate::schema::{Parent, sequence};
 pub use computed::{Computed, ScheduleGap, choose_computed, schedule_gaps};
 use emit::Emitter;
+pub(crate) use emit::is_xml_char;
 
 /// Fin de ligne.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -109,6 +116,9 @@ pub enum WriteCode {
     },
     /// Caractère interdit par XML 1.0 remplacé par U+FFFD.
     InvalidChar,
+    /// `Extras` non réécrit : clé illisible ou sans emplacement, charge qui
+    /// n'est pas un seul élément bien formé du nom de la clé (R-123).
+    ExtraInvalid,
     /// Le `Schedule` ne correspond pas aux tâches du projet (autre projet,
     /// projet modifié) : aucune valeur calculée écrite.
     ScheduleMismatch,
@@ -128,6 +138,7 @@ impl WriteCode {
             Self::Rounded => "mspdi.write.rounded",
             Self::Truncated { .. } => "mspdi.write.truncated",
             Self::InvalidChar => "mspdi.write.invalid_char",
+            Self::ExtraInvalid => "mspdi.write.extra_invalid",
             Self::ScheduleMismatch => "mspdi.write.schedule_mismatch",
             Self::ScheduleIncomplete { .. } => "mspdi.write.schedule_incomplete",
         }
@@ -149,27 +160,139 @@ pub fn write(project: &Project, computed: Computed<'_>, options: &WriteOptions) 
         Computed::Recorded(r) => Some(computed::from_recorded(r)),
         Computed::Omit => None,
     };
-    em.root(&[]);
+    let namespaces: Vec<(String, String)> = project
+        .extras
+        .0
+        .iter()
+        .filter(|e| e.origin == ORIGIN)
+        .filter_map(|e| Some((e.key.strip_prefix("@xmlns:")?.to_owned(), e.payload.clone())))
+        .filter(|(prefix, _)| ExtraKey::parse(&format!("@xmlns:{prefix}")).is_some())
+        .collect();
+    em.root(&namespaces);
     project::write(&mut em, project, values.as_ref(), options);
     em.end_root();
     let (xml, diagnostics) = em.finish();
     Written { xml, diagnostics }
 }
 
-/// Écrit une entité de `parent` sous l'élément `element` : pour chaque nom
-/// du profil, `field` écrit la valeur modélisée, déduite ou calculée.
+/// Un `Extras` à réécrire (R-123) : clé lue, charge validée.
+pub(crate) struct Planned<'e> {
+    pub(crate) key: ExtraKey,
+    payload: &'e str,
+}
+
+/// R-123 : `Extras` d'une entité de `parent` à réécrire. Origine autre que
+/// MSPDI : gardés dans le modèle, jamais écrits. Clé illisible, sans
+/// emplacement (nom modélisé, ancre hors du schéma…), portée d'une ligne de
+/// base absente, ou charge invalide : ignorés, `mspdi.write.extra_invalid`.
+/// Profil strict : noms hors schéma non écrits. Déclarations d'espace de
+/// noms (`@xmlns:p`) : écrites sur la racine, pas ici.
+pub(crate) fn plan<'e>(
+    em: &mut Emitter,
+    element: &str,
+    parent: Parent,
+    extras: &'e Extras,
+    baselines: &[u8],
+    profile: OrderProfile,
+) -> Vec<Planned<'e>> {
+    let mut out = Vec::new();
+    let path = |key: &str| {
+        if element.is_empty() {
+            key.to_owned()
+        } else {
+            format!("{element}/{key}")
+        }
+    };
+    for e in extras.0.iter().filter(|e| e.origin == ORIGIN) {
+        let Some(key) = ExtraKey::parse(&e.key) else {
+            em.report(WriteCode::ExtraInvalid, &path(&e.key), Some(e.key.clone()));
+            continue;
+        };
+        if key.is_attribute() && parent == Parent::Project {
+            continue;
+        }
+        let in_scope = key.scope.is_none_or(|n| baselines.contains(&n));
+        let ok = in_scope
+            && extras::placement(parent, &e.key).is_some()
+            && extras::valid_payload(&key.name, &e.payload);
+        if !ok {
+            em.report(WriteCode::ExtraInvalid, &path(&e.key), Some(e.key.clone()));
+            continue;
+        }
+        let inner = match key.scope {
+            Some(_) => extras::baseline_parent(parent).unwrap_or(parent),
+            None => parent,
+        };
+        if profile == OrderProfile::Strict && sequence(inner).class(&key.name).is_none() {
+            continue;
+        }
+        out.push(Planned {
+            key,
+            payload: &e.payload,
+        });
+    }
+    out
+}
+
+/// Aucun `Extras` (éléments qui n'en ont pas : lien, jour, exception…).
+pub(crate) const NO_EXTRAS: &[&Planned<'static>] = &[];
+
+/// `Extras` d'une ligne de base n, parmi ceux d'une entité.
+pub(crate) fn scoped<'p, 'e>(planned: &'p [Planned<'e>], n: u8) -> Vec<&'p Planned<'e>> {
+    planned.iter().filter(|p| p.key.scope == Some(n)).collect()
+}
+
+/// Écrit les enfants d'une entité de `parent` : pour chaque nom du profil,
+/// `field` écrit la valeur modélisée, déduite ou calculée, puis les `Extras`
+/// de ce nom, puis ceux ancrés sur lui ; ceux ancrés en tête (`^`) d'abord
+/// (R-123). `extras` : ceux de la portée écrite (entité ou ligne de base).
+pub(crate) fn children(
+    em: &mut Emitter,
+    parent: Parent,
+    profile: OrderProfile,
+    extras: &[&Planned<'_>],
+    mut field: impl FnMut(&mut Emitter, &'static str),
+) {
+    let mut named: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut anchored: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for p in extras {
+        match &p.key.anchor {
+            Anchor::None => named.entry(p.key.name.as_str()).or_default().push(p.payload),
+            Anchor::Start => em.raw(p.payload),
+            Anchor::After(a) => anchored.entry(a.as_str()).or_default().push(p.payload),
+        }
+    }
+    for name in sequence(parent).names(profile) {
+        field(em, name);
+        for payload in named
+            .get(name)
+            .into_iter()
+            .flatten()
+            .chain(anchored.get(name).into_iter().flatten())
+        {
+            em.raw(payload);
+        }
+    }
+}
+
+/// Écrit une entité de `parent` sous l'élément `element` (voir
+/// [`children`]).
 fn entity(
     em: &mut Emitter,
     element: &'static str,
     parent: Parent,
     profile: OrderProfile,
-    mut field: impl FnMut(&mut Emitter, &'static str),
+    extras: &[&Planned<'_>],
+    field: impl FnMut(&mut Emitter, &'static str),
 ) {
     em.open(element);
-    for name in sequence(parent).names(profile) {
-        field(em, name);
-    }
+    children(em, parent, profile, extras, field);
     em.close();
+}
+
+/// `Extras` d'une entité hors portée de ligne de base.
+pub(crate) fn unscoped<'p, 'e>(planned: &'p [Planned<'e>]) -> Vec<&'p Planned<'e>> {
+    planned.iter().filter(|p| p.key.scope.is_none()).collect()
 }
 
 /// Longueur maximale d'un élément de `parent` (table du schéma).

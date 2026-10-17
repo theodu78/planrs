@@ -246,7 +246,7 @@ impl Emitter {
 }
 
 /// Caractère admis par XML 1.0 (`Char`).
-const fn is_xml_char(c: char) -> bool {
+pub(crate) const fn is_xml_char(c: char) -> bool {
     matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}')
 }
 

@@ -1,26 +1,32 @@
 //! Élément `Project` : informations, ancre, options, calendrier, puis
-//! calendriers et tâches (R-120, R-130, R-132).
+//! calendriers, tâches, ressources, affectations et `Extras` du projet
+//! (R-120, R-123, R-130, R-132).
 
 use planrs_core::{Project, ScheduleAnchor};
 
 use super::computed::Values;
 use super::emit::Emitter;
-use super::{WriteOptions, calendar, max_len, task};
+use super::{WriteOptions, assignment, calendar, children, max_len, plan, resource, task, unscoped};
 use crate::codes;
-use crate::extras::ORIGIN;
+use crate::extras::Anchor;
 use crate::scalar::{format_bool, format_datetime, format_time};
 use crate::schema::Parent;
 
 /// Écrit les enfants de `Project`.
 pub(crate) fn write(em: &mut Emitter, p: &Project, values: Option<&Values>, options: &WriteOptions) {
-    // Les enfants de `Project` s'écrivent sous la racine déjà ouverte : le
-    // pilote d'entité n'ouvre pas d'élément ici.
+    // Les enfants de `Project` s'écrivent sous la racine déjà ouverte.
     let profile = options.profile;
     let o = &p.options;
     let text = |em: &mut Emitter, name: &'static str, value: &str| {
         em.text(name, value, max_len(Parent::Project, name));
     };
-    for name in crate::schema::sequence(Parent::Project).names(profile) {
+    let planned = plan(em, "", Parent::Project, &p.extras, &[], profile);
+    // R-130 : `CurrencyCode` relu (conservé, R-087), sinon celui des options.
+    let has_currency = planned
+        .iter()
+        .any(|x| x.key.name == "CurrencyCode" && x.key.anchor == Anchor::None);
+    let top = unscoped(&planned);
+    children(em, Parent::Project, profile, &top, |em, name| {
         match name {
             "SaveVersion" => em.leaf(name, &options.save_version.to_string()),
             "GUID" => em.opt_leaf(name, p.info.guid.map(|g| g.to_string())),
@@ -55,16 +61,9 @@ pub(crate) fn write(em: &mut Emitter, p: &Project, values: Option<&Values>, opti
                 .map(format_datetime),
             ),
             "CriticalSlackLimit" => em.leaf(name, &o.critical_slack_limit_days.to_string()),
-            // R-130 : obligatoire ; celui relu (P), sinon celui des options.
             "CurrencyCode" => {
-                match p
-                    .extras
-                    .0
-                    .iter()
-                    .find(|e| e.origin == ORIGIN && e.key == "CurrencyCode")
-                {
-                    Some(e) => em.raw(&e.payload),
-                    None => text(em, name, &options.currency_code),
+                if !has_currency {
+                    text(em, name, &options.currency_code);
                 }
             }
             "CalendarUID" => em.leaf(name, &p.calendar.get().to_string()),
@@ -101,7 +100,21 @@ pub(crate) fn write(em: &mut Emitter, p: &Project, values: Option<&Values>, opti
                 task::write_all(em, p, values, profile);
                 em.close();
             }
+            "Resources" if !p.resources.is_empty() => {
+                em.open(name);
+                for (position, r) in p.resources.iter().enumerate() {
+                    resource::write(em, r, position, &p.options.factors, profile);
+                }
+                em.close();
+            }
+            "Assignments" if !p.assignments.is_empty() => {
+                em.open(name);
+                for a in &p.assignments {
+                    assignment::write(em, a, profile);
+                }
+                em.close();
+            }
             _ => {}
         }
-    }
+    });
 }

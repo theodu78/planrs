@@ -7,7 +7,9 @@ use planrs_core::{
 
 use super::computed::{TaskValues, Values};
 use super::emit::Emitter;
-use super::{OrderProfile, WriteCode, entity, max_len, percent};
+use super::{
+    NO_EXTRAS, OrderProfile, Planned, WriteCode, baseline, entity, max_len, percent, plan, unscoped,
+};
 use crate::codes;
 use crate::scalar::{format_bool, format_datetime, format_iso_duration};
 use crate::schema::Parent;
@@ -125,8 +127,11 @@ fn write(em: &mut Emitter, row: &Row<'_>, profile: OrderProfile) {
         } => Some((start, finish, duration)),
         SchedulingMode::Auto => None,
     };
-    entity(em, "Task", Parent::Task, profile, |em, name| {
-        field(em, name, row, manual, profile);
+    let numbers: Vec<u8> = t.baselines.keys().map(|n| n.get()).collect();
+    let planned = plan(em, "Task", Parent::Task, &t.extras, &numbers, profile);
+    let top = unscoped(&planned);
+    entity(em, "Task", Parent::Task, profile, &top, |em, name| {
+        field(em, name, row, manual, &planned, profile);
     });
     em.subject = None;
 }
@@ -137,6 +142,7 @@ fn field(
     name: &'static str,
     row: &Row<'_>,
     manual: Option<ManualInputs>,
+    planned: &[Planned<'_>],
     profile: OrderProfile,
 ) {
     let t = row.task;
@@ -232,6 +238,7 @@ fn field(
                 predecessor(em, link, profile);
             }
         }
+        "Baseline" => baseline::task(em, &t.baselines, planned, profile),
         _ => {}
     }
 }
@@ -251,6 +258,7 @@ fn predecessor(em: &mut Emitter, link: &Link, profile: OrderProfile) {
         "PredecessorLink",
         Parent::PredecessorLink,
         profile,
+        NO_EXTRAS,
         |em, name| match name {
             "PredecessorUID" => em.leaf(name, &link.predecessor.get().to_string()),
             "Type" => em.leaf(name, &codes::link_type_code(link.kind).to_string()),

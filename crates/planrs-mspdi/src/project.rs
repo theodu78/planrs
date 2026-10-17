@@ -79,7 +79,7 @@ pub(crate) fn build(raw: &RawDocument<'_>, options: &ReadOptions, sink: &mut Sin
     project.options = project_options(&f, sink);
     project.calendar = project_calendar(&f, sink);
     project.calendars = calendar::import(&raw.calendars, project.calendar, sink);
-    project.extras = project_extras(raw);
+
     let mut recorded = RecordedSchedule {
         project_start: recorded_start,
         project_finish: recorded_finish,
@@ -96,6 +96,7 @@ pub(crate) fn build(raw: &RawDocument<'_>, options: &ReadOptions, sink: &mut Sin
         }
     }
     project.assignments = assignments;
+    project.extras = project_extras(raw, &project);
     let mut dropped_computed = BTreeMap::new();
     if dropped_timephased > 0 {
         dropped_computed.insert("TimephasedData".to_owned(), dropped_timephased);
@@ -111,7 +112,7 @@ pub(crate) fn build(raw: &RawDocument<'_>, options: &ReadOptions, sink: &mut Sin
 
 /// `Extras` du projet (R-087) : déclarations `xmlns:préfixe` de la racine,
 /// puis enfants capturés de `Project`, dans l'ordre canonique.
-fn project_extras(raw: &RawDocument<'_>) -> Extras {
+fn project_extras(raw: &RawDocument<'_>, project: &Project) -> Extras {
     let mut out: Vec<ExtraEntry> = raw
         .prefixes
         .iter()
@@ -121,7 +122,14 @@ fn project_extras(raw: &RawDocument<'_>) -> Extras {
             payload: uri.clone(),
         })
         .collect();
-    out.extend(extras::collect(&raw.fields, Parent::Project, None));
+    // Conteneurs non vides : réécrits, donc ancres (R-087).
+    let written = |name: &str| match name {
+        "Calendars" => !project.calendars.is_empty(),
+        "Resources" => !project.resources.is_empty(),
+        "Assignments" => !project.assignments.is_empty(),
+        _ => false,
+    };
+    out.extend(extras::collect_with(&raw.fields, Parent::Project, None, written));
     let mut extras = Extras(out);
     extras::canonical_order(&mut extras, Parent::Project);
     extras

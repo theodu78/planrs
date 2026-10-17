@@ -305,6 +305,19 @@ pub enum Diagnostic {
         /// Successeur (tâche manuelle).
         successor: TaskUid,
     },
+    /// Lien vers une récapitulative dont la borne ne se calcule pas
+    /// (conversion impossible, décalage hors domaine) : ignoré, la
+    /// récapitulative et ses sous-tâches restent planifiées sans lui,
+    /// dégradées (erreur, R-069).
+    #[serde(rename = "link.unschedulable")]
+    LinkUnschedulable {
+        /// Prédécesseur.
+        predecessor: TaskUid,
+        /// Successeur (récapitulative).
+        successor: TaskUid,
+        /// Code stable de l'erreur de conversion (`CalendarError::code`).
+        cause: String,
+    },
     /// Tâche manuelle sans début ni fin : non planifiée (info, R-063).
     #[serde(rename = "task.manual_undated")]
     TaskManualUndated {
@@ -413,6 +426,7 @@ impl Diagnostic {
             | Self::TaskManualDatesInverted { .. }
             | Self::ProjectCalendarFallback { .. }
             | Self::TaskUnschedulable { .. }
+            | Self::LinkUnschedulable { .. }
             | Self::ScheduleFromFinishUnsupported
             | Self::ScheduleInternal { .. } => Severity::Error,
             Self::CalendarExceptionsOverlap { .. }
@@ -494,6 +508,11 @@ impl Diagnostic {
             | Self::LinkManualNotHonored {
                 predecessor,
                 successor,
+            }
+            | Self::LinkUnschedulable {
+                predecessor,
+                successor,
+                ..
             } => Subject::Link {
                 predecessor: *predecessor,
                 successor: *successor,
@@ -534,6 +553,7 @@ impl Diagnostic {
             Self::LinkInactive { .. } => "link.inactive",
             Self::LinkExcludedEndpoint { .. } => "link.excluded_endpoint",
             Self::LinkManualNotHonored { .. } => "link.manual_not_honored",
+            Self::LinkUnschedulable { .. } => "link.unschedulable",
             Self::TaskManualUndated { .. } => "task.manual_undated",
             Self::TaskManualDatesInverted { .. } => "task.manual_dates_inverted",
             Self::TaskCalendarFallback { .. } => "task.calendar_fallback",
@@ -703,6 +723,14 @@ impl fmt::Display for Diagnostic {
             } => write!(
                 f,
                 "la tâche manuelle {successor} ne respecte pas son lien avec la tâche {predecessor}"
+            ),
+            Self::LinkUnschedulable {
+                predecessor,
+                successor,
+                cause,
+            } => write!(
+                f,
+                "le lien {predecessor} → {successor} vers une récapitulative ne peut pas être appliqué ({cause}) : ignoré"
             ),
             Self::TaskManualUndated { task } => {
                 write!(f, "la tâche manuelle {task} n'a ni début ni fin : non planifiée")
@@ -905,6 +933,11 @@ mod tests {
                 predecessor: TaskUid::new(1),
                 successor: t,
             },
+            Diagnostic::LinkUnschedulable {
+                predecessor: TaskUid::new(1),
+                successor: t,
+                cause: "calendar.out_of_domain".to_owned(),
+            },
             Diagnostic::TaskManualUndated { task: t },
             Diagnostic::TaskManualDatesInverted { task: t },
             Diagnostic::TaskCalendarFallback { task: t, calendar: c },
@@ -1015,7 +1048,7 @@ mod tests {
                 successor: TaskUid::new(2)
             }
         );
-        for i in 22..=26 {
+        for i in 22..=27 {
             assert_eq!(
                 all()[i].subject(),
                 Subject::Link {
@@ -1024,15 +1057,16 @@ mod tests {
                 }
             );
         }
-        for i in [27, 28, 29, 31] {
+        assert_eq!(all()[27].severity(), Severity::Error);
+        for i in [28, 29, 30, 32] {
             assert_eq!(all()[i].subject(), Subject::Task(t));
         }
-        for i in [30, 32, 33] {
+        for i in [31, 33, 34] {
             assert_eq!(all()[i].subject(), Subject::Project);
         }
-        assert_eq!(all()[31].severity(), Severity::Error);
+        assert_eq!(all()[32].severity(), Severity::Error);
         assert_eq!(
-            all()[31].to_string(),
+            all()[32].to_string(),
             "la tâche 3 ne peut pas être planifiée (passe avant : calendar.out_of_domain)"
         );
         assert_eq!(

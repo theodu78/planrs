@@ -101,7 +101,7 @@ impl Calc<'_, '_> {
         own: Span,
         skip_start_kind: bool,
     ) -> Result<Option<Minutes>, Fail> {
-        if self.net.is_cut(a) {
+        if self.net.is_cut(a) || self.is_dropped(a) {
             return Ok(None);
         }
         let arc = *self.net.arc(a).ok_or(Fail::Internal("arc hors bornes"))?;

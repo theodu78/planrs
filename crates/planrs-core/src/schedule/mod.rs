@@ -101,6 +101,10 @@ struct Calc<'n, 'a> {
     st: Vec<NodeState>,
     /// Décalage converti de chaque arc de lien, calculé une fois (R-043).
     lag: Vec<Option<Minutes>>,
+    /// Arcs de lien vers une porte dont la borne n'a pas pu se calculer
+    /// (`link.unschedulable`, R-069) : non appliqués, ils ne plafonnent rien
+    /// et ne comptent ni pour la marge libre ni pour R-051.
+    dropped: Vec<bool>,
     diags: Diagnostics,
 }
 
@@ -128,6 +132,11 @@ impl Calc<'_, '_> {
             .and_then(|n| n.twin)
             .and_then(|r| self.state(r));
         bad(s) || twin.is_some_and(bad)
+    }
+
+    /// Arc `a` non appliqué en passe avant (R-069).
+    fn is_dropped(&self, a: u32) -> bool {
+        pos(a).and_then(|i| self.dropped.get(i)).copied().unwrap_or(false)
     }
 
     /// Signale l'échec du calcul de la tâche `uid` dans la passe `pass`.
@@ -301,6 +310,7 @@ pub fn schedule(project: &Project) -> Schedule {
         finish: start,
         st: vec![NodeState::NEW; net.nodes.len()],
         lag: vec![None; net.arcs.len()],
+        dropped: vec![false; net.arcs.len()],
         diags,
     };
     // Étapes 6 à 9.

@@ -111,16 +111,18 @@ impl Calc<'_, '_> {
                     (Candidate::Start(se.start), Driver::SummaryGate { summary })
                 }
                 Some(l) => {
-                    let lag = self.lag_minutes(a)?;
-                    let sigma = self
-                        .net
-                        .scale(l.sigma)
-                        .ok_or(Fail::Internal("échelle hors bornes"))?;
-                    let anchor = match l.ty {
-                        LinkType::FinishToStart | LinkType::FinishToFinish => se.finish,
-                        LinkType::StartToStart | LinkType::StartToFinish => se.start,
+                    let x = match self.link_bound(a, l, se) {
+                        Ok(x) => x,
+                        // R-069 : la borne d'un lien vers une récapitulative
+                        // ne se calcule pas : le lien est ignoré, la porte
+                        // garde ses autres bornes, dégradée.
+                        Err(Fail::Conversion(cause)) if kind == NodeKind::Gate => {
+                            self.drop_link(a, l, cause);
+                            b.degraded = true;
+                            continue;
+                        }
+                        Err(fail) => return Err(fail),
                     };
-                    let x = transfer::forward(*sigma, anchor, lag)?;
                     let cand = match l.ty {
                         LinkType::FinishToStart | LinkType::StartToStart => Candidate::Start(x),
                         LinkType::FinishToFinish | LinkType::StartToFinish => Candidate::Finish(x),
@@ -174,6 +176,34 @@ impl Calc<'_, '_> {
             }
         }
         Ok(b)
+    }
+
+    /// Borne `g(ancre)` de l'arc de lien `a` (R-037 à R-043) : fin ou début
+    /// du prédécesseur selon le type, transférée par le décalage.
+    fn link_bound(&mut self, a: u32, l: super::network::LinkArc, se: Span) -> Result<Moment, Fail> {
+        let lag = self.lag_minutes(a)?;
+        let sigma = self
+            .net
+            .scale(l.sigma)
+            .ok_or(Fail::Internal("échelle hors bornes"))?;
+        let anchor = match l.ty {
+            LinkType::FinishToStart | LinkType::FinishToFinish => se.finish,
+            LinkType::StartToStart | LinkType::StartToFinish => se.start,
+        };
+        Ok(transfer::forward(*sigma, anchor, lag)?)
+    }
+
+    /// R-069 : arc de lien `a` vers une porte non appliqué
+    /// (`link.unschedulable`).
+    fn drop_link(&mut self, a: u32, l: super::network::LinkArc, cause: &str) {
+        if let Some(slot) = super::network::pos(a).and_then(|i| self.dropped.get_mut(i)) {
+            *slot = true;
+        }
+        self.diags.push(Diagnostic::LinkUnschedulable {
+            predecessor: l.pred,
+            successor: l.succ,
+            cause: cause.to_owned(),
+        });
     }
 
     /// Porte d'une récapitulative : plus grande borne de début (début du

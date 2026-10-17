@@ -107,6 +107,7 @@ impl Calc<'_, '_> {
                 .is_some_and(|out_arcs| {
                     out_arcs.iter().any(|&a| {
                         !self.net.is_cut(a)
+                            && !self.is_dropped(a)
                             && self.net.arc(a).is_some_and(|arc| {
                                 arc.link.is_some_and(|l| !l.to_inactive) && self.applied_target(arc.to)
                             })
@@ -142,7 +143,7 @@ impl Calc<'_, '_> {
             .outgoing(v)
             .ok_or(Fail::Internal("arcs sortants hors bornes"))?
         {
-            if net.is_cut(a) {
+            if net.is_cut(a) || self.is_dropped(a) {
                 continue;
             }
             let arc = *net.arc(a).ok_or(Fail::Internal("arc hors bornes"))?;

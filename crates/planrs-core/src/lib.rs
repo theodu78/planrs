@@ -23,8 +23,8 @@
 //! - [`ids`] : UID, ID, GUID, numéros de ligne de base ;
 //! - [`arena`] : collections ordonnées indexées par UID ;
 //! - [`calendar`] : modèle stocké des calendriers, calendriers fournis,
-//!   résolution et récurrences, forme compilée et conversions ouvrées
-//!   (R-011 à R-029) ;
+//!   résolution et récurrences, forme compilée et conversions ouvrées,
+//!   placement des durées et des jalons (R-011 à R-031) ;
 //! - [`model`] : modèle V1 (projet, tâches, liens, ressources, affectations,
 //!   lignes de base), sérialisation validée (R-032 à R-034) ;
 //! - [`diagnostic`] : diagnostics typés, gravité et sujet déduits ;
@@ -50,7 +50,7 @@ pub mod quantity;
 pub mod time;
 
 pub use arena::{Arena, HasUid};
-pub use calendar::{BuiltinCalendarNames, CalendarSet, CompiledCalendar, Direction};
+pub use calendar::{BuiltinCalendarNames, CalendarSet, CompiledCalendar, Direction, Span, TimeScale};
 pub use diagnostic::{Diagnostic, Diagnostics, Severity, Subject};
 pub use duration::{
     ConversionFactors, Duration, DurationUnit, Lag, LagValue, Minutes, TimeBasis, Work, percent_of,

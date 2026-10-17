@@ -44,6 +44,8 @@ mod r026_day_uses_minutes_per_day;
 mod r027_weekend_and_holiday_skipped;
 mod r028_elapsed_time;
 mod r029_no_working_time_and_domain;
+mod r030_task_span;
+mod r031_milestone_placement;
 mod r032_new_project_defaults;
 mod r033_date_without_time;
 mod r034_effective_status_date;

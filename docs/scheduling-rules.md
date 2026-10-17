@@ -194,7 +194,7 @@ Toutes les conversions dérivent de la fonction cumulée W (R-020), calculée su
 - **Formulation** : temps civil pur, 24 h sur 24 et 7 j sur 7, sans calendrier, sans exception, sans recalage du début. Exemples : ven 23/10 17:00 + 2 ej = dim 25/10 17:00 ; + 1 esem = ven 30/10 17:00 ; + 3 ej = lun 26/10 17:00 ; 2026-02-01 00:00 + 1 emois = 2026-03-03 00:00 ; `forward_span(Elapsed, sam 24/10 10:00, 1 440)` = sam 10:00 → dim 10:00.
 - **Source** : learn.microsoft.com, « DurationFormat Element » (S3 : « Elapsed time counts all time, including non-working time ») ; absence de recalage : hypothèse.
 - **Statut** : `hypothèse`.
-- **Tests** : `tests/rules/r028_elapsed_time.rs` (`r028_*`) ; le cas `forward_span` s'ajoute avec le placement.
+- **Tests** : `tests/rules/r028_elapsed_time.rs` (`r028_*`) ; propriété P10.
 
 ## R-029 — Calendrier sans temps ouvré, sortie du domaine
 - **Formulation** : calendrier sans aucune minute ouvrée : `add_working(d ≠ 0)`, `next_working_moment` et `previous_working_moment` → `NoWorkingTime` ; `working_between` = 0 ; `add_working(t, 0)` = t ; diagnostic `CalendarNoWorkingTime` (émis par `CalendarSet::compile`). Cible hors de 1984-2149 : `OutOfDomain`, avec sa direction (`After` si W(t) + d dépasse le total, `Before` si W(t) < |d|). Jamais de boucle, jamais de panique (le coût d'une conversion ne dépend pas de la distance parcourue). Exemples : semaine entièrement chômée, sans exception : lun 08:00 + 60 → `NoWorkingTime` ; Standard : mer 2149-12-31 16:00 + 60 = 17:00, + 61 → `OutOfDomain { After }` ; Standard : lun 1984-01-02 09:00 − 60 = 08:00, − 61 → `OutOfDomain { Before }` ; semaine chômée avec seulement le 01/12/2026 ouvré [08:00,12:00) : 01/12 08:00 + 600 → `OutOfDomain { After }`.
@@ -202,7 +202,21 @@ Toutes les conversions dérivent de la fonction cumulée W (R-020), calculée su
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r029_no_working_time_and_domain.rs` (`r029_*`) ; diagnostic dans les tests unitaires de `calendar::compiled` (`CalendarSet`).
 
-Les règles R-030 et R-031 (placement d'une durée, jalons) sont réservées et ajoutées avec `TimeScale`.
+### Placement
+
+Le placement vit dans `TimeScale::forward_span` et `TimeScale::backward_span` (`crates/planrs-core/src/calendar/scale.rs`), seuls points d'entrée du CPM (J2) avec `add` et `between` : les conventions de début, de fin et de jalon ne vivent qu'ici. Une durée négative est refusée (`NegativeSpan`).
+
+## R-030 — Placement d'une durée > 0
+- **Formulation** : passe avant : début = instant ouvré suivant la date au plus tôt (R-024) ; fin = début + durée (R-021). Passe arrière : fin = instant ouvré précédant la date au plus tard (R-025) ; début = fin − durée (R-022). En temps écoulé : aucun recalage (R-028). Exemples : `forward_span(lun 12:00, 240)` = 13:00 → 17:00 ; `forward_span(ven 23/10 17:00, 480)` = lun 26/10 08:00 → 17:00 ; `forward_span(sam 24/10 10:00, 480)` = lun 08:00 → 17:00 ; `backward_span(lun 26/10 08:00, 480)` = ven 23/10 08:00 → 17:00 ; `backward_span(lun 13:00, 240)` = lun 08:00 → 12:00.
+- **Source** : support.microsoft.com, « Change default times for entered start or finish dates » (S9) ; hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r030_task_span.rs` (`r030_*`) ; propriété P10.
+
+## R-031 — Jalon (durée nulle)
+- **Formulation** : passe avant : t si t termine une minute ouvrée ou se trouve dans une plage (`previous_working_moment(t) == t`), sinon l'instant ouvré suivant. Passe arrière, symétrique : t si `next_working_moment(t) == t`, sinon l'instant ouvré précédent. Début = fin. Exemples, passe avant : ven 23/10 17:00 → ven 17:00 (et non lun 08:00) ; lun 08:00 → lun 08:00 ; lun 12:00 → lun 12:00 ; lun 12:30 → 13:00 ; sam 10:00 → lun 26/10 08:00. Passe arrière : sam 10:00 → ven 17:00 ; lun 08:00 → lun 08:00 ; lun 12:30 → 12:00.
+- **Source** : hypothèse. Un jalon lié en FS s'affiche à la fin de son prédécesseur. Microsoft Q&A, « Project 2016 milestone tasks ignore non-working time » (Q3, communautaire) suggère au contraire l'absence de recalage : hypothèse concurrente, que le corpus tranchera.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r031_milestone_placement.rs` (`r031_*`).
 
 ### Projet
 
@@ -216,7 +230,7 @@ Les règles R-030 et R-031 (placement d'une durée, jalons) sont réservées et 
 - **Formulation** : un début reçoit l'heure de début par défaut, une fin l'heure de fin par défaut ; une heure par défaut de 24:00 donne le lendemain 00:00. L'alignement sur le calendrier se fait ensuite par R-030. Exemples : 2026-10-19 en début → 08:00 ; en fin → 17:00 ; avec un début par défaut à 07:00 → 07:00, puis `forward_span(07:00, 480)` démarre à 08:00 (exemple de S9).
 - **Source** : support.microsoft.com, « Change default times for entered start or finish dates » (S9).
 - **Statut** : `hypothèse`.
-- **Tests** : `tests/rules/r033_date_without_time.rs` (`r033_*`) ; le cas `forward_span` s'ajoute avec le placement.
+- **Tests** : `tests/rules/r033_date_without_time.rs` (`r033_*`), dont le recalage par `forward_span`.
 
 ## R-034 — Date d'état effective
 - **Formulation** : sans date d'état (NA), la date d'état est la date courante injectée. Exemples : date d'état NA et date courante 2026-10-17 08:00 → 2026-10-17 08:00 ; date d'état 2026-10-15 17:00 → 2026-10-15 17:00.

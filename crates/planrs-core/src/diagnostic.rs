@@ -245,6 +245,7 @@ impl Diagnostic {
             }
             CalendarError::UnknownCalendar { .. }
             | CalendarError::OutOfDomain { .. }
+            | CalendarError::ElapsedOutOfDomain { .. }
             | CalendarError::NegativeSpan
             | CalendarError::Inconsistent { .. }
             | CalendarError::Model(_) => None,

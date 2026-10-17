@@ -21,6 +21,10 @@
 //!   cas n'est pas comparé.
 //! - P9 : un calendrier dérivé compilé est identique au même calendrier écrit
 //!   en entier comme calendrier de base.
+//! - P10 : temps écoulé : `forward_span(Elapsed, t, d)` finit à t + d et
+//!   `between` vaut b − a ; en temps ouvré, un placement contient exactement
+//!   d minutes ouvrées, commence au plus tôt à `from` (passe avant) et finit
+//!   au plus tard à `to` (passe arrière).
 
 #![allow(
     clippy::unwrap_used,
@@ -35,7 +39,7 @@ use std::collections::BTreeMap;
 
 use planrs_core::calendar::{
     Calendar, CalendarException, CompiledCalendar, DayHours, DayRule, DaySetting, MonthItem, MonthPosition,
-    Recurrence, TimeRange, WorkWeek, expand_exception, resolve_day, twenty_four_hours,
+    Recurrence, TimeRange, TimeScale, WorkWeek, expand_exception, resolve_day, twenty_four_hours,
 };
 use planrs_core::{
     Arena, CalendarError, CalendarUid, Day, DayRange, Direction, Minutes, Moment, Month, TimeOfDay, Week,
@@ -722,5 +726,38 @@ proptest! {
         prop_assert_eq!(as_flat(cd.add_working(t, d)), as_flat(cf.add_working(t, d)));
         prop_assert_eq!(as_flat(cd.next_working_moment(t)), as_flat(cf.next_working_moment(t)));
         prop_assert_eq!(as_flat(cd.previous_working_moment(t)), as_flat(cf.previous_working_moment(t)));
+    }
+
+    /// P10 : placement en temps écoulé et en temps ouvré.
+    #[test]
+    fn p10_spans(s in scenario(), t in moment(), b in moment(), d in 0_i64..=50_000) {
+        let e = TimeScale::Elapsed;
+        prop_assert_eq!(e.between(t, b), Ok(Minutes::new(b.minutes() - t.minutes())));
+        match e.forward_span(t, Minutes::new(d)) {
+            Ok(span) => {
+                prop_assert_eq!(span.start, t);
+                prop_assert_eq!(span.finish.minutes(), t.minutes() + d);
+            }
+            Err(_) => prop_assert!(t.minutes() + d > MAX),
+        }
+        match e.backward_span(t, Minutes::new(d)) {
+            Ok(span) => {
+                prop_assert_eq!(span.finish, t);
+                prop_assert_eq!(span.start.minutes(), t.minutes() - d);
+            }
+            Err(_) => prop_assert!(t.minutes() - d < 0),
+        }
+        let c = s.compile();
+        let w_scale = TimeScale::Working(&c);
+        if let Ok(span) = w_scale.forward_span(t, Minutes::new(d)) {
+            prop_assert!(span.start >= t && span.finish >= span.start);
+            prop_assert_eq!(w(&c, span.start, span.finish), d);
+            prop_assert_eq!(w(&c, t, span.start), 0);
+        }
+        if let Ok(span) = w_scale.backward_span(t, Minutes::new(d)) {
+            prop_assert!(span.finish <= t && span.finish >= span.start);
+            prop_assert_eq!(w(&c, span.start, span.finish), d);
+            prop_assert_eq!(w(&c, span.finish, t), 0);
+        }
     }
 }

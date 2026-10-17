@@ -283,6 +283,14 @@ pub enum CalendarError {
         /// Sens du dépassement.
         direction: Direction,
     },
+    /// Temps écoulé (sans calendrier) dont le résultat sort du domaine des
+    /// dates.
+    #[serde(rename = "calendar.elapsed_out_of_domain")]
+    #[error("calcul en temps écoulé hors du domaine des dates ({direction})")]
+    ElapsedOutOfDomain {
+        /// Sens du dépassement.
+        direction: Direction,
+    },
     /// Placement d'une durée négative.
     #[serde(rename = "calendar.negative_span")]
     #[error("une durée à placer ne peut pas être négative")]
@@ -322,6 +330,7 @@ impl CalendarError {
             Self::InheritanceCycle { .. } => "calendar.inheritance_cycle",
             Self::NoWorkingTime { .. } => "calendar.no_working_time",
             Self::OutOfDomain { .. } => "calendar.out_of_domain",
+            Self::ElapsedOutOfDomain { .. } => "calendar.elapsed_out_of_domain",
             Self::NegativeSpan => "calendar.negative_span",
             Self::Inconsistent { .. } => "calendar.inconsistent",
             Self::Model(e) => e.code(),
@@ -621,6 +630,9 @@ pub(crate) mod tests {
             CalendarError::OutOfDomain {
                 calendar: c,
                 direction: Direction::After,
+            },
+            CalendarError::ElapsedOutOfDomain {
+                direction: Direction::Before,
             },
             CalendarError::NegativeSpan,
             CalendarError::Model(CalendarModelError::TooManyRanges { count: 6 }),

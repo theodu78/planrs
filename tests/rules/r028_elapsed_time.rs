@@ -42,3 +42,17 @@ fn r028_elapsed_month_is_30_days() {
         moment("2026-03-03T00:00")
     );
 }
+
+#[test]
+fn r028_elapsed_span_not_aligned() {
+    use planrs_core::TimeScale;
+    // Sam 24/10 10:00, 1 ej : pas de recalage sur un jour ouvré, sam 10:00 →
+    // dim 10:00.
+    let span = TimeScale::Elapsed
+        .forward_span(moment("2026-10-24T10:00"), elapsed(1, DurationUnit::Day))
+        .unwrap();
+    assert_eq!(
+        (span.start, span.finish),
+        (moment("2026-10-24T10:00"), moment("2026-10-25T10:00"))
+    );
+}

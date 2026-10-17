@@ -9,15 +9,16 @@
 //!   résolution d'un jour ([`resolve::resolve_day`], R-016, R-017, R-019),
 //!   chemin froid ;
 //! - [`compiled`] : forme compilée (fonction cumulée W), conversions ouvrées
-//!   (R-020 à R-029) et [`CalendarSet`].
-//!
-//! À venir : `scale` (`TimeScale`, placement).
+//!   (R-020 à R-029) et [`CalendarSet`] ;
+//! - [`scale`] : échelle de temps ([`TimeScale`]) et placement d'une durée
+//!   ou d'un jalon (R-030, R-031), seul point d'entrée du CPM.
 
 pub mod builtin;
 pub mod compiled;
 pub mod model;
 pub mod recurrence;
 pub mod resolve;
+pub mod scale;
 
 use serde::{Deserialize, Serialize};
 
@@ -48,3 +49,4 @@ pub use model::{
 };
 pub use recurrence::expand_exception;
 pub use resolve::{CalendarChain, DaySource, ResolvedDay, chain, resolve_day};
+pub use scale::{Span, TimeScale};

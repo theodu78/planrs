@@ -1,6 +1,6 @@
 //! R-033 — Date saisie sans heure : un début reçoit l'heure de début par
 //! défaut, une fin l'heure de fin par défaut. L'alignement sur le calendrier
-//! (R-030) s'ajoute avec le placement.
+//! se fait ensuite par le placement (R-030).
 
 use planrs_core::{ProjectOptions, TimeOfDay};
 use planrs_tests::{day, moment};
@@ -34,4 +34,24 @@ fn r033_end_of_day_finish_is_next_midnight() {
     };
     assert_eq!(o.finish_of(day("2026-10-19")), Ok(moment("2026-10-20T00:00")));
     assert_eq!(o.finish_of(day("2149-12-31")), Ok(moment("2150-01-01T00:00")));
+}
+
+#[test]
+fn r033_default_start_then_aligned_by_span() {
+    use planrs_core::TimeScale;
+    use planrs_tests::{compile_one, mins, standard};
+    // Exemple de S9 : début par défaut 07:00 sur un calendrier à 08:00. La
+    // date saisie devient 07:00, puis le placement d'une journée la recale :
+    // 08:00 → 17:00.
+    let o = ProjectOptions {
+        default_start_time: TimeOfDay::hm(7, 0).unwrap(),
+        ..ProjectOptions::default()
+    };
+    let from = o.start_of(day("2026-10-19")).unwrap();
+    let c = compile_one(standard());
+    let span = TimeScale::Working(&c).forward_span(from, mins(480)).unwrap();
+    assert_eq!(
+        (span.start, span.finish),
+        (moment("2026-10-19T08:00"), moment("2026-10-19T17:00"))
+    );
 }

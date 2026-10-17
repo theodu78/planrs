@@ -438,6 +438,10 @@ fn links(
     sink: &mut Sink<'_>,
 ) -> Vec<Link> {
     let mut out: Vec<Link> = Vec::new();
+    // Prédécesseurs déjà gardés : détection des doublons en O(log n), coût
+    // linéaire (§ 7.5) même pour une tâche à des centaines de milliers de
+    // prédécesseurs.
+    let mut kept: BTreeSet<TaskUid> = BTreeSet::new();
     for e in children.iter().filter(|c| c.name == "PredecessorLink") {
         let mut f = Fields::new(&e.children, LINK, Some(Subject::Task(successor)), e.at);
         let Some((p, p_at)) = f.int("PredecessorUID", sink) else {
@@ -486,7 +490,7 @@ fn links(
             );
             continue;
         }
-        if out.iter().any(|l| l.predecessor == p) {
+        if !kept.insert(p) {
             f.report(
                 ImportCode::Duplicate,
                 "PredecessorUID",

@@ -15,6 +15,7 @@
     reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
 )]
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use planrs_mspdi::{ImportCode, Limits, MspdiError, ReadOptions, read};
@@ -129,6 +130,110 @@ fn hostile_documents() {
         read(long.as_bytes(), &opts()),
         Err(MspdiError::TextTooLong { .. })
     ));
+}
+
+#[test]
+fn depth_limit_set_to_the_maximum_cannot_overflow_the_stack() {
+    // Relecture J2 : `max_depth` réglé à u16::MAX et 65 000 éléments
+    // imbriqués dans une tâche faisaient déborder la pile (libération
+    // récursive de l'arbre). La profondeur est plafonnée à MAX_DEPTH, et les
+    // enfants inconnus d'une tâche ne sont plus construits : lecture sur un
+    // fil de 2 Mio, erreur typée.
+    let handle = std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let limits = Limits {
+                max_depth: u16::MAX,
+                ..Limits::default()
+            };
+            let xml = format!(
+                "<Project><Tasks><Task><UID>1</UID>{}{}</Task></Tasks></Project>",
+                "<a>".repeat(65_000),
+                "</a>".repeat(65_000)
+            );
+            read(xml.as_bytes(), &ReadOptions { limits, ..opts() })
+        })
+        .unwrap();
+    assert!(matches!(
+        handle.join().unwrap(),
+        Err(MspdiError::TooDeep {
+            max: planrs_mspdi::MAX_DEPTH,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn unknown_task_children_are_not_kept() {
+    // Relecture J2 (bloquant) : tout enfant d'une tâche était construit en
+    // mémoire. Deux millions d'enfants inconnus sont désormais sautés et
+    // comptés ; la tâche se lit normalement.
+    let n = 2_000_000;
+    let xml = format!(
+        "<Project><StartDate>2026-10-19T08:00:00</StartDate><Tasks><Task><UID>1</UID><Name>t</Name>\
+         <Duration>PT8H0M0S</Duration>{}</Task></Tasks></Project>",
+        "<X/>".repeat(n)
+    );
+    let doc = read(xml.as_bytes(), &opts()).unwrap();
+    assert_eq!(doc.project.tasks.len(), 1);
+    assert_eq!(doc.source.skipped_elements, u64::try_from(n).unwrap());
+}
+
+#[test]
+fn import_diagnostics_are_capped() {
+    // Relecture J2 : un diagnostic par anomalie, sans borne. Un million de
+    // tâches à l'UID en double : 1 000 diagnostics `mspdi.duplicate` gardés,
+    // les autres comptés et signalés par `mspdi.truncated`.
+    let n = 1_000_000;
+    let xml = format!(
+        "<Project><StartDate>2026-10-19T08:00:00</StartDate><Tasks>{}</Tasks></Project>",
+        "<Task><UID>1</UID></Task>".repeat(n)
+    );
+    let doc = read(xml.as_bytes(), &opts()).unwrap();
+    let duplicates = doc
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == ImportCode::Duplicate)
+        .count();
+    assert_eq!(duplicates, 1_000);
+    let dropped = u64::try_from(n - 1 - 1_000).unwrap();
+    assert_eq!(doc.source.dropped_diagnostics, dropped);
+    assert!(
+        doc.diagnostics
+            .iter()
+            .any(|d| d.code == ImportCode::Truncated { dropped })
+    );
+    assert!(doc.diagnostics.len() <= planrs_mspdi::diag::MAX_DIAGNOSTICS + 1 + 100);
+}
+
+#[test]
+fn many_predecessors_read_in_linear_time() {
+    // Relecture J2 : la détection des doublons était quadratique (36 s pour
+    // 200 000 prédécesseurs en release). Ici 200 000 tâches, dont une liée à
+    // toutes les autres, plus un doublon.
+    let n: u32 = 200_000;
+    let mut xml = String::from("<Project><StartDate>2026-10-19T08:00:00</StartDate><Tasks>");
+    for uid in 1..n {
+        let _ = write!(xml, "<Task><UID>{uid}</UID><Duration>PT8H0M0S</Duration></Task>");
+    }
+    let _ = write!(xml, "<Task><UID>{n}</UID><Duration>PT8H0M0S</Duration>");
+    for uid in 1..n {
+        let _ = write!(
+            xml,
+            "<PredecessorLink><PredecessorUID>{uid}</PredecessorUID></PredecessorLink>"
+        );
+    }
+    xml.push_str(
+        "<PredecessorLink><PredecessorUID>1</PredecessorUID></PredecessorLink></Task></Tasks></Project>",
+    );
+    let started = std::time::Instant::now();
+    let doc = read(xml.as_bytes(), &opts()).unwrap();
+    let last = doc.project.tasks.get(planrs_core::TaskUid::new(n)).unwrap();
+    assert_eq!(last.predecessors.len(), usize::try_from(n - 1).unwrap());
+    assert!(doc.diagnostics.iter().any(|d| d.code == ImportCode::Duplicate));
+    // Garde-fou large (build de test non optimisé) ; la cible de 1 s en
+    // release est mesurée par `tests/perf.rs`.
+    assert!(started.elapsed().as_secs() < 60, "{:?}", started.elapsed());
 }
 
 #[test]

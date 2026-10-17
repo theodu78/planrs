@@ -89,6 +89,14 @@ pub enum MspdiError {
         /// Limite.
         max: u64,
     },
+    /// Plus d'éléments retenus (construits en mémoire) que la limite.
+    #[error("trop d'éléments retenus à la {at} (limite {max})")]
+    TooManyRetained {
+        /// Élément qui dépasse la limite.
+        at: Location,
+        /// Limite.
+        max: u64,
+    },
     /// Texte d'un élément plus long que la limite.
     #[error("texte trop long à la {at} (limite {max} octets)")]
     TextTooLong {
@@ -119,6 +127,7 @@ impl MspdiError {
             Self::DoctypeNotAllowed { .. } => "mspdi.error.doctype_not_allowed",
             Self::TooDeep { .. } => "mspdi.error.too_deep",
             Self::TooManyElements { .. } => "mspdi.error.too_many_elements",
+            Self::TooManyRetained { .. } => "mspdi.error.too_many_retained",
             Self::TextTooLong { .. } => "mspdi.error.text_too_long",
             Self::NotMspdi { .. } => "mspdi.error.not_mspdi",
         }
@@ -300,5 +309,15 @@ mod tests {
         assert_eq!(e.code(), "mspdi.error.unexpected_eof");
         assert!(e.to_string().contains("Project/Tasks"), "{e}");
         assert_eq!(MspdiError::Empty.code(), "mspdi.error.empty");
+        let e = MspdiError::TooManyRetained {
+            at: Location {
+                byte: 10,
+                line: 2,
+                column: 3,
+            },
+            max: 3,
+        };
+        assert_eq!(e.code(), "mspdi.error.too_many_retained");
+        assert!(e.to_string().contains("limite 3"), "{e}");
     }
 }

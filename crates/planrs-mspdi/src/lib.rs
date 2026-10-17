@@ -40,26 +40,42 @@ pub use diag::{ImportCode, ImportDiagnostic, LinkIgnoredReason};
 pub use error::{Location, MspdiError};
 pub use recorded::{RecordedSchedule, RecordedTask, Tenths};
 
+/// Plafond de la profondeur d'imbrication, quelle que soit
+/// [`Limits::max_depth`] : la pile des éléments ouverts reste petite, et
+/// aucune valeur réglée par l'appelant ne la rend dangereuse (règle 10).
+pub const MAX_DEPTH: u16 = 256;
+
 /// Limites de lecture : protègent contre un document hostile ou corrompu.
+///
+/// Mémoire : les éléments sautés ne coûtent qu'un compteur ; seuls les
+/// éléments retenus (champs lus des tâches, calendriers, affectations et du
+/// projet) sont construits, environ 100 octets chacun, bornés par
+/// `max_retained` ; les diagnostics d'import sont plafonnés (10 000 au
+/// total, 1 000 par code). Avec les valeurs par défaut, la mémoire de la
+/// lecture reste de l'ordre de quelques centaines de Mio au pire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limits {
     /// Taille maximale de l'entrée, en octets.
     pub max_bytes: u64,
-    /// Profondeur maximale d'imbrication.
+    /// Profondeur maximale d'imbrication, plafonnée à [`MAX_DEPTH`].
     pub max_depth: u16,
-    /// Nombre maximal d'éléments.
+    /// Nombre maximal d'éléments (retenus ou sautés).
     pub max_elements: u64,
+    /// Nombre maximal d'éléments retenus (construits en mémoire).
+    pub max_retained: u64,
     /// Longueur maximale du texte d'un élément, en octets.
     pub max_text_bytes: usize,
 }
 
 impl Default for Limits {
-    /// 256 Mio, 64 niveaux, 50 000 000 éléments, 16 Mio de texte.
+    /// 256 Mio, 64 niveaux, 20 000 000 éléments dont 3 000 000 retenus
+    /// (environ 60 000 tâches de 50 champs), 16 Mio de texte.
     fn default() -> Self {
         Self {
             max_bytes: 256 * 1024 * 1024,
             max_depth: 64,
-            max_elements: 50_000_000,
+            max_elements: 20_000_000,
+            max_retained: 3_000_000,
             max_text_bytes: 16 * 1024 * 1024,
         }
     }
@@ -97,8 +113,13 @@ pub struct SourceInfo {
     /// `Maps`, `Reports`, `Drawings`, `DataLinks`, `VBAProjects`) : signature d'un
     /// enregistrement par MS Project.
     pub ui_sections: Vec<String>,
-    /// Éléments sautés (Resources, Views, contenu des affectations…).
+    /// Éléments sautés (Resources, Views, contenu des affectations, champs
+    /// non lus des tâches et des calendriers…).
     pub skipped_elements: u64,
+    /// Diagnostics d'import supprimés au-delà des plafonds
+    /// ([`diag::MAX_DIAGNOSTICS`], [`diag::MAX_DIAGNOSTICS_PER_CODE`]) ;
+    /// un diagnostic [`ImportCode::Truncated`] les signale aussi.
+    pub dropped_diagnostics: u64,
 }
 
 /// Document MSPDI lu.
@@ -156,8 +177,9 @@ pub fn read(input: &[u8], options: &ReadOptions) -> Result<MspdiDocument, MspdiE
         namespace: raw.namespace.clone(),
         ui_sections: raw.ui_sections.clone(),
         skipped_elements: raw.skipped_elements,
+        dropped_diagnostics: sink.dropped,
     };
-    let mut diagnostics = sink.out;
+    let mut diagnostics = sink.finish();
     diagnostics.extend(
         project
             .validate()

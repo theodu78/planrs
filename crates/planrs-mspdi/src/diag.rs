@@ -16,6 +16,15 @@ use crate::error::{LineIndex, Location};
 /// Longueur maximale (en caractères) de la valeur brute citée.
 const MAX_VALUE_CHARS: usize = 200;
 
+/// Nombre maximal de diagnostics d'import gardés (règle 10 : un document
+/// hostile ne fait pas croître la mémoire sans borne) ; au-delà, seul leur
+/// nombre est gardé ([`ImportCode::Truncated`]).
+pub const MAX_DIAGNOSTICS: usize = 10_000;
+
+/// Nombre maximal de diagnostics gardés par code : une avalanche d'un code
+/// n'en masque pas d'autres.
+pub const MAX_DIAGNOSTICS_PER_CODE: u32 = 1_000;
+
 /// Raison pour laquelle un lien est ignoré à l'import (R-074).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LinkIgnoredReason {
@@ -68,6 +77,12 @@ pub enum ImportCode {
     /// Incohérence tolérée (drapeau `Summary` contraire à la hiérarchie,
     /// `ID` ≠ position, encodage déclaré, entité inconnue, fuseau ignoré…).
     Inconsistent,
+    /// Diagnostics supprimés au-delà des plafonds ([`MAX_DIAGNOSTICS`],
+    /// [`MAX_DIAGNOSTICS_PER_CODE`]) : un seul, en fin de liste.
+    Truncated {
+        /// Nombre de diagnostics supprimés.
+        dropped: u64,
+    },
     /// Diagnostic de `Project::validate`, enveloppé.
     Core(Diagnostic),
 }
@@ -86,7 +101,25 @@ impl ImportCode {
             Self::Rounded => "mspdi.rounded".to_owned(),
             Self::Unsupported { .. } => "mspdi.unsupported".to_owned(),
             Self::Inconsistent => "mspdi.inconsistent".to_owned(),
+            Self::Truncated { .. } => "mspdi.truncated".to_owned(),
             Self::Core(d) => format!("core.{}", d.code()),
+        }
+    }
+
+    /// Rang de la variante, pour le plafond par code.
+    const fn rank(&self) -> usize {
+        match self {
+            Self::InvalidValue => 0,
+            Self::UnknownCode { .. } => 1,
+            Self::MissingRequired => 2,
+            Self::Duplicate => 3,
+            Self::DanglingReference => 4,
+            Self::LinkIgnored { .. } => 5,
+            Self::Rounded => 6,
+            Self::Unsupported { .. } => 7,
+            Self::Inconsistent => 8,
+            Self::Truncated { .. } => 9,
+            Self::Core(_) => 10,
         }
     }
 
@@ -99,6 +132,7 @@ impl ImportCode {
             | Self::Duplicate
             | Self::Rounded
             | Self::Inconsistent
+            | Self::Truncated { .. }
             | Self::LinkIgnored { .. }
             | Self::Unsupported { .. } => Severity::Warning,
             Self::MissingRequired | Self::DanglingReference => Severity::Error,
@@ -169,6 +203,7 @@ impl fmt::Display for ImportDiagnostic {
             ImportCode::UnknownCode { code } => write!(f, " ({code})")?,
             ImportCode::LinkIgnored { reason } => write!(f, " ({})", reason.as_str())?,
             ImportCode::Unsupported { what } => write!(f, " ({what})")?,
+            ImportCode::Truncated { dropped } => write!(f, " ({dropped} diagnostics supprimés)")?,
             _ => {}
         }
         if !self.element.is_empty() {
@@ -187,10 +222,15 @@ impl fmt::Display for ImportDiagnostic {
     }
 }
 
-/// Collecteur de diagnostics, avec l'index des lignes de l'entrée.
+/// Collecteur de diagnostics, avec l'index des lignes de l'entrée ; borné
+/// par [`MAX_DIAGNOSTICS`] et [`MAX_DIAGNOSTICS_PER_CODE`].
 pub(crate) struct Sink<'a> {
     lines: &'a LineIndex<'a>,
     pub(crate) out: Vec<ImportDiagnostic>,
+    /// Diagnostics gardés, par rang de code.
+    per_code: [u32; 11],
+    /// Diagnostics supprimés.
+    pub(crate) dropped: u64,
 }
 
 impl<'a> Sink<'a> {
@@ -198,10 +238,13 @@ impl<'a> Sink<'a> {
         Self {
             lines,
             out: Vec::new(),
+            per_code: [0; 11],
+            dropped: 0,
         }
     }
 
-    /// Ajoute un diagnostic sur l'élément commençant à l'octet `at`.
+    /// Ajoute un diagnostic sur l'élément commençant à l'octet `at` ; au-delà
+    /// des plafonds, il est seulement compté.
     pub(crate) fn push(
         &mut self,
         code: ImportCode,
@@ -210,9 +253,34 @@ impl<'a> Sink<'a> {
         element: &str,
         value: Option<&str>,
     ) {
+        let Some(kept) = self.per_code.get_mut(code.rank()) else {
+            return;
+        };
+        if self.out.len() >= MAX_DIAGNOSTICS || *kept >= MAX_DIAGNOSTICS_PER_CODE {
+            self.dropped = self.dropped.saturating_add(1);
+            return;
+        }
+        *kept = kept.saturating_add(1);
         let at = self.lines.locate(at);
         self.out
             .push(ImportDiagnostic::new(code, subject, Some(at), element, value));
+    }
+
+    /// Diagnostics gardés, suivis de [`ImportCode::Truncated`] si des
+    /// diagnostics ont été supprimés.
+    pub(crate) fn finish(mut self) -> Vec<ImportDiagnostic> {
+        if self.dropped > 0 {
+            self.out.push(ImportDiagnostic::new(
+                ImportCode::Truncated {
+                    dropped: self.dropped,
+                },
+                None,
+                None,
+                "",
+                None,
+            ));
+        }
+        self.out
     }
 }
 
@@ -263,6 +331,11 @@ mod tests {
                 Severity::Warning,
             ),
             (ImportCode::Inconsistent, "mspdi.inconsistent", Severity::Warning),
+            (
+                ImportCode::Truncated { dropped: 5 },
+                "mspdi.truncated",
+                Severity::Warning,
+            ),
         ];
         for (code, text, severity) in cases {
             assert_eq!(code.code(), text);

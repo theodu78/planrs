@@ -1,9 +1,9 @@
 //! R-062 — Tâche inactive : `Excluded { Inactive }` (descendants :
-//! `InactiveAncestor`) ; placée par ses prédécesseurs actifs et la porte de
-//! son parent (`display`) ; ses liens sortants sont ignorés
-//! (`link.inactive`), sans pont ; hors agrégats, fin du projet, passe arrière
-//! et marge libre de ses prédécesseurs. Source : S25 ; affichage et absence
-//! de pont : hypothèse.
+//! `InactiveAncestor`) ; placée par ses prédécesseurs actifs, ses
+//! prédécesseurs inactifs et la porte de son parent (`display`) ; ses liens
+//! vers une tâche active sont ignorés (`link.inactive`), sans pont ; hors
+//! agrégats, fin du projet, passe arrière et marge libre de ses
+//! prédécesseurs. Source : S25 ; affichage et absence de pont : hypothèse.
 
 use planrs_core::{Diagnostic, Exclusion, Minutes, Span, TaskOutcome};
 use planrs_tests::moment;
@@ -86,4 +86,39 @@ fn r062_inactive_excluded_from_project_finish() {
         .inactive("I")
         .run();
     assert_eq!(run.schedule.project_finish, moment("2026-10-19T17:00"));
+}
+
+#[test]
+fn r062_links_inside_an_inactive_summary_place_the_display() {
+    // S inactive {A 1 j, B 1 j FS de A} ; T 1 j active. Le lien A → B relie
+    // deux tâches inactives : gardé pour l'affichage, B affichée mar 08:00 –
+    // 17:00 (et non lun comme A), sans `link.inactive`. S affiche l'agrégat
+    // lun 08:00 – mar 17:00. Rien ne touche T ni la fin du projet.
+    let run = Net::new("2026-10-19T08:00")
+        .task("S", 0)
+        .task("A", 480)
+        .level("A", 2)
+        .task("B", 480)
+        .level("B", 2)
+        .task("T", 480)
+        .fs("A", "B")
+        .inactive("S")
+        .run();
+    assert_eq!(
+        *run.outcome("B"),
+        TaskOutcome::Excluded {
+            reason: Exclusion::InactiveAncestor,
+            display: Some(span("2026-10-20T08:00", "2026-10-20T17:00")),
+        }
+    );
+    assert_eq!(
+        *run.outcome("S"),
+        TaskOutcome::Excluded {
+            reason: Exclusion::Inactive,
+            display: Some(span("2026-10-19T08:00", "2026-10-20T17:00")),
+        }
+    );
+    assert!(!run.codes().contains(&"link.inactive"), "{:?}", run.codes());
+    assert_eq!(run.schedule.project_finish, moment("2026-10-19T17:00"));
+    assert_eq!(run.at("T").total_slack, Minutes::ZERO);
 }

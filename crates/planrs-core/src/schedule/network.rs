@@ -644,8 +644,12 @@ impl ArcBuilder<'_> {
                     });
                     continue;
                 }
-                // 3. Prédécesseur inactif : aucun arc, aucun pont (R-062).
-                if pred.inactive() {
+                // 3. Prédécesseur inactif vers un successeur actif : aucun
+                //    arc, aucun pont (R-062). Entre deux tâches inactives
+                //    (par exemple dans une récapitulative inactive), l'arc
+                //    est gardé pour le placement d'affichage, marqué
+                //    `to_inactive`.
+                if pred.inactive() && !succ.inactive() {
                     diags.push(Diagnostic::LinkInactive {
                         predecessor: p_uid,
                         successor: s_uid,

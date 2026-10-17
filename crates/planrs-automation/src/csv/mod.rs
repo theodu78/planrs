@@ -10,12 +10,14 @@
 //! d'en-tête exploitable et les bornes de [`CsvLimits`] refusent le fichier.
 //!
 //! Règles : R-144 (encodage, séparateur, locale, en-têtes), R-145 (lignes
-//! vers tâches).
+//! vers tâches), R-146 (export).
 
 mod decode;
+mod export;
 mod header;
 mod import;
 
+pub use export::{CsvExportOptions, default_columns, export};
 pub use import::import;
 
 use planrs_core::{Moment, Project, ScheduleAnchor};

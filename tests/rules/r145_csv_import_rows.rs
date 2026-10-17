@@ -44,6 +44,14 @@ fn r145_rows_to_tasks_and_schedule() {
     // UID 1..n dans l'ordre (pas de colonne N° unique).
     let uids: Vec<u32> = i.project.tasks.iter().map(|t| t.uid().get()).collect();
     assert_eq!(uids, vec![1, 2, 3, 4, 5]);
+    // Phase, récapitulative : durée lue ignorée, son unité gardée sur une
+    // durée nulle (comme R-071) ; « 2h? » garderait heure et estimation.
+    let phase = task(&i, "Phase").duration;
+    assert!(phase.is_zero());
+    assert_eq!(
+        (phase.unit(), phase.basis(), phase.is_estimated()),
+        (DurationUnit::Day, TimeBasis::Working, false)
+    );
     // A : 3 j = 1 440 ; B : FS de A (ID 2) ; Fin : jalon sans durée → 0 ;
     // contrainte par défaut depuis le début : le plus tôt possible.
     assert_eq!(task(&i, "A").duration.minutes(), Minutes::new(1_440));

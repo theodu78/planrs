@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ::csv::{ReaderBuilder, StringRecord};
 use planrs_core::{
-    BuiltinCalendarNames, Constraint, Duration, Link, Moment, OutlineLevel, Percent, Project, ProjectInit,
-    Task, TaskUid, schedule,
+    BuiltinCalendarNames, Constraint, Duration, Link, Minutes, Moment, OutlineLevel, Percent, Project,
+    ProjectInit, Task, TaskUid, schedule,
 };
 
 use super::decode::{decode, detect_separator};
@@ -610,6 +610,14 @@ impl Build<'_> {
         }
         match row.value(self.columns, CsvColumn::Duration) {
             Some(v) if summary => {
+                // Durée calculée (R-054) : seules l'unité, la base et
+                // l'estimation lues sont gardées, sur une durée nulle (comme
+                // R-071 pour MSPDI).
+                if let Ok(d) = parse_duration(v, ctx)
+                    && let Ok(zero) = Duration::new(Minutes::ZERO, d.unit(), d.basis(), d.is_estimated())
+                {
+                    task.duration = zero;
+                }
                 diags.push(
                     line,
                     col(CsvColumn::Duration),

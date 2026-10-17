@@ -10,8 +10,8 @@
 //! - [`text`] : texte des durées, des décalages, des prédécesseurs et des
 //!   dates à la manière de MS Project, en français et en anglais (R-140 à
 //!   R-143) ;
-//! - [`csv`] : import des tâches depuis un CSV de MS Project ou d'un
-//!   tableur (R-144, R-145).
+//! - [`csv`] : import et export des tâches en CSV, depuis et vers MS Project
+//!   ou un tableur (R-144 à R-146).
 //!
 //! Aucune entrée/sortie dans ces modules : du texte ou des octets en entrée,
 //! une valeur du modèle en sortie.

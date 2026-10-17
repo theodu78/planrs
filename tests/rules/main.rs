@@ -147,6 +147,7 @@ mod r142_predecessors_text;
 mod r143_dates_text;
 mod r144_csv_format;
 mod r145_csv_import_rows;
+mod r146_csv_export;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

@@ -2,7 +2,7 @@
 
 use crate::text::lex::fold;
 
-use super::CsvColumn;
+use super::{CsvColumn, CsvLocale};
 
 /// Champ d'une colonne d'en-tête.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,4 +72,35 @@ pub(crate) fn recognize(header: &str) -> Option<(Field, HeaderLanguage)> {
         "resourcenames" | "work" => (Unsupported, En),
         _ => return None,
     })
+}
+
+/// R-144 : intitulé d'une colonne à l'export.
+pub(crate) const fn label(column: CsvColumn, locale: CsvLocale) -> &'static str {
+    use CsvColumn as C;
+    match (column, locale) {
+        (C::Id, CsvLocale::Fr) => "N°",
+        (C::Id, CsvLocale::En) => "ID",
+        (C::UniqueId, CsvLocale::Fr) => "N° unique",
+        (C::UniqueId, CsvLocale::En) => "Unique ID",
+        (C::Name, CsvLocale::Fr) => "Nom",
+        (C::Name, CsvLocale::En) => "Name",
+        (C::Duration, CsvLocale::Fr) => "Durée",
+        (C::Duration, CsvLocale::En) => "Duration",
+        (C::Start, CsvLocale::Fr) => "Début",
+        (C::Start, CsvLocale::En) => "Start",
+        (C::Finish, CsvLocale::Fr) => "Fin",
+        (C::Finish, CsvLocale::En) => "Finish",
+        (C::Predecessors, CsvLocale::Fr) => "Prédécesseurs",
+        (C::Predecessors, CsvLocale::En) => "Predecessors",
+        (C::UniquePredecessors, CsvLocale::Fr) => "N° unique des prédécesseurs",
+        (C::UniquePredecessors, CsvLocale::En) => "Unique ID Predecessors",
+        (C::OutlineLevel, CsvLocale::Fr) => "Niveau hiérarchique",
+        (C::OutlineLevel, CsvLocale::En) => "Outline Level",
+        (C::Milestone, CsvLocale::Fr) => "Jalon",
+        (C::Milestone, CsvLocale::En) => "Milestone",
+        (C::Notes, _) => "Notes",
+        (C::Wbs, _) => "WBS",
+        (C::PercentComplete, CsvLocale::Fr) => "% achevé",
+        (C::PercentComplete, CsvLocale::En) => "% Complete",
+    }
 }

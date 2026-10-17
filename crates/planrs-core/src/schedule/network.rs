@@ -16,12 +16,12 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-use super::constraint::{ConstraintRule, Mode, NodeConstraint, anchor, derive};
+use super::constraint::{ConstraintRule, Mode, NodeConstraint, Side, anchor, derive};
 use crate::calendar::{CalendarSet, CompiledCalendar, Span, TimeScale};
 use crate::diagnostic::{Diagnostic, Diagnostics};
 use crate::duration::{LagValue, Minutes, TimeBasis};
 use crate::ids::{CalendarUid, TaskUid};
-use crate::model::{LinkType, Project, SchedulingMode, Task};
+use crate::model::{ConstraintKind, LinkType, Project, SchedulingMode, Task};
 use crate::quantity::SignedPercent;
 use crate::time::Moment;
 
@@ -142,11 +142,14 @@ pub(super) struct Node {
     /// Feuille manuelle active (R-063) ou agrégat d'une récapitulative
     /// manuelle datée (R-064) : dates saisies, ou l'échec de leur calcul.
     pub fixed: Option<Result<Span, Fail>>,
-    /// Contrainte d'une feuille automatique active (ADR-0010, R-090 à
-    /// R-099) ; `None` sans effet (ASAP depuis le début).
+    /// Contrainte (ADR-0010) : feuille automatique active (R-090 à R-101) ;
+    /// porte d'une récapitulative automatique (SNET, R-103) ; agrégat
+    /// (FNLT, R-103). `None` sans effet (ASAP depuis le début).
     pub constraint: Option<NodeConstraint>,
-    /// Échéance d'une feuille automatique active (R-102) : plafond brut de
-    /// sa fin au plus tard.
+    /// Échéance : feuille active (automatique ou manuelle, R-102, R-104),
+    /// plafond brut de sa fin au plus tard ; agrégat d'une récapitulative
+    /// active (R-103 : contribution à `C(S)` ; manuelle datée : plafond de
+    /// ses propres dates au plus tard).
     pub deadline: Option<Moment>,
     /// Agrégat de la récapitulative parente.
     pub parent_rollup: Option<NodeIx>,
@@ -495,8 +498,8 @@ fn leaf_constraint(task: &Task, scale: TimeScale<'_>, d: Minutes, ctx: BuildCtx)
 }
 
 /// Nœud d'une feuille en position `p` : échelle de placement, dates saisies
-/// d'une manuelle (R-063), contrainte et échéance d'une automatique active
-/// (R-090 à R-102 ; inactive : ignorées sans diagnostic).
+/// d'une manuelle (R-063), contrainte d'une automatique active (R-090 à
+/// R-101), échéance d'une active (R-102, R-104).
 fn leaf_node(
     task: &Task,
     p: usize,
@@ -512,13 +515,17 @@ fn leaf_node(
     } else {
         manual_span(task, scale, diags)
     };
-    let automatic = !info.inactive() && fixed.is_none();
-    let constraint = if automatic {
-        leaf_constraint(task, scale, duration, ctx)
-    } else {
+    // R-104 : manuelle, contrainte ignorée (info), échéance gardée ;
+    // inactive, tout est ignoré sans diagnostic.
+    let constraint = if info.inactive() {
         None
+    } else if fixed.is_some() {
+        manual_ignored(task, ctx, diags);
+        None
+    } else {
+        leaf_constraint(task, scale, duration, ctx)
     };
-    let deadline = task.deadline.filter(|_| automatic);
+    let deadline = task.deadline.filter(|_| !info.inactive());
     Some(Node {
         kind: NodeKind::Leaf,
         task: p,
@@ -536,7 +543,96 @@ fn leaf_node(
 
 /// Récapitulative ouverte pendant la numérotation : position, et dates
 /// saisies et durée utilisée d'une récapitulative manuelle datée (R-064).
-type OpenSummary = (usize, Option<Result<Span, Fail>>, Minutes);
+#[derive(Clone, Copy, Debug)]
+struct OpenSummary {
+    /// Position de la récapitulative.
+    pos: usize,
+    /// Dates saisies d'une récapitulative manuelle datée (R-064).
+    fixed: Option<Result<Span, Fail>>,
+    /// Durée utilisée d'une récapitulative manuelle datée (R-064).
+    duration: Minutes,
+    /// Contrainte de l'agrégat : FNLT, plafond `C(S)` (R-103).
+    constraint: Option<NodeConstraint>,
+    /// Échéance de l'agrégat (R-103 : plafond `C(S)` ; récapitulative
+    /// manuelle datée : plafond de ses propres dates au plus tard, R-104).
+    deadline: Option<Moment>,
+}
+
+/// Contraintes d'une récapitulative (R-103, R-104) : porte (SNET,
+/// plancher brut de ses sous-tâches), agrégat (FNLT, plafond `C(S)`),
+/// échéance. Automatique active : SNET → porte ; FNLT → agrégat (ancrage
+/// `f*` sur son calendrier) ; MSO, MFO, SNLT, FNET → ignorées avec
+/// `constraint.summary_ignored` ; ASAP, ALAP → sans effet ni diagnostic.
+/// Manuelle datée : contrainte ignorée (`constraint.manual_ignored` si
+/// elle diffère du défaut du sens), échéance gardée. Inactive : tout est
+/// ignoré, sans diagnostic.
+fn summary_constraints(
+    task: &Task,
+    info: &TaskInfo,
+    manual: bool,
+    scale: TimeScale<'_>,
+    ctx: BuildCtx,
+    diags: &mut Diagnostics,
+) -> (Option<NodeConstraint>, Option<NodeConstraint>, Option<Moment>) {
+    if info.inactive() {
+        return (None, None, None);
+    }
+    let kind = task.constraint.kind();
+    let date = task.constraint.date();
+    if manual {
+        manual_ignored(task, ctx, diags);
+        return (None, None, task.deadline);
+    }
+    let node = |rule, anchor| NodeConstraint {
+        kind,
+        rule,
+        date,
+        anchor,
+    };
+    match kind {
+        ConstraintKind::AsSoonAsPossible | ConstraintKind::AsLateAsPossible => (None, None, task.deadline),
+        ConstraintKind::StartNoEarlierThan => (
+            Some(node(ConstraintRule::Floor(Side::Start), None)),
+            None,
+            task.deadline,
+        ),
+        ConstraintKind::FinishNoLaterThan => {
+            let anchor = date.map(|c| anchor(scale, kind, c, Minutes::ZERO).map_err(Fail::from));
+            (
+                None,
+                Some(node(ConstraintRule::Cap(Side::Finish), anchor)),
+                task.deadline,
+            )
+        }
+        ConstraintKind::MustStartOn
+        | ConstraintKind::MustFinishOn
+        | ConstraintKind::StartNoLaterThan
+        | ConstraintKind::FinishNoEarlierThan => {
+            diags.push(Diagnostic::ConstraintSummaryIgnored {
+                task: task.uid(),
+                kind,
+            });
+            (None, None, task.deadline)
+        }
+    }
+}
+
+/// R-104 : la contrainte d'une tâche manuelle (feuille ou récapitulative
+/// datée) est stockée mais ignorée ; `constraint.manual_ignored` (info) si
+/// elle diffère du défaut du sens (ASAP depuis le début, ALAP à rebours).
+fn manual_ignored(task: &Task, ctx: BuildCtx, diags: &mut Diagnostics) {
+    let kind = task.constraint.kind();
+    let default = match ctx.mode {
+        Mode::FromStart => ConstraintKind::AsSoonAsPossible,
+        Mode::FromFinish => ConstraintKind::AsLateAsPossible,
+    };
+    if kind != default {
+        diags.push(Diagnostic::ConstraintManualIgnored {
+            task: task.uid(),
+            kind,
+        });
+    }
+}
 
 /// Étape 3 : nœuds canoniques en pré-ordre (porte, feuille, agrégat).
 fn number_nodes(
@@ -550,31 +646,30 @@ fn number_nodes(
     // Récapitulatives ouvertes, la plus intérieure en dernier.
     let mut open: Vec<OpenSummary> = Vec::new();
     let n = tasks.len();
-    let close =
-        |(s, fixed, duration): OpenSummary, tasks: &mut [TaskInfo], nodes: &mut Vec<Node>| -> Option<()> {
-            let info = tasks.get_mut(s)?;
-            let gate = info.entry?;
-            let v = ix(nodes.len())?;
-            nodes.push(Node {
-                kind: NodeKind::Rollup,
-                task: s,
-                uid: info.uid,
-                inactive: info.inactive(),
-                place: info.cal,
-                duration,
-                fixed,
-                constraint: None,
-                deadline: None,
-                parent_rollup: None,
-                twin: Some(gate),
-            });
-            info.exit = Some(v);
-            nodes.get_mut(pos(gate)?)?.twin = Some(v);
-            Some(())
-        };
+    let close = |o: OpenSummary, tasks: &mut [TaskInfo], nodes: &mut Vec<Node>| -> Option<()> {
+        let info = tasks.get_mut(o.pos)?;
+        let gate = info.entry?;
+        let v = ix(nodes.len())?;
+        nodes.push(Node {
+            kind: NodeKind::Rollup,
+            task: o.pos,
+            uid: info.uid,
+            inactive: info.inactive(),
+            place: info.cal,
+            duration: o.duration,
+            fixed: o.fixed,
+            constraint: o.constraint,
+            deadline: o.deadline,
+            parent_rollup: None,
+            twin: Some(gate),
+        });
+        info.exit = Some(v);
+        nodes.get_mut(pos(gate)?)?.twin = Some(v);
+        Some(())
+    };
     for p in 0..=n {
-        while let Some(&(s, _, _)) = open.last() {
-            if tasks.get(s)?.end > p {
+        while let Some(o) = open.last() {
+            if tasks.get(o.pos)?.end > p {
                 break;
             }
             close(open.pop()?, tasks, &mut nodes)?;
@@ -596,11 +691,14 @@ fn number_nodes(
                 task.mode,
                 SchedulingMode::Manual { start, finish, .. } if start.is_some() || finish.is_some()
             );
+            let scale = *scales.get(pos(info.cal)?)?;
             let (fixed, duration) = if dated && !info.inactive() {
-                manual_span(task, *scales.get(pos(info.cal)?)?, diags)
+                manual_span(task, scale, diags)
             } else {
                 (None, Minutes::ZERO)
             };
+            let (gate, constraint, deadline) =
+                summary_constraints(task, info, fixed.is_some(), scale, ctx, diags);
             nodes.push(Node {
                 kind: NodeKind::Gate,
                 task: p,
@@ -609,13 +707,19 @@ fn number_nodes(
                 place: info.cal,
                 duration: Minutes::ZERO,
                 fixed: None,
-                constraint: None,
+                constraint: gate,
                 deadline: None,
                 parent_rollup: None,
                 twin: None,
             });
             info.entry = Some(v);
-            open.push((p, fixed, duration));
+            open.push(OpenSummary {
+                pos: p,
+                fixed,
+                duration,
+                constraint,
+                deadline,
+            });
         } else {
             nodes.push(leaf_node(task, p, info, scales, ctx, diags)?);
             info.entry = Some(v);

@@ -429,6 +429,24 @@ pub enum Diagnostic {
         /// Date saisie de la contrainte.
         date: Moment,
     },
+    /// Contrainte d'une récapitulative sans effet (MSO, MFO, SNLT, FNET) :
+    /// ignorée (avertissement, R-103).
+    #[serde(rename = "constraint.summary_ignored")]
+    ConstraintSummaryIgnored {
+        /// Récapitulative.
+        task: TaskUid,
+        /// Type de la contrainte.
+        kind: ConstraintKind,
+    },
+    /// Contrainte d'une tâche manuelle : stockée, ignorée par le calcul
+    /// (info, R-104).
+    #[serde(rename = "constraint.manual_ignored")]
+    ConstraintManualIgnored {
+        /// Tâche manuelle.
+        task: TaskUid,
+        /// Type de la contrainte.
+        kind: ConstraintKind,
+    },
     /// Échéance dépassée : la fin planifiée tombe après l'échéance, en
     /// temps ouvré de l'échelle de placement (avertissement, R-102).
     #[serde(rename = "task.deadline_missed")]
@@ -523,10 +541,12 @@ impl Diagnostic {
             | Self::TaskCalendarFallback { .. }
             | Self::ConstraintOverride { .. }
             | Self::ConstraintNotHonored { .. }
+            | Self::ConstraintSummaryIgnored { .. }
             | Self::TaskDeadlineMissed { .. } => Severity::Warning,
             Self::LinkInactive { .. }
             | Self::LinkExcludedEndpoint { .. }
-            | Self::TaskManualUndated { .. } => Severity::Info,
+            | Self::TaskManualUndated { .. }
+            | Self::ConstraintManualIgnored { .. } => Severity::Info,
         }
     }
 
@@ -560,6 +580,8 @@ impl Diagnostic {
             | Self::TaskUnschedulable { task, .. }
             | Self::ConstraintOverride { task, .. }
             | Self::ConstraintNotHonored { task, .. }
+            | Self::ConstraintSummaryIgnored { task, .. }
+            | Self::ConstraintManualIgnored { task, .. }
             | Self::TaskDeadlineMissed { task, .. } => Subject::Task(*task),
             Self::LinkCycle { tasks } => tasks.iter().min().map_or(Subject::Project, |t| Subject::Task(*t)),
             Self::LinkSelf { task } => Subject::Link {
@@ -650,6 +672,8 @@ impl Diagnostic {
             Self::TaskUnschedulable { .. } => "task.unschedulable",
             Self::ConstraintOverride { .. } => "constraint.override",
             Self::ConstraintNotHonored { .. } => "constraint.not_honored",
+            Self::ConstraintSummaryIgnored { .. } => "constraint.summary_ignored",
+            Self::ConstraintManualIgnored { .. } => "constraint.manual_ignored",
             Self::TaskDeadlineMissed { .. } => "task.deadline_missed",
             Self::ScheduleFromFinishUnsupported => "schedule.from_finish_unsupported",
             Self::ScheduleInternal { .. } => "schedule.internal",
@@ -850,6 +874,16 @@ impl fmt::Display for Diagnostic {
             Self::ConstraintNotHonored { task, kind, date } => write!(
                 f,
                 "la contrainte {} du {date} de la tâche {task} n'est pas respectée : les liens l'emportent",
+                constraint_name(*kind)
+            ),
+            Self::ConstraintSummaryIgnored { task, kind } => write!(
+                f,
+                "la contrainte {} de la récapitulative {task} est ignorée",
+                constraint_name(*kind)
+            ),
+            Self::ConstraintManualIgnored { task, kind } => write!(
+                f,
+                "la contrainte {} de la tâche manuelle {task} est ignorée par le calcul",
                 constraint_name(*kind)
             ),
             Self::TaskDeadlineMissed {
@@ -1095,6 +1129,14 @@ mod tests {
                 deadline: "2026-10-20T17:00".parse::<Moment>().unwrap(),
                 finish: "2026-10-21T17:00".parse::<Moment>().unwrap(),
             },
+            Diagnostic::ConstraintSummaryIgnored {
+                task: t,
+                kind: ConstraintKind::MustStartOn,
+            },
+            Diagnostic::ConstraintManualIgnored {
+                task: t,
+                kind: ConstraintKind::MustStartOn,
+            },
         ]
     }
 
@@ -1144,6 +1186,7 @@ mod tests {
                 "constraint.override",
                 "constraint.not_honored",
                 "task.deadline_missed",
+                "constraint.summary_ignored",
             ]
         );
         let infos: Vec<&str> = all()
@@ -1153,7 +1196,12 @@ mod tests {
             .collect();
         assert_eq!(
             infos,
-            ["link.inactive", "link.excluded_endpoint", "task.manual_undated"]
+            [
+                "link.inactive",
+                "link.excluded_endpoint",
+                "task.manual_undated",
+                "constraint.manual_ignored"
+            ]
         );
     }
 
@@ -1235,9 +1283,13 @@ mod tests {
     fn constraint_diagnostics() {
         // Contraintes (J3) : sujet la tâche contrainte, borne sérialisée.
         let t = TaskUid::new(3);
-        for i in [35, 36, 37] {
+        for i in [35, 36, 37, 38, 39] {
             assert_eq!(all()[i].subject(), Subject::Task(t));
         }
+        assert_eq!(
+            all()[39].to_string(),
+            "la contrainte « doit commencer le » de la tâche manuelle 3 est ignorée par le calcul"
+        );
         assert_eq!(
             all()[37].to_string(),
             "la tâche 3 finit le 2026-10-21T17:00, après son échéance du 2026-10-20T17:00"

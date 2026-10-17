@@ -316,7 +316,7 @@ impl Calc<'_, '_> {
     }
 
     /// Plafonds hérités d'un agrégat (R-057) : `C(S) = min(C(parent), FS/FF
-    /// sortants)` ; `K(S) = min(SS/SF sortants, K(parent) si ES_S ==
+    /// sortants, FNLT et échéance de la récapitulative (R-103))` ; `K(S) = min(SS/SF sortants, K(parent) si ES_S ==
     /// ES_parent)`.
     fn rollup_caps(&mut self, v: NodeIx, early: Span) -> Result<(), Fail> {
         let parent = self
@@ -324,9 +324,20 @@ impl Calc<'_, '_> {
             .node(v)
             .ok_or(Fail::Internal("nœud hors bornes"))?
             .parent_rollup;
-        let uid = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?.uid;
+        let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+        let (uid, constraint, deadline) = (node.uid, node.constraint, node.deadline);
         let caps = self.out_caps(v)?;
         let mut c = caps.finish.map(|(m, _)| (m, uid));
+        // R-103 : FNLT de la récapitulative (`f*` sur son calendrier) et son
+        // échéance (brute) contribuent à `C(S)`.
+        if let Some(nc) = constraint
+            && let ConstraintRule::Cap(_) = nc.rule
+        {
+            c = Some(min_cap(c, (nc.span()?.finish, uid)));
+        }
+        if let Some(d) = deadline {
+            c = Some(min_cap(c, (d, uid)));
+        }
         let mut k: Option<(Moment, TaskUid)> = None;
         for &(y, _) in &caps.starts {
             k = Some(min_cap(k, (y, uid)));

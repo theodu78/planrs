@@ -212,9 +212,19 @@ impl Calc<'_, '_> {
     }
 
     /// Porte d'une récapitulative : plus grande borne de début (début du
-    /// projet, porte du parent, liens FS/SS entrants), non recalée.
+    /// projet, porte du parent, liens FS/SS entrants, SNET de la
+    /// récapitulative), non recalée.
     fn gate(&mut self, v: NodeIx) -> Result<(), Fail> {
-        let b = self.bounds(v, None)?;
+        let mut b = self.bounds(v, None)?;
+        // R-103 : SNET d'une récapitulative, plancher brut de sa porte (non
+        // recalé, comme une borne de lien, R-056), candidat en dernier.
+        if let Some(c) = self.net.node(v).and_then(|n| n.constraint)
+            && let (ConstraintRule::Floor(Side::Start), Some(date)) = (c.rule, c.date)
+            && date > b.start
+        {
+            b.start = date;
+            b.driver = Driver::Constraint { kind: c.kind };
+        }
         let s = self.state_mut(v).ok_or(Fail::Internal("nœud hors bornes"))?;
         s.early = Some(Span {
             start: b.start,

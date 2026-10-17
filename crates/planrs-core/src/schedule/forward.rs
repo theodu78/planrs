@@ -6,12 +6,12 @@
 //! (R-044 : début du projet, porte du parent, liens dans l'ordre de
 //! stockage).
 
-use super::constraint::{ConstraintRule, Side};
+use super::constraint::{ConstraintRule, Mode, Side};
 use super::network::{Fail, NodeIx, NodeKind};
 use super::{Calc, Driver, Pass, PassRole, transfer};
 use crate::calendar::{Span, TimeScale};
-use crate::diagnostic::Diagnostic;
-use crate::model::LinkType;
+use crate::diagnostic::{Diagnostic, OverriddenBound};
+use crate::model::{ConstraintKind, LinkType};
 use crate::time::Moment;
 
 /// Bornes d'un nœud : plus grande borne de début et son pilote, drapeau
@@ -58,17 +58,19 @@ impl Calc<'_, '_> {
         }
         // R-045 : fin du projet = max des fins au plus tôt des feuilles
         // actives planifiées (manuelles comprises, inactives exclues) et des
-        // récapitulatives manuelles datées (R-064).
-        let mut finish = self.start;
+        // récapitulatives manuelles datées (R-064) ; sans tâche planifiée, le
+        // début du projet. Ce max peut précéder le début du projet (tâche
+        // manuelle ou contrainte respectée avant lui, R-105).
+        let mut finish: Option<Moment> = None;
         for (node, s) in self.net.nodes.iter().zip(&self.st) {
             if (node.kind == NodeKind::Leaf || node.fixed.is_some())
                 && !node.inactive
                 && let Some(e) = s.early
             {
-                finish = finish.max(e.finish);
+                finish = Some(finish.map_or(e.finish, |f| f.max(e.finish)));
             }
         }
-        self.finish = finish;
+        self.finish = finish.unwrap_or(self.start);
     }
 
     /// Bornes de début du nœud `v` (R-036, R-044). Pour une feuille
@@ -272,7 +274,22 @@ impl Calc<'_, '_> {
             return Ok((natural, driver));
         };
         let pinned = Driver::Constraint { kind: c.kind };
+        let primary_from_start = self.role == PassRole::Primary && self.mode == Mode::FromStart;
         match c.rule {
+            // R-095, R-096, R-099 : option active, le plafond (SNLT, FNLT)
+            // s'impose en passe principale ; chaque borne violée est
+            // signalée (R-100).
+            ConstraintRule::Clamped(side) if primary_from_start => {
+                let a = c.span()?;
+                let late = match side {
+                    Side::Start => natural.start > a.start,
+                    Side::Finish => scale.between(a.finish, natural.finish)?.get() > 0,
+                };
+                if late {
+                    self.overrides(v, scale, a, c.kind)?;
+                    return Ok((a, pinned));
+                }
+            }
             ConstraintRule::Floor(Side::Start) => {
                 let a = c.span()?;
                 if a.start > natural.start {
@@ -293,6 +310,74 @@ impl Calc<'_, '_> {
             | ConstraintRule::Pin(_) => {}
         }
         Ok((natural, driver))
+    }
+
+    /// R-100 : la feuille `v`, placée de force sur `a` par sa contrainte de
+    /// type `kind`, viole ces bornes ; un `constraint.override` par borne
+    /// violée, en passe principale seulement : début du projet si
+    /// `a.start <` début (brut) ; porte du parent si `a.start < G` ; lien
+    /// FS/SS si `a.start <` borne (brut) ; lien FF/SF si
+    /// `P.between(a.finish, borne) > 0` (R-063, même lecture que pour une
+    /// tâche manuelle).
+    fn overrides(
+        &mut self,
+        v: NodeIx,
+        scale: TimeScale<'_>,
+        a: Span,
+        kind: ConstraintKind,
+    ) -> Result<(), Fail> {
+        if self.role != PassRole::Primary {
+            return Ok(());
+        }
+        let task = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?.uid;
+        if a.start < self.start {
+            self.diags.push(Diagnostic::ConstraintOverride {
+                task,
+                kind,
+                bound: OverriddenBound::ProjectStart,
+            });
+        }
+        let incoming = self
+            .net
+            .incoming(v)
+            .ok_or(Fail::Internal("arcs entrants hors bornes"))?;
+        for i in incoming {
+            if self.net.is_cut(i) || self.is_dropped(i) {
+                continue;
+            }
+            let arc = *self.net.arc(i).ok_or(Fail::Internal("arc hors bornes"))?;
+            let Some(se) = self.state(arc.from).and_then(|s| s.early) else {
+                continue;
+            };
+            let bound = match arc.link {
+                None => {
+                    let summary = self
+                        .net
+                        .node(arc.from)
+                        .ok_or(Fail::Internal("nœud hors bornes"))?
+                        .uid;
+                    (se.start > a.start).then_some(OverriddenBound::SummaryGate { summary })
+                }
+                Some(l) => {
+                    let x = self.link_bound(i, l, se)?;
+                    let violated = match l.ty {
+                        LinkType::FinishToStart | LinkType::StartToStart => x > a.start,
+                        LinkType::FinishToFinish | LinkType::StartToFinish => {
+                            scale.between(a.finish, x)?.get() > 0
+                        }
+                    };
+                    violated.then_some(OverriddenBound::Predecessor {
+                        predecessor: l.pred,
+                        link: l.ty,
+                    })
+                }
+            };
+            if let Some(bound) = bound {
+                self.diags
+                    .push(Diagnostic::ConstraintOverride { task, kind, bound });
+            }
+        }
+        Ok(())
     }
 
     /// Agrégat d'une récapitulative (R-053) : min des débuts, max des fins

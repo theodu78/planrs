@@ -171,6 +171,14 @@ impl Net {
         self
     }
 
+    /// Option « les tâches respectent toujours leurs dates de contrainte »
+    /// (R-099).
+    #[must_use]
+    pub fn honor(mut self, honor: bool) -> Self {
+        self.project.options.honor_constraints = honor;
+        self
+    }
+
     /// Lien `pred` → `succ`.
     #[must_use]
     pub fn link(mut self, pred: &str, succ: &str, kind: LinkType, lag: Lag) -> Self {

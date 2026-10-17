@@ -9,6 +9,7 @@
 //! débuts au plus tard de ses enfants actifs, lu par les liens FS/SS qui la
 //! visent.
 
+use super::constraint::{ConstraintRule, Mode};
 use super::network::{Fail, NodeIx, NodeKind, pos};
 use super::{Calc, LateDriver, Pass, PassRole, transfer};
 use crate::calendar::Span;
@@ -226,7 +227,8 @@ impl Calc<'_, '_> {
     /// cet ordre, donne la cause (`LateDriver`, R-047).
     fn leaf_late(&mut self, v: NodeIx, early: Span, has_succ: bool) -> Result<(Span, LateDriver), Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
-        let (place, duration, parent) = (node.place, node.duration, node.parent_rollup);
+        let (place, duration, parent, constraint) =
+            (node.place, node.duration, node.parent_rollup, node.constraint);
         let scale = *self
             .net
             .scale(place)
@@ -270,7 +272,30 @@ impl Calc<'_, '_> {
         for (y, driver) in caps.starts {
             lf.apply(start_cap(y)?, driver);
         }
+        // Contrainte côté plafond (R-095, R-096) : `A.finish`, où `A` est
+        // l'ancrage R-090 (pour SNLT, `A.finish = forward_span(s*, d).finish`,
+        // le plafond de fin d'un début au plus tard en `s*`).
+        if let Some(c) = constraint
+            && self.caps_late(c.rule)
+        {
+            lf.apply(c.span()?.finish, LateDriver::Constraint { kind: c.kind });
+        }
         Ok((scale.backward_span(lf.finish, duration)?, lf.driver))
+    }
+
+    /// La règle `rule` plafonne la fin au plus tard dans la passe arrière
+    /// secondaire depuis le début : SNLT, FNLT (plafond, ou serrage si
+    /// l'option est active).
+    fn caps_late(&self, rule: ConstraintRule) -> bool {
+        match rule {
+            ConstraintRule::Cap(_) => true,
+            ConstraintRule::Clamped(_) => self.mode == Mode::FromStart,
+            ConstraintRule::None
+            | ConstraintRule::Opposite
+            | ConstraintRule::Floor(_)
+            | ConstraintRule::Window(_)
+            | ConstraintRule::Pin(_) => false,
+        }
     }
 
     /// Plafonds hérités d'un agrégat (R-057) : `C(S) = min(C(parent), FS/FF

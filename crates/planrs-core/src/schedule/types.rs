@@ -182,7 +182,8 @@ pub enum Driver {
 
 /// Cause de la fin au plus tard d'une tâche (R-047) : le premier plafond
 /// strictement le plus petit, dans l'ordre fin du projet, plusieurs chemins
-/// critiques, plafond hérité d'une récapitulative, liens sortants.
+/// critiques, plafond hérité d'une récapitulative, liens sortants,
+/// contrainte.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LateDriver {
@@ -204,6 +205,14 @@ pub enum LateDriver {
     /// Plusieurs chemins critiques : fin au plus tard = fin au plus tôt
     /// (R-051).
     MultipleCriticalPaths,
+    /// Contrainte de date : plafond (SNLT, FNLT, R-095, R-096) ou fenêtre
+    /// (R-097, R-098).
+    Constraint {
+        /// Type de la contrainte (`constraint` en JSON : le champ `kind`
+        /// porte déjà la variante).
+        #[serde(rename = "constraint")]
+        kind: ConstraintKind,
+    },
     /// Récapitulative : max des fins au plus tard de ses enfants (R-060).
     Rollup,
     /// Repli : dates au plus tard = dates au plus tôt (R-069).

@@ -105,6 +105,12 @@ mod r090_constraint_date_normalization;
 mod r091_as_soon_as_possible;
 mod r093_start_no_earlier_than;
 mod r094_finish_no_earlier_than;
+mod r095_start_no_later_than;
+mod r096_finish_no_later_than;
+mod r099_honor_constraints_option;
+mod r100_constraint_conflict_diagnostics;
+mod r101_negative_slack;
+mod r105_constraint_outside_project;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

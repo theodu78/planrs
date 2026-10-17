@@ -4,13 +4,16 @@
 //! - Marge totale : `min(M.between(ES, LS), M.between(EF, LF))`, `M` étant
 //!   l'échelle de marge (placement de la feuille, temps civil pour une durée
 //!   écoulée ; calendrier d'une récapitulative).
-//! - Marge libre : `min(TF, écarts aux successeurs)`, arcs sortants propres
-//!   et hérités des récapitulatives ancêtres ; aucune troncature (A3).
+//! - Marge libre : `max(0, min(TF, écarts aux successeurs))`, arcs sortants
+//!   propres et hérités des récapitulatives ancêtres (R-101 : sans
+//!   contrainte ni échéance, la borne à 0 est sans effet).
 //! - Critique : `TF ≤ seuil × minutes par jour`.
 
+use super::constraint::{ConstraintRule, Mode, Side};
 use super::network::{Fail, NodeIx, NodeKind};
 use super::{Calc, Pass, transfer};
 use crate::calendar::{Span, TimeScale};
+use crate::diagnostic::Diagnostic;
 use crate::duration::Minutes;
 use crate::model::LinkType;
 
@@ -86,7 +89,41 @@ impl Calc<'_, '_> {
                 .filter(|&r| !self.net.is_fixed_rollup(r));
             first = false;
         }
-        Ok((tf, fs.min(tf)))
+        // R-101 : marge libre bornée à 0 (Q10 : MS Project affiche 0 quand
+        // la marge totale est négative) ; sans contrainte ni échéance, la
+        // borne est sans effet (FS ≥ 0 reste une propriété, P13).
+        Ok((tf, fs.min(tf).max(Minutes::ZERO)))
+    }
+
+    /// Contraintes non tenues, après les marges (R-099) : depuis le début,
+    /// un plafond ou une fenêtre (option inactive) dont la date au plus tôt
+    /// dépasse l'ancrage : début en brut (`ES > s*`), fin en temps ouvré
+    /// (`P.between(f*, EF) > 0`) ; `constraint.not_honored` avec la date
+    /// saisie.
+    pub(super) fn check_constraints(&mut self) {
+        for (node, s) in self.net.nodes.iter().zip(&self.st) {
+            let (Some(c), Some(early)) = (node.constraint, s.early) else {
+                continue;
+            };
+            let (ConstraintRule::Cap(side), Mode::FromStart) = (c.rule, self.mode) else {
+                continue;
+            };
+            let (Some(date), Some(Ok(a)), Some(scale)) = (c.date, c.anchor, self.net.scale(node.place))
+            else {
+                continue;
+            };
+            let late = match side {
+                Side::Start => early.start > a.start,
+                Side::Finish => scale.between(a.finish, early.finish).is_ok_and(|m| m.get() > 0),
+            };
+            if late {
+                self.diags.push(Diagnostic::ConstraintNotHonored {
+                    task: node.uid,
+                    kind: c.kind,
+                    date,
+                });
+            }
+        }
     }
 
     /// Écart de l'arc de lien `a` pour le nœud `v` (R-049) : `M.between(ancre propre,

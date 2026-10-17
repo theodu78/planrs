@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::duration::Minutes;
 use crate::error::CalendarError;
 use crate::ids::{AssignmentUid, CalendarUid, ResourceUid, TaskUid};
+use crate::model::{ConstraintKind, LinkType};
 use crate::time::Moment;
 
 /// Gravité d'un diagnostic.
@@ -89,6 +90,54 @@ impl fmt::Display for Pass {
             Self::Forward => "passe avant",
             Self::Backward => "passe arrière",
         })
+    }
+}
+
+/// Borne violée par une contrainte respectée de force (`constraint.override`,
+/// R-100) : une par borne, pour savoir quel lien ou quelle date cède.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OverriddenBound {
+    /// Début du projet (R-036, R-105).
+    ProjectStart,
+    /// Fin du projet (planification à rebours).
+    ProjectFinish,
+    /// Porte d'une récapitulative ancêtre (R-056).
+    SummaryGate {
+        /// Récapitulative.
+        summary: TaskUid,
+    },
+    /// Plafond hérité d'une récapitulative ancêtre (R-057).
+    SummaryCap {
+        /// Récapitulative.
+        summary: TaskUid,
+    },
+    /// Lien depuis un prédécesseur.
+    Predecessor {
+        /// Prédécesseur d'origine.
+        predecessor: TaskUid,
+        /// Type du lien.
+        link: LinkType,
+    },
+    /// Lien vers un successeur (planification à rebours).
+    Successor {
+        /// Successeur d'origine.
+        successor: TaskUid,
+        /// Type du lien.
+        link: LinkType,
+    },
+}
+
+impl fmt::Display for OverriddenBound {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ProjectStart => f.write_str("le début du projet"),
+            Self::ProjectFinish => f.write_str("la fin du projet"),
+            Self::SummaryGate { summary } => write!(f, "la borne de la récapitulative {summary}"),
+            Self::SummaryCap { summary } => write!(f, "le plafond de la récapitulative {summary}"),
+            Self::Predecessor { predecessor, .. } => write!(f, "le lien depuis la tâche {predecessor}"),
+            Self::Successor { successor, .. } => write!(f, "le lien vers la tâche {successor}"),
+        }
     }
 }
 
@@ -357,6 +406,29 @@ pub enum Diagnostic {
         /// Code stable de l'erreur de conversion (`CalendarError::code`).
         cause: String,
     },
+    /// Contrainte respectée de force malgré une borne (option « respecter
+    /// les contraintes » active) : un diagnostic par borne violée ; le lien
+    /// violé reste et transmet une marge négative (avertissement, R-100).
+    #[serde(rename = "constraint.override")]
+    ConstraintOverride {
+        /// Tâche contrainte.
+        task: TaskUid,
+        /// Type de la contrainte.
+        kind: ConstraintKind,
+        /// Borne violée.
+        bound: OverriddenBound,
+    },
+    /// Contrainte non tenue : l'option « respecter les contraintes » est
+    /// inactive et les liens l'emportent (avertissement, R-099).
+    #[serde(rename = "constraint.not_honored")]
+    ConstraintNotHonored {
+        /// Tâche contrainte.
+        task: TaskUid,
+        /// Type de la contrainte.
+        kind: ConstraintKind,
+        /// Date saisie de la contrainte.
+        date: Moment,
+    },
     /// Planification à rebours non prise en charge (J3) : aucune tâche
     /// planifiée (erreur).
     #[serde(rename = "schedule.from_finish_unsupported")]
@@ -437,7 +509,9 @@ impl Diagnostic {
             | Self::LinkIgnoredInCycle { .. }
             | Self::LinkFinishToSummary { .. }
             | Self::LinkManualNotHonored { .. }
-            | Self::TaskCalendarFallback { .. } => Severity::Warning,
+            | Self::TaskCalendarFallback { .. }
+            | Self::ConstraintOverride { .. }
+            | Self::ConstraintNotHonored { .. } => Severity::Warning,
             Self::LinkInactive { .. }
             | Self::LinkExcludedEndpoint { .. }
             | Self::TaskManualUndated { .. } => Severity::Info,
@@ -471,7 +545,9 @@ impl Diagnostic {
             | Self::TaskManualUndated { task }
             | Self::TaskManualDatesInverted { task }
             | Self::TaskCalendarFallback { task, .. }
-            | Self::TaskUnschedulable { task, .. } => Subject::Task(*task),
+            | Self::TaskUnschedulable { task, .. }
+            | Self::ConstraintOverride { task, .. }
+            | Self::ConstraintNotHonored { task, .. } => Subject::Task(*task),
             Self::LinkCycle { tasks } => tasks.iter().min().map_or(Subject::Project, |t| Subject::Task(*t)),
             Self::LinkSelf { task } => Subject::Link {
                 predecessor: *task,
@@ -559,6 +635,8 @@ impl Diagnostic {
             Self::TaskCalendarFallback { .. } => "task.calendar_fallback",
             Self::ProjectCalendarFallback { .. } => "project.calendar_fallback",
             Self::TaskUnschedulable { .. } => "task.unschedulable",
+            Self::ConstraintOverride { .. } => "constraint.override",
+            Self::ConstraintNotHonored { .. } => "constraint.not_honored",
             Self::ScheduleFromFinishUnsupported => "schedule.from_finish_unsupported",
             Self::ScheduleInternal { .. } => "schedule.internal",
         }
@@ -750,6 +828,16 @@ impl fmt::Display for Diagnostic {
             Self::TaskUnschedulable { task, pass, cause } => {
                 write!(f, "la tâche {task} ne peut pas être planifiée ({pass} : {cause})")
             }
+            Self::ConstraintOverride { task, kind, bound } => write!(
+                f,
+                "la contrainte {} de la tâche {task} est respectée malgré {bound}",
+                constraint_name(*kind)
+            ),
+            Self::ConstraintNotHonored { task, kind, date } => write!(
+                f,
+                "la contrainte {} du {date} de la tâche {task} n'est pas respectée : les liens l'emportent",
+                constraint_name(*kind)
+            ),
             Self::ScheduleFromFinishUnsupported => f.write_str(
                 "la planification à partir de la date de fin n'est pas encore prise en charge : \
                  aucune tâche n'est planifiée",
@@ -761,6 +849,20 @@ impl fmt::Display for Diagnostic {
                 )
             }
         }
+    }
+}
+
+/// Nom français d'un type de contrainte, pour les messages.
+const fn constraint_name(kind: ConstraintKind) -> &'static str {
+    match kind {
+        ConstraintKind::AsSoonAsPossible => "« le plus tôt possible »",
+        ConstraintKind::AsLateAsPossible => "« le plus tard possible »",
+        ConstraintKind::MustStartOn => "« doit commencer le »",
+        ConstraintKind::MustFinishOn => "« doit finir le »",
+        ConstraintKind::StartNoEarlierThan => "« début au plus tôt le »",
+        ConstraintKind::StartNoLaterThan => "« début au plus tard le »",
+        ConstraintKind::FinishNoEarlierThan => "« fin au plus tôt le »",
+        ConstraintKind::FinishNoLaterThan => "« fin au plus tard le »",
     }
 }
 
@@ -834,10 +936,11 @@ mod tests {
         reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
     )]
 
-    use super::{Diagnostic, Diagnostics, Pass, Severity, Subject};
+    use super::{Diagnostic, Diagnostics, OverriddenBound, Pass, Severity, Subject};
     use crate::duration::Minutes;
     use crate::error::tests::assert_tag;
     use crate::ids::{AssignmentUid, CalendarUid, ResourceUid, TaskUid};
+    use crate::model::{ConstraintKind, LinkType};
     use crate::time::Moment;
 
     /// Un exemple de chaque variante.
@@ -951,6 +1054,20 @@ mod tests {
             Diagnostic::ScheduleInternal {
                 detail: "nœud non visité".to_owned(),
             },
+            // Contraintes (J3), indices 35 et suivants.
+            Diagnostic::ConstraintOverride {
+                task: t,
+                kind: ConstraintKind::StartNoLaterThan,
+                bound: OverriddenBound::Predecessor {
+                    predecessor: TaskUid::new(1),
+                    link: LinkType::FinishToStart,
+                },
+            },
+            Diagnostic::ConstraintNotHonored {
+                task: t,
+                kind: ConstraintKind::StartNoLaterThan,
+                date: "2026-10-20T08:00".parse::<Moment>().unwrap(),
+            },
         ]
     }
 
@@ -967,7 +1084,8 @@ mod tests {
                     "link",
                     "assignment",
                     "conversion",
-                    "schedule"
+                    "schedule",
+                    "constraint"
                 ]
                 .contains(&prefix)
             );
@@ -996,6 +1114,8 @@ mod tests {
                 "link.finish_to_summary",
                 "link.manual_not_honored",
                 "task.calendar_fallback",
+                "constraint.override",
+                "constraint.not_honored",
             ]
         );
         let infos: Vec<&str> = all()
@@ -1076,6 +1196,23 @@ mod tests {
             }
             .to_string(),
             "le lien 1 → 3"
+        );
+    }
+
+    #[test]
+    fn constraint_diagnostics() {
+        // Contraintes (J3) : sujet la tâche contrainte, borne sérialisée.
+        let t = TaskUid::new(3);
+        for i in [35, 36] {
+            assert_eq!(all()[i].subject(), Subject::Task(t));
+        }
+        assert_eq!(
+            all()[35].to_string(),
+            "la contrainte « début au plus tard le » de la tâche 3 est respectée malgré le lien depuis la tâche 1"
+        );
+        assert_eq!(
+            serde_json::to_string(&all()[35]).unwrap(),
+            r#"{"code":"constraint.override","task":3,"kind":"start_no_later_than","bound":{"kind":"predecessor","predecessor":1,"link":"finish_to_start"}}"#
         );
     }
 

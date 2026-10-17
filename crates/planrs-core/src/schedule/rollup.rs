@@ -103,7 +103,8 @@ impl Calc<'_, '_> {
             late,
             duration: duration.unwrap_or(Minutes::ZERO),
             total_slack: tf,
-            free_slack: tf,
+            // R-101 : sans lien, marge libre = marge totale, bornée à 0.
+            free_slack: tf.max(Minutes::ZERO),
             critical: tf <= self.critical_limit(),
             percent_complete: self.percent_over(0..self.net.tasks.len()),
             driver: Driver::Rollup,

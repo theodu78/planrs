@@ -356,6 +356,7 @@ pub fn schedule(project: &Project) -> Schedule {
     calc.backward(&order, PassRole::Secondary);
     calc.summary_late();
     calc.slack();
+    calc.check_constraints();
     calc.output(&order)
 }
 

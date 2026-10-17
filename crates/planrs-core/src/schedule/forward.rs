@@ -7,7 +7,7 @@
 //! stockage).
 
 use super::network::{Fail, NodeIx, NodeKind};
-use super::{Calc, Driver, Pass, transfer};
+use super::{Calc, Driver, Pass, PassRole, transfer};
 use crate::calendar::Span;
 use crate::diagnostic::Diagnostic;
 use crate::model::LinkType;
@@ -30,8 +30,10 @@ enum Candidate {
 }
 
 impl Calc<'_, '_> {
-    /// Passe avant complète, puis fin du projet (R-045).
-    pub(super) fn forward(&mut self, order: &[NodeIx]) {
+    /// Passe avant complète, puis fin du projet (R-045). Depuis le début,
+    /// c'est la passe principale (`role` = `Primary`).
+    pub(super) fn forward(&mut self, order: &[NodeIx], role: PassRole) {
+        self.role = role;
         for &v in order {
             let Some(node) = self.net.node(v) else {
                 self.diags.push(Diagnostic::ScheduleInternal {

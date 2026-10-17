@@ -32,12 +32,13 @@ mod types;
 use std::collections::BTreeMap;
 
 pub use crate::diagnostic::Pass;
-pub use types::{Driver, Exclusion, Schedule, TaskOutcome, TaskRole, TaskSchedule};
+pub use types::{Driver, Exclusion, LateDriver, Schedule, TaskOutcome, TaskRole, TaskSchedule};
 
 use crate::arena::Arena;
 use crate::calendar::{CalendarSet, CompiledCalendar, Span, builtin};
 use crate::diagnostic::{Diagnostic, Diagnostics};
 use crate::duration::Minutes;
+use crate::ids::TaskUid;
 use crate::model::{Project, ScheduleAnchor};
 use crate::time::Moment;
 use network::{Fail, Network, NodeIx, pos};
@@ -63,10 +64,14 @@ struct NodeState {
     /// Dates au plus tard et marges de repli : elles dépendent d'un
     /// successeur dégradé ou non planifiable (R-069, propagé vers l'amont).
     late_degraded: bool,
-    /// Agrégat : plafond de fin hérité `C(S)` (R-057).
-    cap_finish: Option<Moment>,
-    /// Agrégat : plafond de début hérité `K(S)` (R-057, A11).
-    cap_start: Option<Moment>,
+    /// Cause de la fin au plus tard (R-047).
+    late_driver: LateDriver,
+    /// Agrégat : plafond de fin hérité `C(S)` (R-057) et la récapitulative
+    /// qui l'a posé.
+    cap_finish: Option<(Moment, TaskUid)>,
+    /// Agrégat : plafond de début hérité `K(S)` (R-057, A11) et la
+    /// récapitulative qui l'a posé.
+    cap_start: Option<(Moment, TaskUid)>,
     /// Marge totale (R-048).
     total_slack: Minutes,
     /// Marge libre (R-049).
@@ -82,6 +87,7 @@ impl NodeState {
         degraded: false,
         failed: false,
         late_degraded: false,
+        late_driver: LateDriver::ProjectFinish,
         cap_finish: None,
         cap_start: None,
         total_slack: Minutes::ZERO,
@@ -89,13 +95,39 @@ impl NodeState {
     };
 }
 
+/// Sens de planification (ADR-0010) : depuis le début, passe avant
+/// principale ; à rebours, passe arrière principale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    /// Depuis la date de début du projet.
+    FromStart,
+    /// À rebours depuis la date de fin du projet (J3, commit suivant).
+    FromFinish,
+}
+
+/// Rôle d'une passe (ADR-0010) : la passe principale place les tâches
+/// (passe avant depuis le début), la passe secondaire calcule les dates
+/// opposées et les marges (passe arrière depuis le début).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PassRole {
+    /// Passe principale.
+    Primary,
+    /// Passe secondaire.
+    Secondary,
+}
+
 /// Calcul en cours : réseau, états des nœuds, décalages convertis.
 struct Calc<'n, 'a> {
     net: &'n Network<'a>,
     project: &'n Project,
+    /// Sens de planification.
+    mode: Mode,
+    /// Rôle de la passe en cours.
+    role: PassRole,
     /// Début du projet (brut, R-036).
     start: Moment,
-    /// Fin du projet (R-045), connue après la passe avant.
+    /// Fin du projet (R-045), connue après la passe avant ; plafond commun
+    /// de la passe arrière (R-046).
     finish: Moment,
     /// États, par nœud.
     st: Vec<NodeState>,
@@ -112,6 +144,26 @@ impl Calc<'_, '_> {
     /// État du nœud `v`.
     fn state(&self, v: NodeIx) -> Option<&NodeState> {
         self.st.get(pos(v)?)
+    }
+
+    /// Le nœud `v` a été atteint par la passe principale : ses dates
+    /// servent de borne à ses voisins dans la passe secondaire (depuis le
+    /// début : il a des dates au plus tôt). Remplace les tests directs sur
+    /// `early` de la passe arrière (ADR-0010).
+    fn reached(&self, v: NodeIx) -> bool {
+        match self.mode {
+            Mode::FromStart | Mode::FromFinish => self.state(v).is_some_and(|s| s.early.is_some()),
+        }
+    }
+
+    /// Le plafond de début hérité `K(parent)` s'applique au nœud de début
+    /// au plus tôt `es` (R-057, A11) : depuis le début, aux seuls nœuds de
+    /// même début que la récapitulative ; à rebours, à tous (D10, ADR-0010).
+    fn k_applies(&self, parent_start: Option<Moment>, es: Moment) -> bool {
+        match self.mode {
+            Mode::FromStart => parent_start == Some(es),
+            Mode::FromFinish => true,
+        }
     }
 
     /// État modifiable du nœud `v`.
@@ -140,7 +192,7 @@ impl Calc<'_, '_> {
     }
 
     /// Signale l'échec du calcul de la tâche `uid` dans la passe `pass`.
-    fn report(&mut self, uid: crate::ids::TaskUid, pass: Pass, fail: Fail) {
+    fn report(&mut self, uid: TaskUid, pass: Pass, fail: Fail) {
         match fail {
             Fail::Conversion(cause) => self.diags.push(Diagnostic::TaskUnschedulable {
                 task: uid,
@@ -266,10 +318,13 @@ impl Calc<'_, '_> {
 /// sont compilés à chaque appel.
 #[must_use]
 pub fn schedule(project: &Project) -> Schedule {
-    let start = match project.anchor {
-        ScheduleAnchor::FromStart(m) => m,
-        ScheduleAnchor::FromFinish(m) => return from_finish(project, m),
+    let (mode, start) = match project.anchor {
+        ScheduleAnchor::FromStart(m) => (Mode::FromStart, m),
+        ScheduleAnchor::FromFinish(m) => (Mode::FromFinish, m),
     };
+    if mode == Mode::FromFinish {
+        return from_finish(project, start);
+    }
     let mut diags = Diagnostics::new();
     // Étape 0 : calendriers et replis (R-066).
     let (set, compile_diags) = CalendarSet::compile(project);
@@ -306,6 +361,8 @@ pub fn schedule(project: &Project) -> Schedule {
     let mut calc = Calc {
         net: &net,
         project,
+        mode,
+        role: PassRole::Primary,
         start,
         finish: start,
         st: vec![NodeState::NEW; net.nodes.len()],
@@ -314,8 +371,8 @@ pub fn schedule(project: &Project) -> Schedule {
         diags,
     };
     // Étapes 6 à 9.
-    calc.forward(&order);
-    calc.backward(&order);
+    calc.forward(&order, PassRole::Primary);
+    calc.backward(&order, PassRole::Secondary);
     calc.summary_late();
     calc.slack();
     calc.output(&order)
@@ -587,6 +644,10 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains(r#""status":"scheduled""#), "{json}");
         assert!(json.contains(r#""kind":"rollup""#), "{json}");
+        assert!(
+            json.contains(r#""late_driver":{"kind":"project_finish"}"#),
+            "{json}"
+        );
         assert_eq!(serde_json::from_str::<Schedule>(&json).unwrap(), s);
     }
 }

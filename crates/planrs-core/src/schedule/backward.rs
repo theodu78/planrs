@@ -10,18 +10,20 @@
 //! visent.
 
 use super::network::{Fail, NodeIx, NodeKind, pos};
-use super::{Calc, Pass, transfer};
+use super::{Calc, LateDriver, Pass, PassRole, transfer};
 use crate::calendar::Span;
+use crate::ids::TaskUid;
 use crate::model::LinkType;
 use crate::time::Moment;
 
-/// Plafonds lus sur les arcs de lien sortants d'un nœud.
+/// Plafonds lus sur les arcs de lien sortants d'un nœud, avec leur cause
+/// (R-047).
 #[derive(Default)]
 struct Caps {
-    /// Plus petit plafond de fin (FS, FF).
-    finish: Option<Moment>,
+    /// Plus petit plafond de fin (FS, FF) ; à égalité, le premier arc.
+    finish: Option<(Moment, LateDriver)>,
     /// Plafonds de début (SS, SF), à convertir pour une feuille.
-    starts: Vec<Moment>,
+    starts: Vec<(Moment, LateDriver)>,
     /// Un successeur est peu sûr (dégradé, en échec) : dates au plus tard
     /// de repli (R-069).
     unreliable: bool,
@@ -32,13 +34,43 @@ fn min_opt(a: Option<Moment>, b: Moment) -> Moment {
     a.map_or(b, |a| a.min(b))
 }
 
+/// Plus petit de deux plafonds avec leur cause ; à égalité, le premier
+/// garde la sienne.
+fn min_cap<T: Copy>(a: Option<(Moment, T)>, b: (Moment, T)) -> (Moment, T) {
+    match a {
+        Some(a) if a.0 <= b.0 => a,
+        _ => b,
+    }
+}
+
+/// Plafond de fin en cours de calcul et sa cause (R-047) : le premier
+/// minimum strict garde sa cause.
+struct LateCap {
+    finish: Moment,
+    driver: LateDriver,
+}
+
+impl LateCap {
+    /// Applique le plafond `m` de cause `driver` s'il est strictement plus
+    /// petit.
+    fn apply(&mut self, m: Moment, driver: LateDriver) {
+        if m < self.finish {
+            self.finish = m;
+            self.driver = driver;
+        }
+    }
+}
+
 impl Calc<'_, '_> {
-    /// Passe arrière complète.
-    pub(super) fn backward(&mut self, order: &[NodeIx]) {
+    /// Passe arrière complète. Depuis le début, c'est la passe secondaire
+    /// (`role` = `Secondary`) : elle ne visite que les nœuds atteints par la
+    /// passe avant (`reached`).
+    pub(super) fn backward(&mut self, order: &[NodeIx], role: PassRole) {
+        self.role = role;
         let has_succ = self.has_successors();
         for &v in order.iter().rev() {
             let Some(node) = self.net.node(v) else { continue };
-            if node.inactive {
+            if node.inactive || !self.reached(v) {
                 continue;
             }
             let (kind, uid) = (node.kind, node.uid);
@@ -51,15 +83,17 @@ impl Calc<'_, '_> {
             if leaf_like {
                 let own_succ = has_succ.get(node.task).copied().unwrap_or(false);
                 match self.leaf_late(v, early, own_succ) {
-                    Ok(late) => {
+                    Ok((late, driver)) => {
                         if let Some(s) = self.state_mut(v) {
                             s.late = Some(late);
+                            s.late_driver = driver;
                         }
                     }
                     Err(fail) => {
                         // R-069 : dates au plus tard de repli.
                         if let Some(s) = self.state_mut(v) {
                             s.late = Some(early);
+                            s.late_driver = LateDriver::Fallback;
                             s.degraded = true;
                         }
                         self.report(uid, Pass::Backward, fail);
@@ -124,11 +158,10 @@ impl Calc<'_, '_> {
     /// des dates au plus tôt et, pour une porte, l'agrégat jumeau aussi (une
     /// récapitulative vide n'en a pas, R-053).
     fn applied_target(&self, target: NodeIx) -> bool {
-        let has_early = |v: NodeIx| self.state(v).is_some_and(|s| s.early.is_some());
         let Some(node) = self.net.node(target) else {
             return false;
         };
-        has_early(target) && (node.kind != NodeKind::Gate || node.twin.is_some_and(has_early))
+        self.reached(target) && (node.kind != NodeKind::Gate || node.twin.is_some_and(|r| self.reached(r)))
     }
 
     /// Plafonds des arcs de lien sortants du nœud `v` (R-047) : FS
@@ -157,7 +190,7 @@ impl Calc<'_, '_> {
             // appliqué, il ne plafonne rien.
             let Some(tl) = self
                 .state(arc.to)
-                .filter(|s| s.early.is_some())
+                .filter(|_| self.reached(arc.to))
                 .and_then(|s| s.late)
             else {
                 continue;
@@ -169,40 +202,60 @@ impl Calc<'_, '_> {
                 LinkType::FinishToFinish | LinkType::StartToFinish => self.finish_anchor(arc.to, tl.finish),
             };
             let y = transfer::backward(*sigma, anchor, lag, self.reads_raw(arc.to, l.sigma))?;
+            let driver = LateDriver::Successor {
+                successor: l.succ,
+                link: l.ty,
+            };
             match l.ty {
                 LinkType::FinishToStart | LinkType::FinishToFinish => {
-                    caps.finish = Some(min_opt(caps.finish, y));
+                    caps.finish = Some(min_cap(caps.finish, (y, driver)));
                 }
-                LinkType::StartToStart | LinkType::StartToFinish => caps.starts.push(y),
+                LinkType::StartToStart | LinkType::StartToFinish => caps.starts.push((y, driver)),
             }
         }
         Ok(caps)
     }
 
     /// Dates au plus tard d'une feuille active (automatique ou manuelle) ou
-    /// d'une récapitulative manuelle datée (R-064) :
+    /// d'une récapitulative manuelle datée (R-064), et leur cause :
     /// plafond de fin = min(fin du projet ; EF si plusieurs chemins critiques
     /// et aucun successeur ; `C(parent)` ; liens FS/FF) ; plafonds de début
-    /// (liens SS/SF, `K(parent)` si même début que le parent) convertis par
+    /// (`K(parent)` si `k_applies`, liens SS/SF) convertis par
     /// `forward_span(y, d).finish` ; `late = backward_span(plafond, d)`
-    /// (R-030, R-031 pour un jalon, R-061).
-    fn leaf_late(&mut self, v: NodeIx, early: Span, has_succ: bool) -> Result<Span, Fail> {
+    /// (R-030, R-031 pour un jalon, R-061). Le premier minimum strict, dans
+    /// cet ordre, donne la cause (`LateDriver`, R-047).
+    fn leaf_late(&mut self, v: NodeIx, early: Span, has_succ: bool) -> Result<(Span, LateDriver), Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
         let (place, duration, parent) = (node.place, node.duration, node.parent_rollup);
-        let mut lf = self.finish;
+        let scale = *self
+            .net
+            .scale(place)
+            .ok_or(Fail::Internal("échelle hors bornes"))?;
+        // Plafond de début `y` : la tâche doit commencer au plus tard en `y`
+        // en brut ; `y` peut tomber hors du temps ouvré de P(t) (décalage
+        // écoulé, successeur sur un autre calendrier, K(S)) : dernier début
+        // plaçable avant la conversion (R-047).
+        let start_cap = |y: Moment| -> Result<Moment, Fail> {
+            let x = scale.latest_start(y, duration)?;
+            Ok(scale.forward_span(x, duration)?.finish)
+        };
+        let mut lf = LateCap {
+            finish: self.finish,
+            driver: LateDriver::ProjectFinish,
+        };
         if self.project.options.multiple_critical_paths && !has_succ {
-            lf = lf.min(early.finish);
+            lf.apply(early.finish, LateDriver::MultipleCriticalPaths);
         }
         let mut caps = self.out_caps(v)?;
         if let Some(pr) = parent {
             let ps = *self.state(pr).ok_or(Fail::Internal("nœud hors bornes"))?;
-            if let Some(c) = ps.cap_finish {
-                lf = lf.min(c);
+            if let Some((c, summary)) = ps.cap_finish {
+                lf.apply(c, LateDriver::SummaryCap { summary });
             }
-            if let (Some(k), Some(pe)) = (ps.cap_start, ps.early)
-                && pe.start == early.start
+            if let Some((k, summary)) = ps.cap_start
+                && self.k_applies(ps.early.map(|e| e.start), early.start)
             {
-                caps.starts.push(k);
+                lf.apply(start_cap(k)?, LateDriver::SummaryCap { summary });
             }
             caps.unreliable |= ps.late_degraded && !self.net.is_fixed_rollup(pr);
         }
@@ -211,22 +264,13 @@ impl Calc<'_, '_> {
         {
             s.late_degraded = true;
         }
-        if let Some(c) = caps.finish {
-            lf = lf.min(c);
+        if let Some((c, driver)) = caps.finish {
+            lf.apply(c, driver);
         }
-        let scale = self
-            .net
-            .scale(place)
-            .ok_or(Fail::Internal("échelle hors bornes"))?;
-        // Plafond de début `y` : la tâche doit commencer au plus tard en `y`
-        // en brut ; `y` peut tomber hors du temps ouvré de P(t) (décalage
-        // écoulé, successeur sur un autre calendrier, K(S)) : dernier début
-        // plaçable avant la conversion (R-047).
-        for y in caps.starts {
-            let x = scale.latest_start(y, duration)?;
-            lf = lf.min(scale.forward_span(x, duration)?.finish);
+        for (y, driver) in caps.starts {
+            lf.apply(start_cap(y)?, driver);
         }
-        Ok(scale.backward_span(lf, duration)?)
+        Ok((scale.backward_span(lf.finish, duration)?, lf.driver))
     }
 
     /// Plafonds hérités d'un agrégat (R-057) : `C(S) = min(C(parent), FS/FF
@@ -238,20 +282,24 @@ impl Calc<'_, '_> {
             .node(v)
             .ok_or(Fail::Internal("nœud hors bornes"))?
             .parent_rollup;
+        let uid = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?.uid;
         let caps = self.out_caps(v)?;
-        let mut c = caps.finish;
-        let mut k = caps.starts.iter().copied().min();
+        let mut c = caps.finish.map(|(m, _)| (m, uid));
+        let mut k: Option<(Moment, TaskUid)> = None;
+        for &(y, _) in &caps.starts {
+            k = Some(min_cap(k, (y, uid)));
+        }
         let mut unreliable = caps.unreliable;
         if let Some(pr) = parent {
             let ps = *self.state(pr).ok_or(Fail::Internal("nœud hors bornes"))?;
             unreliable |= ps.late_degraded && !self.net.is_fixed_rollup(pr);
             if let Some(pc) = ps.cap_finish {
-                c = Some(min_opt(c, pc));
+                c = Some(min_cap(c, pc));
             }
-            if let (Some(pk), Some(pe)) = (ps.cap_start, ps.early)
-                && pe.start == early.start
+            if let Some(pk) = ps.cap_start
+                && self.k_applies(ps.early.map(|e| e.start), early.start)
             {
-                k = Some(min_opt(k, pk));
+                k = Some(min_cap(k, pk));
             }
         }
         let s = self.state_mut(v).ok_or(Fail::Internal("nœud hors bornes"))?;

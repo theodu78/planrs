@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 use super::network::{NodeIx, NodeKind, PROJECT, Role, Status, TaskInfo, pos};
-use super::{Calc, Driver, Exclusion, Schedule, TaskOutcome, TaskRole, TaskSchedule};
+use super::{Calc, Driver, Exclusion, LateDriver, Schedule, TaskOutcome, TaskRole, TaskSchedule};
 use crate::calendar::Span;
 use crate::diagnostic::Diagnostic;
 use crate::duration::Minutes;
@@ -107,6 +107,7 @@ impl Calc<'_, '_> {
             critical: tf <= self.critical_limit(),
             percent_complete: self.percent_over(0..self.net.tasks.len()),
             driver: Driver::Rollup,
+            late_driver: LateDriver::Rollup,
             degraded,
         })
     }
@@ -186,6 +187,16 @@ impl Calc<'_, '_> {
                 detail: format!("tâche {} sans dates au plus tard", task.uid()),
             });
         }
+        // Cause de la fin au plus tard : agrégat des enfants pour une
+        // récapitulative automatique (R-060), repli sans dates au plus tard
+        // (R-069).
+        let late_driver = if state.late.is_none() {
+            LateDriver::Fallback
+        } else if info.role == Role::Summary && !fixed {
+            LateDriver::Rollup
+        } else {
+            state.late_driver
+        };
         let (role, manual, duration, percent_complete) = if info.role == Role::Summary {
             // R-054 ; récapitulative manuelle datée : durée utilisée (R-064).
             let duration = if fixed {
@@ -224,6 +235,7 @@ impl Calc<'_, '_> {
             critical: state.total_slack <= self.critical_limit(),
             percent_complete,
             driver: state.driver,
+            late_driver,
             degraded,
         })
     }

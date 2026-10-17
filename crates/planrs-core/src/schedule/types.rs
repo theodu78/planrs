@@ -132,6 +132,9 @@ pub struct TaskSchedule {
     pub percent_complete: Percent,
     /// Cause du début au plus tôt (base d'`explain_date`, J6).
     pub driver: Driver,
+    /// Cause de la fin au plus tard (R-047 ; base d'`explain_date` à
+    /// rebours et pour une tâche « le plus tard possible »).
+    pub late_driver: LateDriver,
     /// Dates de repli : une conversion a échoué ici ou en amont (R-069).
     pub degraded: bool,
 }
@@ -168,4 +171,34 @@ pub enum Driver {
     Manual,
     /// Agrégat des sous-tâches (récapitulative, R-053).
     Rollup,
+}
+
+/// Cause de la fin au plus tard d'une tâche (R-047) : le premier plafond
+/// strictement le plus petit, dans l'ordre fin du projet, plusieurs chemins
+/// critiques, plafond hérité d'une récapitulative, liens sortants.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LateDriver {
+    /// Fin du projet (R-046).
+    ProjectFinish,
+    /// Plafond d'un lien sortant (R-047).
+    Successor {
+        /// Successeur (d'origine, éventuellement récapitulatif).
+        successor: TaskUid,
+        /// Type du lien.
+        link: LinkType,
+    },
+    /// Plafond hérité d'une récapitulative ancêtre : `C(S)` ou `K(S)`
+    /// (R-057).
+    SummaryCap {
+        /// Récapitulative dont le plafond s'applique.
+        summary: TaskUid,
+    },
+    /// Plusieurs chemins critiques : fin au plus tard = fin au plus tôt
+    /// (R-051).
+    MultipleCriticalPaths,
+    /// Récapitulative : max des fins au plus tard de ses enfants (R-060).
+    Rollup,
+    /// Repli : dates au plus tard = dates au plus tôt (R-069).
+    Fallback,
 }

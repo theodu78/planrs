@@ -42,46 +42,58 @@ impl Calc<'_, '_> {
             let Some(early) = self.state(v).and_then(|s| s.early) else {
                 continue;
             };
-            match kind {
-                NodeKind::Leaf => {
-                    let own_succ = has_succ.get(node.task).copied().unwrap_or(false);
-                    match self.leaf_late(v, early, own_succ) {
-                        Ok(late) => {
-                            if let Some(s) = self.state_mut(v) {
-                                s.late = Some(late);
-                            }
-                        }
-                        Err(fail) => {
-                            // R-069 : dates au plus tard de repli.
-                            if let Some(s) = self.state_mut(v) {
-                                s.late = Some(early);
-                                s.degraded = true;
-                            }
-                            self.report(uid, Pass::Backward, fail);
+            // R-064 : une récapitulative manuelle datée se traite comme une
+            // feuille manuelle ; ses enfants n'héritent d'aucun plafond.
+            let leaf_like = kind == NodeKind::Leaf || node.fixed.is_some();
+            if leaf_like {
+                let own_succ = has_succ.get(node.task).copied().unwrap_or(false);
+                match self.leaf_late(v, early, own_succ) {
+                    Ok(late) => {
+                        if let Some(s) = self.state_mut(v) {
+                            s.late = Some(late);
                         }
                     }
-                }
-                NodeKind::Rollup => {
-                    if let Err(fail) = self.rollup_caps(v, early) {
+                    Err(fail) => {
+                        // R-069 : dates au plus tard de repli.
                         if let Some(s) = self.state_mut(v) {
+                            s.late = Some(early);
                             s.degraded = true;
                         }
                         self.report(uid, Pass::Backward, fail);
                     }
                 }
-                NodeKind::Gate => self.gate_late(v),
+            } else if kind == NodeKind::Rollup {
+                if let Err(fail) = self.rollup_caps(v, early) {
+                    if let Some(s) = self.state_mut(v) {
+                        s.degraded = true;
+                    }
+                    self.report(uid, Pass::Backward, fail);
+                }
+            } else {
+                self.gate_late(v);
             }
         }
     }
 
     /// R-051 : vrai, par position, si la tâche a un successeur effectif
     /// (lien non coupé vers une tâche active), en propre ou hérité d'une
-    /// récapitulative ancêtre. Parents avant enfants : un seul passage.
+    /// récapitulative ancêtre (sauf à travers une récapitulative manuelle
+    /// datée, R-064). Parents avant enfants : un seul passage.
     fn has_successors(&self) -> Vec<bool> {
         let mut out = vec![false; self.net.tasks.len()];
         for p in 0..self.net.tasks.len() {
             let Some(info) = self.net.task(p) else { continue };
-            let inherited = info.parent.and_then(|par| out.get(par).copied()).unwrap_or(false);
+            let inherited = info
+                .parent
+                .filter(|&par| {
+                    !self
+                        .net
+                        .task(par)
+                        .and_then(|t| t.exit)
+                        .is_some_and(|r| self.net.is_fixed_rollup(r))
+                })
+                .and_then(|par| out.get(par).copied())
+                .unwrap_or(false);
             let own = info
                 .exit
                 .and_then(|v| self.net.outgoing(v))
@@ -142,7 +154,8 @@ impl Calc<'_, '_> {
         Ok(caps)
     }
 
-    /// Dates au plus tard d'une feuille active (automatique ou manuelle) :
+    /// Dates au plus tard d'une feuille active (automatique ou manuelle) ou
+    /// d'une récapitulative manuelle datée (R-064) :
     /// plafond de fin = min(fin du projet ; EF si plusieurs chemins critiques
     /// et aucun successeur ; `C(parent)` ; liens FS/FF) ; plafonds de début
     /// (liens SS/SF, `K(parent)` si même début que le parent) convertis par
@@ -237,9 +250,10 @@ impl Calc<'_, '_> {
         }
     }
 
-    /// Dates au plus tard des récapitulatives actives (R-060, mécanique) :
-    /// LS = min LS, LF = max LF des enfants actifs, des plus intérieures aux
-    /// plus extérieures (positions décroissantes).
+    /// Dates au plus tard des récapitulatives actives (R-060) : LS = min LS,
+    /// LF = max LF des enfants actifs, des plus intérieures aux plus
+    /// extérieures (positions décroissantes). Une récapitulative manuelle
+    /// datée garde les siennes, calculées comme pour une feuille (R-064).
     pub(super) fn summary_late(&mut self) {
         for p in (0..self.net.tasks.len()).rev() {
             let Some(info) = self.net.task(p) else { continue };
@@ -247,6 +261,9 @@ impl Calc<'_, '_> {
                 continue;
             }
             let Some(rollup) = info.exit else { continue };
+            if self.net.is_fixed_rollup(rollup) {
+                continue;
+            }
             let mut late: Option<Span> = None;
             let Some(incoming) = self.net.incoming(rollup) else {
                 continue;

@@ -135,10 +135,11 @@ pub(super) struct Node {
     /// agrégat : calendrier de la récapitulative.
     pub place: u32,
     /// Feuille : durée de la tâche ; feuille manuelle : durée utilisée
-    /// (R-063).
+    /// (R-063) ; agrégat d'une récapitulative manuelle datée : durée
+    /// utilisée (R-064) ; autre agrégat, porte : 0.
     pub duration: Minutes,
-    /// Feuille manuelle active : dates saisies (R-063), ou l'échec de leur
-    /// calcul.
+    /// Feuille manuelle active (R-063) ou agrégat d'une récapitulative
+    /// manuelle datée (R-064) : dates saisies, ou l'échec de leur calcul.
     pub fixed: Option<Result<Span, Fail>>,
     /// Agrégat de la récapitulative parente.
     pub parent_rollup: Option<NodeIx>,
@@ -256,6 +257,14 @@ impl<'a> Network<'a> {
         let a = pos(*self.out_off.get(i)?)?;
         let b = pos(*self.out_off.get(i.checked_add(1)?)?)?;
         self.out_idx.get(a..b)
+    }
+
+    /// Agrégat d'une récapitulative manuelle datée (R-064) : ses dates ne
+    /// dépendent pas de ses enfants, qui n'héritent donc ni de ses liens
+    /// sortants ni de ceux de ses ancêtres.
+    pub fn is_fixed_rollup(&self, v: NodeIx) -> bool {
+        self.node(v)
+            .is_some_and(|n| n.kind == NodeKind::Rollup && n.fixed.is_some())
     }
 
     /// Nombre de nœuds.
@@ -399,7 +408,8 @@ fn place_of(task: &Task, cal: u32) -> u32 {
     }
 }
 
-/// R-063 : dates d'une feuille manuelle et durée utilisée. Les dates saisies
+/// R-063, R-064 : dates d'une feuille (ou d'une récapitulative) manuelle et
+/// durée utilisée. Les dates saisies
 /// sont conservées sans recalage ; une seule saisie : l'autre par `P.add`
 /// avec la durée saisie, sinon la durée de la tâche ; deux saisies : la
 /// durée utilisée est le temps entre elles sur `P` ; fin avant début :
@@ -448,6 +458,10 @@ fn manual_span(
     }
 }
 
+/// Récapitulative ouverte pendant la numérotation : position, et dates
+/// saisies et durée utilisée d'une récapitulative manuelle datée (R-064).
+type OpenSummary = (usize, Option<Result<Span, Fail>>, Minutes);
+
 /// Étape 3 : nœuds canoniques en pré-ordre (porte, feuille, agrégat).
 fn number_nodes(
     project: &Project,
@@ -456,35 +470,35 @@ fn number_nodes(
     diags: &mut Diagnostics,
 ) -> Option<Vec<Node>> {
     let mut nodes: Vec<Node> = Vec::with_capacity(tasks.len().checked_add(tasks.len() / 4)?);
-    // Récapitulatives ouvertes (positions), la plus intérieure en dernier.
-    let mut open: Vec<usize> = Vec::new();
+    // Récapitulatives ouvertes, la plus intérieure en dernier.
+    let mut open: Vec<OpenSummary> = Vec::new();
     let n = tasks.len();
-    let close = |s: usize, tasks: &mut [TaskInfo], nodes: &mut Vec<Node>| -> Option<()> {
-        let info = tasks.get_mut(s)?;
-        let gate = info.entry?;
-        let v = ix(nodes.len())?;
-        nodes.push(Node {
-            kind: NodeKind::Rollup,
-            task: s,
-            uid: info.uid,
-            inactive: info.inactive(),
-            place: info.cal,
-            duration: Minutes::ZERO,
-            fixed: None,
-            parent_rollup: None,
-            twin: Some(gate),
-        });
-        info.exit = Some(v);
-        nodes.get_mut(pos(gate)?)?.twin = Some(v);
-        Some(())
-    };
+    let close =
+        |(s, fixed, duration): OpenSummary, tasks: &mut [TaskInfo], nodes: &mut Vec<Node>| -> Option<()> {
+            let info = tasks.get_mut(s)?;
+            let gate = info.entry?;
+            let v = ix(nodes.len())?;
+            nodes.push(Node {
+                kind: NodeKind::Rollup,
+                task: s,
+                uid: info.uid,
+                inactive: info.inactive(),
+                place: info.cal,
+                duration,
+                fixed,
+                parent_rollup: None,
+                twin: Some(gate),
+            });
+            info.exit = Some(v);
+            nodes.get_mut(pos(gate)?)?.twin = Some(v);
+            Some(())
+        };
     for p in 0..=n {
-        while let Some(&s) = open.last() {
+        while let Some(&(s, _, _)) = open.last() {
             if tasks.get(s)?.end > p {
                 break;
             }
-            open.pop();
-            close(s, tasks, &mut nodes)?;
+            close(open.pop()?, tasks, &mut nodes)?;
         }
         if p == n {
             break;
@@ -496,8 +510,18 @@ fn number_nodes(
         }
         let v = ix(nodes.len())?;
         if info.role == Role::Summary {
-            // R-064 (récapitulative manuelle à dates fixes) : agent des
-            // récapitulatives. Ici, toute récapitulative est automatique.
+            // R-064 : une récapitulative manuelle active avec au moins une
+            // date saisie garde ses dates (comme une feuille manuelle, sur
+            // son calendrier) ; sans date, elle est automatique.
+            let dated = matches!(
+                task.mode,
+                SchedulingMode::Manual { start, finish, .. } if start.is_some() || finish.is_some()
+            );
+            let (fixed, duration) = if dated && !info.inactive() {
+                manual_span(task, *scales.get(pos(info.cal)?)?, diags)
+            } else {
+                (None, Minutes::ZERO)
+            };
             nodes.push(Node {
                 kind: NodeKind::Gate,
                 task: p,
@@ -510,7 +534,7 @@ fn number_nodes(
                 twin: None,
             });
             info.entry = Some(v);
-            open.push(p);
+            open.push((p, fixed, duration));
         } else {
             let place = place_of(task, info.cal);
             let (fixed, duration) = if info.inactive() {

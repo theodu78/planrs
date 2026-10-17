@@ -1,11 +1,10 @@
 //! Agrégats des récapitulatives et assemblage du résultat (spécification J2
 //! § 3.10).
 //!
-//! Mécanique des récapitulatives en place ici : dates (R-053), durée
+//! Récapitulatives : dates (R-053, agrégat de la passe avant), durée
 //! (R-054), % achevé (R-055), dates au plus tard agrégées (R-060, dans
-//! `backward.rs`). Restent à l'agent des récapitulatives : la récapitulative
-//! manuelle à dates fixes (R-064), la récapitulative du projet (R-068), et
-//! les fiches et tests des règles R-053 à R-058, R-060.
+//! `backward.rs`), récapitulative manuelle datée (R-064). Reste : la
+//! récapitulative du projet (R-068).
 
 use std::collections::BTreeMap;
 
@@ -111,8 +110,12 @@ impl Calc<'_, '_> {
         let Some(state) = exit else {
             return excluded(Exclusion::Unschedulable);
         };
+        let node = info.exit.and_then(|v| self.net.node(v));
+        let fixed = node.is_some_and(|n| n.fixed.is_some());
         let Some(early) = state.early else {
-            return excluded(if info.role == Role::Summary {
+            // Une récapitulative manuelle datée dont les dates ne se
+            // calculent pas est non planifiable, pas vide (R-064, R-069).
+            return excluded(if info.role == Role::Summary && !fixed {
                 Exclusion::EmptySummary
             } else {
                 Exclusion::Unschedulable
@@ -128,24 +131,27 @@ impl Calc<'_, '_> {
                 detail: format!("tâche {} sans dates au plus tard", task.uid()),
             });
         }
-        let node = info.exit.and_then(|v| self.net.node(v));
         let (role, manual, duration, percent_complete) = if info.role == Role::Summary {
-            let duration = node
-                .and_then(|n| self.net.scale(n.place))
-                .and_then(|s| s.between(early.start, early.finish).ok());
+            // R-054 ; récapitulative manuelle datée : durée utilisée (R-064).
+            let duration = if fixed {
+                node.map(|n| n.duration)
+            } else {
+                node.and_then(|n| self.net.scale(n.place))
+                    .and_then(|s| s.between(early.start, early.finish).ok())
+            };
             if duration.is_none() {
                 degraded = true;
             }
             (
                 TaskRole::Summary,
-                false,
+                fixed,
                 duration.unwrap_or(Minutes::ZERO),
                 self.summary_percent(p, info),
             )
         } else {
             (
                 TaskRole::Leaf,
-                node.is_some_and(|n| n.fixed.is_some()),
+                fixed,
                 node.map_or(task.duration.minutes(), |n| n.duration),
                 task.progress.percent_complete,
             )

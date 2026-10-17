@@ -45,8 +45,13 @@ use network::{Fail, Network, NodeIx, pos};
 /// État calculé d'un nœud canonique.
 #[derive(Clone, Copy, Debug)]
 struct NodeState {
-    /// Dates au plus tôt ; porte : `(G, G)` ; agrégat : (min ES, max EF).
+    /// Dates au plus tôt ; porte : `(G, G)` ; agrégat : (min ES, max EF),
+    /// ou les dates saisies d'une récapitulative manuelle datée (R-064).
     early: Option<Span>,
+    /// Agrégat : (min ES, max EF) des enfants, même pour une récapitulative
+    /// manuelle datée (début réel des sous-tâches, lu par la marge libre
+    /// d'un lien vers sa porte).
+    children: Option<Span>,
     /// Dates au plus tard ; porte : `(LG, LG)` ; agrégat : (min LS, max LF).
     late: Option<Span>,
     /// Cause de l'ES (R-044).
@@ -68,6 +73,7 @@ struct NodeState {
 impl NodeState {
     const NEW: Self = Self {
         early: None,
+        children: None,
         late: None,
         driver: Driver::ProjectStart,
         degraded: false,
@@ -157,9 +163,13 @@ impl Calc<'_, '_> {
 
     /// Durée d'un nœud prédécesseur : feuille (manuelle : durée utilisée) ;
     /// agrégat : temps ouvré entre son début et sa fin sur le calendrier de
-    /// la récapitulative (R-054).
+    /// la récapitulative (R-054) ; récapitulative manuelle datée : durée
+    /// utilisée (R-064).
     fn duration_of(&self, v: NodeIx) -> Result<Minutes, Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+        if node.fixed.is_some() {
+            return Ok(node.duration);
+        }
         match node.kind {
             network::NodeKind::Leaf => Ok(node.duration),
             network::NodeKind::Rollup => {
@@ -317,8 +327,7 @@ fn internal_failure(project: &Project, start: Moment, mut diags: Diagnostics, de
 #[cfg(test)]
 mod tests {
     //! Mécanique des portes et des agrégats (cas de la spécification J2 ;
-    //! les fiches R-053 à R-060 et leurs tests `tests/rules/` viennent avec
-    //! l'agent des récapitulatives).
+    //! les fiches R-053 à R-060 ont leurs tests dans `tests/rules/`).
     #![allow(
         clippy::unwrap_used,
         clippy::indexing_slicing,

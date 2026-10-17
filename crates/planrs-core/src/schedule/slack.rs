@@ -77,7 +77,13 @@ impl Calc<'_, '_> {
                     fs = fs.min(gap);
                 }
             }
-            owner = self.net.node(o).and_then(|n| n.parent_rollup);
+            // Une récapitulative manuelle datée (R-064) ne dépend pas de ses
+            // enfants : ses liens et ceux de ses ancêtres ne les concernent pas.
+            owner = self
+                .net
+                .node(o)
+                .and_then(|n| n.parent_rollup)
+                .filter(|&r| !self.net.is_fixed_rollup(r));
             first = false;
         }
         Ok((tf, fs.min(tf)))
@@ -104,9 +110,10 @@ impl Calc<'_, '_> {
             return Ok(None);
         }
         let target = self.net.node(arc.to).ok_or(Fail::Internal("nœud hors bornes"))?;
-        // Cible porte : début agrégé de la récapitulative (min ES des enfants).
+        // Cible porte : début agrégé des sous-tâches (min ES des enfants, même
+        // sous une récapitulative manuelle datée, R-064).
         let te = match target.kind {
-            NodeKind::Gate => target.twin.and_then(|r| self.state(r)).and_then(|s| s.early),
+            NodeKind::Gate => target.twin.and_then(|r| self.state(r)).and_then(|s| s.children),
             _ => self.state(arc.to).and_then(|s| s.early),
         };
         let Some(te) = te else { return Ok(None) };

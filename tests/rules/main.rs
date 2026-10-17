@@ -78,6 +78,7 @@ mod r060_summary_slack_and_critical;
 mod r061_milestone_in_network;
 mod r062_inactive_task;
 mod r063_manual_task;
+mod r064_manual_summary;
 mod r065_link_cycle;
 mod r066_task_calendar_fallback;
 mod r067_elapsed_duration_task;

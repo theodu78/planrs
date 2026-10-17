@@ -54,10 +54,11 @@ impl Calc<'_, '_> {
             }
         }
         // R-045 : fin du projet = max des fins au plus tôt des feuilles
-        // actives planifiées (manuelles comprises, inactives exclues).
+        // actives planifiées (manuelles comprises, inactives exclues) et des
+        // récapitulatives manuelles datées (R-064).
         let mut finish = self.start;
         for (node, s) in self.net.nodes.iter().zip(&self.st) {
-            if node.kind == NodeKind::Leaf
+            if (node.kind == NodeKind::Leaf || node.fixed.is_some())
                 && !node.inactive
                 && let Some(e) = s.early
             {
@@ -219,7 +220,13 @@ impl Calc<'_, '_> {
     /// Agrégat d'une récapitulative (R-053) : min des débuts, max des fins
     /// des enfants planifiés reliés (actifs, ou tous inactifs sous une
     /// récapitulative inactive). Aucun : pas de dates (`EmptySummary`).
+    /// Récapitulative manuelle datée (R-064) : ses dates saisies, pilote
+    /// `Manual`, quelles que soient celles de ses enfants.
     fn rollup(&mut self, v: NodeIx) -> Result<(), Fail> {
+        let fixed = match self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?.fixed {
+            Some(r) => Some(r?),
+            None => None,
+        };
         let incoming = self
             .net
             .incoming(v)
@@ -242,6 +249,12 @@ impl Calc<'_, '_> {
             }
         }
         let s = self.state_mut(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+        s.children = span;
+        if let Some(f) = fixed {
+            s.early = Some(f);
+            s.driver = Driver::Manual;
+            return Ok(());
+        }
         s.early = span;
         s.driver = Driver::Rollup;
         s.degraded = degraded;

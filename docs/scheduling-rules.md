@@ -358,7 +358,7 @@ Le moteur (`planrs_core::schedule`, ADR-0009) calcule un `Schedule` hors du mod�
 - **Tests** : `tests/rules/r044_multiple_predecessors.rs` (`r044_*`).
 
 ## R-045 — Fin du projet
-- **Formulation** : max des fins au plus tôt des feuilles actives planifiées (manuelles comprises, inactives exclues) ; sans tâche planifiée : début du projet brut. Exemples : réseau N1 (A 1 j ; B 2 j ; C 1 j FS de A et de B ; D 1 j seul) → mer 21/10 17:00 ; projet vide commençant sam 17/10 10:00 → sam 17/10 10:00.
+- **Formulation** : max des fins au plus tôt des feuilles actives planifiées (manuelles comprises, inactives exclues) et des récapitulatives manuelles datées (R-064) ; sans tâche planifiée : début du projet brut. Exemples : réseau N1 (A 1 j ; B 2 j ; C 1 j FS de A et de B ; D 1 j seul) → mer 21/10 17:00 ; projet vide commençant sam 17/10 10:00 → sam 17/10 10:00.
 - **Source** : S22, S16 ; projet vide : hypothèse.
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r045_project_finish.rs` (`r045_*`).
@@ -470,6 +470,12 @@ Le moteur (`planrs_core::schedule`, ADR-0009) calcule un `Schedule` hors du mod�
 - **Source** : S8 ; observé O9 (A7) ; reste : hypothèse.
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r063_manual_task.rs` (`r063_*`) ; invariants aléatoires (point fixe : feuilles passées en manuelles à leurs dates au plus tôt).
+
+## R-064 — Récapitulative manuelle
+- **Formulation** : une récapitulative manuelle active avec au moins une date saisie garde ses dates comme une feuille manuelle (R-063, sur le calendrier de la récapitulative, sinon du projet ; durée utilisée = durée saisie, sinon temps ouvré entre les deux dates) ; ses successeurs lisent ces dates, y compris pour un décalage en % ; elle entre dans l'agrégat de son parent et dans la fin du projet (R-045). Ses enfants sont planifiés normalement : la porte de ses liens FS/SS entrants s'applique à eux (S24), mais ils n'héritent ni de ses liens sortants ni de ceux de ses ancêtres (ses dates ne dépendent pas d'eux), en passe arrière comme pour la marge libre et R-051. Ses dates au plus tard, sa marge et sa criticité se calculent comme pour une feuille manuelle. Sans date saisie : récapitulative automatique. Inactive : traitée comme une récapitulative inactive automatique (R-062). Exemples : S manuelle mar 20/10 08:00 – ven 23/10 17:00 {A 1 j} : A lun 08:00 – 17:00, S reste mar – ven (durée 1 920) ; Y FS de S 1 j → lun 26/10 08:00 – 17:00 ; S TF 0 ; A TF 2 400 (n'hérite pas de S → Y). X 2 j FS → S manuelle lun {A 1 j} → A mer 08:00, S inchangée. P {S manuelle mar – ven {A}} → P mar – ven.
+- **Source** : observé O8 (A7 UID 1, 5, 6 : dates saisies différentes du min/max des enfants) ; dates au plus tard, héritage des liens : hypothèse (A7 UID 6 : LS ≠ min LS des enfants, non comparé).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r064_manual_summary.rs` (`r064_*`).
 
 ## R-065 — Cycles
 - **Formulation** : après Kahn, les nœuds restants sont découpés en composantes fortement connexes (Tarjan itératif) ; dans chaque composante d'au moins deux nœuds, les liens internes qui remontent la liste (`from ≥ to` dans la numérotation canonique) sont coupés, puis l'ordre est recalculé. Un `link.cycle` (erreur) par composante, avec les UID triés ; un `link.ignored_in_cycle` (avertissement) par lien coupé. Jamais de panique. Exemple : UID = ID, A (1), B (2), C (3), X (4) ; liens A → B, B → A, B → C, X → A (FS, 1 j chacune) : B → A coupé ; X lun, A mar, B mer, C jeu ; `link.cycle { [1, 2] }`, `link.ignored_in_cycle { 2 → 1 }`.

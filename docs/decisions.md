@@ -78,6 +78,8 @@ Une entrée par décision, datée, avec le contexte, les options écartées et l
 
 **Critère de fin.** Conversions durée ↔ dates testées sur les calendriers standard, 24 h et avec exceptions ; tous les checks de `CLAUDE.md` verts ; `docs/scorecard.md` à jour ; tag `j1`.
 
+**Statut (2026-10-17).** Plan réalisé selon l'ADR-0008 : modèle V1, point fixe, calendriers compilés et conversions durée ↔ dates, testés sur Standard, 24 heures, Équipe de nuit, calendriers dérivés et avec exceptions (règles R-001 à R-034, chacune avec son test ; propriétés P1 à P12). Tous les checks de `CLAUDE.md` verts ; `docs/scorecard.md` à jour. Reste : le tag `j1`, posé par la session principale après relecture.
+
 ## ADR-0008 — 2026-10-17 — J1 : modèle de données et calendriers
 
 **Contexte.** Seconde moitié de J1 (ADR-0007) : modèle V1, point fixe, calendriers et conversions dans `planrs-core`. Trois conceptions ont été comparées (fidélité MSPDI, segments périodiques, ergonomie commandes/agents). La spécification détaillée (types, règles R-001 à R-034, tests, plan de commits) sert de cahier des charges aux agents ; ce qui suit en fixe les choix.

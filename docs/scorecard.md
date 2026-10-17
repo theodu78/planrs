@@ -4,7 +4,7 @@ Mise à jour à la fin de chaque jalon. Trois niveaux, jamais confondus : **impl
 
 | Domaine | Implémenté | Testé | Vérifié | Notes |
 |---|---|---|---|---|
-| Calendriers ouvrés | – | – | – | J1 |
+| Calendriers ouvrés | oui | oui | – | J1 : semaine type, exceptions (récurrences dépliées), semaines datées, héritage à un niveau (boucle refusée), Standard / 24 heures / Équipe de nuit, forme compilée (fonction cumulée W), conversions ouvrées et écoulées, placement des durées et des jalons. Règles R-011 à R-031 (statut `hypothèse`), une par fichier de test `tests/rules/r011_*` à `r031_*`, propriétés P1 à P10 (oracle naïf fondé sur `resolve_day`). Aucune règle vérifiée contre MS Project (pas de corpus ni d'oracle avant J2). |
 | Chemin critique, liens, décalages | – | – | – | J2 |
 | Récapitulatives | – | – | – | J2 |
 | Contraintes, planification à rebours | – | – | – | J3 |

@@ -583,34 +583,40 @@ fn work_week(e: &Element<'_>, subject: Option<Subject>, sink: &mut Sink<'_>) -> 
     let period = time_period(&f, sink)?;
     let mut days: Week<DayRule> = Week::from_fn(|_| DayRule::Inherit);
     let mut seen: Week<bool> = Week::default();
-    if let Some(list) = f.get("WeekDays", sink) {
-        for wd in list.children.iter().filter(|c| c.name == "WeekDay") {
-            let Some(entry) = day_entry(wd, &format!("{path}/WeekDays/WeekDay"), subject, sink) else {
-                continue;
-            };
-            match entry.day_type {
-                DayType::Weekday(d) if !*seen.get(d) => {
-                    *seen.get_mut(d) = true;
-                    *days.get_mut(d) = DayRule::from(entry.setting);
-                }
-                DayType::Weekday(_) => {
-                    sink.push(
-                        ImportCode::Duplicate,
-                        subject,
-                        entry.at,
-                        &format!("{path}/WeekDays/WeekDay"),
-                        None,
-                    );
-                }
-                DayType::LegacyException => {
-                    sink.push(
-                        ImportCode::Inconsistent,
-                        subject,
-                        entry.at,
-                        &format!("{path}/WeekDays/WeekDay/DayType"),
-                        Some("0"),
-                    );
-                }
+    // Forme lue depuis J2 (`WeekDays/WeekDay`, plages comprises), puis forme
+    // pj15 (`WeekDay` direct, sans plages ; écrite par le profil strict,
+    // R-128).
+    let listed = f
+        .get("WeekDays", sink)
+        .map(|list| list.children.as_slice())
+        .unwrap_or_default();
+    let direct = e.children.iter().filter(|c| c.name == "WeekDay");
+    for wd in listed.iter().filter(|c| c.name == "WeekDay").chain(direct) {
+        let Some(entry) = day_entry(wd, &format!("{path}/WeekDays/WeekDay"), subject, sink) else {
+            continue;
+        };
+        match entry.day_type {
+            DayType::Weekday(d) if !*seen.get(d) => {
+                *seen.get_mut(d) = true;
+                *days.get_mut(d) = DayRule::from(entry.setting);
+            }
+            DayType::Weekday(_) => {
+                sink.push(
+                    ImportCode::Duplicate,
+                    subject,
+                    entry.at,
+                    &format!("{path}/WeekDays/WeekDay"),
+                    None,
+                );
+            }
+            DayType::LegacyException => {
+                sink.push(
+                    ImportCode::Inconsistent,
+                    subject,
+                    entry.at,
+                    &format!("{path}/WeekDays/WeekDay/DayType"),
+                    Some("0"),
+                );
             }
         }
     }

@@ -394,13 +394,20 @@ fn non_negative_minutes(f: &Fields<'_>, name: &str, sink: &mut Sink<'_>) -> Minu
 }
 
 /// R-085 : mode manuel, depuis `ManualStart`, `ManualFinish`,
-/// `ManualDuration`, à défaut `Start`, `Finish`, `Duration`.
+/// `ManualDuration` ; si aucun des trois n'est présent (même vide), à
+/// défaut `Start`, `Finish`, `Duration` (amendement R-129 : un élément
+/// présent et vide vaut « non saisi », sans repli).
 fn mode(f: &Fields<'_>, rec: &RecordedTask, duration: Duration, sink: &mut Sink<'_>) -> SchedulingMode {
     if f.bool("Manual", sink) != Some(true) {
         return SchedulingMode::Auto;
     }
-    let start = f.datetime("ManualStart", sink).or(rec.start);
-    let finish = f.datetime("ManualFinish", sink).or(rec.finish);
+    let explicit = f.has("ManualStart") || f.has("ManualFinish") || f.has("ManualDuration");
+    let start = f
+        .datetime("ManualStart", sink)
+        .or(if explicit { None } else { rec.start });
+    let finish = f
+        .datetime("ManualFinish", sink)
+        .or(if explicit { None } else { rec.finish });
     let manual_duration = match f.duration("ManualDuration", sink) {
         Some((d, at)) => {
             let made = Duration::new(
@@ -414,7 +421,7 @@ fn mode(f: &Fields<'_>, rec: &RecordedTask, duration: Duration, sink: &mut Sink<
             }
             made.ok()
         }
-        None => f.has("Duration").then_some(duration),
+        None => (!explicit && f.has("Duration")).then_some(duration),
     };
     SchedulingMode::Manual {
         start,

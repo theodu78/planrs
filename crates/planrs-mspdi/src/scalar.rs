@@ -410,6 +410,46 @@ pub const fn percent_lag_from_link_lag(link_lag: i64) -> Option<i64> {
     link_lag.checked_mul(10)
 }
 
+/// R-120 : date `AAAA-MM-JJThh:mm:00`, sans fuseau (inverse de R-075).
+#[must_use]
+pub fn format_datetime(m: Moment) -> String {
+    format!("{m}:00")
+}
+
+/// R-120 : heure `hh:mm:00`. 24:00 s'écrit `00:00:00` pour une fin de
+/// plage (`end_of_range`, R-077) et `24:00:00` sinon (heure par défaut du
+/// projet).
+#[must_use]
+pub fn format_time(t: TimeOfDay, end_of_range: bool) -> String {
+    let minutes = t.minutes();
+    if minutes >= 1_440 {
+        return if end_of_range { "00:00:00" } else { "24:00:00" }.to_owned();
+    }
+    format!("{:02}:{:02}:00", minutes / 60, minutes % 60)
+}
+
+/// R-120 : durée ISO 8601 `PT{h}H{m}M0S` (inverse de R-070), `-PT…` si
+/// négative. Exemple : 2 400 → `PT40H0M0S`.
+#[must_use]
+pub fn format_iso_duration(minutes: i64) -> String {
+    let sign = if minutes < 0 { "-" } else { "" };
+    let abs = minutes.unsigned_abs();
+    format!("{sign}PT{}H{}M0S", abs / 60, abs % 60)
+}
+
+/// R-120 : booléen `0` / `1`.
+#[must_use]
+pub const fn format_bool(b: bool) -> &'static str {
+    if b { "1" } else { "0" }
+}
+
+/// R-120 : décimal au point, sans zéro final (`1.50` → `1.5`, `2.00` →
+/// `2`).
+#[must_use]
+pub fn format_decimal(d: Decimal) -> String {
+    d.normalized().to_string()
+}
+
 /// Décimal lu (`xsd:decimal`, `xsd:float` sans exposant) : valeur exacte au
 /// plus à 6 décimales, et vrai si des décimales au-delà de la sixième ont
 /// été arrondies (R-001).
@@ -478,7 +518,8 @@ mod tests {
     )]
 
     use super::{
-        DateTimeError, IsoDuration, IsoDurationError, parse_bool, parse_datetime, parse_decimal, parse_int,
+        DateTimeError, IsoDuration, IsoDurationError, format_bool, format_datetime, format_decimal,
+        format_iso_duration, format_time, parse_bool, parse_datetime, parse_decimal, parse_int,
         parse_iso_duration, parse_time, percent_lag_from_link_lag, tenths_to_minutes,
     };
     use planrs_core::{Minutes, Moment, TimeOfDay};
@@ -647,5 +688,34 @@ mod tests {
         for bad in ["", ".", "-", "1e5", "1,5", "abc", "1.2.3", "99999999999999999999"] {
             assert_eq!(parse_decimal(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn r120_value_forms_round_trip() {
+        let at = m("2026-10-19T08:00");
+        assert_eq!(format_datetime(at), "2026-10-19T08:00:00");
+        assert_eq!(parse_datetime(&format_datetime(at)).unwrap().moment, at);
+        assert_eq!(format_datetime(Moment::MAX), "2150-01-01T00:00:00");
+        assert_eq!(
+            parse_datetime(&format_datetime(Moment::MAX)).unwrap().moment,
+            Moment::MAX
+        );
+        assert_eq!(format_time(TimeOfDay::hm(8, 5).unwrap(), true), "08:05:00");
+        assert_eq!(format_time(TimeOfDay::END_OF_DAY, true), "00:00:00");
+        assert_eq!(format_time(TimeOfDay::END_OF_DAY, false), "24:00:00");
+        assert_eq!(parse_time("24:00:00").unwrap().0, TimeOfDay::END_OF_DAY);
+        for minutes in [0, 1, 59, 60, 480, 2_400, 87_308_640, -480, -1] {
+            let text = format_iso_duration(minutes);
+            assert_eq!(parse_iso_duration(&text).unwrap().minutes, minutes, "{text}");
+        }
+        assert_eq!(format_iso_duration(2_400), "PT40H0M0S");
+        assert_eq!(format_iso_duration(-90), "-PT1H30M0S");
+        assert_eq!(format_bool(true), "1");
+        assert_eq!(format_bool(false), "0");
+        let d = |m: i64, s: u8| planrs_core::Decimal::new(m, s).unwrap();
+        assert_eq!(format_decimal(d(150, 2)), "1.5");
+        assert_eq!(format_decimal(d(200, 2)), "2");
+        assert_eq!(format_decimal(d(-415_875, 5)), "-4.15875");
+        assert_eq!(format_decimal(d(5, 1)), "0.5");
     }
 }

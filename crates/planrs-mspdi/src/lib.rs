@@ -7,7 +7,8 @@
 //! MS Project (clean-room, règle 1). Aucun flottant : les décimales des
 //! durées sont lues en entiers et arrondies par la règle unique R-001.
 //!
-//! État (J2, ADR-0009) : lecture seule ([`read`]). Lecture événementielle
+//! État (J3, ADR-0010) : lecture ([`read`]) et écriture ([`write::write`]).
+//! Lecture événementielle
 //! quick-xml, arbre borné par sous-arbre (pile explicite, limites de taille,
 //! de profondeur, d'éléments et de texte ; DOCTYPE refusé), correspondance
 //! typée indulgente : une valeur illisible devient un diagnostic et reçoit sa
@@ -23,7 +24,9 @@
 //! - [`diag`] : diagnostics d'import ;
 //! - [`extras`] : éléments non modélisés conservés (clés, ordre canonique) ;
 //! - [`schema`] : table unique des éléments du schéma (séquences pj15,
-//!   classes, ordre observé ; R-087, R-121).
+//!   classes, ordre observé ; R-087, R-121) ;
+//! - [`write`] : écriture MSPDI, profils d'ordre, diagnostics d'écriture
+//!   (R-120 à R-132).
 
 pub mod codes;
 pub mod diag;
@@ -31,6 +34,7 @@ pub mod error;
 pub mod extras;
 pub mod scalar;
 pub mod schema;
+pub mod write;
 
 mod assignment;
 mod baseline;

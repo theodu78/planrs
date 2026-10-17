@@ -1,0 +1,100 @@
+//! Élément `Project` : informations, ancre, options, calendrier, puis
+//! calendriers et tâches (R-120, R-130, R-132).
+
+use planrs_core::{Project, ScheduleAnchor};
+
+use super::emit::Emitter;
+use super::{WriteOptions, calendar, max_len, task};
+use crate::codes;
+use crate::extras::ORIGIN;
+use crate::scalar::{format_bool, format_datetime, format_time};
+use crate::schema::Parent;
+
+/// Écrit les enfants de `Project`.
+pub(crate) fn write(em: &mut Emitter, p: &Project, options: &WriteOptions) {
+    // Les enfants de `Project` s'écrivent sous la racine déjà ouverte : le
+    // pilote d'entité n'ouvre pas d'élément ici.
+    let profile = options.profile;
+    let o = &p.options;
+    let text = |em: &mut Emitter, name: &'static str, value: &str| {
+        em.text(name, value, max_len(Parent::Project, name));
+    };
+    for name in crate::schema::sequence(Parent::Project).names(profile) {
+        match name {
+            "SaveVersion" => em.leaf(name, &options.save_version.to_string()),
+            "GUID" => em.opt_leaf(name, p.info.guid.map(|g| g.to_string())),
+            "Name" => text(em, name, &p.info.name),
+            "Title" => text(em, name, &p.info.title),
+            "Subject" => text(em, name, &p.info.subject),
+            "Category" => text(em, name, &p.info.category),
+            "Company" => text(em, name, &p.info.company),
+            "Manager" => text(em, name, &p.info.manager),
+            "Author" => text(em, name, &p.info.author),
+            "CreationDate" => em.opt_leaf(name, p.info.creation_date.map(format_datetime)),
+            "ScheduleFromStart" => em.leaf(
+                name,
+                format_bool(matches!(p.anchor, ScheduleAnchor::FromStart(_))),
+            ),
+            // R-132 : l'ancre est une entrée ; l'autre borne est calculée
+            // (R-122).
+            "StartDate" => {
+                if let ScheduleAnchor::FromStart(s) = p.anchor {
+                    em.leaf(name, &format_datetime(s));
+                }
+            }
+            "FinishDate" => {
+                if let ScheduleAnchor::FromFinish(f) = p.anchor {
+                    em.leaf(name, &format_datetime(f));
+                }
+            }
+            "CriticalSlackLimit" => em.leaf(name, &o.critical_slack_limit_days.to_string()),
+            // R-130 : obligatoire ; celui relu (P), sinon celui des options.
+            "CurrencyCode" => {
+                match p
+                    .extras
+                    .0
+                    .iter()
+                    .find(|e| e.origin == ORIGIN && e.key == "CurrencyCode")
+                {
+                    Some(e) => em.raw(&e.payload),
+                    None => text(em, name, &options.currency_code),
+                }
+            }
+            "CalendarUID" => em.leaf(name, &p.calendar.get().to_string()),
+            "DefaultStartTime" => em.leaf(name, &format_time(o.default_start_time, false)),
+            "DefaultFinishTime" => em.leaf(name, &format_time(o.default_finish_time, false)),
+            "MinutesPerDay" => em.leaf(name, &o.factors.minutes_per_day().to_string()),
+            "MinutesPerWeek" => em.leaf(name, &o.factors.minutes_per_week().to_string()),
+            "DaysPerMonth" => em.leaf(name, &o.factors.days_per_month().to_string()),
+            "DefaultTaskType" => em.leaf(name, &codes::task_type_code(o.default_task_type).to_string()),
+            "DurationFormat" => em.leaf(
+                name,
+                &codes::duration_format_code(o.default_duration_unit, planrs_core::TimeBasis::Working, false)
+                    .to_string(),
+            ),
+            "WorkFormat" => em.leaf(name, &codes::work_format_code(o.default_work_unit).to_string()),
+            "HonorConstraints" => em.leaf(name, format_bool(o.honor_constraints)),
+            "MultipleCriticalPaths" => em.leaf(name, format_bool(o.multiple_critical_paths)),
+            "NewTasksEffortDriven" => em.leaf(name, format_bool(o.new_tasks_effort_driven)),
+            "NewTasksEstimated" => em.leaf(name, format_bool(o.new_tasks_estimated)),
+            "WeekStartDay" => em.leaf(name, &codes::week_start_code(o.week_start_day).to_string()),
+            "StatusDate" => em.opt_leaf(name, p.status_date.map(format_datetime)),
+            "CurrentDate" => em.leaf(name, &format_datetime(p.current_date)),
+            "Calendars" => {
+                if !p.calendars.is_empty() {
+                    em.open(name);
+                    for c in &p.calendars {
+                        calendar::write(em, c, profile);
+                    }
+                    em.close();
+                }
+            }
+            "Tasks" => {
+                em.open(name);
+                task::write_all(em, p, profile);
+                em.close();
+            }
+            _ => {}
+        }
+    }
+}

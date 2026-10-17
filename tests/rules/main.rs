@@ -118,9 +118,17 @@ mod r102_deadline;
 mod r103_summary_constraints;
 mod r104_manual_and_inactive_constraint;
 mod r105_constraint_outside_project;
+mod r120_mspdi_write_form;
+mod r121_element_order_profiles;
 mod r124_resources_mspdi;
 mod r125_assignments_mspdi;
 mod r126_baselines_mspdi;
+mod r127_task_progress_write;
+mod r128_calendars_write;
+mod r129_manual_tasks_write;
+mod r130_required_elements;
+mod r131_strings_write;
+mod r132_constraints_write;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

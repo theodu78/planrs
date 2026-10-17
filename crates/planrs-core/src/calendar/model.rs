@@ -175,7 +175,7 @@ impl From<DaySetting> for DayRule {
 /// Nature d'un calendrier : de base (semaine complète) ou dérivé (une base et
 /// ses seules différences). Héritage à un niveau, comme MS Project.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum CalendarKind {
     /// Calendrier de base : semaine complète par construction.
     Base {
@@ -615,6 +615,7 @@ mod tests {
         Calendar, CalendarException, CalendarKind, DayHours, DayRule, DaySetting, MonthItem, MonthPosition,
         Recurrence, TimeRange, WorkWeek,
     };
+    use crate::calendar::builtin::standard;
     use crate::duration::Minutes;
     use crate::error::CalendarModelError;
     use crate::ids::CalendarUid;
@@ -851,6 +852,14 @@ mod tests {
         assert_eq!(serde_json::from_str::<Calendar>(&json).unwrap(), c);
         let mut bad = serde_json::to_value(&c).unwrap();
         bad["unknown"] = serde_json::Value::Bool(true);
+        assert!(serde_json::from_value::<Calendar>(bad).is_err());
+        // Champ inconnu dans une variante de `CalendarKind` : refusé aussi.
+        let mut bad = serde_json::to_value(&c).unwrap();
+        bad["kind"]["derived"]["bogus"] = serde_json::Value::from(1);
+        assert!(serde_json::from_value::<Calendar>(bad).is_err());
+        let base = standard(CalendarUid::new(1), "Standard".to_owned());
+        let mut bad = serde_json::to_value(&base).unwrap();
+        bad["kind"]["base"]["bogus"] = serde_json::Value::from(1);
         assert!(serde_json::from_value::<Calendar>(bad).is_err());
     }
 }

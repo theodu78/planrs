@@ -108,8 +108,8 @@ impl Moment {
         let midnight = NaiveDateTime::new(EPOCH, NaiveTime::MIN);
         // Toujours défini sur le domaine (vérifié exhaustivement par les
         // tests) ; l'origine sert de repli plutôt qu'une panique.
-        midnight
-            .checked_add_signed(chrono::TimeDelta::minutes(self.0))
+        chrono::TimeDelta::try_minutes(self.0)
+            .and_then(|d| midnight.checked_add_signed(d))
             .unwrap_or(midnight)
     }
 

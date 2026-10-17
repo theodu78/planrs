@@ -77,7 +77,7 @@ pub enum Constraint {
 /// Mode de planification. Une tâche manuelle est stockée, pas recalculée
 /// (ADR-0005) : ses dates sont des entrées.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum SchedulingMode {
     /// Planification automatique.
     #[default]
@@ -407,5 +407,12 @@ mod tests {
         let json = serde_json::to_string(&m).unwrap();
         assert_eq!(json, r#"{"manual":{"start":null,"finish":null,"duration":null}}"#);
         assert_eq!(serde_json::from_str::<SchedulingMode>(&json).unwrap(), m);
+        // Champ inconnu dans la variante `manual` : refusé.
+        assert!(
+            serde_json::from_str::<SchedulingMode>(
+                r#"{"manual":{"start":null,"finish":null,"duration":null,"bogus":3}}"#
+            )
+            .is_err()
+        );
     }
 }

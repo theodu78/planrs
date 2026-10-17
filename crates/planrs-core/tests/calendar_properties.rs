@@ -18,7 +18,12 @@
 //! - P7 : calendrier 24 heures : `add_working(t, d) == t + d`.
 //! - P8 : test différentiel contre un oracle naïf fondé sur `resolve_day`
 //!   (API froide), jour par jour sur une fenêtre de ±400 jours ; au-delà, le
-//!   cas n'est pas comparé.
+//!   cas n'est pas comparé. `resolve_day` partage avec la compilation le
+//!   dépliage des récurrences, l'ordre des exceptions et le choix de la
+//!   semaine datée : chaque jour de la fenêtre est donc aussi comparé à un
+//!   second oracle, écrit ici sans aucune fonction de `planrs-core`
+//!   (récurrences dépliées jour par jour avec chrono, précédence R-016 à
+//!   R-019 réécrite).
 //! - P9 : un calendrier dérivé compilé est identique au même calendrier écrit
 //!   en entier comme calendrier de base.
 //! - P10 : temps écoulé : `forward_span(Elapsed, t, d)` finit à t + d et
@@ -216,14 +221,16 @@ fn scenario() -> impl Strategy<Value = Scenario> {
         prop::collection::vec(exception(), 0..=20),
         prop::collection::vec(work_week(), 0..=3),
     );
-    let derived = prop::option::weighted(
-        0.4,
-        (
+    // Un dérivé dans 40 % des cas (poids entiers : aucun flottant).
+    let derived = prop_oneof![
+        3 => Just(None),
+        2 => (
             week_of(day_rule()),
             prop::collection::vec(exception(), 0..=10),
             prop::collection::vec(work_week(), 0..=3),
-        ),
-    );
+        )
+            .prop_map(Some),
+    ];
     (base, derived).prop_map(|((week, exceptions, work_weeks), derived)| {
         let base = Calendar::new_base(CalendarUid::new(1), "Base".to_owned(), week);
         let mut list = vec![with_extras(&base, &exceptions, &work_weeks)];
@@ -429,6 +436,177 @@ impl Oracle {
             }
         }
         if to_start { Naive::Before } else { Naive::Unknown }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Oracle indépendant de la résolution d'un jour (P8)
+// ---------------------------------------------------------------------------
+
+/// Résolution d'un jour écrite d'après R-016 à R-019, sans `resolve_day`,
+/// `expand_exception` ni aucun tri de `planrs-core`.
+mod independent {
+    use chrono::{Datelike, NaiveDate};
+    use planrs_core::calendar::{
+        Calendar, CalendarException, CalendarKind, DayRule, DaySetting, MonthItem, MonthPosition, Recurrence,
+        WorkWeek,
+    };
+    use planrs_core::{Arena, CalendarUid, Day, Weekday};
+
+    fn date(d: Day) -> NaiveDate {
+        NaiveDate::from_ymd_opt(1984, 1, 1).unwrap() + chrono::Days::new(u64::try_from(d.index()).unwrap())
+    }
+
+    fn weekday(d: NaiveDate) -> Weekday {
+        Weekday::ALL[usize::try_from(d.weekday().num_days_from_sunday()).unwrap()]
+    }
+
+    fn item_matches(d: NaiveDate, item: MonthItem) -> bool {
+        let wd = weekday(d);
+        let weekend = matches!(wd, Weekday::Saturday | Weekday::Sunday);
+        match item {
+            MonthItem::Day => true,
+            MonthItem::Weekday => !weekend,
+            MonthItem::WeekendDay => weekend,
+            MonthItem::On(w) => wd == w,
+        }
+    }
+
+    /// `d` est le n-ième (ou le dernier) jour `item` de son mois.
+    fn is_nth(d: NaiveDate, position: MonthPosition, item: MonthItem) -> bool {
+        let candidates: Vec<NaiveDate> = (1..=31)
+            .filter_map(|k| NaiveDate::from_ymd_opt(d.year(), d.month(), k))
+            .filter(|x| item_matches(*x, item))
+            .collect();
+        let chosen = match position {
+            MonthPosition::First => candidates.first(),
+            MonthPosition::Second => candidates.get(1),
+            MonthPosition::Third => candidates.get(2),
+            MonthPosition::Fourth => candidates.get(3),
+            MonthPosition::Last => candidates.last(),
+        };
+        chosen == Some(&d)
+    }
+
+    fn months_between(first: NaiveDate, d: NaiveDate) -> i64 {
+        (i64::from(d.year()) * 12 + i64::from(d.month0()))
+            - (i64::from(first.year()) * 12 + i64::from(first.month0()))
+    }
+
+    fn sunday_of(d: NaiveDate) -> NaiveDate {
+        d - chrono::Days::new(u64::from(d.weekday().num_days_from_sunday()))
+    }
+
+    /// Le jour `d` de la période répond-il à la récurrence (avant la limite
+    /// d'occurrences) ?
+    fn matches(r: Recurrence, first: NaiveDate, d: NaiveDate) -> bool {
+        match r {
+            Recurrence::Period => true,
+            Recurrence::Daily { every } => (d - first).num_days() % i64::from(every) == 0,
+            Recurrence::Weekly { every, days } => {
+                let weeks = (sunday_of(d) - sunday_of(first)).num_days() / 7;
+                weeks % i64::from(every) == 0 && *days.get(weekday(d))
+            }
+            Recurrence::MonthlyByDay { every, day } => {
+                months_between(first, d) % i64::from(every) == 0 && d.day() == u32::from(day)
+            }
+            Recurrence::MonthlyByPosition {
+                every,
+                position,
+                item,
+            } => months_between(first, d) % i64::from(every) == 0 && is_nth(d, position, item),
+            Recurrence::YearlyByDay { month, day } => {
+                d.month() == month.number() && d.day() == u32::from(day)
+            }
+            Recurrence::YearlyByPosition {
+                month,
+                position,
+                item,
+            } => d.month() == month.number() && is_nth(d, position, item),
+            Recurrence::ByDayCount { .. } | Recurrence::ByWeekdayCount { .. } => false,
+        }
+    }
+
+    /// Jours (indices) d'une exception, dépliés un à un dans la période.
+    fn expand(e: &CalendarException) -> Vec<i32> {
+        let first = date(e.period.first());
+        let mut out: Vec<i32> = (e.period.first().index()..=e.period.last().index())
+            .filter(|&k| matches(e.recurrence, first, date(Day::new(k).unwrap())))
+            .collect();
+        if let Some(n) = e.occurrences {
+            out.truncate(usize::try_from(n).unwrap());
+        }
+        out
+    }
+
+    /// Indices d'une liste triés par (premier jour, indice), à la main.
+    fn order_by_start(starts: &[i32]) -> Vec<usize> {
+        let mut idx: Vec<usize> = (0..starts.len()).collect();
+        // Tri par insertion, stable : à début égal, l'ordre de stockage.
+        for i in 1..idx.len() {
+            let mut j = i;
+            while j > 0 && starts[idx[j - 1]] > starts[idx[j]] {
+                idx.swap(j - 1, j);
+                j -= 1;
+            }
+        }
+        idx
+    }
+
+    fn exception_setting(c: &Calendar, day: i32) -> Option<DaySetting> {
+        let ex = c.exceptions();
+        let starts: Vec<i32> = ex.iter().map(|e| e.period.first().index()).collect();
+        order_by_start(&starts)
+            .into_iter()
+            .find(|&i| {
+                ex[i].period.first().index() <= day
+                    && day <= ex[i].period.last().index()
+                    && expand(&ex[i]).contains(&day)
+            })
+            .map(|i| ex[i].setting.clone())
+    }
+
+    fn rule_setting(rule: &DayRule) -> Option<DaySetting> {
+        match rule {
+            DayRule::Inherit => None,
+            DayRule::NonWorking => Some(DaySetting::NonWorking),
+            DayRule::Working(h) => Some(DaySetting::Working(h.clone())),
+        }
+    }
+
+    /// Semaines d'un niveau (R-019) : la première semaine datée qui couvre le
+    /// jour le possède ; un jour `Inherit` y renvoie à la semaine par défaut
+    /// du même calendrier.
+    fn week_setting(c: &Calendar, day: i32, wd: Weekday) -> Option<DaySetting> {
+        let ww: &[WorkWeek] = c.work_weeks();
+        let starts: Vec<i32> = ww.iter().map(|w| w.period.first().index()).collect();
+        let owner = order_by_start(&starts)
+            .into_iter()
+            .find(|&i| ww[i].period.first().index() <= day && day <= ww[i].period.last().index());
+        if let Some(s) = owner.and_then(|i| rule_setting(ww[i].days.get(wd))) {
+            return Some(s);
+        }
+        match c.kind() {
+            CalendarKind::Base { week } => Some(week.get(wd).clone()),
+            CalendarKind::Derived { week, .. } => rule_setting(week.get(wd)),
+        }
+    }
+
+    /// Réglage du jour (R-016) : exception du dérivé, de la base, semaines du
+    /// dérivé, semaines de la base.
+    pub fn resolve(calendars: &Arena<CalendarUid, Calendar>, uid: CalendarUid, day: Day) -> DaySetting {
+        let c = calendars.get(uid).unwrap();
+        let levels: Vec<&Calendar> = match c.kind() {
+            CalendarKind::Base { .. } => vec![c],
+            CalendarKind::Derived { base, .. } => vec![c, calendars.get(*base).unwrap()],
+        };
+        let k = day.index();
+        let wd = weekday(date(day));
+        levels
+            .iter()
+            .find_map(|l| exception_setting(l, k))
+            .or_else(|| levels.iter().find_map(|l| week_setting(l, k, wd)))
+            .unwrap()
     }
 }
 
@@ -656,6 +834,9 @@ proptest! {
         // Plages de chaque jour de la fenêtre.
         for (i, ranges) in o.days.iter().enumerate() {
             let day = Day::new(i32::try_from(o.first_day + i64::try_from(i).unwrap()).unwrap()).unwrap();
+            // `resolve_day` contre l'oracle indépendant.
+            let independent = merged(&independent::resolve(&s.calendars, s.uid, day));
+            prop_assert_eq!(&independent, ranges, "jour {} (oracle indépendant)", day);
             let got: Vec<(i64, i64)> = c
                 .day_ranges(day)
                 .unwrap()

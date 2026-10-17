@@ -86,3 +86,70 @@ fn r019_work_week_conversions() {
         Ok(mins(2_160))
     );
 }
+
+#[test]
+fn r019_overlap_storage_order_differs_from_start_order() {
+    use planrs_core::calendar::Calendar;
+    use planrs_core::{BuiltinCalendarNames, CalendarUid, Diagnostic, Project, ProjectInit, ScheduleAnchor};
+    use planrs_tests::{compile_one, mins, moment};
+    // Lues depuis un fichier (une commande refuse le chevauchement), stockées
+    // à rebours de leurs dates de début :
+    // - n° 0 : du lun 09/11 au lun 30/11/2026, lundi [08:00,10:00), autres
+    //   jours hérités ;
+    // - n° 1 : du dim 01/11 au dim 15/11/2026, mardi chômé, autres jours
+    //   hérités.
+    // La n° 1 commence la première : elle possède les jours communs (09 au
+    // 15/11), y compris son lundi hérité, qui renvoie à la semaine par défaut
+    // (480) et non au lundi de la n° 0 (hypothèse, R-019).
+    let ww = |from: &str, to: &str, wd: Weekday, rule: DayRule| WorkWeek {
+        name: String::new(),
+        period: days(from, to),
+        days: Week::from_fn(|d| if d == wd { rule.clone() } else { DayRule::Inherit }),
+    };
+    let mut json = serde_json::to_value(standard()).unwrap();
+    json["work_weeks"] = serde_json::to_value(vec![
+        ww(
+            "2026-11-09",
+            "2026-11-30",
+            Weekday::Monday,
+            DayRule::Working(hours(&[("08:00", "10:00")])),
+        ),
+        ww("2026-11-01", "2026-11-15", Weekday::Tuesday, DayRule::NonWorking),
+    ])
+    .unwrap();
+    let c: Calendar = serde_json::from_value(json).unwrap();
+    let a = calendars(vec![c.clone()]);
+    // Lun 02/11 : 480 (n° 1, lundi hérité) ; mar 03/11 : 0 (n° 1).
+    assert_eq!(day_minutes(&a, 1, "2026-11-02"), 480);
+    assert_eq!(day_minutes(&a, 1, "2026-11-03"), 0);
+    // Lun 09/11 : n° 1, lundi hérité → 480 ; mar 10/11 : 0.
+    assert_eq!(day_minutes(&a, 1, "2026-11-09"), 480);
+    assert_eq!(day_minutes(&a, 1, "2026-11-10"), 0);
+    // Lun 16/11 : seule la n° 0 couvre → 120 ; mar 17/11 hérité → 480.
+    assert_eq!(day_minutes(&a, 1, "2026-11-16"), 120);
+    assert_eq!(day_minutes(&a, 1, "2026-11-17"), 480);
+    // Du lun 09/11 00:00 au mer 18/11 00:00 : 480 + 0 + 3 × 480 + 120 + 480
+    // = 2 520.
+    assert_eq!(
+        compile_one(c.clone()).working_between(moment("2026-11-09T00:00"), moment("2026-11-18T00:00")),
+        Ok(mins(2_520))
+    );
+    // Diagnostic : la n° 1 retenue, la n° 0 ignorée sur les jours communs.
+    let mut p = Project::new(ProjectInit {
+        name: "P".to_owned(),
+        anchor: ScheduleAnchor::FromStart(moment("2026-11-09T08:00")),
+        current_date: moment("2026-11-09T08:00"),
+        calendar_names: BuiltinCalendarNames::default(),
+    });
+    let mut list: Vec<Calendar> = p.calendars.iter().cloned().collect();
+    list[0] = c;
+    p.calendars = calendars(list);
+    assert_eq!(
+        p.validate().finish(),
+        [Diagnostic::CalendarWorkWeeksOverlap {
+            calendar: CalendarUid::new(1),
+            kept: 1,
+            ignored: 0
+        }]
+    );
+}

@@ -641,6 +641,24 @@ impl CompiledCalendar {
     }
 }
 
+/// Diagnostic de la compilation du calendrier `uid` : aucun temps ouvré, ou
+/// échec. Toute erreur de compilation donne un diagnostic : celles que
+/// [`Diagnostic::from_calendar_error`] ne couvre pas deviennent
+/// [`Diagnostic::CalendarInternal`] (§ 6.5 : un diagnostic par calendrier en
+/// échec).
+fn compile_diagnostic(
+    uid: CalendarUid,
+    result: &Result<CompiledCalendar, CalendarError>,
+) -> Option<Diagnostic> {
+    match result {
+        Ok(cc) if !cc.has_working_time() => Some(Diagnostic::CalendarNoWorkingTime { calendar: uid }),
+        Ok(_) => None,
+        Err(e) => {
+            Some(Diagnostic::from_calendar_error(e).unwrap_or(Diagnostic::CalendarInternal { calendar: uid }))
+        }
+    }
+}
+
 /// Calendriers d'un projet, compilés une fois par recalcul (aucun cache ni
 /// invalidation).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -657,16 +675,8 @@ impl CalendarSet {
         let mut out = Diagnostics::new();
         for c in &project.calendars {
             let result = CompiledCalendar::compile(&project.calendars, c.uid());
-            match &result {
-                Ok(cc) if !cc.has_working_time() => {
-                    out.push(Diagnostic::CalendarNoWorkingTime { calendar: c.uid() });
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    if let Some(d) = Diagnostic::from_calendar_error(e) {
-                        out.push(d);
-                    }
-                }
+            if let Some(d) = compile_diagnostic(c.uid(), &result) {
+                out.push(d);
             }
             compiled.insert(c.uid(), result);
         }
@@ -698,7 +708,7 @@ mod tests {
         reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
     )]
 
-    use super::{CalendarSet, CompiledCalendar, Segment, SegmentRule};
+    use super::{CalendarSet, CompiledCalendar, Segment, SegmentRule, compile_diagnostic};
     use crate::arena::Arena;
     use crate::calendar::Direction;
     use crate::calendar::builtin::{BuiltinCalendarNames, standard, twenty_four_hours};
@@ -960,6 +970,40 @@ mod tests {
         assert_eq!(
             set.get(uid(7)).unwrap_err(),
             CalendarError::UnknownCalendar { calendar: uid(7) }
+        );
+    }
+
+    #[test]
+    fn every_compile_failure_has_a_diagnostic() {
+        // Résultats fabriqués : un invariant violé (jamais produit par la
+        // compilation) et des erreurs hors héritage donnent un diagnostic
+        // d'erreur interne, jamais un silence.
+        for e in [
+            CalendarError::Inconsistent { calendar: uid(6) },
+            CalendarError::UnknownCalendar { calendar: uid(6) },
+            CalendarError::NegativeSpan,
+        ] {
+            let d = compile_diagnostic(uid(6), &Err(e)).unwrap();
+            assert_eq!(d, Diagnostic::CalendarInternal { calendar: uid(6) });
+            assert_eq!(d.severity(), crate::diagnostic::Severity::Error);
+        }
+        assert_eq!(
+            compile_diagnostic(
+                uid(5),
+                &Err(CalendarError::BaseMissing {
+                    calendar: uid(5),
+                    base: uid(99)
+                })
+            ),
+            Some(Diagnostic::CalendarBaseMissing {
+                calendar: uid(5),
+                base: uid(99)
+            })
+        );
+        let a = Arena::try_from(vec![standard(uid(1), "Standard".to_owned())]).unwrap();
+        assert_eq!(
+            compile_diagnostic(uid(1), &CompiledCalendar::compile(&a, uid(1))),
+            None
         );
     }
 }

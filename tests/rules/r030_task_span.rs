@@ -55,3 +55,28 @@ fn r030_backward_span_aligns_finish() {
         (moment("2026-10-19T08:00"), moment("2026-10-19T12:00"))
     );
 }
+
+#[test]
+fn r030_elapsed_span_out_of_domain() {
+    use planrs_core::{CalendarError, Direction};
+    // Temps écoulé : fin au-delà de 2150-01-01 00:00 (passe avant) ou début
+    // avant 1984-01-01 00:00 (passe arrière) → `ElapsedOutOfDomain`.
+    let e = TimeScale::Elapsed;
+    assert_eq!(
+        e.forward_span(moment("2149-12-31T23:00"), mins(61)),
+        Err(CalendarError::ElapsedOutOfDomain {
+            direction: Direction::After
+        })
+    );
+    assert_eq!(
+        e.backward_span(moment("1984-01-01T01:00"), mins(61)),
+        Err(CalendarError::ElapsedOutOfDomain {
+            direction: Direction::Before
+        })
+    );
+    let s = e.backward_span(moment("1984-01-01T01:00"), mins(60)).unwrap();
+    assert_eq!(
+        (s.start, s.finish),
+        (moment("1984-01-01T00:00"), moment("1984-01-01T01:00"))
+    );
+}

@@ -216,3 +216,53 @@ fn r018_daily_every_two_days_conversion() {
         Ok(mins(960))
     );
 }
+
+#[test]
+fn r018_recurring_exception_overlapping_a_period() {
+    use planrs_tests::{compile_one, mins, working};
+    // Lues depuis un fichier, stockées à rebours de leurs dates de début :
+    // n° 0 = du mar 03/11 au ven 06/11/2026, ouvré [09:00,11:00) ; n° 1 =
+    // chaque mercredi du lun 02/11 au lun 30/11, chômé. La n° 1 commence la
+    // première : elle possède le mer 04/11 (sa première occurrence) ; la n° 0
+    // garde les 03, 05 et 06/11.
+    let period = CalendarException {
+        name: String::new(),
+        period: days("2026-11-03", "2026-11-06"),
+        setting: working(&[("09:00", "11:00")]),
+        recurrence: Recurrence::Period,
+        occurrences: None,
+    };
+    let wednesdays = recurring(
+        "2026-11-02",
+        "2026-11-30",
+        Recurrence::Weekly {
+            every: 1,
+            days: Week::from_fn(|d| d == Weekday::Wednesday),
+        },
+        None,
+    );
+    let mut json = serde_json::to_value(standard()).unwrap();
+    json["exceptions"] = serde_json::to_value(vec![period, wednesdays]).unwrap();
+    let c: Calendar = serde_json::from_value(json).unwrap();
+    let a = calendars(vec![c.clone()]);
+    // Lun 02/11 : 480 ; mar 03/11 : 120 ; mer 04/11 : 0 ; jeu 05 et ven
+    // 06/11 : 120 ; sam 07/11 : 0. Total 840.
+    let minutes: Vec<i64> = [
+        "2026-11-02",
+        "2026-11-03",
+        "2026-11-04",
+        "2026-11-05",
+        "2026-11-06",
+        "2026-11-07",
+    ]
+    .iter()
+    .map(|d| day_minutes(&a, 1, d))
+    .collect();
+    assert_eq!(minutes, [480, 120, 0, 120, 120, 0]);
+    // Mer 11/11 : chômé par la récurrence, hors de la période n° 0.
+    assert_eq!(day_minutes(&a, 1, "2026-11-11"), 0);
+    assert_eq!(
+        compile_one(c).working_between(moment("2026-11-02T00:00"), moment("2026-11-08T00:00")),
+        Ok(mins(840))
+    );
+}

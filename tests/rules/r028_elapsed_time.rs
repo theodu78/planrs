@@ -56,3 +56,29 @@ fn r028_elapsed_span_not_aligned() {
         (moment("2026-10-24T10:00"), moment("2026-10-25T10:00"))
     );
 }
+
+#[test]
+fn r028_elapsed_out_of_domain() {
+    use planrs_core::{CalendarError, Direction, TimeScale};
+    // Sans calendrier : l'erreur de domaine n'a pas d'UID et porte son sens.
+    let e = TimeScale::Elapsed;
+    // Mer 2149-12-31 23:00 + 60 = 2150-01-01 00:00 (dernier instant) ; + 61
+    // en sort.
+    assert_eq!(
+        e.add(moment("2149-12-31T23:00"), Minutes::new(60)),
+        Ok(moment("2150-01-01T00:00"))
+    );
+    assert_eq!(
+        e.add(moment("2149-12-31T23:00"), Minutes::new(61)),
+        Err(CalendarError::ElapsedOutOfDomain {
+            direction: Direction::After
+        })
+    );
+    // Dim 1984-01-01 01:00 − 61 sort du domaine par le bas.
+    assert_eq!(
+        e.add(moment("1984-01-01T01:00"), Minutes::new(-61)),
+        Err(CalendarError::ElapsedOutOfDomain {
+            direction: Direction::Before
+        })
+    );
+}

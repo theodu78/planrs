@@ -183,17 +183,17 @@ impl Project {
         }
 
         // Semaines datées (non récurrentes : les jours sont ceux de la
-        // période). La première par (début, indice) l'emporte (R-017, R-019).
-        let order = work_weeks_in_order(calendar);
-        for (pos, (kept, a)) in order.iter().enumerate() {
-            for (ignored, b) in order.iter().skip(pos.saturating_add(1)) {
-                if a.period.overlaps(b.period) {
-                    out.push(Diagnostic::CalendarWorkWeeksOverlap {
-                        calendar: uid,
-                        kept: *kept,
-                        ignored: *ignored,
-                    });
-                }
+        // période). Posées dans l'ordre (début, indice), chacune ne prend que
+        // les jours libres, comme à la compilation (R-019) : `kept` est la
+        // semaine qui s'applique réellement sur les jours communs.
+        let mut week_claims: DayClaims<usize> = DayClaims::new();
+        for (ignored, w) in work_weeks_in_order(calendar) {
+            for kept in week_claims.claim(w.period.first().index(), w.period.last().index(), ignored) {
+                out.push(Diagnostic::CalendarWorkWeeksOverlap {
+                    calendar: uid,
+                    kept,
+                    ignored,
+                });
             }
         }
 
@@ -632,6 +632,50 @@ mod tests {
                     exception: 2
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn calendar_nested_work_weeks_report_the_applied_week() {
+        // n° 0 : janvier 2027 ; n° 1 : du 05 au 20/01 ; n° 2 : du 10 au 12/01.
+        // La n° 0 possède tout janvier : les n° 1 et 2 butent sur elle seule
+        // (et non la n° 2 sur la n° 1, qui ne s'applique jamais).
+        let mut p = project();
+        let day = |s: &str| s.parse::<Day>().unwrap();
+        let ww = |a: &str, b: &str| WorkWeek {
+            name: String::new(),
+            period: DayRange::new(day(a), day(b)).unwrap(),
+            days: Week::from_fn(|_| DayRule::NonWorking),
+        };
+        let mut c = serde_json::to_value(Calendar::new_derived(
+            CalendarUid::new(4),
+            "Paul".to_owned(),
+            CalendarUid::new(1),
+        ))
+        .unwrap();
+        c["work_weeks"] = serde_json::to_value(vec![
+            ww("2027-01-01", "2027-01-31"),
+            ww("2027-01-05", "2027-01-20"),
+            ww("2027-01-10", "2027-01-12"),
+        ])
+        .unwrap();
+        with_calendars(&mut p, vec![c]);
+        let uid = CalendarUid::new(4);
+        let overlap = |kept, ignored| Diagnostic::CalendarWorkWeeksOverlap {
+            calendar: uid,
+            kept,
+            ignored,
+        };
+        assert_eq!(diagnostics(&p), [overlap(0, 1), overlap(0, 2)]);
+        // La semaine appliquée le 11/01 est bien la n° 0.
+        assert_eq!(
+            crate::calendar::resolve::resolve_day(&p.calendars, uid, day("2027-01-11"))
+                .unwrap()
+                .source,
+            crate::calendar::resolve::DaySource::WorkWeek {
+                calendar: uid,
+                index: 0
+            }
         );
     }
 

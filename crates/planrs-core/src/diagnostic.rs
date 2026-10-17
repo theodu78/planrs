@@ -113,6 +113,14 @@ pub enum Diagnostic {
         /// Calendrier.
         calendar: CalendarUid,
     },
+    /// Calendrier dont la compilation a échoué sur un invariant interne
+    /// (`CalendarError::Inconsistent`) : jamais attendu, anomalie à signaler
+    /// (erreur).
+    #[serde(rename = "calendar.internal")]
+    CalendarInternal {
+        /// Calendrier.
+        calendar: CalendarUid,
+    },
     /// Exceptions qui se chevauchent : la première l'emporte (avertissement).
     #[serde(rename = "calendar.exceptions_overlap")]
     CalendarExceptionsOverlap {
@@ -221,8 +229,8 @@ pub enum Diagnostic {
 }
 
 impl Diagnostic {
-    /// Diagnostic d'un calendrier qui ne se compile pas (héritage) ou n'a
-    /// aucun temps ouvré. `None` pour les autres erreurs : un calendrier
+    /// Diagnostic d'un calendrier qui ne se compile pas (héritage, invariant
+    /// interne) ou n'a aucun temps ouvré. `None` pour les autres erreurs : un calendrier
     /// inconnu n'a de sens qu'avec l'élément qui le référence
     /// ([`Diagnostic::CalendarUnknown`]), et les erreurs de conversion sont
     /// rapportées par l'appelant avec leur contexte.
@@ -243,11 +251,11 @@ impl Diagnostic {
             CalendarError::NoWorkingTime { calendar } => {
                 Some(Self::CalendarNoWorkingTime { calendar: *calendar })
             }
+            CalendarError::Inconsistent { calendar } => Some(Self::CalendarInternal { calendar: *calendar }),
             CalendarError::UnknownCalendar { .. }
             | CalendarError::OutOfDomain { .. }
             | CalendarError::ElapsedOutOfDomain { .. }
             | CalendarError::NegativeSpan
-            | CalendarError::Inconsistent { .. }
             | CalendarError::Model(_) => None,
         }
     }
@@ -261,6 +269,7 @@ impl Diagnostic {
             | Self::CalendarBaseNotBase { .. }
             | Self::CalendarInheritanceCycle { .. }
             | Self::CalendarNoWorkingTime { .. }
+            | Self::CalendarInternal { .. }
             | Self::TaskReservedUid
             | Self::TaskOutlineJump { .. }
             | Self::TaskNegativeProgress { .. }
@@ -286,6 +295,7 @@ impl Diagnostic {
             Self::CalendarBaseMissing { calendar, .. }
             | Self::CalendarBaseNotBase { calendar, .. }
             | Self::CalendarNoWorkingTime { calendar }
+            | Self::CalendarInternal { calendar }
             | Self::CalendarExceptionsOverlap { calendar, .. }
             | Self::CalendarWorkWeeksOverlap { calendar, .. }
             | Self::CalendarRecurrenceUnsupported { calendar, .. }
@@ -327,6 +337,7 @@ impl Diagnostic {
             Self::CalendarBaseNotBase { .. } => "calendar.base_not_base",
             Self::CalendarInheritanceCycle { .. } => "calendar.inheritance_cycle",
             Self::CalendarNoWorkingTime { .. } => "calendar.no_working_time",
+            Self::CalendarInternal { .. } => "calendar.internal",
             Self::CalendarExceptionsOverlap { .. } => "calendar.exceptions_overlap",
             Self::CalendarWorkWeeksOverlap { .. } => "calendar.work_weeks_overlap",
             Self::CalendarRecurrenceUnsupported { .. } => "calendar.recurrence_unsupported",
@@ -373,6 +384,10 @@ impl fmt::Display for Diagnostic {
             Self::CalendarNoWorkingTime { calendar } => write!(
                 f,
                 "le calendrier {calendar} n'a aucun temps ouvré : aucune durée ne peut y être placée"
+            ),
+            Self::CalendarInternal { calendar } => write!(
+                f,
+                "le calendrier {calendar} n'a pas pu être compilé (incohérence interne, anomalie à signaler)"
             ),
             Self::CalendarExceptionsOverlap {
                 calendar,
@@ -596,6 +611,7 @@ mod tests {
                 from: "2149-12-31T16:00".parse::<Moment>().unwrap(),
                 minutes: Minutes::new(61),
             },
+            Diagnostic::CalendarInternal { calendar: c },
         ]
     }
 
@@ -655,6 +671,8 @@ mod tests {
         );
         assert_eq!(all()[17].subject(), Subject::Assignment(AssignmentUid::new(9)));
         assert_eq!(all()[18].subject(), Subject::Calendar(c));
+        assert_eq!(all()[19].subject(), Subject::Calendar(c));
+        assert_eq!(all()[19].severity(), Severity::Error);
         assert_eq!(
             Subject::Link {
                 predecessor: TaskUid::new(1),

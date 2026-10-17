@@ -170,3 +170,46 @@ fn r017_year_end_closure_conversions() {
         Ok(moment("2027-01-04T16:00"))
     );
 }
+
+#[test]
+fn r017_storage_order_differs_from_start_order() {
+    // Lues depuis un fichier, stockées à rebours de leurs dates de début :
+    // n° 0 = mer 11/11/2026 ouvré [08:00,12:00) ; n° 1 = du lun 09/11 au ven
+    // 13/11, chômé. La n° 1 commence la première : elle l'emporte le 11/11,
+    // malgré son rang de stockage.
+    let mut json = serde_json::to_value(standard()).unwrap();
+    json["exceptions"] = serde_json::to_value(vec![
+        exception("2026-11-11", "2026-11-11", working(&[("08:00", "12:00")])),
+        exception("2026-11-09", "2026-11-13", DaySetting::NonWorking),
+    ])
+    .unwrap();
+    let c: Calendar = serde_json::from_value(json).unwrap();
+    let a = calendars(vec![c.clone()]);
+    assert_eq!(day_minutes(&a, 1, "2026-11-11"), 0);
+    assert_eq!(day_minutes(&a, 1, "2026-11-09"), 0);
+    assert_eq!(day_minutes(&a, 1, "2026-11-16"), 480);
+    // Forme compilée : semaine du 09/11 entièrement chômée (0, et non 240).
+    assert_eq!(
+        planrs_tests::compile_one(c.clone())
+            .working_between(moment("2026-11-09T00:00"), moment("2026-11-14T00:00")),
+        Ok(planrs_tests::mins(0))
+    );
+    // Diagnostic : la n° 1 retenue, la n° 0 ignorée.
+    let mut p = Project::new(ProjectInit {
+        name: "P".to_owned(),
+        anchor: ScheduleAnchor::FromStart(moment("2026-11-09T08:00")),
+        current_date: moment("2026-11-09T08:00"),
+        calendar_names: BuiltinCalendarNames::default(),
+    });
+    let mut list: Vec<Calendar> = p.calendars.iter().cloned().collect();
+    list[0] = c;
+    p.calendars = calendars(list);
+    assert_eq!(
+        p.validate().finish(),
+        [Diagnostic::CalendarExceptionsOverlap {
+            calendar: CalendarUid::new(1),
+            kept: 1,
+            ignored: 0
+        }]
+    );
+}

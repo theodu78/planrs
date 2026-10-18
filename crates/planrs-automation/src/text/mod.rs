@@ -21,6 +21,7 @@ pub(crate) mod lex;
 
 pub use date::{DateRole, format_date, parse_date};
 pub use duration::{format_duration, format_lag, parse_duration, parse_lag};
+pub(crate) use predecessors::predecessor_elements;
 pub use predecessors::{
     PredecessorRef, format_predecessor, format_predecessors, link_code, parse_predecessors,
 };

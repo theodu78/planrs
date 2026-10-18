@@ -216,3 +216,29 @@ fn r144_file_refusals() {
     assert_eq!(i.project.tasks.iter().next().unwrap().notes, "");
     assert_eq!(codes(&i), vec![(2, "csv.bad_value", Some("Notes".to_owned()))]);
 }
+
+#[test]
+fn r144_diagnostics_are_capped() {
+    // Règle 10 : 3 000 prédécesseurs inconnus → 1 000 gardés pour ce code,
+    // les autres codes ne sont pas masqués, un `csv.truncated` final.
+    use planrs_automation::csv::{CsvCode, MAX_DIAGNOSTICS_PER_CODE};
+    use std::fmt::Write as _;
+    let mut csv = String::from("Nom;Durée;Prédécesseurs\n");
+    for k in 0..3_000 {
+        writeln!(csv, "T{k};1j;99999").unwrap();
+    }
+    csv.push_str("X;5x;\n");
+    let i = read(csv.as_bytes());
+    let count = |code: &str| i.diagnostics.iter().filter(|d| d.code.code() == code).count();
+    assert_eq!(
+        count("csv.unknown_predecessor"),
+        MAX_DIAGNOSTICS_PER_CODE as usize
+    );
+    assert_eq!(count("csv.bad_value"), 1);
+    let last = i.diagnostics.last().unwrap();
+    assert_eq!(
+        (last.line, &last.code),
+        (0, &CsvCode::Truncated { dropped: 2_000 })
+    );
+    assert_eq!(i.diagnostics.len(), 1_002);
+}

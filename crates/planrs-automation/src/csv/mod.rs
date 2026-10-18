@@ -18,7 +18,7 @@ mod header;
 mod import;
 
 pub use export::{CsvExportOptions, default_columns, export};
-pub use import::import;
+pub use import::{MAX_DIAGNOSTICS, MAX_DIAGNOSTICS_PER_CODE, import};
 
 use planrs_core::{Moment, Project, ScheduleAnchor};
 use serde::Serialize;
@@ -155,8 +155,19 @@ pub struct CsvDiagnostic {
     pub column: Option<String>,
     /// Nature.
     pub code: CsvCode,
-    /// Valeur brute en cause (200 caractères au plus).
+    /// Valeur brute en cause (200 caractères au plus) ; pour une cellule de
+    /// prédécesseurs, le premier élément fautif.
     pub value: Option<String>,
+    /// Autres éléments fautifs de la même cellule de prédécesseurs, résumés
+    /// par ce diagnostic (un seul par cellule) ; 0 sinon.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub others: u32,
+}
+
+/// Vrai pour 0 (sérialisation de [`CsvDiagnostic::others`]).
+#[allow(clippy::trivially_copy_pass_by_ref, reason = "signature imposée par serde")]
+const fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// Nature d'un diagnostic d'import (codes stables `csv.*`).
@@ -207,6 +218,18 @@ pub enum CsvCode {
     /// par U+FFFD.
     #[serde(rename = "csv.invalid_char")]
     InvalidChar,
+    /// Colonne « N° unique des prédécesseurs » sans colonne « N° unique » :
+    /// les UID sont réattribués, les liens par UID seraient faux ; colonne
+    /// ignorée (une fois, première ligne concernée).
+    #[serde(rename = "csv.unique_predecessors_without_uid")]
+    UniquePredecessorsWithoutUid,
+    /// Diagnostics supprimés au-delà des plafonds ([`MAX_DIAGNOSTICS`],
+    /// [`MAX_DIAGNOSTICS_PER_CODE`]) : un seul, en fin de liste, ligne 0.
+    #[serde(rename = "csv.truncated")]
+    Truncated {
+        /// Nombre de diagnostics supprimés.
+        dropped: u64,
+    },
 }
 
 impl CsvCode {
@@ -226,6 +249,8 @@ impl CsvCode {
             Self::ExternalPredecessor => "csv.external_predecessor",
             Self::DateMismatch { .. } => "csv.date_mismatch",
             Self::InvalidChar => "csv.invalid_char",
+            Self::UniquePredecessorsWithoutUid => "csv.unique_predecessors_without_uid",
+            Self::Truncated { .. } => "csv.truncated",
         }
     }
 
@@ -352,6 +377,8 @@ mod tests {
                 computed: None,
             },
             CsvCode::InvalidChar,
+            CsvCode::UniquePredecessorsWithoutUid,
+            CsvCode::Truncated { dropped: 3 },
         ] {
             assert_eq!(serde_json::to_value(&c).unwrap()["code"], c.code());
         }

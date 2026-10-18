@@ -16,7 +16,7 @@ use super::{
 };
 use crate::text::lex::{Cursor, bounded_chars, fold};
 use crate::text::{
-    DateRole, Language, TextContext, TextError, parse_date, parse_duration, parse_predecessors,
+    DateRole, Language, TextContext, TextError, parse_date, parse_duration, predecessor_elements,
 };
 
 /// Longueur maximale (en caractères) d'une valeur citée dans un diagnostic.
@@ -35,27 +35,29 @@ impl Columns {
     }
 }
 
-/// Ligne de données : numéro de ligne physique et cellules.
+/// Ligne de données : numéro de ligne physique et cellules des seules
+/// colonnes reconnues (règle 10 : 200 000 lignes × 256 colonnes gardées en
+/// entier coûteraient ~1,2 Go), par colonne.
 struct Row {
     line: u64,
-    cells: Vec<String>,
+    cells: BTreeMap<CsvColumn, String>,
 }
 
 impl Row {
+    /// Cellule d'une colonne telle quelle, `None` si absente.
+    fn cell(&self, column: CsvColumn) -> Option<&str> {
+        self.cells.get(&column).map(String::as_str)
+    }
+
     /// Cellule brute d'une colonne, `None` si absente ou vide (espaces).
-    fn raw<'a>(&'a self, columns: &Columns, column: CsvColumn) -> Option<&'a str> {
-        let i = *columns.index.get(&column)?;
-        self.cells
-            .get(i)
-            .map(String::as_str)
-            .filter(|c| !c.trim().is_empty())
+    fn raw<'a>(&'a self, _columns: &Columns, column: CsvColumn) -> Option<&'a str> {
+        self.cell(column).filter(|c| !c.trim().is_empty())
     }
 
     /// Cellule de texte (nom, notes, WBS) telle quelle, espaces comprises ;
     /// `None` si absente ou vide.
-    fn text<'a>(&'a self, columns: &Columns, column: CsvColumn) -> Option<&'a str> {
-        let i = *columns.index.get(&column)?;
-        self.cells.get(i).map(String::as_str).filter(|c| !c.is_empty())
+    fn text<'a>(&'a self, _columns: &Columns, column: CsvColumn) -> Option<&'a str> {
+        self.cell(column).filter(|c| !c.is_empty())
     }
 
     /// Cellule d'une colonne, espaces de bord retirées.
@@ -64,18 +66,89 @@ impl Row {
     }
 }
 
-/// Diagnostics accumulés.
+/// Nombre maximal de diagnostics gardés (règle 10, comme l'import MSPDI) ;
+/// au-delà, seul leur nombre est gardé (`csv.truncated`).
+pub const MAX_DIAGNOSTICS: usize = 10_000;
+
+/// Nombre maximal de diagnostics gardés par code : une avalanche d'un code
+/// n'en masque pas d'autres.
+pub const MAX_DIAGNOSTICS_PER_CODE: u32 = 1_000;
+
+/// Diagnostics accumulés, bornés ; chacun avec le rang de sa colonne dans
+/// l'en-tête (0 : aucune), calculé une fois à l'insertion, pour le tri.
 #[derive(Default)]
-struct Diags(Vec<CsvDiagnostic>);
+struct Diags {
+    kept: Vec<(usize, CsvDiagnostic)>,
+    /// Rang (1 = première) de la première colonne de chaque intitulé
+    /// (espaces de bord retirées).
+    positions: BTreeMap<String, usize>,
+    per_code: BTreeMap<&'static str, u32>,
+    dropped: u64,
+}
 
 impl Diags {
+    /// Fixe les intitulés de l'en-tête (avant tout diagnostic de colonne).
+    fn set_headers(&mut self, headers: &[String]) {
+        for (i, h) in headers.iter().enumerate() {
+            self.positions
+                .entry(h.trim().to_owned())
+                .or_insert_with(|| i.saturating_add(1));
+        }
+    }
+
     fn push(&mut self, line: u64, column: Option<String>, code: CsvCode, value: Option<&str>) {
-        self.0.push(CsvDiagnostic {
-            line,
-            column,
-            code,
-            value: value.map(|v| v.chars().take(MAX_VALUE_CHARS).collect()),
-        });
+        self.push_more(line, column, code, value, 0);
+    }
+
+    /// Diagnostic qui en résume `others` autres de la même cellule.
+    fn push_more(
+        &mut self,
+        line: u64,
+        column: Option<String>,
+        code: CsvCode,
+        value: Option<&str>,
+        others: u32,
+    ) {
+        let count = self.per_code.entry(code.code()).or_insert(0);
+        if self.kept.len() >= MAX_DIAGNOSTICS || *count >= MAX_DIAGNOSTICS_PER_CODE {
+            self.dropped = self.dropped.saturating_add(1);
+            return;
+        }
+        *count = count.saturating_add(1);
+        let position = column
+            .as_deref()
+            .and_then(|c| self.positions.get(c).copied())
+            .unwrap_or(0);
+        self.kept.push((
+            position,
+            CsvDiagnostic {
+                line,
+                column,
+                code,
+                value: value.map(|v| v.chars().take(MAX_VALUE_CHARS).collect()),
+                others,
+            },
+        ));
+    }
+
+    /// Diagnostics triés par ligne puis par colonne (tri stable), suivis d'un
+    /// `csv.truncated` s'il y en a eu de supprimés.
+    fn finish(self) -> Vec<CsvDiagnostic> {
+        let mut kept = self.kept;
+        kept.sort_by_key(|(position, d)| (d.line, *position));
+        let mut out: Vec<CsvDiagnostic> = kept.into_iter().map(|(_, d)| d).collect();
+        if self.dropped > 0 {
+            out.push(CsvDiagnostic {
+                line: 0,
+                column: None,
+                code: CsvCode::Truncated {
+                    dropped: self.dropped,
+                },
+                value: None,
+                others: 0,
+            });
+        }
+        out
     }
 }
 
@@ -235,6 +308,7 @@ fn read_header(
         index: BTreeMap::new(),
         headers,
     };
+    diags.set_headers(&columns.headers);
     let (mut fr, mut en) = (0_u32, 0_u32);
     for (i, h) in columns.headers.iter().enumerate() {
         let name = Some(h.trim().to_owned());
@@ -306,16 +380,20 @@ fn read_rows(
             return Err(CsvError::TooManyRows);
         }
         let line = lines.of(record);
-        let mut cells = Vec::with_capacity(record.len());
         for (i, cell) in record.iter().enumerate() {
             if cell.len() > limits.max_field_bytes {
                 let column = columns.headers.get(i).map(|h| h.trim().to_owned());
                 diags.push(line, column, CsvCode::BadValue, Some(cell));
-                cells.push(String::new());
-            } else {
-                cells.push(cell.to_owned());
             }
         }
+        let cells = columns
+            .index
+            .iter()
+            .filter_map(|(c, i)| {
+                let cell = record.get(*i)?;
+                (cell.len() <= limits.max_field_bytes).then(|| (*c, cell.to_owned()))
+            })
+            .collect();
         rows.push(Row { line, cells });
     }
     Ok(rows)
@@ -367,14 +445,7 @@ pub fn import(bytes: &[u8], options: &CsvImportOptions) -> Result<CsvImport, Csv
     };
     let project = build.project(&mut diags);
     // Ordre des lignes, puis des colonnes du fichier (tri stable).
-    let mut diagnostics = diags.0;
-    diagnostics.sort_by_key(|d| {
-        let position = d
-            .column
-            .as_ref()
-            .and_then(|c| columns.headers.iter().position(|h| h.trim() == c));
-        (d.line, position.map_or(0, |p| p.saturating_add(1)))
-    });
+    let diagnostics = diags.finish();
     Ok(CsvImport {
         project,
         diagnostics,
@@ -660,8 +731,12 @@ impl Build<'_> {
     }
 
     /// R-145 : prédécesseurs par ID (colonne Prédécesseurs) ou, si la
-    /// cellule est vide, par UID (N° unique des prédécesseurs). Inconnu, sur
-    /// soi, en double ou externe : diagnostic, lien ignoré.
+    /// cellule est vide, par UID (N° unique des prédécesseurs) — seulement
+    /// si la colonne N° unique existe : sans elle, les UID sont réattribués
+    /// 1..n et les liens seraient faux, la colonne est ignorée
+    /// (`csv.unique_predecessors_without_uid`, une fois). Inconnu, sur soi,
+    /// en double, externe ou illisible : lien ignoré ; un seul diagnostic
+    /// par cellule (premier élément fautif, nombre des autres).
     fn links(
         &self,
         project: &mut Project,
@@ -671,6 +746,8 @@ impl Build<'_> {
         diags: &mut Diags,
     ) {
         let uid_of_kept: Vec<TaskUid> = placed.iter().map(|p| p.uid).collect();
+        let has_uid_column = self.columns.index.contains_key(&CsvColumn::UniqueId);
+        let mut warned = false;
         for p in placed {
             let Some(row) = self.rows.get(p.row) else { continue };
             let (column, by_uid) = if row.value(self.columns, CsvColumn::Predecessors).is_some() {
@@ -682,41 +759,52 @@ impl Build<'_> {
                 continue;
             };
             let header = self.header(column);
-            let (refs, errors) = parse_predecessors(v, ctx);
-            for e in errors {
-                let code = if e == TextError::ExternalPredecessor {
-                    CsvCode::ExternalPredecessor
-                } else {
-                    CsvCode::BadValue
-                };
-                diags.push(row.line, header.clone(), code, Some(v));
+            if by_uid && !has_uid_column {
+                if !warned {
+                    diags.push(row.line, header, CsvCode::UniquePredecessorsWithoutUid, None);
+                    warned = true;
+                }
+                continue;
             }
+            // Premier élément fautif (code, texte) et nombre d'éléments fautifs.
+            let mut first: Option<(CsvCode, String)> = None;
+            let mut faults: u32 = 0;
+            let mut fault = |code: CsvCode, text: &str| {
+                faults = faults.saturating_add(1);
+                if first.is_none() {
+                    first = Some((code, text.to_owned()));
+                }
+            };
             let mut links: Vec<Link> = Vec::new();
-            for r in refs {
+            let elements = predecessor_elements(v, ctx).unwrap_or_else(|_| {
+                fault(CsvCode::BadValue, v);
+                Vec::new()
+            });
+            for (text, parsed) in elements {
+                let r = match parsed {
+                    Ok(r) => r,
+                    Err(TextError::ExternalPredecessor) => {
+                        fault(CsvCode::ExternalPredecessor, &text);
+                        continue;
+                    }
+                    Err(_) => {
+                        fault(CsvCode::BadValue, &text);
+                        continue;
+                    }
+                };
                 let target = if by_uid {
                     Some(TaskUid::new(r.id)).filter(|u| project.tasks.contains(*u))
                 } else {
                     ids.get(&r.id).and_then(|k| uid_of_kept.get(*k)).copied()
                 };
-                let id_text = r.id.to_string();
                 let Some(pred) = target else {
-                    diags.push(
-                        row.line,
-                        header.clone(),
-                        CsvCode::UnknownPredecessor,
-                        Some(&id_text),
-                    );
+                    fault(CsvCode::UnknownPredecessor, &r.id.to_string());
                     continue;
                 };
                 if pred == p.uid {
-                    diags.push(row.line, header.clone(), CsvCode::SelfPredecessor, Some(&id_text));
+                    fault(CsvCode::SelfPredecessor, &r.id.to_string());
                 } else if links.iter().any(|l| l.predecessor == pred) {
-                    diags.push(
-                        row.line,
-                        header.clone(),
-                        CsvCode::DuplicatePredecessor,
-                        Some(&id_text),
-                    );
+                    fault(CsvCode::DuplicatePredecessor, &r.id.to_string());
                 } else {
                     links.push(Link {
                         predecessor: pred,
@@ -724,6 +812,9 @@ impl Build<'_> {
                         lag: r.lag,
                     });
                 }
+            }
+            if let Some((code, text)) = first {
+                diags.push_more(row.line, header, code, Some(&text), faults.saturating_sub(1));
             }
             if let Some(task) = project.tasks.get_mut(p.uid) {
                 task.predecessors = links;

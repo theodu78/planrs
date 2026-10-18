@@ -4,7 +4,7 @@
 //! bornes et numéros de ligne physiques.
 
 use planrs_automation::csv::{
-    CsvEncoding, CsvError, CsvImport, CsvImportOptions, CsvLimits, CsvLocale, import,
+    CsvCode, CsvEncoding, CsvError, CsvImport, CsvImportOptions, CsvLimits, CsvLocale, import,
 };
 use planrs_core::{Duration, DurationUnit, Minutes, ScheduleAnchor, TimeBasis};
 use planrs_tests::moment;
@@ -264,4 +264,73 @@ fn r144_diagnostics_are_capped() {
         (0, &CsvCode::Truncated { dropped: 2_000 })
     );
     assert_eq!(i.diagnostics.len(), 1_002);
+}
+
+/// Diagnostics `csv.date_ambiguous` : (ligne, colonne, valeur, gravité).
+fn ambiguous(i: &CsvImport) -> Vec<(u64, Option<String>, Option<String>, planrs_core::Severity)> {
+    i.diagnostics
+        .iter()
+        .filter(|d| d.code == CsvCode::DateAmbiguous)
+        .map(|d| (d.line, d.column.clone(), d.value.clone(), d.code.severity()))
+        .collect()
+}
+
+#[test]
+fn r144_date_ambiguous_warning_once_per_column() {
+    // En-têtes français, « 03/04/2026 » partout : lu le 3 avril (JJ/MM de la
+    // locale des en-têtes), le 4 mars dans l'autre ordre ; aucune valeur ne
+    // lève l'ambiguïté → un avertissement par colonne, à la première valeur.
+    let csv = "N°;Nom;Durée;Début;Fin\r\n\
+               1;A;1j;03/04/2026 08:00;03/04/2026 17:00\r\n\
+               2;B;1j;03/04/2026;05/06/2026\r\n\
+               3;C;1j;2026-04-03;\r\n";
+    let i = read(csv.as_bytes());
+    assert_eq!(i.detected.locale, CsvLocale::Fr);
+    let first = i.project.tasks.iter().next().unwrap();
+    assert_eq!(first.name, "A");
+    let warn = planrs_core::Severity::Warning;
+    assert_eq!(
+        ambiguous(&i),
+        vec![
+            (
+                2,
+                Some("Début".to_owned()),
+                Some("03/04/2026 08:00".to_owned()),
+                warn
+            ),
+            (
+                2,
+                Some("Fin".to_owned()),
+                Some("03/04/2026 17:00".to_owned()),
+                warn
+            ),
+        ]
+    );
+    // Locale imposée : l'ordre ne vient plus des en-têtes, aucun avertissement.
+    let mut opts = options();
+    opts.locale = Some(CsvLocale::Fr);
+    assert_eq!(ambiguous(&import(csv.as_bytes(), &opts).unwrap()), vec![]);
+    // En-têtes anglais, « 03/04/2026 » : 4 mars → même avertissement.
+    let en = read(b"Name,Duration,Start\r\nA,1d,03/04/2026\r\n");
+    assert_eq!(en.detected.locale, CsvLocale::En);
+    assert_eq!(
+        ambiguous(&en),
+        vec![(2, Some("Start".to_owned()), Some("03/04/2026".to_owned()), warn)]
+    );
+    // Code stable.
+    assert_eq!(CsvCode::DateAmbiguous.code(), "csv.date_ambiguous");
+}
+
+#[test]
+fn r144_no_warning_when_day_over_12() {
+    // Une valeur dont le jour dépasse 12 (13/04/2026 en JJ/MM) ne se lit pas
+    // dans l'autre ordre : la colonne n'est pas ambiguë.
+    let i = read("N°;Nom;Durée;Début\r\n1;A;1j;03/04/2026\r\n2;B;1j;13/04/2026\r\n".as_bytes());
+    assert_eq!(ambiguous(&i), vec![]);
+    // Anglais : « 12/25/2026 » (jour 25 en second) lève l'ambiguïté.
+    let en = read(b"Name,Duration,Start\r\nA,1d,04/03/2026\r\nB,1d,12/25/2026\r\n");
+    assert_eq!(ambiguous(&en), vec![]);
+    // Dates ISO, ou identiques dans les deux ordres : rien d'ambigu.
+    let iso = read("N°;Nom;Durée;Début\r\n1;A;1j;2026-04-03\r\n2;B;1j;03/03/2026\r\n".as_bytes());
+    assert_eq!(ambiguous(&iso), vec![]);
 }

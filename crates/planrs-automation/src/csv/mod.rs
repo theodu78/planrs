@@ -214,6 +214,12 @@ pub enum CsvCode {
         /// Date calculée ; `None` si la tâche n'est pas planifiée.
         computed: Option<Moment>,
     },
+    /// Colonne de dates lue jour/mois (ou mois/jour) selon la locale déduite
+    /// des seuls en-têtes, sans qu'aucune valeur ne lève l'ambiguïté (R-144,
+    /// amendée en J4) : avertissement, une fois par colonne, à la première
+    /// valeur que l'autre ordre lirait autrement.
+    #[serde(rename = "csv.date_ambiguous")]
+    DateAmbiguous,
     /// Caractère de contrôle (ou séquence d'encodage invalide) remplacé
     /// par U+FFFD.
     #[serde(rename = "csv.invalid_char")]
@@ -248,6 +254,7 @@ impl CsvCode {
             Self::DuplicatePredecessor => "csv.duplicate_predecessor",
             Self::ExternalPredecessor => "csv.external_predecessor",
             Self::DateMismatch { .. } => "csv.date_mismatch",
+            Self::DateAmbiguous => "csv.date_ambiguous",
             Self::InvalidChar => "csv.invalid_char",
             Self::UniquePredecessorsWithoutUid => "csv.unique_predecessors_without_uid",
             Self::Truncated { .. } => "csv.truncated",
@@ -376,6 +383,7 @@ mod tests {
                 csv: Moment::MIN,
                 computed: None,
             },
+            CsvCode::DateAmbiguous,
             CsvCode::InvalidChar,
             CsvCode::UniquePredecessorsWithoutUid,
             CsvCode::Truncated { dropped: 3 },

@@ -81,24 +81,51 @@ fn summary_flags(p: &Project) -> Vec<bool> {
 }
 
 /// Numéros hiérarchiques (« 1 », « 1.2 »…) des tâches non vides ; une ligne
-/// vide reçoit celui de sa position sans faire avancer les compteurs.
+/// vide reçoit une chaîne vide sans faire avancer les compteurs.
+///
+/// R-120 : la profondeur d'une tâche est celle de la hiérarchie du moteur
+/// (pile des niveaux, R-052 : parent = tâche non vide précédente de niveau
+/// strictement inférieur), jamais son `OutlineLevel` brut : un niveau qui
+/// saute (9 après 1) compte pour le précédent + 1, deux tâches au même
+/// niveau sont sœurs. Règle 10 : sans cela, 60 000 tâches au niveau 65 535
+/// écriraient chacune ~131 Ko. Un numéro est en outre construit au plus
+/// jusqu'au `maxLength` du schéma + 1 caractère (l'émetteur le tronque et
+/// le signale, R-131) : une hiérarchie réellement profonde ne coûte pas
+/// plus. `OutlineLevel` est écrit tel quel.
 fn outline_numbers(p: &Project) -> Vec<String> {
+    let cap = usize::from(max_len(Parent::Task, "OutlineNumber").unwrap_or(512)).saturating_add(1);
+    let mut levels: Vec<u16> = Vec::new();
     let mut counters: Vec<u32> = Vec::new();
     p.tasks
         .iter()
         .map(|t| {
-            let level = usize::from(t.outline_level.get());
             if t.is_null {
                 return String::new();
             }
-            counters.truncate(level);
-            while counters.len() < level {
+            let level = t.outline_level.get();
+            while levels.last().is_some_and(|&l| l >= level) {
+                levels.pop();
+            }
+            levels.push(level);
+            let depth = levels.len();
+            counters.truncate(depth);
+            while counters.len() < depth {
                 counters.push(0);
             }
             if let Some(last) = counters.last_mut() {
                 *last = last.saturating_add(1);
             }
-            counters.iter().map(u32::to_string).collect::<Vec<_>>().join(".")
+            let mut number = String::new();
+            for (i, c) in counters.iter().enumerate() {
+                if number.len() >= cap {
+                    break;
+                }
+                if i > 0 {
+                    number.push('.');
+                }
+                number.push_str(&c.to_string());
+            }
+            number
         })
         .collect()
 }
@@ -324,5 +351,40 @@ mod tests {
         }
         assert_eq!(outline_numbers(&p), ["1", "1.1", "", "1.1.1", "2"]);
         assert_eq!(summary_flags(&p), [true, true, false, false, false]);
+    }
+
+    /// Projet de feuilles aux niveaux donnés.
+    fn with_levels(levels: impl IntoIterator<Item = u16>) -> Project {
+        let mut p = Project::new(ProjectInit {
+            name: "P".to_owned(),
+            anchor: ScheduleAnchor::FromStart("2026-10-19T08:00".parse().unwrap()),
+            current_date: "2026-10-17T08:00".parse().unwrap(),
+            calendar_names: BuiltinCalendarNames::default(),
+        });
+        let o = p.options;
+        for (uid, level) in (1..).zip(levels) {
+            let mut t = Task::new(TaskUid::new(uid), String::new(), &o);
+            t.outline_level = OutlineLevel::new(level).unwrap();
+            p.tasks.push(t).unwrap();
+        }
+        p
+    }
+
+    /// R-120 : numérotation selon la hiérarchie du moteur (un niveau qui
+    /// saute vaut le précédent + 1, même niveau = sœurs), longueur bornée
+    /// (règle 10).
+    #[test]
+    fn r120_outline_numbers_clamp_level_jumps() {
+        let p = with_levels([3, 9, 2, 65_535, 65_535, 1]);
+        assert_eq!(outline_numbers(&p), ["1", "1.1", "2", "2.1", "2.2", "3"]);
+        let numbers = outline_numbers(&with_levels([65_535; 2_000]));
+        assert!(numbers.iter().all(|n| n.len() <= 4), "{:?}", numbers.last());
+        assert_eq!(numbers.last().map(String::as_str), Some("2000"));
+        // Hiérarchie réelle de 400 niveaux : numéro construit au plus
+        // jusqu'au maxLength + 1 environ, tronqué ensuite par l'émetteur.
+        let numbers = outline_numbers(&with_levels(1..=400));
+        assert_eq!(numbers.get(2).map(String::as_str), Some("1.1.1"));
+        assert!(numbers.iter().all(|n| n.len() <= 514));
+        assert!(numbers.last().is_some_and(|n| n.len() > 512));
     }
 }

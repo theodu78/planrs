@@ -6,20 +6,31 @@
 //! d'échéances) et `5000_from_finish` (planification à rebours, mêmes
 //! proportions) : 3 exécutions de chauffe, puis médiane de 15.
 //! Échec au-delà de 50 ms, avertissement au-delà de 25 ms ; cible locale
-//! ≤ 10 ms. Mesure seulement en release, par le job CI `perf` :
+//! ≤ 10 ms. Hiérarchie profonde hostile (ADR-0012, lot L15) : 256 niveaux
+//! de récapitulatives imbriquées, 5 000 tâches, 10 000 liens dont des FS,
+//! SS et FF depuis chaque récapitulative ; budget 30 ms de médiane.
+//! Mesure seulement en release, par le job CI `perf` :
 //! `cargo test -p planrs-tests --release --test perf -- --ignored --nocapture`.
 
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
     clippy::print_stderr,
+    clippy::arithmetic_side_effects,
+    clippy::too_many_lines,
     reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
 )]
 
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use planrs_core::{Diagnostic, Project, Severity, TaskOutcome, TaskRole, schedule};
+use planrs_core::calendar::BuiltinCalendarNames;
+use planrs_core::schedule::schedule_reference;
+use planrs_core::{
+    Diagnostic, Duration as TaskDuration, DurationUnit, Lag, LagValue, Link, LinkType, Minutes, Moment,
+    OutlineLevel, Percent, Project, ProjectInit, ScheduleAnchor, Severity, Task, TaskOutcome, TaskRole,
+    TaskUid, TimeBasis, schedule,
+};
 use planrs_tests::generate::{constrained_network, from_finish_network, large_network};
 
 /// Seuil d'échec de la médiane.
@@ -99,6 +110,11 @@ fn constrained_networks_shape() {
 
 /// Médiane de 15 exécutions après 3 de chauffe ; échec au-delà du budget.
 fn budget(name: &str, p: &Project) {
+    budget_of(name, p, BUDGET);
+}
+
+/// [`budget`] avec un seuil explicite.
+fn budget_of(name: &str, p: &Project, limit: Duration) {
     for _ in 0..3 {
         black_box(schedule(black_box(p)));
     }
@@ -120,8 +136,8 @@ fn budget(name: &str, p: &Project) {
         eprintln!("avertissement : médiane {median:?} au-delà de {WARN:?} (cible locale ≤ 10 ms)");
     }
     assert!(
-        median <= BUDGET,
-        "{name} : médiane {median:?} au-delà du budget {BUDGET:?}"
+        median <= limit,
+        "{name} : médiane {median:?} au-delà du budget {limit:?}"
     );
 }
 
@@ -141,4 +157,179 @@ fn schedule_budget_5000_constrained() {
 #[ignore = "budget mesuré en release, job CI perf"]
 fn schedule_budget_5000_from_finish() {
     budget("5000_from_finish", &from_finish_network(2026));
+}
+
+/// Profondeur de la hiérarchie hostile.
+const DEPTH: u32 = 256;
+/// Tâches de la hiérarchie hostile.
+const DEEP_TASKS: u32 = 5_000;
+/// Liens de la hiérarchie hostile.
+const DEEP_LINKS: usize = 10_000;
+
+/// Hiérarchie hostile (lot L15) : récapitulative `S_i` au niveau `i` (1 à
+/// 256), chacune suivie de ses feuilles au niveau `i + 1` (environ 17 par
+/// niveau, de profondeur moyenne 128) ; puis 256 tâches de premier niveau
+/// `Z_i`. Liens : `S_i → Z_i` (FS, +1 h), `S_i → Z_(i+1)` (SS), `S_i →
+/// Z_(i+2)` (FF) ; chaque feuille a des prédécesseurs FS ou SS parmi les
+/// 40 feuilles qui la précèdent, jusqu'à 10 000 liens. Chaque feuille hérite
+/// donc des arcs de tous ses ancêtres : la référence (J3) remonte jusqu'à
+/// 256 agrégats et 768 arcs par nœud.
+fn deep_hierarchy() -> Project {
+    let start: Moment = "2026-11-02T08:00".parse().unwrap();
+    let mut p = Project::new(ProjectInit {
+        name: "Hiérarchie profonde".to_owned(),
+        anchor: ScheduleAnchor::FromStart(start),
+        current_date: start,
+        calendar_names: BuiltinCalendarNames::default(),
+    });
+    let options = p.options;
+    let day = |n: i64| {
+        TaskDuration::new(
+            Minutes::new(n * 480),
+            DurationUnit::Day,
+            TimeBasis::Working,
+            false,
+        )
+        .unwrap()
+    };
+    let leaves_total = DEEP_TASKS - 2 * DEPTH;
+    let mut uid = 0u32;
+    let mut spine = Vec::new();
+    let mut leaves: Vec<TaskUid> = Vec::new();
+    let mut tasks = Vec::new();
+    for i in 1..=DEPTH {
+        uid += 1;
+        let mut s = Task::new(TaskUid::new(uid), format!("S{i}"), &options);
+        s.outline_level = OutlineLevel::new(u16::try_from(i).unwrap()).unwrap();
+        spine.push(s.uid());
+        tasks.push(s);
+        let k = leaves_total / DEPTH + u32::from(i <= leaves_total % DEPTH);
+        for j in 0..k {
+            uid += 1;
+            let mut t = Task::new(TaskUid::new(uid), format!("F{i}.{j}"), &options);
+            t.outline_level = OutlineLevel::new(u16::try_from(i + 1).unwrap()).unwrap();
+            t.duration = day(i64::from(1 + (uid % 5)));
+            t.progress.percent_complete = Percent::new(i64::from(uid % 11) * 1_000).unwrap();
+            leaves.push(t.uid());
+            tasks.push(t);
+        }
+    }
+    let mut links = 0usize;
+    // Prédécesseurs des feuilles : jusqu'à 40 en arrière, déterministes.
+    let mut leaf_preds: Vec<Vec<Link>> = vec![Vec::new(); leaves.len()];
+    let mut x: u64 = 0x2545_F491_4F6C_DD1D;
+    let mut next = || {
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        x
+    };
+    let summary_links = 3 * usize::try_from(DEPTH).unwrap();
+    while links < DEEP_LINKS - summary_links {
+        let s = usize::try_from(next() % u64::try_from(leaves.len()).unwrap()).unwrap();
+        if s == 0 {
+            continue;
+        }
+        let back = 1 + usize::try_from(next() % 40).unwrap();
+        let q = s.saturating_sub(back);
+        if leaf_preds[s].iter().any(|l| l.predecessor == leaves[q]) {
+            continue;
+        }
+        let kind = if next() % 4 == 0 {
+            LinkType::StartToStart
+        } else {
+            LinkType::FinishToStart
+        };
+        leaf_preds[s].push(Link {
+            predecessor: leaves[q],
+            kind,
+            lag: Lag::ZERO,
+        });
+        links += 1;
+    }
+    let mut z = Vec::new();
+    for i in 0..DEPTH {
+        uid += 1;
+        let mut t = Task::new(TaskUid::new(uid), format!("Z{i}"), &options);
+        t.duration = day(2);
+        z.push(t);
+    }
+    let n = spine.len();
+    for (i, s) in spine.iter().enumerate() {
+        let hour = Lag::new(
+            TimeBasis::Working,
+            LagValue::Time {
+                minutes: Minutes::new(60),
+                unit: DurationUnit::Hour,
+            },
+        )
+        .unwrap();
+        z[i].predecessors.push(Link {
+            predecessor: *s,
+            kind: LinkType::FinishToStart,
+            lag: hour,
+        });
+        z[(i + 1) % n].predecessors.push(Link {
+            predecessor: *s,
+            kind: LinkType::StartToStart,
+            lag: Lag::ZERO,
+        });
+        z[(i + 2) % n].predecessors.push(Link {
+            predecessor: *s,
+            kind: LinkType::FinishToFinish,
+            lag: Lag::ZERO,
+        });
+    }
+    let mut leaf_preds = leaf_preds.into_iter();
+    for mut t in tasks {
+        if t.outline_level.get() > 1 && !spine.contains(&t.uid()) {
+            t.predecessors = leaf_preds.next().unwrap_or_default();
+        }
+        p.tasks.push(t).unwrap();
+    }
+    for t in z {
+        p.tasks.push(t).unwrap();
+    }
+    p
+}
+
+/// La hiérarchie hostile a la forme annoncée, se calcule sans erreur, et
+/// les deux implémentations des marges et des % achevés (lot L15) y sont
+/// égales.
+#[test]
+fn deep_hierarchy_shape() {
+    let p = deep_hierarchy();
+    assert_eq!(p.tasks.len(), 5_000);
+    let links: usize = p.tasks.iter().map(|t| t.predecessors.len()).sum();
+    assert_eq!(links, DEEP_LINKS);
+    assert_eq!(p.tasks.iter().map(|t| t.outline_level.get()).max(), Some(257));
+    let s = schedule(&p);
+    let errors: Vec<&Diagnostic> = s
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity() == Severity::Error)
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
+    let summaries = s
+        .tasks
+        .values()
+        .filter(|o| matches!(o, TaskOutcome::Scheduled(ts) if ts.role == TaskRole::Summary && !ts.degraded))
+        .count();
+    assert_eq!(summaries, 256);
+    assert_eq!(s, schedule_reference(&p));
+}
+
+#[test]
+#[ignore = "budget mesuré en release, job CI perf"]
+fn perf_deep_hierarchy_256_5000() {
+    let p = deep_hierarchy();
+    // Référence (J3), informative : le coût que la stratégie rapide évite.
+    let t = Instant::now();
+    black_box(schedule_reference(black_box(&p)));
+    eprintln!("schedule_reference (hiérarchie profonde) : {:?}", t.elapsed());
+    budget_of(
+        "hiérarchie de 256 niveaux, 5 000 tâches",
+        &p,
+        Duration::from_millis(30),
+    );
 }

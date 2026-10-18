@@ -1,31 +1,206 @@
 //! Exécution des commandes de liens (R-156, R-161).
 //!
-//! Squelette du contrat J4 (L0) : chaque commande répond
-//! `command.not_yet_available` jusqu'à son lot (L5).
+//! Un lien est porté par son successeur (`Task::predecessors`) et désigné par
+//! la paire (prédécesseur, successeur) : une paire n'a qu'un lien (R-156,
+//! comme `Project::validate`). Les refus propres à la commande (auto-lien,
+//! doublon, récapitulative ↔ descendante, lien absent) sont immédiats ; un
+//! cycle n'est connu qu'après le recalcul et passe par R-160.
 
-#![allow(
-    dead_code,
-    reason = "contrat J4 (L0) : appelé par Session::apply (L2) ; attribut à retirer en L5"
-)]
+use planrs_core::{Lag, Link, LinkType, Project, Subject, Task, TaskUid};
 
 use super::exec::Ctx;
-use super::{LinkKey, LinkSpec};
-use crate::error::CommandError;
+use super::{LinkKey, LinkSpec, TaskRef};
+use crate::error::{CommandError, CommandErrorKind, codes};
+use crate::outcome::SideEffect;
 
-/// `add` : à écrire en L5.
+/// Clés d'`Extras` d'une tâche jetées quand ses liens ou sa contrainte
+/// changent (R-161) : répartition et nivellement calculés par MS Project,
+/// faux dès que les dates bougent. Triées.
+pub(super) const TASK_SCHEDULE_EXTRAS: [&str; 7] = [
+    "LevelingDelay",
+    "LevelingDelayFormat",
+    "PreLeveledFinish",
+    "PreLeveledStart",
+    "Resume",
+    "Stop",
+    "TimephasedData",
+];
+
+/// R-161 : retire des `Extras` de la tâche `uid` les clés
+/// [`TASK_SCHEDULE_EXTRAS`] et signale celles qui étaient présentes
+/// (`SideEffect::ExtrasDropped`, une fois par tâche et par opération).
+pub(super) fn drop_task_schedule_extras(ctx: &mut Ctx<'_>, uid: TaskUid) {
+    let Some(task) = ctx.project.tasks.get_mut(uid) else {
+        return;
+    };
+    let mut keys: Vec<String> = Vec::new();
+    task.extras.0.retain(|e| {
+        let drop = TASK_SCHEDULE_EXTRAS.contains(&e.key.as_str());
+        if drop && !keys.contains(&e.key) {
+            keys.push(e.key.clone());
+        }
+        !drop
+    });
+    if !keys.is_empty() {
+        keys.sort();
+        ctx.effects.push(SideEffect::ExtrasDropped {
+            subject: Subject::Task(uid),
+            keys,
+        });
+    }
+}
+
+/// Niveau hiérarchique de la tâche à la position `pos` (R-052).
+fn level_at(p: &Project, pos: usize) -> Option<u16> {
+    p.tasks.at(pos).map(|t| t.outline_level.get())
+}
+
+/// Vrai si la tâche `uid` a au moins une sous-tâche : la suivante dans
+/// l'ordre d'affichage est d'un niveau plus profond (R-052).
+pub(super) fn is_summary(p: &Project, uid: TaskUid) -> bool {
+    let Some(pos) = p.tasks.position(uid) else {
+        return false;
+    };
+    match (level_at(p, pos), pos.checked_add(1).and_then(|n| level_at(p, n))) {
+        (Some(level), Some(next)) => next > level,
+        _ => false,
+    }
+}
+
+/// Vrai si l'une des deux tâches est une descendante de l'autre (R-059) :
+/// toutes les tâches de la plus haute (exclue) à la plus basse (incluse)
+/// sont plus profondes que la plus haute. Parcours borné par la distance.
+fn related_by_outline(p: &Project, a: TaskUid, b: TaskUid) -> bool {
+    let (Some(pa), Some(pb)) = (p.tasks.position(a), p.tasks.position(b)) else {
+        return false;
+    };
+    let (top, bottom) = if pa < pb { (pa, pb) } else { (pb, pa) };
+    let Some(top_level) = level_at(p, top) else {
+        return false;
+    };
+    p.tasks
+        .iter()
+        .skip(top.saturating_add(1))
+        .take(bottom.saturating_sub(top))
+        .all(|t| t.outline_level.get() > top_level)
+}
+
+/// Erreur d'un lien, sujet le lien.
+fn link_error(code: &'static str, kind: CommandErrorKind, pred: TaskUid, succ: TaskUid) -> CommandError {
+    CommandError::new(code, kind).with_subject(Subject::Link {
+        predecessor: pred,
+        successor: succ,
+    })
+}
+
+/// `link.not_found` : la paire n'a pas de lien.
+fn not_found(pred: TaskUid, succ: TaskUid) -> CommandError {
+    link_error(
+        codes::LINK_NOT_FOUND,
+        CommandErrorKind::InvalidParam(format!("aucun lien de la tâche {pred} vers la tâche {succ}")),
+        pred,
+        succ,
+    )
+}
+
+/// Successeur `succ` du clone (résolu, donc présent).
+fn successor(p: &mut Project, succ: TaskUid) -> Result<&mut Task, CommandError> {
+    p.tasks.get_mut(succ).ok_or_else(|| {
+        CommandError::new(codes::TASK_NOT_FOUND, CommandErrorKind::UnknownTask(succ))
+            .with_field("succ")
+            .with_subject(Subject::Task(succ))
+    })
+}
+
+/// Résout la paire et marque le lien et le successeur comme touchés (R-160).
+fn resolve_pair(
+    ctx: &mut Ctx<'_>,
+    pred: &TaskRef,
+    succ: &TaskRef,
+) -> Result<(TaskUid, TaskUid), CommandError> {
+    let p = ctx.task(pred, "pred")?;
+    let s = ctx.task(succ, "succ")?;
+    ctx.touched.insert(
+        Subject::Link {
+            predecessor: p,
+            successor: s,
+        },
+        ctx.op_index,
+    );
+    ctx.touched.insert(Subject::Task(s), ctx.op_index);
+    Ok((p, s))
+}
+
+/// `link.add` (R-156) : type FS et décalage nul par défaut.
 pub(super) fn add(op: &LinkSpec, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
-    let _ = (op, ctx);
-    Err(CommandError::not_yet(4))
+    let (pred, succ) = resolve_pair(ctx, &op.pred, &op.succ)?;
+    if pred == succ {
+        return Err(link_error(codes::LINK_SELF, CommandErrorKind::SelfLink, pred, succ).with_field("succ"));
+    }
+    let kind = op.kind.map_or(LinkType::FinishToStart, LinkType::from);
+    let lag = match &op.lag {
+        Some(l) => ctx.lag(l, "lag")?,
+        None => Lag::ZERO,
+    };
+    let task = successor(ctx.project, succ)?;
+    if task.predecessors.iter().any(|l| l.predecessor == pred) {
+        return Err(link_error(
+            codes::LINK_DUPLICATE,
+            CommandErrorKind::DuplicateLink,
+            pred,
+            succ,
+        ));
+    }
+    if related_by_outline(ctx.project, pred, succ) {
+        return Err(link_error(
+            codes::LINK_SUMMARY_DESCENDANT,
+            CommandErrorKind::SummaryDescendantLink,
+            pred,
+            succ,
+        ));
+    }
+    successor(ctx.project, succ)?.predecessors.push(Link {
+        predecessor: pred,
+        kind,
+        lag,
+    });
+    drop_task_schedule_extras(ctx, succ);
+    Ok(())
 }
 
-/// `update` : à écrire en L5.
+/// `link.update` (R-156) : remplace le type et/ou le décalage ; un champ
+/// absent est gardé.
 pub(super) fn update(op: &LinkSpec, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
-    let _ = (op, ctx);
-    Err(CommandError::not_yet(4))
+    let (pred, succ) = resolve_pair(ctx, &op.pred, &op.succ)?;
+    let lag = match &op.lag {
+        Some(l) => Some(ctx.lag(l, "lag")?),
+        None => None,
+    };
+    let task = successor(ctx.project, succ)?;
+    let link = task
+        .predecessors
+        .iter_mut()
+        .find(|l| l.predecessor == pred)
+        .ok_or_else(|| not_found(pred, succ))?;
+    if let Some(k) = op.kind {
+        link.kind = k.into();
+    }
+    if let Some(l) = lag {
+        link.lag = l;
+    }
+    drop_task_schedule_extras(ctx, succ);
+    Ok(())
 }
 
-/// `remove` : à écrire en L5.
+/// `link.remove` (R-156).
 pub(super) fn remove(op: &LinkKey, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
-    let _ = (op, ctx);
-    Err(CommandError::not_yet(4))
+    let (pred, succ) = resolve_pair(ctx, &op.pred, &op.succ)?;
+    let task = successor(ctx.project, succ)?;
+    let before = task.predecessors.len();
+    task.predecessors.retain(|l| l.predecessor != pred);
+    if task.predecessors.len() == before {
+        return Err(not_found(pred, succ));
+    }
+    drop_task_schedule_extras(ctx, succ);
+    Ok(())
 }

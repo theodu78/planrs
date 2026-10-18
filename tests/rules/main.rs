@@ -151,6 +151,8 @@ mod r145_csv_import_rows;
 mod r146_csv_export;
 mod r150_refs_and_labels;
 mod r151_uid_allocation;
+mod r156_links;
+mod r159_constraints;
 mod r160_refuse_new_errors;
 mod r162_recorded_discarded;
 mod r163_schedule_diff;

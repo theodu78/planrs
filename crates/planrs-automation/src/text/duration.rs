@@ -15,8 +15,8 @@ fn working_unit(folded: &str) -> Option<DurationUnit> {
         "m" | "mn" | "min" | "mins" | "minute" | "minutes" => DurationUnit::Minute,
         "h" | "hr" | "hrs" | "heure" | "heures" | "hour" | "hours" => DurationUnit::Hour,
         "j" | "jr" | "jour" | "jours" | "d" | "dy" | "day" | "days" => DurationUnit::Day,
-        "s" | "sem" | "semaine" | "semaines" | "w" | "wk" | "week" | "weeks" => DurationUnit::Week,
-        "mo" | "ms" | "mois" | "mon" | "month" | "months" => DurationUnit::Month,
+        "s" | "sem" | "semaine" | "semaines" | "w" | "wk" | "wks" | "week" | "weeks" => DurationUnit::Week,
+        "mo" | "ms" | "mois" | "mon" | "mons" | "month" | "months" => DurationUnit::Month,
         _ => return None,
     })
 }
@@ -109,7 +109,7 @@ pub fn parse_duration(s: &str, ctx: &TextContext) -> Result<Duration, TextError>
         return Err(TextError::Empty);
     }
     let negative = cur.sign();
-    let value = cur.decimal()?;
+    let value = cur.decimal_in(ctx.language)?;
     let (token, estimated) = unit_token(&mut cur)?;
     let (unit, basis) = if token.is_empty() {
         (ctx.default_duration_unit, TimeBasis::Working)
@@ -148,7 +148,7 @@ pub fn parse_lag(s: &str, ctx: &TextContext) -> Result<Lag, TextError> {
         return Err(TextError::Empty);
     }
     let negative = cur.sign();
-    let value = signed(cur.decimal()?, negative)?;
+    let value = signed(cur.decimal_in(ctx.language)?, negative)?;
     let (token, estimated) = unit_token(&mut cur)?;
     if estimated {
         let mut unit = token_text(&token);
@@ -325,11 +325,14 @@ mod tests {
             ("semaines", Week),
             ("w", Week),
             ("wk", Week),
+            ("wks", Week),
+            ("Wks.", Week),
             ("weeks", Week),
             ("mo", Month),
             ("ms", Month),
             ("mois", Month),
             ("mon", Month),
+            ("mons", Month),
             ("months", Month),
         ] {
             assert_eq!(unit(s), Some((u, W)), "{s}");
@@ -344,6 +347,8 @@ mod tests {
             ("ew", Week),
             ("emo", Month),
             ("ems", Month),
+            ("ewks", Week),
+            ("emons", Month),
             ("jé", Day),
             ("hé", Hour),
             ("sé", Week),
@@ -352,7 +357,8 @@ mod tests {
         ] {
             assert_eq!(unit(s), Some((u, E)), "{s}");
         }
-        for s in ["x", "e", "é", "", "jj", "5", "%"] {
+        // Pas d'unité « année » dans le modèle : refusées comme inconnues.
+        for s in ["x", "e", "é", "", "jj", "5", "%", "yr", "yrs", "y"] {
             assert_eq!(unit(s), None, "{s}");
         }
     }

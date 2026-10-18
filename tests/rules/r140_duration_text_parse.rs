@@ -243,3 +243,23 @@ fn r140_lags_are_signed() {
     assert_eq!(parse_lag("-200000j", &ctx()), Err(TextError::OutOfRange));
     assert_eq!(parse_lag("", &ctx()), Err(TextError::Empty));
 }
+
+#[test]
+fn r140_english_comma_thousands_are_refused() {
+    // « 1,000 hrs » en anglais : séparateur de milliers anglais, pas une
+    // marque décimale ; refusé plutôt que lu 1 h sans diagnostic. En
+    // français, la virgule reste décimale (1 h).
+    let en = TextContext::for_options(&ProjectOptions::default(), Language::En);
+    assert_eq!(
+        parse_duration("1,000 hrs", &en),
+        Err(TextError::BadNumber { at: 1 })
+    );
+    assert_eq!(parse_lag("+2,500h", &en), Err(TextError::BadNumber { at: 2 }));
+    assert_eq!(
+        parse_duration("1,000 h", &ctx()),
+        Ok(work(60, DurationUnit::Hour))
+    );
+    assert_eq!(parse_duration("1,5 hrs", &en), Ok(work(90, DurationUnit::Hour)));
+    assert_eq!(parse_duration("1.000 hrs", &en), Ok(work(60, DurationUnit::Hour)));
+    assert_eq!(parse_duration("2 wks", &en), Ok(work(4_800, DurationUnit::Week)));
+}

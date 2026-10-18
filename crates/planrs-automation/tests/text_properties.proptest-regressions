@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 861af7c71504be940e5b40b088233947994096339fa5f13c1ab790cd3654d6ad # shrinks to f = ConversionFactors { minutes_per_day: 480, minutes_per_week: 2400, days_per_month: 20 }, lang = Fr, m = 2412, u = Day, b = Working, est = false

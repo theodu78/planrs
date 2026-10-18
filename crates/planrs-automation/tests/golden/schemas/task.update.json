@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`task.update`.",
+  "properties": {
+    "active": {
+      "description": "Tâche active.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "duration": {
+      "additionalProperties": false,
+      "description": "Durée.",
+      "properties": {
+        "elapsed": {
+          "description": "Durée écoulée (« 5ej »).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "estimated": {
+          "description": "Durée estimée (« 5j? »).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "minutes": {
+          "description": "Minutes (ouvrées, ou écoulées si `elapsed`).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "text": {
+          "description": "Texte à la manière de MS Project (« 5j », « 2d? »).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "description": "Unité d'une durée en JSON.",
+              "oneOf": [
+                {
+                  "const": "minute",
+                  "description": "Minute.",
+                  "type": "string"
+                },
+                {
+                  "const": "hour",
+                  "description": "Heure.",
+                  "type": "string"
+                },
+                {
+                  "const": "day",
+                  "description": "Jour.",
+                  "type": "string"
+                },
+                {
+                  "const": "week",
+                  "description": "Semaine.",
+                  "type": "string"
+                },
+                {
+                  "const": "month",
+                  "description": "Mois.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Unité d'affichage."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "finish": {
+      "description": "Fin saisie (R-158).",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "milestone": {
+      "description": "Jalon.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "name": {
+      "description": "Nom (`null` refusé).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "notes": {
+      "description": "Notes.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "start": {
+      "description": "Début saisi (R-158).",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "uid": {
+      "description": "Tâche.",
+      "oneOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "required": [
+    "uid"
+  ],
+  "title": "TaskUpdate",
+  "type": "object"
+}

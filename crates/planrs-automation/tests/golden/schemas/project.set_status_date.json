@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`project.set_status_date`. Struct plutôt que `Patch<Moment>` nu : une\nvariante d'enum à étiquette interne doit contenir un objet JSON.",
+  "properties": {
+    "date": {
+      "description": "Date d'état (`null` : NA).",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "SetStatusDate",
+  "type": "object"
+}

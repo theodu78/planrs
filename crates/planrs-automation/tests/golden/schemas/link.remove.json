@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`link.remove`.",
+  "properties": {
+    "pred": {
+      "description": "Prédécesseur.",
+      "oneOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        }
+      ]
+    },
+    "succ": {
+      "description": "Successeur.",
+      "oneOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "required": [
+    "pred",
+    "succ"
+  ],
+  "title": "LinkKey",
+  "type": "object"
+}

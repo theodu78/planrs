@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`link.add`, `link.update`.",
+  "properties": {
+    "kind": {
+      "anyOf": [
+        {
+          "description": "Type de lien en JSON (codes anglais de MS Project).",
+          "oneOf": [
+            {
+              "const": "fs",
+              "description": "Fin à début.",
+              "type": "string"
+            },
+            {
+              "const": "ss",
+              "description": "Début à début.",
+              "type": "string"
+            },
+            {
+              "const": "ff",
+              "description": "Fin à fin.",
+              "type": "string"
+            },
+            {
+              "const": "sf",
+              "description": "Début à fin.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Type (défaut FS à l'ajout ; gardé à la modification)."
+    },
+    "lag": {
+      "additionalProperties": false,
+      "description": "Décalage (défaut 0 à l'ajout ; gardé à la modification).",
+      "properties": {
+        "elapsed": {
+          "description": "Décalage écoulé.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "minutes": {
+          "description": "Minutes (signées).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "percent": {
+          "description": "Pourcentage en 1/100 de % (5 000 = 50 %).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "text": {
+          "description": "Texte (« +2j », « -1d », « 50% »).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "description": "Unité d'une durée en JSON.",
+              "oneOf": [
+                {
+                  "const": "minute",
+                  "description": "Minute.",
+                  "type": "string"
+                },
+                {
+                  "const": "hour",
+                  "description": "Heure.",
+                  "type": "string"
+                },
+                {
+                  "const": "day",
+                  "description": "Jour.",
+                  "type": "string"
+                },
+                {
+                  "const": "week",
+                  "description": "Semaine.",
+                  "type": "string"
+                },
+                {
+                  "const": "month",
+                  "description": "Mois.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Unité d'affichage."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "pred": {
+      "description": "Prédécesseur.",
+      "oneOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        }
+      ]
+    },
+    "succ": {
+      "description": "Successeur.",
+      "oneOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "required": [
+    "pred",
+    "succ"
+  ],
+  "title": "LinkSpec",
+  "type": "object"
+}

@@ -238,3 +238,39 @@ fn r087_scheduled_work_distribution_of_an_assignment_is_dropped() {
     assert_eq!(extras(2), [("TimephasedData".to_owned(), true)]);
     assert_eq!(doc.source.dropped_computed.get("TimephasedData"), Some(&2));
 }
+
+#[test]
+fn r087_payload_with_an_undefined_entity_is_not_rewritten() {
+    // `&nbsp;` n'est pas défini en XML sans DTD : le lecteur le tolère
+    // (`mspdi.inconsistent`) et capture la charge telle quelle, mais la
+    // réécrire produirait un document mal formé. L'écriture l'écarte
+    // (`mspdi.write.extra_invalid`) ; `normalize` décrit la perte.
+    use planrs_mspdi::write::{Computed, WriteCode, WriteOptions, write};
+    let xml = project(
+        "<Task><UID>1</UID><ID>1</ID><Name>A</Name><Hyperlink>a&nbsp;b</Hyperlink>\
+         <Contact>x &amp; &#233;</Contact></Task>",
+        "",
+    );
+    let doc = read_xml(&xml, true);
+    assert_eq!(
+        task_extras(&doc, 1),
+        [
+            ("Contact", "<Contact>x &amp; &#233;</Contact>"),
+            ("Hyperlink", "<Hyperlink>a&nbsp;b</Hyperlink>"),
+        ]
+    );
+    let options = WriteOptions::default();
+    let out = write(&doc.project, Computed::Omit, &options);
+    let text = String::from_utf8(out.xml.clone()).unwrap();
+    assert!(!text.contains("&nbsp;"));
+    assert!(text.contains("<Contact>x &amp; &#233;</Contact>"));
+    let invalid: Vec<&str> = out
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == WriteCode::ExtraInvalid)
+        .map(|d| d.element.as_str())
+        .collect();
+    assert_eq!(invalid, ["Tasks/Task/Hyperlink"]);
+    let back = read(&out.xml, &ReadOptions::new(moment("2026-01-01T00:00"))).unwrap();
+    assert_eq!(back.project, planrs_mspdi::normalize(&doc.project, &options));
+}

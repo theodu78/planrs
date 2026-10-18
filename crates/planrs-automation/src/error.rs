@@ -51,6 +51,10 @@ pub mod codes {
     pub const TASK_MANUAL_UNSUPPORTED: &str = "task.manual_unsupported";
     /// Exception de calendrier en chevauchement partiel (R-165).
     pub const CALENDAR_EXCEPTION_OVERLAP: &str = "calendar.exception_overlap";
+    /// Aucune exception ne commence ce jour (R-165, `calendar.remove_exception`).
+    pub const CALENDAR_EXCEPTION_NOT_FOUND: &str = "calendar.exception_not_found";
+    /// Calendrier (UID) inconnu.
+    pub const CALENDAR_NOT_FOUND: &str = "calendar.not_found";
     /// Aucune session ouverte (`Workspace`).
     pub const SESSION_NONE: &str = "session.none";
     /// Verrou de session empoisonné (MCP).

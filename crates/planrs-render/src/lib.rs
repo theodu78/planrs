@@ -5,7 +5,7 @@
 //! entières en 1/16 px, aucune police système, sortie bornée et rapport de
 //! troncature (ADR-0012 D10). PNG reporté en J7.
 //!
-//! État : contrat J4 (L0) ; le rendu est écrit par le lot L7.
+//! Hypothèses d'affichage H-R : `docs/features/render.md`.
 
 mod axis;
 mod request;

@@ -10,6 +10,9 @@ repository.workspace = true
 [dependencies]
 planrs-core.workspace = true
 planrs-mspdi.workspace = true
+# Session et registre de commandes (ADR-0012 D11) : toute édition passe par
+# `Action::Exec(Batch)`.
+planrs-automation.workspace = true
 egui.workspace = true
 eframe.workspace = true
 chrono.workspace = true

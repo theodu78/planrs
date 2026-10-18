@@ -467,6 +467,9 @@ impl App {
             }
             Action::ToggleDiagnostics => self.state.diagnostics_open = !self.state.diagnostics_open,
             Action::DismissMessage => self.messages.clear(),
+            // Contrat J4 (L0) : sans effet, câblé sur la session en L11.
+            Action::Exec(batch) => drop(batch),
+            Action::Undo | Action::Redo => {}
         }
     }
 

@@ -14,7 +14,9 @@
 mod calendar;
 mod constraint;
 pub(crate) mod exec;
+mod extras_invalidation;
 mod link;
+mod outline;
 pub mod params;
 mod project;
 mod refs;

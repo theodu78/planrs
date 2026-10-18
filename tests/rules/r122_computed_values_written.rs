@@ -65,10 +65,24 @@ fn r122_schedule_values_are_written() {
     let p0 = task_xml(&xml, 0);
     assert!(p0.contains("<Duration>PT24H0M0S</Duration>"), "{p0}");
     assert!(xml.contains("<FinishDate>2026-10-21T17:00:00</FinishDate>"));
-    // Relu : valeurs enregistrées = valeurs du moteur ; tâches identiques
-    // (la valeur calculée n'entre pas dans le modèle, ADR-0004).
+    // Relu : valeurs enregistrées = valeurs du moteur ; tâches égales à leur
+    // image par l'aller-retour (la valeur calculée n'entre pas dans le
+    // modèle, ADR-0004 ; seul le reste d'une tâche sans avancement est
+    // dérivé, R-127).
     let back = reread(&out.xml);
-    assert_eq!(back.project.tasks, proj.tasks);
+    assert_eq!(
+        back.project.tasks,
+        planrs_mspdi::normalize(&proj, &WriteOptions::default()).tasks
+    );
+    assert_eq!(
+        back.project
+            .tasks
+            .get(TaskUid::new(1))
+            .unwrap()
+            .progress
+            .remaining_duration,
+        planrs_core::Minutes::new(960)
+    );
     let rec = &back.recorded.tasks[&TaskUid::new(1)];
     assert_eq!(rec.total_slack, Some(planrs_mspdi::Tenths(0)));
     assert_eq!(back.recorded.project_finish, Some(moment("2026-10-21T17:00")));

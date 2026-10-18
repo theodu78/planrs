@@ -2,7 +2,8 @@
 //! manuel ; ID, numéro hiérarchique et drapeau `Summary` déduits.
 
 use planrs_core::{
-    Constraint, Duration, Lag, LagValue, Link, Project, SchedulingMode, Subject, Task, TaskUid,
+    Constraint, Duration, Lag, LagValue, Link, Minutes, Progress, Project, SchedulingMode, Subject, Task,
+    TaskUid, Work,
 };
 
 use super::computed::{TaskValues, Values};
@@ -130,6 +131,22 @@ fn outline_numbers(p: &Project) -> Vec<String> {
         .collect()
 }
 
+/// R-127 : durée et travail restants écrits. Une tâche non récapitulative
+/// sans aucun avancement saisi (`Progress` par défaut : créée par planrs ou
+/// relue sans valeur) reçoit ce que MS Project écrit toujours, reste =
+/// durée − réel = durée, et travail restant = travail (minutes entières,
+/// jamais négatives) ; sinon les valeurs saisies, telles quelles. Une
+/// récapitulative garde ses valeurs : sa durée est calculée (R-071), pas une
+/// entrée du modèle.
+pub(crate) fn remaining(t: &Task, summary: bool) -> (Minutes, Work) {
+    let p = &t.progress;
+    if summary || *p != Progress::default() {
+        return (p.remaining_duration, p.remaining_work);
+    }
+    let duration = Minutes::new(t.duration.minutes().get().max(0));
+    (duration, t.work)
+}
+
 /// `DurationFormat` d'une durée.
 fn duration_format(d: &Duration) -> String {
     codes::duration_format_code(d.unit(), d.basis(), d.is_estimated()).to_string()
@@ -244,8 +261,8 @@ fn field(
         "ActualFinish" => em.opt_date(name, t.progress.actual_finish),
         "ActualDuration" => em.leaf_iso(name, t.progress.actual_duration.get()),
         "ActualWork" => em.leaf_iso(name, t.progress.actual_work.minutes().get()),
-        "RemainingDuration" => em.leaf_iso(name, t.progress.remaining_duration.get()),
-        "RemainingWork" => em.leaf_iso(name, t.progress.remaining_work.minutes().get()),
+        "RemainingDuration" => em.leaf_iso(name, remaining(t, row.summary).0.get()),
+        "RemainingWork" => em.leaf_iso(name, remaining(t, row.summary).1.minutes().get()),
         "ConstraintType" => em.leaf_int(name, codes::constraint_code(t.constraint.kind())),
         "CalendarUID" => em.leaf(
             name,

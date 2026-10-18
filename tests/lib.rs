@@ -24,6 +24,7 @@ pub mod generate;
 pub mod mspdi;
 pub mod net;
 pub mod session;
+pub mod task_edit;
 
 /// Dossier `tests/` du dépôt, quel que soit le répertoire courant.
 #[must_use]

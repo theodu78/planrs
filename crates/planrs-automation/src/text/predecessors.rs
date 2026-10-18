@@ -77,35 +77,66 @@ fn parse_element(element: &[char], ctx: &TextContext) -> Result<PredecessorRef, 
     Ok(PredecessorRef { id, kind, lag })
 }
 
+/// R-142 : vrai si `c` sépare deux éléments d'une liste : le séparateur de
+/// liste du contexte (`;` en français, `,` en anglais, S38) et, en anglais,
+/// aussi `;` (sans ambiguïté avec le point décimal anglais). Le français
+/// garde `;` seul : la virgule y est la marque décimale.
+fn is_list_separator(c: char, ctx: &TextContext) -> bool {
+    c == ctx.list_separator || (ctx.language == Language::En && c == ';')
+}
+
+/// Élément d'une liste de prédécesseurs : texte (espaces de bord retirées)
+/// et lecture.
+pub(crate) type Element = (String, Result<PredecessorRef, TextError>);
+
+/// R-142 : éléments d'une liste de prédécesseurs, dans l'ordre, chacun avec
+/// son texte (espaces de bord retirées) et sa lecture ; éléments vides
+/// sautés.
+///
+/// # Errors
+///
+/// [`TextError::TooLong`] au-delà de [`super::MAX_INPUT_CHARS`] caractères.
+pub(crate) fn predecessor_elements(s: &str, ctx: &TextContext) -> Result<Vec<Element>, TextError> {
+    let chars = bounded_chars(s)?;
+    Ok(chars
+        .split(|c| is_list_separator(*c, ctx))
+        .filter(|element| !element.iter().all(|c| is_space(*c)))
+        .map(|element| {
+            let text: String = element.iter().collect();
+            (
+                text.trim_matches(is_space).to_owned(),
+                parse_element(element, ctx),
+            )
+        })
+        .collect())
+}
+
 /// R-142 : lit une liste de prédécesseurs séparée par le séparateur de liste
-/// du contexte (`;` en français, `,` en anglais, S38). Élément :
-/// `id [type] [décalage]` ; type FS/FD, SS/DD, FF, SF/DF (casse ignorée),
-/// absent → fin à début ; décalage signé de R-140 ou pourcentage (`%`,
-/// `e%`). Un élément vide est ignoré ; un élément illisible est écarté et
-/// son erreur rendue, les autres sont gardés (dans l'ordre).
+/// du contexte (`;` en français ; `,` en anglais, où `;` est aussi admis,
+/// S38). Élément : `id [type] [décalage]` ; type FS/FD, SS/DD, FF, SF/DF
+/// (casse ignorée), absent → fin à début ; décalage signé de R-140 ou
+/// pourcentage (`%`, `e%`). Un élément vide est ignoré ; un élément
+/// illisible est écarté et son erreur rendue, les autres sont gardés (dans
+/// l'ordre).
 ///
 /// Exemples : « 3FD+2j;5DD » → (3, FS, +960), (5, SS, 0) ; « 4FF-1j » →
 /// FF −480 ; « 3 FS + 50% » → FS +5 000 ; « C:\a.mpp\3FF » →
-/// `text.external_predecessor` ; « 3XY » → `text.bad_link_type`.
+/// `text.external_predecessor` ; « 3XY » → `text.bad_link_type` ; en
+/// anglais « 3;5 » et « 3,5 » → deux liens.
 #[must_use]
 pub fn parse_predecessors(s: &str, ctx: &TextContext) -> (Vec<PredecessorRef>, Vec<TextError>) {
     let mut refs = Vec::new();
     let mut errors = Vec::new();
-    let chars = match bounded_chars(s) {
-        Ok(c) => c,
-        Err(e) => {
-            errors.push(e);
-            return (refs, errors);
+    match predecessor_elements(s, ctx) {
+        Ok(elements) => {
+            for (_, r) in elements {
+                match r {
+                    Ok(r) => refs.push(r),
+                    Err(e) => errors.push(e),
+                }
+            }
         }
-    };
-    for element in chars.split(|c| *c == ctx.list_separator) {
-        if element.iter().all(|c| is_space(*c)) {
-            continue;
-        }
-        match parse_element(element, ctx) {
-            Ok(r) => refs.push(r),
-            Err(e) => errors.push(e),
-        }
+        Err(e) => errors.push(e),
     }
     (refs, errors)
 }

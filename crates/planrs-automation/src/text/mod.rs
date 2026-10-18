@@ -71,7 +71,8 @@ pub struct TextContext {
     /// Marque décimale à l'écriture.
     pub decimal: DecimalMark,
     /// Séparateur d'une liste de prédécesseurs (`;` en français, `,` en
-    /// anglais : séparateur de liste des paramètres régionaux, S38).
+    /// anglais : séparateur de liste des paramètres régionaux, S38) ; à la
+    /// lecture, l'anglais admet aussi `;` (R-142).
     pub list_separator: char,
     /// Facteurs de conversion des unités (R-006, R-007).
     pub factors: ConversionFactors,

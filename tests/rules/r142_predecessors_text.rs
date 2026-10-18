@@ -176,3 +176,32 @@ fn r142_task_predecessors_by_position() {
         ("1,2SS+1d".to_owned(), vec![TaskUid::new(99)])
     );
 }
+
+#[test]
+fn r142_english_accepts_semicolons() {
+    // En anglais, `;` sépare aussi les éléments (pas d'ambiguïté avec le
+    // point décimal) : « 3;5 » → deux liens, comme « 3,5 ». Le français
+    // garde `;` seul (la virgule y est décimale : « 3FD+1,5j » est un seul
+    // élément).
+    let fs = |id| r(id, LinkType::FinishToStart, Lag::ZERO);
+    let en = ctx(Language::En);
+    assert_eq!(parse_predecessors("3;5", &en), (vec![fs(3), fs(5)], vec![]));
+    assert_eq!(parse_predecessors("3,5", &en), (vec![fs(3), fs(5)], vec![]));
+    assert_eq!(
+        parse_predecessors("3FS+2d; 5SS,7", &en),
+        (
+            vec![
+                r(3, LinkType::FinishToStart, days(960)),
+                r(5, LinkType::StartToStart, Lag::ZERO),
+                fs(7)
+            ],
+            vec![]
+        )
+    );
+    let fr = ctx(Language::Fr);
+    assert_eq!(parse_predecessors("3;5", &fr), (vec![fs(3), fs(5)], vec![]));
+    assert_eq!(
+        parse_predecessors("3FD+1,5j", &fr),
+        (vec![r(3, LinkType::FinishToStart, days(720))], vec![])
+    );
+}

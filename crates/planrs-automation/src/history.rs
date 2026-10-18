@@ -1,22 +1,31 @@
 //! Historique d'annulation : une entrée par lot commité (R-164, lot L2).
+//!
+//! Chaque entrée porte un identifiant unique (1, 2, …, jamais réutilisé) :
+//! l'état courant est désigné par l'identifiant de la dernière entrée
+//! annulable, ou par la base (état d'ouverture, puis dernière entrée
+//! abandonnée par le budget). `saved_at` de la session retient cet
+//! identifiant : après une annulation suivie d'un nouveau lot, la même
+//! profondeur de pile ne passe pas pour l'état enregistré.
 
-#![allow(
-    dead_code,
-    reason = "contrat J4 (L0) : rempli par Session (L2) ; attribut à retirer en L2"
-)]
+use std::collections::VecDeque;
 
 use serde::Serialize;
 
 use crate::command::Batch;
 use crate::delta::Delta;
+use crate::session::SessionLimits;
 
 /// Historique d'une session : pile d'annulation, pile de rétablissement,
 /// entrées abandonnées par le budget.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct History {
-    undo: Vec<HistoryEntry>,
+    undo: VecDeque<HistoryEntry>,
     redo: Vec<HistoryEntry>,
     dropped: u64,
+    /// Identifiant de l'état au bas de la pile d'annulation (0 : ouverture).
+    base: u64,
+    /// Dernier identifiant attribué.
+    last_id: u64,
 }
 
 /// Entrée d'historique.
@@ -26,6 +35,8 @@ pub(crate) struct HistoryEntry {
     pub ops: Batch,
     pub delta: Delta,
     pub bytes: usize,
+    /// Identifiant de l'état après ce lot.
+    pub id: u64,
 }
 
 /// Vue de l'historique (`history.list`).
@@ -51,16 +62,73 @@ pub struct HistoryItem {
 }
 
 impl History {
-    /// Position courante : entrées commitées depuis l'ouverture, abandonnées
-    /// comprises (clé de `saved_at`).
+    /// Identifiant de l'état courant (clé de `saved_at`).
     pub(crate) fn position(&self) -> u64 {
-        let len = u64::try_from(self.undo.len()).unwrap_or(u64::MAX);
-        self.dropped.saturating_add(len)
+        self.undo.back().map_or(self.base, |e| e.id)
+    }
+
+    /// Vrai si l'état `id` est encore atteignable par annuler/rétablir.
+    pub(crate) fn reachable(&self, id: u64) -> bool {
+        id == self.base || self.undo.iter().chain(&self.redo).any(|e| e.id == id)
     }
 
     /// Nombre d'entrées annulables.
     pub(crate) fn len(&self) -> usize {
         self.undo.len()
+    }
+
+    /// Empile un lot commité (R-164) : vide la pile de rétablissement, puis
+    /// abandonne les plus anciennes entrées tant que le budget (octets ou
+    /// nombre) est dépassé, en gardant toujours la dernière.
+    pub(crate) fn push(
+        &mut self,
+        label: Option<String>,
+        ops: Batch,
+        delta: Delta,
+        bytes: usize,
+        limits: &SessionLimits,
+    ) {
+        self.redo.clear();
+        self.last_id = self.last_id.saturating_add(1);
+        self.undo.push_back(HistoryEntry {
+            label,
+            ops,
+            delta,
+            bytes,
+            id: self.last_id,
+        });
+        let mut total: usize = self.undo.iter().fold(0, |acc, e| acc.saturating_add(e.bytes));
+        while self.undo.len() > 1
+            && (total > limits.history_bytes || self.undo.len() > limits.history_entries)
+        {
+            let Some(oldest) = self.undo.pop_front() else {
+                break;
+            };
+            total = total.saturating_sub(oldest.bytes);
+            self.base = oldest.id;
+            self.dropped = self.dropped.saturating_add(1);
+        }
+    }
+
+    /// Retire l'entrée à annuler.
+    pub(crate) fn pop_undo(&mut self) -> Option<HistoryEntry> {
+        self.undo.pop_back()
+    }
+
+    /// Range une entrée annulée (rétablissable).
+    pub(crate) fn push_redo(&mut self, e: HistoryEntry) {
+        self.redo.push(e);
+    }
+
+    /// Retire l'entrée à rétablir.
+    pub(crate) fn pop_redo(&mut self) -> Option<HistoryEntry> {
+        self.redo.pop()
+    }
+
+    /// Remet une entrée rétablie (ou une annulation échouée) en haut de la
+    /// pile d'annulation, sans toucher à la pile de rétablissement.
+    pub(crate) fn push_undo_back(&mut self, e: HistoryEntry) {
+        self.undo.push_back(e);
     }
 
     /// Vue de l'historique.

@@ -26,6 +26,7 @@ pub mod command;
 pub mod control;
 pub mod csv;
 mod delta;
+mod diag_delta;
 pub mod diff;
 pub mod error;
 #[cfg(not(target_arch = "wasm32"))]
@@ -47,5 +48,5 @@ pub use error::{CommandError, CommandErrorKind, HistoryError, OpenError};
 pub use history::HistoryView;
 pub use outcome::{ApplyOutcome, SideEffect};
 pub use registry::{Availability, CommandSpec, Kind, REGISTRY};
-pub use session::{AnchorSpec, ApplyMode, DocOrigin, NewProject, Session, SessionLimits};
+pub use session::{AnchorSpec, ApplyMode, ApplyOptions, DocOrigin, NewProject, Session, SessionLimits};
 pub use workspace::{ToolError, Workspace};

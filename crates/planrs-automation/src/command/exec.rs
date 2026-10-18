@@ -4,11 +4,6 @@
 //! `Session::apply` exécute chaque opération sur un clone du projet ; une
 //! erreur interrompt le lot, l'état de la session reste intact.
 
-#![allow(
-    dead_code,
-    reason = "contrat J4 (L0) : appelé par Session::apply (L2) ; attribut à retirer en L2"
-)]
-
 use std::collections::BTreeMap;
 
 use planrs_core::{Project, Subject, TaskUid};
@@ -34,6 +29,7 @@ pub(crate) struct Ctx<'a> {
     /// Index de l'opération courante.
     pub op_index: usize,
     /// Contexte du texte (langue du lot ou de la session).
+    #[allow(dead_code, reason = "lu par les commandes de L4 et L5 (durées en texte)")]
     pub text: &'a TextContext,
     /// Tâches créées, dans l'ordre.
     pub created: &'a mut Vec<TaskUid>,

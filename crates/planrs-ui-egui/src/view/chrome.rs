@@ -64,6 +64,18 @@ pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
                 });
                 ui.menu_button(texts.get(TextId::MenuTheme), |ui| theme_choices(ui, fc));
                 ui.menu_button(texts.get(TextId::MenuLanguage), |ui| language_choices(ui, fc));
+                ui.separator();
+                // Bascule du panneau des diagnostics : les compteurs de la
+                // barre d'état l'ouvrent aussi, mais rien ne les signale comme
+                // cliquables. Toujours active : un panneau resté ouvert après
+                // « Fermer » doit pouvoir se refermer.
+                let mut open = fc.state.diagnostics_open;
+                if ui
+                    .checkbox(&mut open, texts.get(TextId::MenuDiagnostics))
+                    .changed()
+                {
+                    fc.actions.push(Action::ToggleDiagnostics);
+                }
             });
         });
     });

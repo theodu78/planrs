@@ -137,6 +137,7 @@ text_ids! {
     MenuZoom => "menu-zoom",
     MenuTheme => "menu-theme",
     MenuLanguage => "menu-language",
+    MenuDiagnostics => "menu-diagnostics",
     // Barre d'outils et zoom.
     ToolbarFit => "toolbar-fit",
     ZoomDay => "zoom-day",

@@ -24,6 +24,7 @@ menu-view = View
 menu-zoom = Zoom
 menu-theme = Theme
 menu-language = Language
+menu-diagnostics = Diagnostics
 
 ## Barre d'outils et zoom
 

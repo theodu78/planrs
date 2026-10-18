@@ -365,6 +365,22 @@ fn diagnostics_panel_toggles() {
     assert!(!harness.state().state.diagnostics_open);
 }
 
+/// Le menu Affichage ouvre et referme le panneau des diagnostics, même sans
+/// document (un panneau resté ouvert après « Fermer » se referme).
+#[test]
+fn diagnostics_menu_entry_toggles_panel() {
+    let mut harness = harness();
+    open_demo(&mut harness);
+    click(&mut harness, &fr(TextId::MenuView));
+    click(&mut harness, &fr(TextId::MenuDiagnostics));
+    assert!(harness.state().state.diagnostics_open);
+    harness.state_mut().dispatch(Action::CloseDocument);
+    harness.run();
+    click(&mut harness, &fr(TextId::MenuView));
+    click(&mut harness, &fr(TextId::MenuDiagnostics));
+    assert!(!harness.state().state.diagnostics_open);
+}
+
 #[test]
 fn click_row_selects_task() {
     let mut harness = harness();

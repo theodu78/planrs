@@ -31,7 +31,9 @@ pub use extras::{ExtraEntry, Extras};
 pub use link::{Link, LinkType};
 pub use options::ProjectOptions;
 pub use resource::{Resource, ResourceKind};
-pub use task::{Constraint, OutlineLevel, Priority, Progress, SchedulingMode, Task, TaskType};
+pub use task::{
+    Constraint, ConstraintKind, OutlineLevel, Priority, Progress, SchedulingMode, Task, TaskType,
+};
 
 use crate::arena::Arena;
 use crate::calendar::builtin::{self, BuiltinCalendarNames};

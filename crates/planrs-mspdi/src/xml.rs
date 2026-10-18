@@ -1,20 +1,32 @@
 //! Lecture événementielle du XML (quick-xml) et arbre borné par sous-arbre
-//! (ADR-0009, A19).
+//! (ADR-0009, A19 ; capture des éléments non modélisés : R-087, ADR-0010).
 //!
 //! Le document n'est jamais chargé en arbre complet : seuls les sous-arbres
-//! utiles sont construits (`Calendars/Calendar`, `Tasks/Task`, les champs
-//! scalaires de `Project`, le `TaskUID` de chaque `Assignments/Assignment`) ;
-//! le reste est sauté et compté. Dans un sous-arbre retenu, seuls les enfants
-//! que l'import lit sont gardés ([`Kind`], listes blanches comme
-//! [`PROJECT_FIELDS`]) : `Baseline`, `ExtendedAttribute`, `TimephasedData`
-//! ou un élément inconnu sont sautés, si bien qu'un arbre retenu a au plus
-//! six niveaux, quelle que soit la profondeur de l'entrée (aucune récursion,
-//! même à la libération). La construction utilise une pile explicite. Toutes
-//! les limites sont vérifiées au fil de la lecture, avant l'allocation
-//! qu'elles protègent, dont le nombre d'éléments retenus
-//! ([`Limits::max_retained`]).
+//! utiles sont construits (`Calendars/Calendar`, `Tasks/Task`,
+//! `Resources/Resource`, `Assignments/Assignment`, les champs scalaires de
+//! `Project`).
+//! Sous un élément retenu, la table du schéma ([`crate::schema`]) décide du
+//! sort de chaque enfant, selon sa classe :
+//! - lu (M, M?, D, C, F, et `GUID`) : construit ;
+//! - calculé non recalculé (X) : sauté, compté par nom
+//!   ([`RawDocument::dropped_computed`]) ;
+//! - conservé (P, ou hors schéma) : **capturé** — ses descendants sont
+//!   analysés (limites de profondeur, d'éléments, de texte) mais pas
+//!   construits, et l'élément garde la tranche exacte de l'entrée qui le
+//!   contient ([`Element::raw`]), qui deviendra un `Extras` (R-087). Sous un
+//!   jour de calendrier, une exception, une semaine datée, une plage ou un
+//!   lien, qui n'ont pas d'`Extras`, un enfant non lu est perdu, compté
+//!   ([`RawDocument::not_preserved`]) et signalé (`mspdi.not_preserved`).
+//!
+//! Un arbre retenu reste peu profond quelle que soit la profondeur de
+//! l'entrée (aucune récursion, même à la libération). La construction
+//! utilise une pile explicite. Toutes les limites sont vérifiées au fil de la
+//! lecture, avant l'allocation qu'elles protègent : nombre d'éléments
+//! retenus ([`Limits::max_retained`], une capture compte pour un) et octets
+//! capturés ([`Limits::max_extras_bytes`]).
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
@@ -22,6 +34,7 @@ use quick_xml::events::{BytesStart, Event};
 use crate::Limits;
 use crate::diag::{ImportCode, Sink};
 use crate::error::{LineIndex, MspdiError};
+use crate::schema::{Class, Parent, sequence};
 
 /// Élément XML retenu : nom local, texte concaténé, enfants retenus,
 /// position (octet du début de la balise ouvrante).
@@ -39,174 +52,9 @@ pub(crate) struct Element<'a> {
     pub(crate) structured: bool,
     /// Octet du début de la balise ouvrante.
     pub(crate) at: u64,
-}
-
-/// Champs scalaires de `Project` retenus (§ 7.6).
-pub(crate) const PROJECT_FIELDS: &[&str] = &[
-    "SaveVersion",
-    "GUID",
-    "Name",
-    "Title",
-    "Subject",
-    "Category",
-    "Company",
-    "Manager",
-    "Author",
-    "CreationDate",
-    "ScheduleFromStart",
-    "StartDate",
-    "FinishDate",
-    "CalendarUID",
-    "DefaultStartTime",
-    "DefaultFinishTime",
-    "MinutesPerDay",
-    "MinutesPerWeek",
-    "DaysPerMonth",
-    "DurationFormat",
-    "WorkFormat",
-    "DefaultTaskType",
-    "NewTasksEffortDriven",
-    "NewTasksEstimated",
-    "HonorConstraints",
-    "WeekStartDay",
-    "StatusDate",
-    "CurrentDate",
-    "CriticalSlackLimit",
-    "MultipleCriticalPaths",
-];
-
-/// Champs scalaires d'une tâche (`Tasks/Task`) lus par l'import (`task.rs`).
-/// Toute lecture d'un nouveau champ doit l'ajouter ici, sinon il est sauté.
-pub(crate) const TASK_FIELDS: &[&str] = &[
-    "UID",
-    "ID",
-    "GUID",
-    "Name",
-    "Type",
-    "IsNull",
-    "CreateDate",
-    "WBS",
-    "OutlineLevel",
-    "Priority",
-    "Start",
-    "Finish",
-    "Duration",
-    "DurationFormat",
-    "ManualStart",
-    "ManualFinish",
-    "ManualDuration",
-    "Manual",
-    "EffortDriven",
-    "Estimated",
-    "Milestone",
-    "Summary",
-    "Critical",
-    "Active",
-    "Recurring",
-    "IgnoreResourceCalendar",
-    "CalendarUID",
-    "ConstraintType",
-    "ConstraintDate",
-    "Deadline",
-    "EarlyStart",
-    "EarlyFinish",
-    "LateStart",
-    "LateFinish",
-    "TotalSlack",
-    "FreeSlack",
-    "LevelingDelay",
-    "PercentComplete",
-    "PercentWorkComplete",
-    "PhysicalPercentComplete",
-    "ActualStart",
-    "ActualFinish",
-    "ActualDuration",
-    "RemainingDuration",
-    "Notes",
-];
-
-/// Champs d'un `PredecessorLink` lus par l'import (`task.rs`).
-pub(crate) const LINK_FIELDS: &[&str] = &["PredecessorUID", "Type", "CrossProject", "LinkLag", "LagFormat"];
-
-/// Champs scalaires d'un calendrier (`Calendars/Calendar`).
-pub(crate) const CALENDAR_FIELDS: &[&str] = &["UID", "Name", "GUID", "IsBaseCalendar", "BaseCalendarUID"];
-
-/// Champs scalaires d'une exception (`Exceptions/Exception`).
-pub(crate) const EXCEPTION_FIELDS: &[&str] = &[
-    "Name",
-    "Type",
-    "Period",
-    "DaysOfWeek",
-    "MonthItem",
-    "MonthPosition",
-    "Month",
-    "MonthDay",
-    "EnteredByOccurrences",
-    "Occurrences",
-    "DayWorking",
-];
-
-/// Forme d'un élément retenu : décide lesquels de ses enfants sont retenus
-/// (et sous quelle forme) ; les autres sont sautés et comptés.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Kind {
-    /// Champ scalaire : aucun enfant retenu.
-    Scalar,
-    /// `Tasks/Task`.
-    Task,
-    /// `PredecessorLink`.
-    Link,
-    /// `Calendars/Calendar`.
-    Calendar,
-    /// `WeekDays`.
-    WeekDays,
-    /// `WeekDay`.
-    WeekDay,
-    /// `WorkingTimes`.
-    WorkingTimes,
-    /// `WorkingTime`.
-    WorkingTime,
-    /// `TimePeriod`.
-    TimePeriod,
-    /// `Exceptions`.
-    Exceptions,
-    /// `Exception`.
-    Exception,
-    /// `WorkWeeks`.
-    WorkWeeks,
-    /// `WorkWeek`.
-    WorkWeek,
-    /// `Assignments/Assignment` : son seul `TaskUID`.
-    Assignment,
-}
-
-/// Forme de l'enfant `name` d'un élément retenu de forme `parent` ; `None` :
-/// enfant sauté.
-fn child_kind(parent: Kind, name: &str) -> Option<Kind> {
-    let scalar = |known: bool| known.then_some(Kind::Scalar);
-    match (parent, name) {
-        (Kind::Task, "PredecessorLink") => Some(Kind::Link),
-        (Kind::Task, n) => scalar(TASK_FIELDS.contains(&n)),
-        (Kind::Link, n) => scalar(LINK_FIELDS.contains(&n)),
-        (Kind::Calendar | Kind::WorkWeek, "WeekDays") => Some(Kind::WeekDays),
-        (Kind::Calendar, "Exceptions") => Some(Kind::Exceptions),
-        (Kind::Calendar, "WorkWeeks") => Some(Kind::WorkWeeks),
-        (Kind::Calendar, n) => scalar(CALENDAR_FIELDS.contains(&n)),
-        (Kind::WeekDays, "WeekDay") => Some(Kind::WeekDay),
-        (Kind::WeekDay | Kind::Exception, "WorkingTimes") => Some(Kind::WorkingTimes),
-        (Kind::WeekDay | Kind::Exception | Kind::WorkWeek, "TimePeriod") => Some(Kind::TimePeriod),
-        (Kind::WeekDay, n) => scalar(matches!(n, "DayType" | "DayWorking")),
-        (Kind::WorkingTimes, "WorkingTime") => Some(Kind::WorkingTime),
-        (Kind::WorkingTime, n) => scalar(matches!(n, "FromTime" | "ToTime")),
-        (Kind::TimePeriod, n) => scalar(matches!(n, "FromDate" | "ToDate")),
-        (Kind::Exceptions, "Exception") => Some(Kind::Exception),
-        (Kind::Exception, n) => scalar(EXCEPTION_FIELDS.contains(&n)),
-        (Kind::WorkWeeks, "WorkWeek") => Some(Kind::WorkWeek),
-        (Kind::WorkWeek, n) => scalar(n == "Name"),
-        (Kind::Assignment, n) => scalar(n == "TaskUID"),
-        // Champ scalaire, ou enfant inconnu d'une liste.
-        (Kind::Scalar | Kind::WeekDays | Kind::WorkingTimes | Kind::Exceptions | Kind::WorkWeeks, _) => None,
-    }
+    /// Élément capturé (classe P ou hors schéma) : tranche exacte de
+    /// l'entrée, de `<` à la fin de la balise fermante (R-087).
+    pub(crate) raw: Option<&'a str>,
 }
 
 /// Sections d'interface : leur présence signe un enregistrement par
@@ -223,25 +71,144 @@ pub(crate) const UI_SECTIONS: &[&str] = &[
     "VBAProjects",
 ];
 
+/// Forme d'un élément retenu : décide du sort de ses enfants.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    /// Champ scalaire : aucun enfant retenu.
+    Scalar,
+    /// Entité dont les enfants non lus sont capturés (`Task`, `Calendar`,
+    /// `Resource`, `Assignment`, lignes de base).
+    Entity(Parent),
+    /// Élément sans `Extras` (`WeekDay`, `Exception`, `WorkWeek`,
+    /// `PredecessorLink`) : un enfant non lu est perdu.
+    Strict(Parent),
+    /// `WeekDays`.
+    WeekDays,
+    /// `WorkingTimes`.
+    WorkingTimes,
+    /// `WorkingTime`.
+    WorkingTime,
+    /// `TimePeriod`.
+    TimePeriod,
+    /// `Exceptions`.
+    Exceptions,
+    /// `WorkWeeks`.
+    WorkWeeks,
+}
+
+/// Sort d'un enfant d'un élément retenu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fate {
+    /// Construit, avec cette forme.
+    Build(Kind),
+    /// Capturé verbatim (R-087).
+    Capture,
+    /// Calculé non recalculé (classe X) : sauté, compté par nom.
+    Drop,
+    /// Perdu (aucun `Extras` pour ce parent) : sauté, compté, signalé.
+    Lost,
+    /// Sauté (contenu d'un champ scalaire, conteneur inconnu…).
+    Skip,
+}
+
+/// Parents qui portent un `GUID` (élément hors schéma, modélisé).
+const fn has_guid(parent: Parent) -> bool {
+    matches!(
+        parent,
+        Parent::Project | Parent::Calendar | Parent::Task | Parent::Resource | Parent::Assignment
+    )
+}
+
+/// Forme d'un enfant lu (classe M, M?, D, C, F) d'une entité.
+fn structured(parent: Parent, name: &str) -> Kind {
+    match (parent, name) {
+        (Parent::Task, "PredecessorLink") => Kind::Strict(Parent::PredecessorLink),
+        (Parent::Task, "Baseline") => Kind::Entity(Parent::TaskBaseline),
+        (Parent::Resource, "Baseline") => Kind::Entity(Parent::ResourceBaseline),
+        (Parent::Assignment, "Baseline") => Kind::Entity(Parent::AssignmentBaseline),
+        (Parent::Calendar, "WeekDays") => Kind::WeekDays,
+        (Parent::Calendar, "Exceptions") => Kind::Exceptions,
+        (Parent::Calendar, "WorkWeeks") => Kind::WorkWeeks,
+        (Parent::WeekDay | Parent::Exception | Parent::WorkWeek, "TimePeriod") => Kind::TimePeriod,
+        (Parent::WeekDay | Parent::Exception, "WorkingTimes") => Kind::WorkingTimes,
+        // Forme pj15 d'une semaine datée : `WeekDay` direct (`DayType`,
+        // `DayWorking`).
+        (Parent::WorkWeek, "WeekDay") => Kind::Strict(Parent::WeekDay),
+        _ => Kind::Scalar,
+    }
+}
+
+/// Sort de l'enfant `name` d'un élément de forme `parent`.
+fn fate(parent: Kind, name: &str, capture: bool) -> Fate {
+    let lost_unless = |known: bool, kind: Kind| if known { Fate::Build(kind) } else { Fate::Lost };
+    match parent {
+        Kind::Entity(p) => {
+            if name == "GUID" && has_guid(p) {
+                return Fate::Build(Kind::Scalar);
+            }
+            match sequence(p).class(name) {
+                Some(
+                    Class::Modeled | Class::ModeledOpt | Class::Derived | Class::Computed | Class::Format,
+                ) => Fate::Build(structured(p, name)),
+                Some(Class::Dropped) => Fate::Drop,
+                // `LevelingDelay` d'une tâche : conservé et lu (R-083).
+                Some(Class::Preserved) | None if capture => Fate::Capture,
+                _ if p == Parent::Task && name == "LevelingDelay" => Fate::Build(Kind::Scalar),
+                Some(Class::Preserved) | None => Fate::Skip,
+            }
+        }
+        Kind::Strict(p) => {
+            // Forme lue depuis J2 d'une semaine datée : `WeekDays/WeekDay`
+            // avec plages (R-082), hors du schéma pj15.
+            if p == Parent::WorkWeek && name == "WeekDays" {
+                return Fate::Build(Kind::WeekDays);
+            }
+            match sequence(p).class(name) {
+                Some(
+                    Class::Modeled | Class::ModeledOpt | Class::Derived | Class::Computed | Class::Format,
+                ) => Fate::Build(structured(p, name)),
+                _ => Fate::Lost,
+            }
+        }
+        Kind::WeekDays => lost_unless(name == "WeekDay", Kind::Strict(Parent::WeekDay)),
+        Kind::Exceptions => lost_unless(name == "Exception", Kind::Strict(Parent::Exception)),
+        Kind::WorkWeeks => lost_unless(name == "WorkWeek", Kind::Strict(Parent::WorkWeek)),
+        Kind::WorkingTimes => lost_unless(name == "WorkingTime", Kind::WorkingTime),
+        Kind::WorkingTime => lost_unless(matches!(name, "FromTime" | "ToTime"), Kind::Scalar),
+        Kind::TimePeriod => lost_unless(matches!(name, "FromDate" | "ToDate"), Kind::Scalar),
+        Kind::Scalar => Fate::Skip,
+    }
+}
+
 /// Résultat de la lecture XML, avant la correspondance typée.
 #[derive(Debug, Default)]
 pub(crate) struct RawDocument<'a> {
     /// Espace de noms de la racine, s'il est déclaré.
     pub(crate) namespace: Option<String>,
+    /// Déclarations `xmlns:préfixe` de la racine (préfixe, adresse), dans
+    /// l'ordre : réémises à l'écriture (R-087).
+    pub(crate) prefixes: Vec<(String, String)>,
     /// Octet du début de la racine `Project`.
     pub(crate) root_at: u64,
-    /// Champs scalaires de `Project` (enfants sautés).
+    /// Enfants de `Project` hors conteneurs : champs lus et éléments
+    /// capturés, dans l'ordre du document.
     pub(crate) fields: Vec<Element<'a>>,
     /// Éléments `Calendars/Calendar`.
     pub(crate) calendars: Vec<Element<'a>>,
     /// Éléments `Tasks/Task`.
     pub(crate) tasks: Vec<Element<'a>>,
-    /// Éléments `Assignments/Assignment`, réduits à leur `TaskUID`.
+    /// Éléments `Resources/Resource`.
+    pub(crate) resources: Vec<Element<'a>>,
+    /// Éléments `Assignments/Assignment`.
     pub(crate) assignments: Vec<Element<'a>>,
     /// Sections d'interface présentes, dans l'ordre du document, sans doublon.
     pub(crate) ui_sections: Vec<String>,
-    /// Éléments sautés.
+    /// Éléments sautés (hors calculés comptés et perdus).
     pub(crate) skipped_elements: u64,
+    /// Éléments calculés non recalculés (classe X), par nom.
+    pub(crate) dropped_computed: BTreeMap<String, u64>,
+    /// Éléments perdus (enfants non lus d'un parent sans `Extras`).
+    pub(crate) not_preserved: u64,
 }
 
 /// Destination d'un sous-arbre retenu, une fois fermé.
@@ -250,6 +217,7 @@ enum Dest {
     Field,
     Calendar,
     Task,
+    Resource,
     Assignment,
 }
 
@@ -258,6 +226,7 @@ enum Dest {
 enum Container {
     Calendars,
     Tasks,
+    Resources,
     Assignments,
 }
 
@@ -266,11 +235,15 @@ enum Container {
 enum Role {
     /// `Project`.
     Root,
-    /// Conteneur parcouru (`Calendars`, `Tasks`, `Assignments`).
+    /// Conteneur parcouru (`Calendars`, `Tasks`, `Resources`, `Assignments`).
     Container(Container),
     /// Élément retenu ; `top` pour la racine du sous-arbre ; `kind` décide
     /// des enfants retenus (les autres sont sautés).
     Build { top: Option<Dest>, kind: Kind },
+    /// Élément capturé ; `top` pour un enfant direct de `Project`.
+    Capture { top: Option<Dest> },
+    /// Descendant d'un élément capturé : analysé, non construit.
+    InCapture,
     /// Élément sauté (lui et tout son contenu).
     Skip,
 }
@@ -286,22 +259,30 @@ struct State<'a, 's, 'l> {
     /// Entrée.
     input: &'a str,
     limits: Limits,
+    /// Capturer les éléments non modélisés (`ReadOptions::keep_extras`).
+    capture: bool,
     open: Vec<Frame<'a>>,
-    /// Pile des éléments retenus en construction (parallèle aux cadres `Build`).
+    /// Pile des éléments retenus en construction (parallèle aux cadres
+    /// `Build` et `Capture`).
     building: Vec<Element<'a>>,
     doc: RawDocument<'a>,
     elements: u64,
-    /// Éléments retenus (construits), bornés par [`Limits::max_retained`].
+    /// Éléments retenus (construits ou capturés), bornés par
+    /// [`Limits::max_retained`].
     retained: u64,
+    /// Octets capturés, bornés par [`Limits::max_extras_bytes`].
+    captured_bytes: u64,
     root_seen: bool,
     sink: &'s mut Sink<'l>,
 }
 
 /// Lit le document : contrôles structurels (erreurs) et anomalies tolérées
-/// (diagnostics dans `sink`).
+/// (diagnostics dans `sink`). `capture` : garder les éléments non
+/// modélisés (R-087).
 pub(crate) fn read_document<'a>(
     text: &'a str,
     limits: Limits,
+    capture: bool,
     lines: &LineIndex<'_>,
     sink: &mut Sink<'_>,
 ) -> Result<RawDocument<'a>, MspdiError> {
@@ -315,11 +296,13 @@ pub(crate) fn read_document<'a>(
     let mut state = State {
         input: text,
         limits,
+        capture,
         open: Vec::new(),
         building: Vec::new(),
         doc: RawDocument::default(),
         elements: 0,
         retained: 0,
+        captured_bytes: 0,
         root_seen: false,
         sink,
     };
@@ -334,13 +317,14 @@ pub(crate) fn read_document<'a>(
                 });
             }
         };
+        let after = reader.buffer_position();
         match event {
             Event::Start(e) => state.start(&e, at, lines)?,
-            Event::End(_) => state.end(),
+            Event::End(_) => state.end(after, lines)?,
             Event::Empty(e) => {
                 // `expand_empty_elements` les déplie : branche gardée par sûreté.
                 state.start(&e, at, lines)?;
-                state.end();
+                state.end(after, lines)?;
             }
             Event::Text(t) => state.text(t.xml10_content(), at, lines)?,
             Event::CData(t) => state.text(t.xml10_content(), at, lines)?,
@@ -413,11 +397,100 @@ fn root_namespace(e: &BytesStart<'_>) -> Option<String> {
         .find_map(|a| (a.key.as_ref() == wanted).then(|| a.value.clone().into_owned()))
 }
 
+/// Déclarations `xmlns:préfixe` de la racine.
+fn root_prefixes(e: &BytesStart<'_>) -> Vec<(String, String)> {
+    e.attributes()
+        .flatten()
+        .filter_map(|a| {
+            let key = a.key.as_ref();
+            let prefix = key.strip_prefix("xmlns:")?;
+            Some((prefix.to_owned(), a.value.clone().into_owned()))
+        })
+        .collect()
+}
+
 impl<'a> State<'a, '_, '_> {
     /// Chemin des éléments ouverts sous la racine (« Tasks/Task/UID »).
     fn path(&self) -> String {
         let names: Vec<&str> = self.open.iter().skip(1).map(|f| f.name.as_ref()).collect();
         names.join("/")
+    }
+
+    /// Rôle d'un enfant de `Project`.
+    fn root_child(&mut self, name: &str, at: u64) -> Role {
+        let container = match name {
+            "Calendars" => Some(Container::Calendars),
+            "Tasks" => Some(Container::Tasks),
+            "Resources" => Some(Container::Resources),
+            "Assignments" => Some(Container::Assignments),
+            _ => None,
+        };
+        if let Some(c) = container {
+            // Repère dans la suite des enfants de `Project` : un élément
+            // hors schéma qui suit `Tasks` s'y ancre (R-087).
+            self.doc.fields.push(Element {
+                name: Cow::Owned(name.to_owned()),
+                at,
+                ..Element::default()
+            });
+            return Role::Container(c);
+        }
+        if UI_SECTIONS.contains(&name) && !self.doc.ui_sections.iter().any(|s| s == name) {
+            self.doc.ui_sections.push(name.to_owned());
+        }
+        let field = Role::Build {
+            top: Some(Dest::Field),
+            kind: Kind::Scalar,
+        };
+        if name == "GUID" {
+            return field;
+        }
+        match sequence(Parent::Project).class(name) {
+            Some(Class::Modeled | Class::ModeledOpt | Class::Derived | Class::Computed | Class::Format) => {
+                field
+            }
+            Some(Class::Dropped) => {
+                self.drop_computed(name);
+                Role::Skip
+            }
+            Some(Class::Preserved) | None if self.capture => Role::Capture {
+                top: Some(Dest::Field),
+            },
+            Some(Class::Preserved) | None => Role::Skip,
+        }
+    }
+
+    /// Rôle d'un enfant d'un élément retenu de forme `kind`.
+    fn child_role(&mut self, kind: Kind, name: &str, at: u64) -> Role {
+        // Le texte d'un élément qui a des enfants n'est jamais lu
+        // (indentation) : il n'est pas gardé, même si l'enfant est sauté.
+        if let Some(parent) = self.building.last_mut() {
+            parent.structured = true;
+            parent.text = Cow::Borrowed("");
+        }
+        match fate(kind, name, self.capture) {
+            Fate::Build(kind) => Role::Build { top: None, kind },
+            Fate::Capture => Role::Capture { top: None },
+            Fate::Drop => {
+                self.drop_computed(name);
+                Role::Skip
+            }
+            Fate::Lost => {
+                self.doc.not_preserved = self.doc.not_preserved.saturating_add(1);
+                let path = format!("{}/{name}", self.path());
+                self.sink.push(ImportCode::NotPreserved, None, at, &path, None);
+                Role::Skip
+            }
+            Fate::Skip => Role::Skip,
+        }
+    }
+
+    fn drop_computed(&mut self, name: &str) {
+        if let Some(n) = self.doc.dropped_computed.get_mut(name) {
+            *n = n.saturating_add(1);
+        } else {
+            self.doc.dropped_computed.insert(name.to_owned(), 1);
+        }
     }
 
     fn start(&mut self, e: &BytesStart<'_>, at: u64, lines: &LineIndex<'_>) -> Result<(), MspdiError> {
@@ -450,54 +523,43 @@ impl<'a> State<'a, '_, '_> {
                 }
                 self.root_seen = true;
                 self.doc.namespace = root_namespace(e);
+                self.doc.prefixes = root_prefixes(e);
                 self.doc.root_at = at;
                 Role::Root
             }
-            Some(Role::Root) => match name.as_ref() {
-                "Calendars" => Role::Container(Container::Calendars),
-                "Tasks" => Role::Container(Container::Tasks),
-                "Assignments" => Role::Container(Container::Assignments),
-                n if PROJECT_FIELDS.contains(&n) => Role::Build {
-                    top: Some(Dest::Field),
-                    kind: Kind::Scalar,
-                },
-                n => {
-                    if UI_SECTIONS.contains(&n) && !self.doc.ui_sections.iter().any(|s| s == n) {
-                        self.doc.ui_sections.push(name.to_string());
-                    }
-                    Role::Skip
-                }
-            },
+            Some(Role::Root) => self.root_child(&name, at),
             Some(Role::Container(c)) => match (c, name.as_ref()) {
                 (Container::Calendars, "Calendar") => Role::Build {
                     top: Some(Dest::Calendar),
-                    kind: Kind::Calendar,
+                    kind: Kind::Entity(Parent::Calendar),
                 },
                 (Container::Tasks, "Task") => Role::Build {
                     top: Some(Dest::Task),
-                    kind: Kind::Task,
+                    kind: Kind::Entity(Parent::Task),
+                },
+                (Container::Resources, "Resource") => Role::Build {
+                    top: Some(Dest::Resource),
+                    kind: Kind::Entity(Parent::Resource),
                 },
                 (Container::Assignments, "Assignment") => Role::Build {
                     top: Some(Dest::Assignment),
-                    kind: Kind::Assignment,
+                    kind: Kind::Entity(Parent::Assignment),
                 },
                 _ => Role::Skip,
             },
-            Some(Role::Build { kind, .. }) => {
-                // Le texte d'un élément qui a des enfants n'est jamais lu
-                // (indentation) : il n'est pas gardé, même si l'enfant est
-                // sauté.
+            Some(Role::Build { kind, .. }) => self.child_role(kind, &name, at),
+            Some(Role::Capture { .. } | Role::InCapture) => {
                 if let Some(parent) = self.building.last_mut() {
                     parent.structured = true;
                     parent.text = Cow::Borrowed("");
                 }
-                child_kind(kind, &name).map_or(Role::Skip, |kind| Role::Build { top: None, kind })
+                Role::InCapture
             }
             Some(Role::Skip) => Role::Skip,
         };
         match role {
             Role::Skip => self.doc.skipped_elements = self.doc.skipped_elements.saturating_add(1),
-            Role::Build { .. } => {
+            Role::Build { .. } | Role::Capture { .. } => {
                 self.retained = self.retained.saturating_add(1);
                 if self.retained > self.limits.max_retained {
                     return Err(MspdiError::TooManyRetained {
@@ -511,24 +573,39 @@ impl<'a> State<'a, '_, '_> {
                     children: Vec::new(),
                     structured: false,
                     at,
+                    raw: None,
                 });
             }
-            Role::Root | Role::Container(_) => {}
+            Role::Root | Role::Container(_) | Role::InCapture => {}
         }
         self.open.push(Frame { name, role });
         Ok(())
     }
 
-    fn end(&mut self) {
+    /// Fin de l'élément ouvert ; `after` : octet qui suit sa balise
+    /// fermante.
+    fn end(&mut self, after: u64, lines: &LineIndex<'_>) -> Result<(), MspdiError> {
         let Some(frame) = self.open.pop() else {
-            return;
+            return Ok(());
         };
-        let Role::Build { top, .. } = frame.role else {
-            return;
+        let (Role::Build { top, .. } | Role::Capture { top }) = frame.role else {
+            return Ok(());
         };
-        let Some(done) = self.building.pop() else {
-            return;
+        let Some(mut done) = self.building.pop() else {
+            return Ok(());
         };
+        if matches!(frame.role, Role::Capture { .. }) {
+            let size = after.saturating_sub(done.at);
+            self.captured_bytes = self.captured_bytes.saturating_add(size);
+            if self.captured_bytes > self.limits.max_extras_bytes {
+                return Err(MspdiError::TooManyRetained {
+                    at: lines.locate(done.at),
+                    max: self.limits.max_extras_bytes,
+                });
+            }
+            let range = usize::try_from(done.at).ok().zip(usize::try_from(after).ok());
+            done.raw = range.and_then(|(a, b)| self.input.get(a..b));
+        }
         match top {
             None => {
                 if let Some(parent) = self.building.last_mut() {
@@ -538,8 +615,10 @@ impl<'a> State<'a, '_, '_> {
             Some(Dest::Field) => self.doc.fields.push(done),
             Some(Dest::Calendar) => self.doc.calendars.push(done),
             Some(Dest::Task) => self.doc.tasks.push(done),
+            Some(Dest::Resource) => self.doc.resources.push(done),
             Some(Dest::Assignment) => self.doc.assignments.push(done),
         }
+        Ok(())
     }
 
     fn text(&mut self, piece: Cow<'a, str>, at: u64, lines: &LineIndex<'_>) -> Result<(), MspdiError> {
@@ -551,7 +630,10 @@ impl<'a> State<'a, '_, '_> {
         if piece.len() > max {
             return Err(too_long());
         }
-        if !matches!(self.open.last().map(|f| f.role), Some(Role::Build { .. })) {
+        if !matches!(
+            self.open.last().map(|f| f.role),
+            Some(Role::Build { .. } | Role::Capture { .. })
+        ) {
             return Ok(());
         }
         if let Some(current) = self.building.last_mut() {
@@ -592,7 +674,7 @@ mod tests {
     fn read_with(text: &str, limits: Limits) -> (Result<RawDocument<'_>, MspdiError>, Vec<ImportDiagnostic>) {
         let lines = LineIndex::new(text);
         let mut sink = Sink::new(&lines);
-        let r = read_document(text, limits, &lines, &mut sink);
+        let r = read_document(text, limits, true, &lines, &mut sink);
         (r, sink.out)
     }
 
@@ -630,14 +712,36 @@ mod tests {
             doc.namespace.as_deref(),
             Some("http://schemas.microsoft.com/project")
         );
+        // Champs lus, éléments capturés (sections d'interface, hors schéma)
+        // et repères des conteneurs, dans l'ordre du document.
         let names: Vec<&str> = doc.fields.iter().map(|f| f.name.as_ref()).collect();
-        assert_eq!(names, ["SaveVersion", "Name", "Title"]);
+        assert_eq!(
+            names,
+            [
+                "SaveVersion",
+                "Name",
+                "Title",
+                "Views",
+                "Maps",
+                "Resources",
+                "Calendars",
+                "Tasks",
+                "Assignments"
+            ]
+        );
         assert_eq!(doc.fields[1].text, "A & B éA");
         assert_eq!(doc.fields[2].text, "x < y");
+        assert_eq!(
+            doc.fields[3].raw,
+            Some("<Views><View><Name>Gantt</Name></View></Views>")
+        );
+        assert_eq!(doc.fields[4].raw, Some("<Maps/>"));
+        assert_eq!(doc.fields[1].raw, None);
         assert_eq!(doc.ui_sections, ["Views", "Maps"]);
-        // Sautés : Views, View, Name ; Maps ; Resources, Resource, UID ;
-        // UID et TimephasedData, Type de l'affectation.
-        assert_eq!(doc.skipped_elements, 10);
+        // Rien n'est sauté : la répartition de l'affectation est capturée
+        // (le filtre des répartitions calculées vient après, R-087).
+        assert_eq!(doc.skipped_elements, 0);
+        assert_eq!(doc.resources.len(), 1);
         assert_eq!(doc.calendars.len(), 1);
         let cal = &doc.calendars[0];
         assert_eq!(cal.children[1].children[0].children[0].text, "1");
@@ -645,8 +749,14 @@ mod tests {
         assert_eq!(doc.tasks[0].children[1].name, "Name");
         assert_eq!(doc.tasks[1].children[1].children[0].text, "0");
         assert_eq!(doc.assignments.len(), 1);
-        assert_eq!(doc.assignments[0].children.len(), 1);
-        assert_eq!(doc.assignments[0].children[0].text, "1");
+        let names: Vec<&str> = doc.assignments[0]
+            .children
+            .iter()
+            .map(|c| c.name.as_ref())
+            .collect();
+        assert_eq!(names, ["UID", "TaskUID", "TimephasedData"]);
+        assert_eq!(doc.assignments[0].children[1].text, "1");
+        assert!(doc.assignments[0].children[2].raw.is_some());
         // Position : début de la balise.
         assert_eq!(&SMALL[usize::try_from(doc.tasks[1].at).unwrap()..][..6], "<Task>");
     }
@@ -728,29 +838,94 @@ mod tests {
     }
 
     #[test]
-    fn only_read_children_are_retained() {
-        // Sous `Task` et `Calendar`, seuls les champs lus par l'import sont
-        // construits ; le reste est sauté et compté, à tout niveau. Le texte
-        // d'un champ qui a des enfants (même sautés) n'est pas lu.
+    fn r087_children_by_class() {
+        // Sous `Task` et `Calendar`, la classe décide : lus (M, M?, D, C, F)
+        // construits ; calculés non recalculés (X) sautés et comptés par
+        // nom ; conservés (P) et hors schéma capturés verbatim ; enfants non
+        // lus d'un lien ou d'un jour de calendrier perdus, comptés et
+        // signalés. Le texte d'un champ qui a des enfants n'est pas lu.
         let text = "<Project><Tasks><Task><UID>1</UID><Baseline><Number>0</Number></Baseline>\
                     <ExtendedAttribute><FieldID>1</FieldID></ExtendedAttribute><X/><Name>a<b/>c</Name>\
-                    <PredecessorLink><PredecessorUID>2</PredecessorUID><Junk/></PredecessorLink></Task></Tasks>\
-                    <Calendars><Calendar><UID>1</UID><Foo/><WeekDays><WeekDay><DayType>1</DayType><Bar/>\
-                    </WeekDay></WeekDays></Calendar></Calendars></Project>";
+                    <Cost>5</Cost><PredecessorLink><PredecessorUID>2</PredecessorUID><Junk/></PredecessorLink>\
+                    </Task></Tasks><Calendars><Calendar><UID>1</UID><Foo/><WeekDays><WeekDay><DayType>1</DayType>\
+                    <Bar/></WeekDay></WeekDays></Calendar></Calendars></Project>";
         let (doc, diags) = read(text);
         let doc = doc.unwrap();
-        assert!(diags.is_empty(), "{diags:?}");
+        let lost: Vec<&str> = diags.iter().map(|d| d.element.as_str()).collect();
+        assert_eq!(
+            lost,
+            [
+                "Tasks/Task/PredecessorLink/Junk",
+                "Calendars/Calendar/WeekDays/WeekDay/Bar"
+            ]
+        );
+        assert!(diags.iter().all(|d| d.code == ImportCode::NotPreserved));
+        assert_eq!(doc.not_preserved, 2);
         let names =
             |e: &super::Element<'_>| e.children.iter().map(|c| c.name.to_string()).collect::<Vec<_>>();
         let task = &doc.tasks[0];
-        assert_eq!(names(task), ["UID", "Name", "PredecessorLink"]);
-        assert_eq!(task.children[1].text, "");
-        assert_eq!(names(&task.children[2]), ["PredecessorUID"]);
+        assert_eq!(
+            names(task),
+            [
+                "UID",
+                "Baseline",
+                "ExtendedAttribute",
+                "X",
+                "Name",
+                "PredecessorLink"
+            ]
+        );
+        assert_eq!(
+            task.children[2].raw,
+            Some("<ExtendedAttribute><FieldID>1</FieldID></ExtendedAttribute>")
+        );
+        assert_eq!(task.children[3].raw, Some("<X/>"));
+        assert_eq!(task.children[4].text, "");
+        assert_eq!(names(&task.children[5]), ["PredecessorUID"]);
+        assert_eq!(doc.dropped_computed.get("Cost"), Some(&1));
         let cal = &doc.calendars[0];
-        assert_eq!(names(cal), ["UID", "WeekDays"]);
-        assert_eq!(names(&cal.children[1].children[0]), ["DayType"]);
-        // Baseline, Number, ExtendedAttribute, FieldID, X, b, Junk, Foo, Bar.
-        assert_eq!(doc.skipped_elements, 9);
+        assert_eq!(names(cal), ["UID", "Foo", "WeekDays"]);
+        assert_eq!(names(&cal.children[2].children[0]), ["DayType"]);
+        // b (sous Name), Cost, Junk, Bar.
+        assert_eq!(doc.skipped_elements, 4);
+        // Sans capture : P et hors schéma sautés.
+        let lines = LineIndex::new(text);
+        let mut sink = Sink::new(&lines);
+        let plain = read_document(text, Limits::default(), false, &lines, &mut sink).unwrap();
+        assert_eq!(
+            names(&plain.tasks[0]),
+            ["UID", "Baseline", "Name", "PredecessorLink"]
+        );
+        assert_eq!(plain.skipped_elements, 8);
+    }
+
+    #[test]
+    fn r087_capture_limits() {
+        // Chaque capture compte pour un élément retenu ; le total des octets
+        // capturés est borné.
+        let text = "<Project><Tasks><Task><UID>1</UID><Contact>a</Contact><Contact>b</Contact></Task></Tasks></Project>";
+        let limits = Limits {
+            max_retained: 3,
+            ..Limits::default()
+        };
+        assert!(matches!(
+            read_with(text, limits).0,
+            Err(MspdiError::TooManyRetained { max: 3, .. })
+        ));
+        let limits = Limits {
+            max_extras_bytes: 39,
+            ..Limits::default()
+        };
+        // Deux captures de 20 octets.
+        assert!(matches!(
+            read_with(text, limits).0,
+            Err(MspdiError::TooManyRetained { max: 39, .. })
+        ));
+        let limits = Limits {
+            max_extras_bytes: 40,
+            ..Limits::default()
+        };
+        assert!(read_with(text, limits).0.is_ok());
     }
 
     #[test]
@@ -765,13 +940,14 @@ mod tests {
             read_with(text, limits).0,
             Err(MspdiError::TooManyRetained { max: 3, .. })
         ));
-        // Les éléments sautés ne comptent pas.
+        // Les éléments sautés (ici, calculés non recalculés) ne comptent pas.
         let skipped = format!(
             "<Project><Tasks><Task><UID>1</UID>{}</Task></Tasks></Project>",
-            "<X/>".repeat(1_000)
+            "<Cost>0</Cost>".repeat(1_000)
         );
         let doc = read_with(&skipped, limits).0.unwrap();
         assert_eq!(doc.skipped_elements, 1_000);
+        assert_eq!(doc.dropped_computed.get("Cost"), Some(&1_000));
     }
 
     #[test]

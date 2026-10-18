@@ -7,7 +7,8 @@
 //! MS Project (clean-room, règle 1). Aucun flottant : les décimales des
 //! durées sont lues en entiers et arrondies par la règle unique R-001.
 //!
-//! État (J2, ADR-0009) : lecture seule ([`read`]). Lecture événementielle
+//! État (J3, ADR-0010) : lecture ([`read`]) et écriture ([`write::write`]).
+//! Lecture événementielle
 //! quick-xml, arbre borné par sous-arbre (pile explicite, limites de taille,
 //! de profondeur, d'éléments et de texte ; DOCTYPE refusé), correspondance
 //! typée indulgente : une valeur illisible devient un diagnostic et reçoit sa
@@ -20,24 +21,39 @@
 //!   dixièmes de minute (R-070, R-072, R-073, R-075) ;
 //! - [`codes`] : tables des codes numériques MSPDI vers les types du cœur ;
 //! - [`error`] : erreurs structurelles typées, positions ;
-//! - [`diag`] : diagnostics d'import.
+//! - [`diag`] : diagnostics d'import ;
+//! - [`extras`] : éléments non modélisés conservés (clés, ordre canonique) ;
+//! - [`schema`] : table unique des éléments du schéma (séquences pj15,
+//!   classes, ordre observé ; R-087, R-121) ;
+//! - [`write`] : écriture MSPDI, profils d'ordre, diagnostics d'écriture
+//!   (R-120 à R-132).
 
 pub mod codes;
 pub mod diag;
 pub mod error;
+pub mod extras;
+mod normalize;
 pub mod scalar;
+pub mod schema;
+pub mod write;
 
+mod assignment;
+mod baseline;
 mod calendar;
 mod fields;
 mod project;
 mod recorded;
+mod resource;
 mod task;
 mod xml;
+
+use std::collections::BTreeMap;
 
 use planrs_core::{Moment, Project};
 
 pub use diag::{ImportCode, ImportDiagnostic, LinkIgnoredReason};
 pub use error::{Location, MspdiError};
+pub use normalize::normalize;
 pub use recorded::{RecordedSchedule, RecordedTask, Tenths};
 
 /// Plafond de la profondeur d'imbrication, quelle que soit
@@ -65,18 +81,23 @@ pub struct Limits {
     pub max_retained: u64,
     /// Longueur maximale du texte d'un élément, en octets.
     pub max_text_bytes: usize,
+    /// Total maximal des octets capturés en `Extras` (R-087).
+    pub max_extras_bytes: u64,
 }
 
 impl Default for Limits {
     /// 256 Mio, 64 niveaux, 20 000 000 éléments dont 3 000 000 retenus
-    /// (environ 60 000 tâches de 50 champs), 16 Mio de texte.
+    /// (environ 60 000 tâches de 50 champs), 16 Mio de texte, captures
+    /// bornées par la taille de l'entrée.
     fn default() -> Self {
+        let max_bytes = 256 * 1024 * 1024;
         Self {
-            max_bytes: 256 * 1024 * 1024,
+            max_bytes,
             max_depth: 64,
             max_elements: 20_000_000,
             max_retained: 3_000_000,
             max_text_bytes: 16 * 1024 * 1024,
+            max_extras_bytes: max_bytes,
         }
     }
 }
@@ -89,15 +110,19 @@ pub struct ReadOptions {
     pub current_date: Moment,
     /// Limites.
     pub limits: Limits,
+    /// Conserver les éléments non modélisés en `Extras` (R-087) ; faux :
+    /// ils sont sautés (mémoire minimale, aller-retour avec pertes).
+    pub keep_extras: bool,
 }
 
 impl ReadOptions {
-    /// Options avec les limites par défaut.
+    /// Options avec les limites par défaut, `Extras` conservés.
     #[must_use]
     pub fn new(current_date: Moment) -> Self {
         Self {
             current_date,
             limits: Limits::default(),
+            keep_extras: true,
         }
     }
 }
@@ -113,9 +138,17 @@ pub struct SourceInfo {
     /// `Maps`, `Reports`, `Drawings`, `DataLinks`, `VBAProjects`) : signature d'un
     /// enregistrement par MS Project.
     pub ui_sections: Vec<String>,
-    /// Éléments sautés (Resources, Views, contenu des affectations, champs
-    /// non lus des tâches et des calendriers…).
+    /// Éléments sautés (contenu d'un champ scalaire, conteneurs inconnus,
+    /// éléments non conservés avec `keep_extras` faux, calculés non
+    /// recalculés et perdus ci-dessous compris…).
     pub skipped_elements: u64,
+    /// Éléments calculés non recalculés par planrs (classe X : coûts,
+    /// valeur acquise, écarts, surutilisation, travail des ressources), par
+    /// nom : ni lus ni conservés, MS Project les recalcule (R-087, D13).
+    pub dropped_computed: BTreeMap<String, u64>,
+    /// Enfants non lus d'un élément sans `Extras` (jour de calendrier,
+    /// exception, semaine datée, plage, lien) : perdus (`mspdi.not_preserved`).
+    pub not_preserved: u64,
     /// Diagnostics d'import supprimés au-delà des plafonds
     /// ([`diag::MAX_DIAGNOSTICS`], [`diag::MAX_DIAGNOSTICS_PER_CODE`]) ;
     /// un diagnostic [`ImportCode::Truncated`] les signale aussi.
@@ -166,17 +199,25 @@ pub fn read(input: &[u8], options: &ReadOptions) -> Result<MspdiDocument, MspdiE
     })?;
     let lines = error::LineIndex::new(text);
     let mut sink = diag::Sink::new(&lines);
-    let raw = xml::read_document(text, limits, &lines, &mut sink)?;
+    let raw = xml::read_document(text, limits, options.keep_extras, &lines, &mut sink)?;
     let project::Built {
         project,
         recorded,
         save_version,
+        dropped_computed,
     } = project::build(&raw, options, &mut sink);
+    let mut all_dropped = raw.dropped_computed.clone();
+    for (name, n) in dropped_computed {
+        let total = all_dropped.entry(name).or_insert(0);
+        *total = total.saturating_add(n);
+    }
     let source = SourceInfo {
         save_version,
         namespace: raw.namespace.clone(),
         ui_sections: raw.ui_sections.clone(),
         skipped_elements: raw.skipped_elements,
+        dropped_computed: all_dropped,
+        not_preserved: raw.not_preserved,
         dropped_diagnostics: sink.dropped,
     };
     let mut diagnostics = sink.finish();

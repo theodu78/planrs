@@ -11,9 +11,9 @@ use std::collections::BTreeMap;
 
 use planrs_core::calendar::BuiltinCalendarNames;
 use planrs_core::{
-    CalendarUid, Duration, DurationUnit, Lag, LagValue, Link, LinkType, Minutes, OutlineLevel, Project,
-    ProjectInit, ProjectOptions, Schedule, ScheduleAnchor, SchedulingMode, SignedPercent, Task, TaskOutcome,
-    TaskSchedule, TaskUid, TimeBasis,
+    CalendarUid, Constraint, Duration, DurationUnit, Lag, LagValue, Link, LinkType, Minutes, OutlineLevel,
+    Project, ProjectInit, ProjectOptions, Schedule, ScheduleAnchor, SchedulingMode, SignedPercent, Task,
+    TaskOutcome, TaskSchedule, TaskUid, TimeBasis,
 };
 
 use crate::moment;
@@ -90,6 +90,8 @@ impl Net {
         let options = self.project.options;
         let mut t = Task::new(TaskUid::new(uid), name.to_owned(), &options);
         t.duration = duration(minutes, TimeBasis::Working);
+        // R-108 : ALAP par défaut à rebours.
+        t.constraint = Constraint::default_for(&self.project.anchor);
         if let Err(e) = self.project.tasks.push(t) {
             panic!("tâche de test « {name} » : {e}");
         }
@@ -164,6 +166,37 @@ impl Net {
         self
     }
 
+    /// Contrainte de la tâche (R-090 à R-105).
+    #[must_use]
+    pub fn constraint(mut self, name: &str, c: Constraint) -> Self {
+        self.task_mut(name).constraint = c;
+        self
+    }
+
+    /// Échéance de la tâche (R-102).
+    #[must_use]
+    pub fn deadline(mut self, name: &str, date: &str) -> Self {
+        self.task_mut(name).deadline = Some(moment(date));
+        self
+    }
+
+    /// Planification à rebours depuis la fin `finish` (R-106) ; les tâches
+    /// ajoutées ensuite sont ALAP (contrainte par défaut à rebours, R-108).
+    /// À appeler avant d'ajouter les tâches.
+    #[must_use]
+    pub fn from_finish(mut self, finish: &str) -> Self {
+        self.project.anchor = ScheduleAnchor::FromFinish(moment(finish));
+        self
+    }
+
+    /// Option « les tâches respectent toujours leurs dates de contrainte »
+    /// (R-099).
+    #[must_use]
+    pub fn honor(mut self, honor: bool) -> Self {
+        self.project.options.honor_constraints = honor;
+        self
+    }
+
     /// Lien `pred` → `succ`.
     #[must_use]
     pub fn link(mut self, pred: &str, succ: &str, kind: LinkType, lag: Lag) -> Self {
@@ -212,8 +245,14 @@ impl Net {
     /// Calcule le planning.
     #[must_use]
     pub fn run(self) -> Run {
+        self.run_with(planrs_core::Limits::default())
+    }
+
+    /// Calcule le planning sous des plafonds explicites.
+    #[must_use]
+    pub fn run_with(self, limits: planrs_core::Limits) -> Run {
         Run {
-            schedule: planrs_core::schedule(&self.project),
+            schedule: planrs_core::schedule_with(&self.project, limits),
             names: self.names,
         }
     }

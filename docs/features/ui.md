@@ -222,7 +222,7 @@ Reportés (ADR-0011), non implémentés :
 Constatés à la relecture et non corrigés :
 - **polices non latines** : les noms en chinois, japonais, coréen, arabe, hébreu ou en emoji s'affichent en boîtes vides (polices par défaut d'egui) ; sur le desktop, la feature `system_fonts` d'eframe (active par défaut, native seulement) pourrait fournir un repli par les polices du système, non vérifié ; rien sur le web ni sous kittest. Décision à prendre (police de repli embarquée : licence, taille ; chargement paresseux sur le web) ;
 - **erreurs d'ouverture non traduites** : le détail est le `Display` de `MspdiError` (français) ou de `std::io::Error` (langue du système), figé dans le message (un changement de langue retraduit le titre, pas le détail) ; le nom du fichier fautif n'apparaît pas dans le message (`docs/ui-needs.md` N9, N10) ;
-- **contraintes ignorées sans diagnostic** : le moteur J2 ne traite pas les contraintes de date et n'émet rien ; l'écran affiche des dates qui n'en tiennent pas compte (tâche 41 de l'exemple ; `docs/ui-needs.md` N4) ;
+- ~~**contraintes ignorées sans diagnostic**~~ (clos en J3 : le moteur honore les contraintes de date et émet des diagnostics ; la tâche 41 de l'exemple démarre le 26/04, `docs/ui-needs.md` N4) ;
 - « → » des diagnostics du cœur remplacé par « -> » à l'affichage (glyphe absent des polices d'egui) ;
 - barre d'outils sur deux lignes sous environ 900 px de large (`horizontal_wrapped`) ;
 - `ScrollArea` d'egui 0.37 estompe le contenu près du bas de la zone (fondu de défilement) : la dernière ligne visible de la table et du Gantt apparaît pâlie ;

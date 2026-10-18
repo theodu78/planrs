@@ -30,7 +30,7 @@ Le rapport est écrit dans `target/tmp/corpus-report.md` et `target/tmp/corpus-r
 | `sha256` | empreinte SHA-256, 64 hexadécimaux minuscules, unique |
 | `producer` | `msproject`, `msproject-probable` ou `unknown` |
 | `save_version` | `SaveVersion` attendu |
-| `note` | remarque (peut être vide) |
+| `note` | remarque (peut être vide) : contenu du fichier, divergences connues et jalon qui les traitera ; recopiée dans la section du fichier du rapport |
 | `floor` | plancher : nombre minimal de cas identiques sur ce fichier (≥ 0) |
 
 - Le manifeste est **figé** : on ajoute des lignes ; un retrait passe par un ADR et garde le nom. `planrs_core::parity::CORPUS_FLOOR` vaut la somme des `floor` (testé) et `FLOOR = CORPUS_FLOOR + ORACLE_FLOOR`.
@@ -44,3 +44,7 @@ Le rapport est écrit dans `target/tmp/corpus-report.md` et `target/tmp/corpus-r
 - Les tâches touchées par une fonction hors J2 ne sont pas exclues : elles sont **étiquetées** par causes probables (`constraint`, `deadline`, `progress`, `leveling_delay`, `assigned`, `summary_link`, `milestone`, `manual_predecessor`, `task_calendar`, `project_calendar_derived`, `elapsed`, `lag`, `slack_not_tenth_multiple`, plus `divergent_predecessor` et `divergent_child` pour une divergence propagée) et comptent si elles coïncident.
 - **Verdict** : tout fichier présent doit atteindre son `floor` (sinon régression nommée) ; un fichier `producer = msproject` doit comparer, pour chaque cas, les 9 champs de base (10 pour une récapitulative ou l'UID 0), et n'avoir aucune tâche exclue faute de valeur comparable, sinon la comparaison est « incomplète » et le verdict échoue (une régression du lecteur ne tient pas le plancher à vide) ; le rapport publie, par fichier, le nombre de comparaisons par champ ; un fichier absent ne compte ni pour ni contre ; une erreur de lecture d'un fichier qui a un plancher échoue ; « plancher relevable » si identiques > `floor`.
 - **Relever le plancher** : recopier dans chaque `floor` le nombre d'identiques mesuré, recalculer `CORPUS_FLOOR`, commiter les deux ensemble ; jamais à la baisse, sauf ADR. Les règles exercées par des cas identiques (table du rapport) passent à `vérifié contre MS Project` dans `docs/scheduling-rules.md`, avec la référence du cas.
+
+## Aller-retour MSPDI (P25)
+
+Le harnais relit aussi chaque fichier présent après une écriture par planrs (profil observé, R-121) : lecture → écriture → relecture. Le projet relu doit égaler `planrs_mspdi::normalize(projet lu)` (R-133) avec les valeurs relues écrites (`Computed::Recorded`) comme avec celles du moteur (`Computed::Schedule`), le planning enregistré relu doit égaler celui du fichier, et les éléments réécrits de chaque entité doivent suivre l'ordre source. Le rapport publie, par fichier, ces quatre verdicts, le nombre d'`Extras` par entité, les calculés non recalculés écartés (par nom), les enfants perdus et les diagnostics d'écriture. Un fichier `producer = msproject` qui n'est pas identique fait échouer le verdict. « Relu identique » par planrs n'est pas une vérification par MS Project.

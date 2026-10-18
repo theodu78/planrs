@@ -1,20 +1,23 @@
 //! Import des tâches, des liens et des valeurs enregistrées (R-071, R-074,
 //! R-076, R-083 à R-085).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use planrs_core::{
     CalendarUid, Constraint, Decimal, Duration, DurationUnit, Lag, LagValue, Link, LinkType, Minutes, Moment,
     OutlineLevel, Percent, Priority, Project, ProjectOptions, SchedulingMode, SignedPercent, Subject, Task,
-    TaskUid, TimeBasis,
+    TaskUid, TimeBasis, Work,
 };
 
+use crate::baseline;
 use crate::codes::{self, ConstraintKind, DurationCode};
 use crate::diag::{ImportCode, LinkIgnoredReason, Sink};
+use crate::extras;
 use crate::fields::Fields;
 use crate::project::{code, guid};
 use crate::recorded::{RecordedSchedule, RecordedTask, Tenths};
 use crate::scalar::{percent_lag_from_link_lag, tenths_to_minutes};
+use crate::schema::Parent;
 use crate::xml::Element;
 
 /// Chemin d'une tâche.
@@ -34,7 +37,6 @@ struct Read<'e> {
 /// `recorded`.
 pub(crate) fn import(
     elements: &[Element<'_>],
-    assignments: &[Element<'_>],
     project: &mut Project,
     recorded: &mut RecordedSchedule,
     sink: &mut Sink<'_>,
@@ -60,7 +62,13 @@ pub(crate) fn import(
         f.set_subject(Some(Subject::Task(uid)));
         let rec = recorded_task(&f, sink);
         let position = rows.len();
-        let (task, duration) = task(uid, &f, &rec, &options, position, sink);
+        let (mut task, duration) = task(uid, &f, &rec, &options, position, sink);
+        let baselines = baseline::task(&element.children, &options, f.subject(), sink);
+        task.baselines = baselines.map;
+        let mut kept = extras::collect(&element.children, Parent::Task, None);
+        kept.extend(baselines.extras);
+        task.extras = planrs_core::Extras(kept);
+        extras::canonical_order(&mut task.extras, Parent::Task);
         recorded.tasks.insert(uid, rec);
         if uid == TaskUid::PROJECT_SUMMARY {
             project.summary_task = Some(task);
@@ -101,23 +109,28 @@ pub(crate) fn import(
         if is_summary && matches!(row.task.mode, SchedulingMode::Auto) {
             // Durée d'une récapitulative automatique : valeur calculée, gardée
             // dans `recorded` seulement (ADR-0004, effacement structurel).
-            row.task.duration = Duration::zero(row.duration.unit());
+            row.task.duration = computed_zero(row.duration);
         } else if !row.task.is_null && !f.has("Duration") {
             f.missing("Duration", sink);
         }
         row.task.predecessors = links(uid, &row.element.children, &known, &options, sink);
     }
     if let Some(summary) = &mut project.summary_task {
-        let duration = summary.duration;
-        summary.duration = Duration::zero(duration.unit());
+        summary.duration = computed_zero(summary.duration);
     }
 
     for row in rows {
         // UID uniques (filtrés plus haut) : l'ajout ne peut pas échouer.
         let _ = project.tasks.push(row.task);
     }
+}
 
-    count_assignments(assignments, recorded, sink);
+/// R-071 : durée d'une récapitulative automatique ou de l'UID 0 (valeur
+/// calculée, gardée dans `RecordedSchedule`) : minutes à 0, unité, base et
+/// estimation gardées (amendement J3, R-133 : l'aller-retour d'une
+/// récapitulative du projet manuelle garde l'estimation de sa durée saisie).
+pub(crate) fn computed_zero(d: Duration) -> Duration {
+    Duration::new(Minutes::ZERO, d.unit(), d.basis(), d.is_estimated()).unwrap_or(Duration::zero(d.unit()))
 }
 
 /// UID d'une tâche ; absent, négatif ou illisible : tâche ignorée.
@@ -162,6 +175,8 @@ fn recorded_task(f: &Fields<'_>, sink: &mut Sink<'_>) -> RecordedTask {
         late_finish: f.datetime("LateFinish", sink),
         total_slack: tenths("TotalSlack", sink),
         free_slack: tenths("FreeSlack", sink),
+        start_slack: tenths("StartSlack", sink),
+        finish_slack: tenths("FinishSlack", sink),
         critical: f.bool("Critical", sink),
         summary: f.bool("Summary", sink),
         duration: f.duration("Duration", sink).map(|(d, _)| Minutes::new(d.minutes)),
@@ -192,6 +207,7 @@ fn task(
         .unwrap_or(options.new_tasks_effort_driven);
     let duration = task_duration(f, rec.duration, options, sink);
     t.duration = duration;
+    t.work = baseline::work(f, "Work", sink).unwrap_or(Work::ZERO);
     t.milestone = f.bool("Milestone", sink).unwrap_or(false);
     t.constraint = constraint(f, sink);
     t.deadline = f.datetime("Deadline", sink);
@@ -205,6 +221,8 @@ fn task(
     t.progress.actual_finish = f.datetime("ActualFinish", sink);
     t.progress.actual_duration = non_negative_minutes(f, "ActualDuration", sink);
     t.progress.remaining_duration = non_negative_minutes(f, "RemainingDuration", sink);
+    t.progress.actual_work = baseline::work(f, "ActualWork", sink).unwrap_or(Work::ZERO);
+    t.progress.remaining_work = baseline::work(f, "RemainingWork", sink).unwrap_or(Work::ZERO);
     f.raw("Notes", sink).unwrap_or_default().clone_into(&mut t.notes);
     t.mode = mode(f, rec, duration, sink);
     t.active = f.bool("Active", sink).unwrap_or(true);
@@ -383,13 +401,20 @@ fn non_negative_minutes(f: &Fields<'_>, name: &str, sink: &mut Sink<'_>) -> Minu
 }
 
 /// R-085 : mode manuel, depuis `ManualStart`, `ManualFinish`,
-/// `ManualDuration`, à défaut `Start`, `Finish`, `Duration`.
+/// `ManualDuration` ; si aucun des trois n'est présent (même vide), à
+/// défaut `Start`, `Finish`, `Duration` (amendement R-129 : un élément
+/// présent et vide vaut « non saisi », sans repli).
 fn mode(f: &Fields<'_>, rec: &RecordedTask, duration: Duration, sink: &mut Sink<'_>) -> SchedulingMode {
     if f.bool("Manual", sink) != Some(true) {
         return SchedulingMode::Auto;
     }
-    let start = f.datetime("ManualStart", sink).or(rec.start);
-    let finish = f.datetime("ManualFinish", sink).or(rec.finish);
+    let explicit = f.has("ManualStart") || f.has("ManualFinish") || f.has("ManualDuration");
+    let start = f
+        .datetime("ManualStart", sink)
+        .or(if explicit { None } else { rec.start });
+    let finish = f
+        .datetime("ManualFinish", sink)
+        .or(if explicit { None } else { rec.finish });
     let manual_duration = match f.duration("ManualDuration", sink) {
         Some((d, at)) => {
             let made = Duration::new(
@@ -403,7 +428,7 @@ fn mode(f: &Fields<'_>, rec: &RecordedTask, duration: Duration, sink: &mut Sink<
             }
             made.ok()
         }
-        None => f.has("Duration").then_some(duration),
+        None => (!explicit && f.has("Duration")).then_some(duration),
     };
     SchedulingMode::Manual {
         start,
@@ -560,33 +585,4 @@ fn lag(f: &Fields<'_>, options: &ProjectOptions, sink: &mut Sink<'_>) -> Lag {
         f.invalid("LinkLag", at, &tenths.to_string(), sink);
         Lag::ZERO
     })
-}
-
-/// Compte les affectations par tâche (`Assignments/Assignment/TaskUID`).
-fn count_assignments(assignments: &[Element<'_>], recorded: &mut RecordedSchedule, sink: &mut Sink<'_>) {
-    let mut counts: BTreeMap<TaskUid, u32> = BTreeMap::new();
-    for a in assignments {
-        let f = Fields::new(&a.children, "Assignments/Assignment", None, a.at);
-        let Some((v, at)) = f.int("TaskUID", sink) else {
-            continue;
-        };
-        match u32::try_from(v).map(TaskUid::new) {
-            Ok(uid) if recorded.tasks.contains_key(&uid) => {
-                let n = counts.entry(uid).or_insert(0);
-                *n = n.saturating_add(1);
-            }
-            _ => f.report(
-                ImportCode::DanglingReference,
-                "TaskUID",
-                at,
-                Some(&v.to_string()),
-                sink,
-            ),
-        }
-    }
-    for (uid, n) in counts {
-        if let Some(rec) = recorded.tasks.get_mut(&uid) {
-            rec.assignments = n;
-        }
-    }
 }

@@ -5,6 +5,10 @@
 # Corpus public : fichiers non versionnés (droits d'auteur), seul le manifeste l'est
 /tests/corpus/files/
 
+# Schéma MSPDI de Microsoft, extrait par `cargo xtask schema fetch` (jamais commité)
+/tests/schema/mspdi_pj15.xsd
+/tests/schema/.part-*
+
 # Captures produites par les tests visuels (nouvelle capture / différence)
 *.new.png
 *.diff.png

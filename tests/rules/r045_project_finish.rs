@@ -31,3 +31,15 @@ fn r045_empty_project() {
     assert_eq!(run.schedule.tasks.len(), 0);
     assert_eq!(run.schedule.order.len(), 0);
 }
+
+#[test]
+fn r045_finish_before_the_project_start() {
+    // Max des fins au plus tôt, même avant le début du projet : M manuelle
+    // ven 16/10 08:00 – 17:00 seule → fin du projet ven 16/10 17:00 (et non
+    // le début du projet, lun 19/10 08:00).
+    let run = Net::new("2026-10-19T08:00")
+        .task("M", 480)
+        .manual("M", Some("2026-10-16T08:00"), Some("2026-10-16T17:00"))
+        .run();
+    assert_eq!(run.schedule.project_finish, moment("2026-10-16T17:00"));
+}

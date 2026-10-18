@@ -16,11 +16,12 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
+use super::constraint::{ConstraintRule, Mode, NodeConstraint, Side, anchor, derive};
 use crate::calendar::{CalendarSet, CompiledCalendar, Span, TimeScale};
 use crate::diagnostic::{Diagnostic, Diagnostics};
 use crate::duration::{LagValue, Minutes, TimeBasis};
 use crate::ids::{CalendarUid, TaskUid};
-use crate::model::{LinkType, Project, SchedulingMode, Task};
+use crate::model::{ConstraintKind, LinkType, Project, SchedulingMode, Task};
 use crate::quantity::SignedPercent;
 use crate::time::Moment;
 
@@ -29,7 +30,10 @@ pub(super) type NodeIx = u32;
 
 /// Indice de l'échelle « temps écoulé » dans [`Network::scales`].
 pub(super) const ELAPSED: u32 = 0;
-/// Indice de l'échelle du calendrier du projet dans [`Network::scales`].
+/// Indice de l'échelle du calendrier du projet dans [`Network::scales`] :
+/// toujours un calendrier de base (R-113), échelle de mesure des durées des
+/// récapitulatives, des marges et des décalages des tâches sans calendrier
+/// propre.
 pub(super) const PROJECT: u32 = 1;
 
 /// Échec du calcul d'un nœud : conversion impossible (code stable de
@@ -141,6 +145,15 @@ pub(super) struct Node {
     /// Feuille manuelle active (R-063) ou agrégat d'une récapitulative
     /// manuelle datée (R-064) : dates saisies, ou l'échec de leur calcul.
     pub fixed: Option<Result<Span, Fail>>,
+    /// Contrainte (ADR-0010) : feuille automatique active (R-090 à R-101) ;
+    /// porte d'une récapitulative automatique (SNET, R-103) ; agrégat
+    /// (FNLT, R-103). `None` sans effet (ASAP depuis le début).
+    pub constraint: Option<NodeConstraint>,
+    /// Échéance : feuille active (automatique ou manuelle, R-102, R-104),
+    /// plafond brut de sa fin au plus tard ; agrégat d'une récapitulative
+    /// active (R-103 : contribution à `C(S)` ; manuelle datée : plafond de
+    /// ses propres dates au plus tard).
+    pub deadline: Option<Moment>,
     /// Agrégat de la récapitulative parente.
     pub parent_rollup: Option<NodeIx>,
     /// Porte : son agrégat ; agrégat : sa porte.
@@ -187,9 +200,13 @@ pub(super) struct Arc {
 
 /// Réseau prêt pour les passes.
 pub(super) struct Network<'a> {
-    /// Échelles : `[0]` temps écoulé, `[1]` calendrier du projet, puis les
-    /// calendriers de tâche utilisés, dans l'ordre des UID.
+    /// Échelles : `[0]` temps écoulé, `[1]` calendrier du projet (de base,
+    /// R-113), `[2]` calendrier dérivé désigné par le projet s'il y en a un,
+    /// puis les calendriers de tâche utilisés, dans l'ordre des UID.
     pub scales: Vec<TimeScale<'a>>,
+    /// Échelle de placement d'une tâche sans calendrier propre : `PROJECT`,
+    /// ou le calendrier dérivé désigné par le projet (R-113).
+    pub default_place: u32,
     /// Classification, par position.
     pub tasks: Vec<TaskInfo>,
     /// Nœuds canoniques.
@@ -238,6 +255,13 @@ impl<'a> Network<'a> {
         self.scales.get(pos(i)?)
     }
 
+    /// Échelle de mesure `M` d'une échelle de placement (R-048, R-049,
+    /// R-054, R-113) : le calendrier du projet (de base) pour le calendrier
+    /// dérivé qu'il désigne ; l'échelle elle-même sinon.
+    pub fn measure(&self, place: u32) -> u32 {
+        measure_of(self.default_place, place)
+    }
+
     /// Classification de la tâche en position `p`.
     pub fn task(&self, p: usize) -> Option<&TaskInfo> {
         self.tasks.get(p)
@@ -276,27 +300,46 @@ impl<'a> Network<'a> {
 /// Calendriers résolus pour le calcul (§ 3.1, R-066).
 pub(super) struct Scales<'a> {
     /// Échelles (voir [`Network::scales`]).
-    pub scales: Vec<TimeScale<'a>>,
+    pub table: Vec<TimeScale<'a>>,
     /// Échelle ouvrée de chaque tâche, par position.
     pub task_cal: Vec<u32>,
+    /// Voir [`Network::default_place`].
+    pub default_place: u32,
+}
+
+/// Échelle de mesure d'une échelle de placement (voir [`Network::measure`]).
+fn measure_of(default_place: u32, place: u32) -> u32 {
+    if place == default_place { PROJECT } else { place }
 }
 
 /// Table des échelles : temps écoulé, calendrier du projet (déjà résolu,
-/// replis compris), puis un calendrier compilé par UID de tâche utilisé.
-/// Un calendrier de tâche inutilisable (inconnu, en échec, sans temps ouvré)
-/// est remplacé par celui du projet, avec `task.calendar_fallback`.
+/// replis compris ; de base, R-113), le calendrier dérivé désigné par le
+/// projet (`designated`, R-113) s'il y en a un, puis un calendrier compilé
+/// par UID de tâche utilisé. Une tâche sans calendrier propre est placée sur
+/// le calendrier désigné s'il existe, sinon sur celui du projet ; un
+/// calendrier de tâche inutilisable (inconnu, en échec, sans temps ouvré) est
+/// remplacé de même, avec `task.calendar_fallback`.
 pub(super) fn scales<'a>(
     project: &Project,
     set: &'a CalendarSet,
     project_cal: &'a CompiledCalendar,
+    designated: Option<&'a CompiledCalendar>,
     diags: &mut Diagnostics,
 ) -> Scales<'a> {
     let mut scales = vec![TimeScale::Elapsed, TimeScale::Working(project_cal)];
+    let default_place = match designated {
+        Some(c) => {
+            let i = ix(scales.len()).unwrap_or(PROJECT);
+            scales.push(TimeScale::Working(c));
+            i
+        }
+        None => PROJECT,
+    };
     let mut index: BTreeMap<CalendarUid, Option<u32>> = BTreeMap::new();
     let mut task_cal = Vec::with_capacity(project.tasks.len());
     for task in &project.tasks {
         let Some(uid) = task.calendar.filter(|_| !task.is_null) else {
-            task_cal.push(PROJECT);
+            task_cal.push(default_place);
             continue;
         };
         let slot = *index.entry(uid).or_insert_with(|| match set.get(uid) {
@@ -316,10 +359,14 @@ pub(super) fn scales<'a>(
                 task: task.uid(),
                 calendar: uid,
             });
-            task_cal.push(PROJECT);
+            task_cal.push(default_place);
         }
     }
-    Scales { scales, task_cal }
+    Scales {
+        table: scales,
+        task_cal,
+        default_place,
+    }
 }
 
 /// Étapes 1 et 2 : hiérarchie (R-052) et activité (R-062). Le parent est la
@@ -458,44 +505,208 @@ fn manual_span(
     }
 }
 
+/// Sens de planification et option « respecter les contraintes » (R-099),
+/// lus une fois pour la construction du réseau.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct BuildCtx {
+    /// Sens de planification.
+    pub mode: Mode,
+    /// Option « les tâches respectent toujours leurs dates de contrainte ».
+    pub honor: bool,
+}
+
+/// Contrainte d'une feuille automatique active de durée `d` sur son échelle
+/// de placement : règle dérivée (R-099) et ancrage R-090. `None` si la
+/// contrainte est sans effet (ASAP depuis le début).
+fn leaf_constraint(task: &Task, scale: TimeScale<'_>, d: Minutes, ctx: BuildCtx) -> Option<NodeConstraint> {
+    let kind = task.constraint.kind();
+    let rule = derive(kind, ctx.mode, ctx.honor);
+    if rule == ConstraintRule::None {
+        return None;
+    }
+    let date = task.constraint.date();
+    let anchor = date.map(|date| anchor(scale, kind, date, d).map_err(Fail::from));
+    Some(NodeConstraint {
+        kind,
+        rule,
+        date,
+        anchor,
+    })
+}
+
+/// Nœud d'une feuille en position `p` : échelle de placement, dates saisies
+/// d'une manuelle (R-063), contrainte d'une automatique active (R-090 à
+/// R-101), échéance d'une active (R-102, R-104).
+fn leaf_node(
+    task: &Task,
+    p: usize,
+    info: &TaskInfo,
+    scales: &[TimeScale<'_>],
+    ctx: BuildCtx,
+    diags: &mut Diagnostics,
+) -> Option<Node> {
+    let place = place_of(task, info.cal);
+    let scale = *scales.get(pos(place)?)?;
+    let (fixed, duration) = if info.inactive() {
+        (None, task.duration.minutes())
+    } else {
+        manual_span(task, scale, diags)
+    };
+    // R-104 : manuelle, contrainte ignorée (info), échéance gardée ;
+    // inactive, tout est ignoré sans diagnostic.
+    let constraint = if info.inactive() {
+        None
+    } else if fixed.is_some() {
+        manual_ignored(task, ctx, diags);
+        None
+    } else {
+        leaf_constraint(task, scale, duration, ctx)
+    };
+    let deadline = task.deadline.filter(|_| !info.inactive());
+    Some(Node {
+        kind: NodeKind::Leaf,
+        task: p,
+        uid: info.uid,
+        inactive: info.inactive(),
+        place,
+        duration,
+        fixed,
+        constraint,
+        deadline,
+        parent_rollup: None,
+        twin: None,
+    })
+}
+
 /// Récapitulative ouverte pendant la numérotation : position, et dates
 /// saisies et durée utilisée d'une récapitulative manuelle datée (R-064).
-type OpenSummary = (usize, Option<Result<Span, Fail>>, Minutes);
+#[derive(Clone, Copy, Debug)]
+struct OpenSummary {
+    /// Position de la récapitulative.
+    pos: usize,
+    /// Dates saisies d'une récapitulative manuelle datée (R-064).
+    fixed: Option<Result<Span, Fail>>,
+    /// Durée utilisée d'une récapitulative manuelle datée (R-064).
+    duration: Minutes,
+    /// Contrainte de l'agrégat : FNLT, plafond `C(S)` (R-103).
+    constraint: Option<NodeConstraint>,
+    /// Échéance de l'agrégat (R-103 : plafond `C(S)` ; récapitulative
+    /// manuelle datée : plafond de ses propres dates au plus tard, R-104).
+    deadline: Option<Moment>,
+}
+
+/// Contraintes d'une récapitulative (R-103, R-104) : porte (SNET,
+/// plancher brut de ses sous-tâches), agrégat (FNLT, plafond `C(S)`),
+/// échéance. Automatique active : SNET → porte ; FNLT → agrégat (ancrage
+/// `f*` sur son calendrier) ; MSO, MFO, SNLT, FNET → ignorées avec
+/// `constraint.summary_ignored` ; ASAP, ALAP → sans effet ni diagnostic.
+/// Manuelle datée : contrainte ignorée (`constraint.manual_ignored` si
+/// elle diffère du défaut du sens), échéance gardée. Inactive : tout est
+/// ignoré, sans diagnostic.
+fn summary_constraints(
+    task: &Task,
+    info: &TaskInfo,
+    manual: bool,
+    scale: TimeScale<'_>,
+    ctx: BuildCtx,
+    diags: &mut Diagnostics,
+) -> (Option<NodeConstraint>, Option<NodeConstraint>, Option<Moment>) {
+    if info.inactive() {
+        return (None, None, None);
+    }
+    let kind = task.constraint.kind();
+    let date = task.constraint.date();
+    if manual {
+        manual_ignored(task, ctx, diags);
+        return (None, None, task.deadline);
+    }
+    let node = |rule, anchor| NodeConstraint {
+        kind,
+        rule,
+        date,
+        anchor,
+    };
+    match kind {
+        ConstraintKind::AsSoonAsPossible | ConstraintKind::AsLateAsPossible => (None, None, task.deadline),
+        ConstraintKind::StartNoEarlierThan => (
+            Some(node(ConstraintRule::Floor(Side::Start), None)),
+            None,
+            task.deadline,
+        ),
+        ConstraintKind::FinishNoLaterThan => {
+            let anchor = date.map(|c| anchor(scale, kind, c, Minutes::ZERO).map_err(Fail::from));
+            (
+                None,
+                Some(node(ConstraintRule::Cap(Side::Finish), anchor)),
+                task.deadline,
+            )
+        }
+        ConstraintKind::MustStartOn
+        | ConstraintKind::MustFinishOn
+        | ConstraintKind::StartNoLaterThan
+        | ConstraintKind::FinishNoEarlierThan => {
+            diags.push(Diagnostic::ConstraintSummaryIgnored {
+                task: task.uid(),
+                kind,
+            });
+            (None, None, task.deadline)
+        }
+    }
+}
+
+/// R-104 : la contrainte d'une tâche manuelle (feuille ou récapitulative
+/// datée) est stockée mais ignorée ; `constraint.manual_ignored` (info) si
+/// elle diffère du défaut du sens (ASAP depuis le début, ALAP à rebours).
+fn manual_ignored(task: &Task, ctx: BuildCtx, diags: &mut Diagnostics) {
+    let kind = task.constraint.kind();
+    let default = match ctx.mode {
+        Mode::FromStart => ConstraintKind::AsSoonAsPossible,
+        Mode::FromFinish => ConstraintKind::AsLateAsPossible,
+    };
+    if kind != default {
+        diags.push(Diagnostic::ConstraintManualIgnored {
+            task: task.uid(),
+            kind,
+        });
+    }
+}
 
 /// Étape 3 : nœuds canoniques en pré-ordre (porte, feuille, agrégat).
 fn number_nodes(
     project: &Project,
     tasks: &mut [TaskInfo],
     scales: &[TimeScale<'_>],
+    ctx: BuildCtx,
     diags: &mut Diagnostics,
 ) -> Option<Vec<Node>> {
     let mut nodes: Vec<Node> = Vec::with_capacity(tasks.len().checked_add(tasks.len() / 4)?);
     // Récapitulatives ouvertes, la plus intérieure en dernier.
     let mut open: Vec<OpenSummary> = Vec::new();
     let n = tasks.len();
-    let close =
-        |(s, fixed, duration): OpenSummary, tasks: &mut [TaskInfo], nodes: &mut Vec<Node>| -> Option<()> {
-            let info = tasks.get_mut(s)?;
-            let gate = info.entry?;
-            let v = ix(nodes.len())?;
-            nodes.push(Node {
-                kind: NodeKind::Rollup,
-                task: s,
-                uid: info.uid,
-                inactive: info.inactive(),
-                place: info.cal,
-                duration,
-                fixed,
-                parent_rollup: None,
-                twin: Some(gate),
-            });
-            info.exit = Some(v);
-            nodes.get_mut(pos(gate)?)?.twin = Some(v);
-            Some(())
-        };
+    let close = |o: OpenSummary, tasks: &mut [TaskInfo], nodes: &mut Vec<Node>| -> Option<()> {
+        let info = tasks.get_mut(o.pos)?;
+        let gate = info.entry?;
+        let v = ix(nodes.len())?;
+        nodes.push(Node {
+            kind: NodeKind::Rollup,
+            task: o.pos,
+            uid: info.uid,
+            inactive: info.inactive(),
+            place: info.cal,
+            duration: o.duration,
+            fixed: o.fixed,
+            constraint: o.constraint,
+            deadline: o.deadline,
+            parent_rollup: None,
+            twin: Some(gate),
+        });
+        info.exit = Some(v);
+        nodes.get_mut(pos(gate)?)?.twin = Some(v);
+        Some(())
+    };
     for p in 0..=n {
-        while let Some(&(s, _, _)) = open.last() {
-            if tasks.get(s)?.end > p {
+        while let Some(o) = open.last() {
+            if tasks.get(o.pos)?.end > p {
                 break;
             }
             close(open.pop()?, tasks, &mut nodes)?;
@@ -517,11 +728,14 @@ fn number_nodes(
                 task.mode,
                 SchedulingMode::Manual { start, finish, .. } if start.is_some() || finish.is_some()
             );
+            let scale = *scales.get(pos(info.cal)?)?;
             let (fixed, duration) = if dated && !info.inactive() {
-                manual_span(task, *scales.get(pos(info.cal)?)?, diags)
+                manual_span(task, scale, diags)
             } else {
                 (None, Minutes::ZERO)
             };
+            let (gate, constraint, deadline) =
+                summary_constraints(task, info, fixed.is_some(), scale, ctx, diags);
             nodes.push(Node {
                 kind: NodeKind::Gate,
                 task: p,
@@ -530,29 +744,21 @@ fn number_nodes(
                 place: info.cal,
                 duration: Minutes::ZERO,
                 fixed: None,
+                constraint: gate,
+                deadline: None,
                 parent_rollup: None,
                 twin: None,
             });
             info.entry = Some(v);
-            open.push((p, fixed, duration));
-        } else {
-            let place = place_of(task, info.cal);
-            let (fixed, duration) = if info.inactive() {
-                (None, task.duration.minutes())
-            } else {
-                manual_span(task, *scales.get(pos(place)?)?, diags)
-            };
-            nodes.push(Node {
-                kind: NodeKind::Leaf,
-                task: p,
-                uid: info.uid,
-                inactive: info.inactive(),
-                place,
-                duration,
+            open.push(OpenSummary {
+                pos: p,
                 fixed,
-                parent_rollup: None,
-                twin: None,
+                duration,
+                constraint,
+                deadline,
             });
+        } else {
+            nodes.push(leaf_node(task, p, info, scales, ctx, diags)?);
             info.entry = Some(v);
             info.exit = Some(v);
         }
@@ -569,10 +775,30 @@ fn number_nodes(
     Some(nodes)
 }
 
+/// Budget par défaut des arcs dépliés par R-058 (lien FF ou SF vers une
+/// récapitulative, un arc par feuille) : 4 000 000 arcs, soit environ
+/// 160 Mo d'arcs (40 octets chacun), CSR compris. Le budget de performance
+/// (5 000 tâches, 10 000 liens) en reste loin ; sans plafond, un fichier de
+/// 5 Mo (20 000 liens FF vers une récapitulative de 20 000 feuilles)
+/// demanderait 400 millions d'arcs (R-058, règle 10).
+pub const DEFAULT_EXPANDED_ARC_BUDGET: usize = 4_000_000;
+
 /// Contexte de construction des arcs.
 struct ArcBuilder<'p> {
     project: &'p Project,
+    mode: Mode,
+    /// Voir [`Network::default_place`].
+    default_place: u32,
     arcs: Vec<Arc>,
+    /// Budget des arcs dépliés (R-058), voir [`DEFAULT_EXPANDED_ARC_BUDGET`].
+    expansion_budget: usize,
+    /// Arcs dépliés encore permis.
+    expansion_left: usize,
+    /// Liens FF/SF vers une récapitulative ignorés faute de budget.
+    expansion_ignored: u64,
+    /// Nombre de feuilles cibles du dépliage, par position de
+    /// récapitulative (calculé à la première rencontre).
+    expansion_targets: Vec<Option<usize>>,
 }
 
 impl ArcBuilder<'_> {
@@ -600,6 +826,26 @@ impl ArcBuilder<'_> {
             }
         }
         Some(())
+    }
+
+    /// R-110 (miroir de R-058) : à rebours, le plafond de début `K(S)` d'un
+    /// lien SS ou SF depuis une récapitulative automatique active (en
+    /// position `p_pos`) s'applique à toutes ses sous-tâches, avec
+    /// `link.start_from_summary` ; une récapitulative manuelle datée ne
+    /// transmet pas ses liens (R-064).
+    fn start_from_summary(&self, kind: LinkType, p_pos: usize, pred: &TaskInfo) -> bool {
+        let start_kind = matches!(kind, LinkType::StartToStart | LinkType::StartToFinish);
+        let dated_manual = self.project.tasks.at(p_pos).is_some_and(|t| {
+            matches!(
+                t.mode,
+                SchedulingMode::Manual { start, finish, .. } if start.is_some() || finish.is_some()
+            )
+        });
+        self.mode == Mode::FromFinish
+            && start_kind
+            && pred.role == Role::Summary
+            && !dated_manual
+            && !pred.inactive()
     }
 
     /// Étape 4 : liens effectifs (§ 3.5), dans l'ordre des successeurs puis
@@ -673,7 +919,9 @@ impl ArcBuilder<'_> {
                 };
                 let sigma = match link.lag.basis {
                     TimeBasis::Elapsed => ELAPSED,
-                    TimeBasis::Working => succ.cal,
+                    // R-041 : calendrier de tâche du successeur, sinon le
+                    // calendrier du projet (de base, R-113).
+                    TimeBasis::Working => measure_of(self.default_place, succ.cal),
                 };
                 let arc = |to: NodeIx, to_inactive: bool| Arc {
                     from,
@@ -691,26 +939,85 @@ impl ArcBuilder<'_> {
                 //    dépliage sur les feuilles pour FF/SF (R-058).
                 let finish_kind = matches!(link.kind, LinkType::FinishToFinish | LinkType::StartToFinish);
                 if succ.role == Role::Summary && finish_kind {
-                    diags.push(Diagnostic::LinkFinishToSummary {
-                        predecessor: p_uid,
-                        successor: s_uid,
-                    });
-                    let first = s_pos.checked_add(1)?;
-                    for q in first..succ.end {
-                        let leaf = tasks.get(q)?;
-                        if leaf.role != Role::Leaf || (leaf.inactive() && !succ.inactive()) {
-                            continue;
-                        }
-                        if let Some(v) = leaf.entry {
-                            self.arcs.push(arc(v, leaf.inactive()));
-                        }
-                    }
+                    self.expand_to_summary(tasks, s_pos, succ, &arc, (p_uid, s_uid), diags)?;
                 } else {
                     self.arcs.push(arc(succ.entry?, succ.inactive()));
                 }
+                if self.start_from_summary(link.kind, p_pos, pred) {
+                    diags.push(Diagnostic::LinkStartFromSummary {
+                        predecessor: p_uid,
+                        successor: s_uid,
+                    });
+                }
+            }
+        }
+        if self.expansion_ignored > 0 {
+            diags.push(Diagnostic::LinkExpansionLimit {
+                limit: u64::try_from(self.expansion_budget).unwrap_or(u64::MAX),
+                ignored: self.expansion_ignored,
+            });
+        }
+        Some(())
+    }
+
+    /// R-058 : dépliage d'un lien FF ou SF `(prédécesseur, successeur)` vers
+    /// la récapitulative `succ` (position `s_pos`) sur ses feuilles, sous le
+    /// budget global d'arcs dépliés.
+    fn expand_to_summary(
+        &mut self,
+        tasks: &[TaskInfo],
+        s_pos: usize,
+        succ: &TaskInfo,
+        arc: &dyn Fn(NodeIx, bool) -> Arc,
+        (p_uid, s_uid): (TaskUid, TaskUid),
+        diags: &mut Diagnostics,
+    ) -> Option<()> {
+        // Budget global (R-058, règle 10) : un lien qui ne tient plus est
+        // ignoré en entier, ainsi que tous les suivants (jamais de dépliage
+        // partiel).
+        let targets = self.expansion_targets(tasks, s_pos, succ)?;
+        if self.expansion_ignored > 0 || targets > self.expansion_left {
+            self.expansion_ignored = self.expansion_ignored.saturating_add(1);
+            return Some(());
+        }
+        self.expansion_left = self.expansion_left.saturating_sub(targets);
+        diags.push(Diagnostic::LinkFinishToSummary {
+            predecessor: p_uid,
+            successor: s_uid,
+        });
+        let first = s_pos.checked_add(1)?;
+        for q in first..succ.end {
+            let leaf = tasks.get(q)?;
+            if !Self::expansion_target(leaf, succ) {
+                continue;
+            }
+            if let Some(v) = leaf.entry {
+                self.arcs.push(arc(v, leaf.inactive()));
             }
         }
         Some(())
+    }
+
+    /// Feuille `leaf` cible du dépliage d'un lien vers la récapitulative
+    /// `succ` : feuille active, ou inactive sous une récapitulative inactive.
+    fn expansion_target(leaf: &TaskInfo, succ: &TaskInfo) -> bool {
+        leaf.role == Role::Leaf && (!leaf.inactive() || succ.inactive()) && leaf.entry.is_some()
+    }
+
+    /// Nombre d'arcs que déplie un lien vers la récapitulative en position
+    /// `s_pos` (mis en cache : chaque sous-arbre n'est parcouru qu'une fois).
+    fn expansion_targets(&mut self, tasks: &[TaskInfo], s_pos: usize, succ: &TaskInfo) -> Option<usize> {
+        if let Some(Some(n)) = self.expansion_targets.get(s_pos) {
+            return Some(*n);
+        }
+        let first = s_pos.checked_add(1)?;
+        let n = tasks
+            .get(first..succ.end)?
+            .iter()
+            .filter(|leaf| Self::expansion_target(leaf, succ))
+            .count();
+        *self.expansion_targets.get_mut(s_pos)? = Some(n);
+        Some(n)
     }
 }
 
@@ -722,8 +1029,10 @@ struct Csr {
     out_idx: Vec<u32>,
 }
 
-/// Tri par comptage stable des arcs par cible ; index sortant.
-fn csr(node_count: usize, arcs: Vec<Arc>) -> Option<Csr> {
+/// Tri par comptage stable des arcs par cible, en place (permutation
+/// appliquée par cycles : aucune seconde copie des arcs, seulement 4 octets
+/// par arc) ; index sortant.
+fn csr(node_count: usize, mut arcs: Vec<Arc>) -> Option<Csr> {
     let mut in_off = vec![0u32; node_count.checked_add(1)?];
     for a in &arcs {
         let slot = in_off.get_mut(pos(a.to)?.checked_add(1)?)?;
@@ -735,13 +1044,34 @@ fn csr(node_count: usize, arcs: Vec<Arc>) -> Option<Csr> {
         *cur = cur.checked_add(prev)?;
     }
     let mut fill = in_off.clone();
-    let mut sorted: Vec<Option<Arc>> = vec![None; arcs.len()];
-    for a in arcs {
+    // `dest[k]` : position finale de l'arc `k` (ordre d'origine conservé
+    // entre arcs de même cible : tri stable).
+    let mut dest: Vec<u32> = Vec::with_capacity(arcs.len());
+    for a in &arcs {
         let slot = fill.get_mut(pos(a.to)?)?;
-        *sorted.get_mut(pos(*slot)?)? = Some(a);
+        dest.push(*slot);
         *slot = slot.checked_add(1)?;
     }
-    let sorted: Vec<Arc> = sorted.into_iter().collect::<Option<Vec<Arc>>>()?;
+    // Une permutation se range en moins de `n` échanges : au-delà, `dest`
+    // n'en est pas une (invariant violé), on s'arrête au lieu de boucler.
+    let mut swaps_left = arcs.len();
+    for k in 0..arcs.len() {
+        loop {
+            let d = pos(*dest.get(k)?)?;
+            if d == k {
+                break;
+            }
+            // Chaque échange place définitivement l'arc envoyé en `d`.
+            if d >= arcs.len() {
+                return None;
+            }
+            swaps_left = swaps_left.checked_sub(1)?;
+            arcs.swap(k, d);
+            dest.swap(k, d);
+        }
+    }
+    drop(dest);
+    let sorted = arcs;
     let mut out_off = vec![0u32; node_count.checked_add(1)?];
     for a in &sorted {
         let slot = out_off.get_mut(pos(a.from)?.checked_add(1)?)?;
@@ -769,19 +1099,36 @@ fn csr(node_count: usize, arcs: Vec<Arc>) -> Option<Csr> {
 
 /// Étapes 1 à 4 : réseau complet. `None` si un invariant est violé (jamais
 /// attendu) ; l'appelant le signale.
-pub(super) fn build<'a>(project: &Project, sc: Scales<'a>, diags: &mut Diagnostics) -> Option<Network<'a>> {
+pub(super) fn build<'a>(
+    project: &Project,
+    sc: Scales<'a>,
+    mode: Mode,
+    expanded_arc_budget: usize,
+    diags: &mut Diagnostics,
+) -> Option<Network<'a>> {
+    let ctx = BuildCtx {
+        mode,
+        honor: project.options.honor_constraints,
+    };
     let mut tasks = classify(project, &sc.task_cal, diags)?;
-    let nodes = number_nodes(project, &mut tasks, &sc.scales, diags)?;
+    let nodes = number_nodes(project, &mut tasks, &sc.table, ctx, diags)?;
     let mut builder = ArcBuilder {
         project,
+        mode,
+        default_place: sc.default_place,
         arcs: Vec::new(),
+        expansion_budget: expanded_arc_budget,
+        expansion_left: expanded_arc_budget,
+        expansion_ignored: 0,
+        expansion_targets: vec![None; tasks.len()],
     };
     builder.hierarchy(&tasks)?;
     builder.links(&tasks, diags)?;
     let arc_count = builder.arcs.len();
     let c = csr(nodes.len(), builder.arcs)?;
     Some(Network {
-        scales: sc.scales,
+        scales: sc.table,
+        default_place: sc.default_place,
         tasks,
         nodes,
         arcs: c.arcs,

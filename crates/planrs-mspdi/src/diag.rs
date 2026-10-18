@@ -69,9 +69,10 @@ pub enum ImportCode {
     },
     /// Secondes, durée ou décalage arrondis à la minute.
     Rounded,
-    /// Fonction non prise en charge (planification à rebours, `LevelingDelay`…).
+    /// Fonction non prise en charge (`LevelingDelay`…). La planification à
+    /// rebours (`schedule_from_finish`) ne l'est plus depuis J3 (R-089).
     Unsupported {
-        /// Fonction, en code stable (`schedule_from_finish`…).
+        /// Fonction, en code stable (`leveling_delay`…).
         what: String,
     },
     /// Incohérence tolérée (drapeau `Summary` contraire à la hiérarchie,
@@ -85,6 +86,14 @@ pub enum ImportCode {
     },
     /// Diagnostic de `Project::validate`, enveloppé.
     Core(Diagnostic),
+    /// Enfant non lu d'un élément qui n'a pas d'`Extras` (jour de
+    /// calendrier, exception, semaine datée, plage, lien) : perdu à
+    /// l'aller-retour, compté (`SourceInfo::not_preserved`, R-087).
+    NotPreserved,
+    /// `HonorConstraints` à 0 alors qu'une tâche automatique active a une
+    /// contrainte datée : les liens l'emportent sur les contraintes (R-089,
+    /// R-099). Info, une fois.
+    HonorConstraintsOff,
 }
 
 impl ImportCode {
@@ -103,6 +112,8 @@ impl ImportCode {
             Self::Inconsistent => "mspdi.inconsistent".to_owned(),
             Self::Truncated { .. } => "mspdi.truncated".to_owned(),
             Self::Core(d) => format!("core.{}", d.code()),
+            Self::NotPreserved => "mspdi.not_preserved".to_owned(),
+            Self::HonorConstraintsOff => "mspdi.honor_constraints_off".to_owned(),
         }
     }
 
@@ -120,6 +131,8 @@ impl ImportCode {
             Self::Inconsistent => 8,
             Self::Truncated { .. } => 9,
             Self::Core(_) => 10,
+            Self::NotPreserved => 11,
+            Self::HonorConstraintsOff => 12,
         }
     }
 
@@ -136,6 +149,7 @@ impl ImportCode {
             | Self::LinkIgnored { .. }
             | Self::Unsupported { .. } => Severity::Warning,
             Self::MissingRequired | Self::DanglingReference => Severity::Error,
+            Self::NotPreserved | Self::HonorConstraintsOff => Severity::Info,
             Self::Core(d) => d.severity(),
         }
     }
@@ -222,13 +236,16 @@ impl fmt::Display for ImportDiagnostic {
     }
 }
 
+/// Nombre de rangs de [`ImportCode`] (plafond par code).
+const RANKS: usize = 13;
+
 /// Collecteur de diagnostics, avec l'index des lignes de l'entrée ; borné
 /// par [`MAX_DIAGNOSTICS`] et [`MAX_DIAGNOSTICS_PER_CODE`].
 pub(crate) struct Sink<'a> {
     lines: &'a LineIndex<'a>,
     pub(crate) out: Vec<ImportDiagnostic>,
     /// Diagnostics gardés, par rang de code.
-    per_code: [u32; 11],
+    per_code: [u32; RANKS],
     /// Diagnostics supprimés.
     pub(crate) dropped: u64,
 }
@@ -238,7 +255,7 @@ impl<'a> Sink<'a> {
         Self {
             lines,
             out: Vec::new(),
-            per_code: [0; 11],
+            per_code: [0; RANKS],
             dropped: 0,
         }
     }
@@ -336,6 +353,7 @@ mod tests {
                 "mspdi.truncated",
                 Severity::Warning,
             ),
+            (ImportCode::NotPreserved, "mspdi.not_preserved", Severity::Info),
         ];
         for (code, text, severity) in cases {
             assert_eq!(code.code(), text);

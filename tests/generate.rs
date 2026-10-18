@@ -13,8 +13,8 @@ use std::collections::BTreeSet;
 
 use planrs_core::calendar::{BuiltinCalendarNames, CalendarException, DaySetting, Recurrence};
 use planrs_core::{
-    CalendarUid, Day, DayRange, Duration, DurationUnit, Lag, LagValue, Link, LinkType, Minutes, Moment,
-    OutlineLevel, Project, ProjectInit, ScheduleAnchor, SignedPercent, Task, TaskUid, TimeBasis,
+    CalendarUid, Constraint, Day, DayRange, Duration, DurationUnit, Lag, LagValue, Link, LinkType, Minutes,
+    Moment, OutlineLevel, Project, ProjectInit, ScheduleAnchor, SignedPercent, Task, TaskUid, TimeBasis,
 };
 
 /// xorshift64*, déterministe sur toutes les plateformes.
@@ -233,6 +233,88 @@ fn add_holidays(p: &mut Project, r: &mut Rng, count: usize) {
         };
         if cal.add_exception(e).is_ok() {
             added += 1;
+        }
+    }
+}
+
+/// Grand réseau contraint (spécification J3 § 9.2, cas `5000_constrained`) :
+/// le réseau de [`large_network`], plus, sur les feuilles, 20 % de
+/// contraintes datées (six types, dates de −3 à +120 jours autour du début,
+/// à la minute), 5 % d'ALAP et 5 % d'échéances (même plage) ; option
+/// « respecter les contraintes » active.
+///
+/// # Panics
+///
+/// Jamais pour une graine quelconque (les valeurs sont toutes valides).
+#[must_use]
+pub fn constrained_network(seed: u64) -> Project {
+    let mut p = large_network(seed);
+    let ScheduleAnchor::FromStart(start) = p.anchor else {
+        return p;
+    };
+    add_constraints(&mut p, seed, start, ScheduleAnchor::FromStart(start));
+    p
+}
+
+/// Grand réseau planifié à rebours (spécification J3 § 9.2, cas
+/// `5000_from_finish`) : le réseau de [`large_network`], ancré sur sa fin
+/// calculée depuis le début, toutes ses tâches ALAP (défaut à rebours,
+/// R-108), plus, sur les feuilles, 20 % de contraintes datées, 5 % d'ASAP et
+/// 5 % d'échéances, dates de −120 à +3 jours autour de la fin.
+///
+/// # Panics
+///
+/// Jamais pour une graine quelconque (les valeurs sont toutes valides).
+#[must_use]
+pub fn from_finish_network(seed: u64) -> Project {
+    let mut p = large_network(seed);
+    let finish = planrs_core::schedule(&p).project_finish;
+    let anchor = ScheduleAnchor::FromFinish(finish);
+    p.anchor = anchor;
+    add_constraints(&mut p, seed, finish, anchor);
+    p
+}
+
+/// Contraintes du grand réseau : contrainte par défaut du sens sur toutes
+/// les tâches (R-108), puis, sur les feuilles, 20 % de contraintes datées,
+/// 5 % de la contrainte opposée (ALAP depuis le début, ASAP à rebours) et
+/// 5 % d'échéances, dates à la minute autour de `around` (−3 à +120 jours
+/// depuis le début, −120 à +3 jours à rebours).
+fn add_constraints(p: &mut Project, seed: u64, around: Moment, anchor: ScheduleAnchor) {
+    let mut r = Rng::new(seed.rotate_left(23));
+    let (lo, hi, opposite) = match anchor {
+        ScheduleAnchor::FromStart(_) => (-3 * 1_440, 120 * 1_440, Constraint::AsLateAsPossible),
+        ScheduleAnchor::FromFinish(_) => (-120 * 1_440, 3 * 1_440, Constraint::AsSoonAsPossible),
+    };
+    let uids: Vec<TaskUid> = p.tasks.iter().map(Task::uid).collect();
+    for uid in uids {
+        let Some(t) = p.tasks.get_mut(uid) else {
+            continue;
+        };
+        t.constraint = Constraint::default_for(&anchor);
+        if t.outline_level.get() != 4 {
+            continue;
+        }
+        let date = |r: &mut Rng| {
+            around
+                .checked_add(Minutes::new(r.range(lo, hi)))
+                .unwrap_or(around)
+        };
+        if r.chance(20) {
+            let d = date(&mut r);
+            t.constraint = match r.range(0, 5) {
+                0 => Constraint::MustStartOn { date: d },
+                1 => Constraint::MustFinishOn { date: d },
+                2 => Constraint::StartNoEarlierThan { date: d },
+                3 => Constraint::StartNoLaterThan { date: d },
+                4 => Constraint::FinishNoEarlierThan { date: d },
+                _ => Constraint::FinishNoLaterThan { date: d },
+            };
+        } else if r.chance(6) {
+            t.constraint = opposite;
+        }
+        if r.chance(5) {
+            t.deadline = Some(date(&mut r));
         }
     }
 }

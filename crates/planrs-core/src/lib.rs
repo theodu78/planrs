@@ -54,7 +54,7 @@ pub mod time;
 
 pub use arena::{Arena, HasUid};
 pub use calendar::{BuiltinCalendarNames, CalendarSet, CompiledCalendar, Direction, Span, TimeScale};
-pub use diagnostic::{Diagnostic, Diagnostics, Pass, Severity, Subject};
+pub use diagnostic::{Diagnostic, Diagnostics, OverriddenBound, Pass, Severity, Subject};
 pub use duration::{
     ConversionFactors, Duration, DurationUnit, Lag, LagValue, Minutes, TimeBasis, Work, percent_of,
 };
@@ -65,12 +65,16 @@ pub use error::{
 pub use fixed::{Decimal, round_div};
 pub use ids::{AssignmentUid, BaselineNumber, CalendarUid, EntityUid, Guid, ResourceUid, TaskId, TaskUid};
 pub use model::{
-    Assignment, AssignmentBaseline, Constraint, ExtraEntry, Extras, Link, LinkType, OutlineLevel, Priority,
-    Progress, Project, ProjectInfo, ProjectInit, ProjectOptions, Resource, ResourceBaseline, ResourceKind,
-    ScheduleAnchor, SchedulingMode, Task, TaskBaseline, TaskType, WorkContour,
+    Assignment, AssignmentBaseline, Constraint, ConstraintKind, ExtraEntry, Extras, Link, LinkType,
+    OutlineLevel, Priority, Progress, Project, ProjectInfo, ProjectInit, ProjectOptions, Resource,
+    ResourceBaseline, ResourceKind, ScheduleAnchor, SchedulingMode, Task, TaskBaseline, TaskType,
+    WorkContour,
 };
 pub use quantity::{Money, Percent, Rate, RateUnit, SignedPercent, Units};
-pub use schedule::{Driver, Exclusion, Schedule, TaskOutcome, TaskRole, TaskSchedule, schedule};
+pub use schedule::{
+    Driver, Exclusion, LateDriver, Limits, Schedule, TaskOutcome, TaskRole, TaskSchedule, schedule,
+    schedule_with,
+};
 pub use time::{Day, DayRange, Moment, Month, TimeOfDay, Week, Weekday};
 
 /// Nom affiché du produit.

@@ -1,22 +1,27 @@
 //! Correspondance typée de l'élément `Project` (§ 7.6) : informations,
-//! ancre, options, calendrier du projet ; puis calendriers et tâches.
+//! ancre, options, calendrier du projet ; puis calendriers, tâches,
+//! ressources et affectations.
 //!
 //! Valeurs par défaut : celles du schéma MSPDI pour un élément absent
 //! (R-076), sinon celles du modèle (R-032).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use planrs_core::{
-    Arena, BuiltinCalendarNames, CalendarUid, ConversionFactors, Guid, Project, ProjectInfo, ProjectInit,
-    ProjectOptions, ScheduleAnchor, Subject, TaskType,
+    Arena, BuiltinCalendarNames, CalendarUid, ConversionFactors, ExtraEntry, Extras, Guid, Project,
+    ProjectInfo, ProjectInit, ProjectOptions, ScheduleAnchor, SchedulingMode, Subject, TaskType, TaskUid,
 };
 
 use crate::ReadOptions;
+use crate::assignment;
 use crate::calendar;
 use crate::codes::{self, DurationCode};
 use crate::diag::{ImportCode, Sink};
+use crate::extras::{self, ORIGIN};
 use crate::fields::Fields;
 use crate::recorded::RecordedSchedule;
+use crate::resource;
+use crate::schema::Parent;
 use crate::task;
 use crate::xml::RawDocument;
 
@@ -25,6 +30,9 @@ pub(crate) struct Built {
     pub(crate) project: Project,
     pub(crate) recorded: RecordedSchedule,
     pub(crate) save_version: Option<i64>,
+    /// Calculés écartés après la lecture XML (répartitions de type 1 des
+    /// affectations, R-087), à ajouter à ceux de la lecture.
+    pub(crate) dropped_computed: BTreeMap<String, u64>,
 }
 
 /// UID du calendrier du projet quand `CalendarUID` manque et qu'aucun
@@ -36,25 +44,25 @@ pub(crate) fn build(raw: &RawDocument<'_>, options: &ReadOptions, sink: &mut Sin
     let f = Fields::new(raw.fields.iter(), "", Some(Subject::Project), raw.root_at);
     let save_version = f.int("SaveVersion", sink).map(|(v, _)| v);
 
+    // R-089 : sens de planification (`ScheduleFromStart`, défaut vrai du
+    // schéma, R-076). Depuis le début, l'ancre est `StartDate` ; à rebours,
+    // `FinishDate` (« Required if ScheduleFromStart is false », S34), sinon
+    // `StartDate`, sinon « maintenant », avec `mspdi.missing_required`.
+    // `StartDate` est toujours gardée dans le planning enregistré (R-083).
+    let from_start = f.bool("ScheduleFromStart", sink).unwrap_or(true);
     let recorded_start = f.datetime("StartDate", sink);
-    if !f.has("StartDate") {
-        f.missing("StartDate", sink);
-    }
-    let start = recorded_start.unwrap_or(options.current_date);
     let recorded_finish = f.datetime("FinishDate", sink);
+    let start = recorded_start.unwrap_or(options.current_date);
     let current_date = f.datetime("CurrentDate", sink).unwrap_or(options.current_date);
-    let anchor = if f.bool("ScheduleFromStart", sink).unwrap_or(true) {
+    let anchor = if from_start {
+        if !f.has("StartDate") {
+            f.missing("StartDate", sink);
+        }
         ScheduleAnchor::FromStart(start)
     } else {
-        f.report(
-            ImportCode::Unsupported {
-                what: "schedule_from_finish".to_owned(),
-            },
-            "ScheduleFromStart",
-            f.at(),
-            None,
-            sink,
-        );
+        if !f.has("FinishDate") {
+            f.missing("FinishDate", sink);
+        }
         ScheduleAnchor::FromFinish(recorded_finish.unwrap_or(start))
     };
 
@@ -71,19 +79,87 @@ pub(crate) fn build(raw: &RawDocument<'_>, options: &ReadOptions, sink: &mut Sin
     project.options = project_options(&f, sink);
     project.calendar = project_calendar(&f, sink);
     project.calendars = calendar::import(&raw.calendars, project.calendar, sink);
+
     let mut recorded = RecordedSchedule {
         project_start: recorded_start,
         project_finish: recorded_finish,
         tasks: BTreeMap::new(),
     };
 
-    task::import(&raw.tasks, &raw.assignments, &mut project, &mut recorded, sink);
+    task::import(&raw.tasks, &mut project, &mut recorded, sink);
+    honor_constraints_off(&f, &project, sink);
+    project.resources = resource::import(&raw.resources, &project.options.factors, sink);
+    let tasks: BTreeSet<TaskUid> = recorded.tasks.keys().copied().collect();
+    let (assignments, dropped_timephased) = assignment::import(&raw.assignments, &tasks, sink);
+    for (uid, n) in assignment::count_by_task(&assignments) {
+        if let Some(rec) = recorded.tasks.get_mut(&uid) {
+            rec.assignments = n;
+        }
+    }
+    project.assignments = assignments;
+    project.extras = project_extras(raw, &project);
+    let mut dropped_computed = BTreeMap::new();
+    if dropped_timephased > 0 {
+        dropped_computed.insert("TimephasedData".to_owned(), dropped_timephased);
+    }
 
     Built {
         project,
         recorded,
         save_version,
+        dropped_computed,
     }
+}
+
+/// R-089 : `HonorConstraints` est lu littéralement (S34 : `default="true"`,
+/// « Whether tasks honour their constraint dates ») ; à 0 alors qu'une tâche
+/// automatique active a une contrainte datée, l'option change le calcul de
+/// cette tâche : `mspdi.honor_constraints_off` (info, une fois). Les cinq
+/// fichiers du corpus ont 0 (O15) : un codage inversé reste l'hypothèse
+/// concurrente prioritaire.
+fn honor_constraints_off(f: &Fields<'_>, project: &Project, sink: &mut Sink<'_>) {
+    if project.options.honor_constraints {
+        return;
+    }
+    let dated = project
+        .tasks
+        .iter()
+        .any(|t| !t.is_null && t.active && t.mode == SchedulingMode::Auto && t.constraint.kind().is_dated());
+    if dated {
+        let value = f.raw("HonorConstraints", sink);
+        f.report(
+            ImportCode::HonorConstraintsOff,
+            "HonorConstraints",
+            f.at(),
+            value,
+            sink,
+        );
+    }
+}
+
+/// `Extras` du projet (R-087) : déclarations `xmlns:préfixe` de la racine,
+/// puis enfants capturés de `Project`, dans l'ordre canonique.
+fn project_extras(raw: &RawDocument<'_>, project: &Project) -> Extras {
+    let mut out: Vec<ExtraEntry> = raw
+        .prefixes
+        .iter()
+        .map(|(prefix, uri)| ExtraEntry {
+            origin: ORIGIN.to_owned(),
+            key: format!("@xmlns:{prefix}"),
+            payload: uri.clone(),
+        })
+        .collect();
+    // Conteneurs non vides : réécrits, donc ancres (R-087).
+    let written = |name: &str| match name {
+        "Calendars" => !project.calendars.is_empty(),
+        "Resources" => !project.resources.is_empty(),
+        "Assignments" => !project.assignments.is_empty(),
+        _ => false,
+    };
+    out.extend(extras::collect_with(&raw.fields, Parent::Project, None, written));
+    let mut extras = Extras(out);
+    extras::canonical_order(&mut extras, Parent::Project);
+    extras
 }
 
 /// Informations descriptives.

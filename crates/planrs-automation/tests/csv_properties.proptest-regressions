@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 96205484b8d4a479019afbe329c79df2e342cad4e8e49425a6c9b80b617f2302 # shrinks to gens = [Gen { name: "", notes: "", minutes: 0, unit: Minute, elapsed: false, estimated: false, deeper: false, milestone: false, null: false, links: [] }, Gen { name: "", notes: "", minutes: 0, unit: Minute, elapsed: false, estimated: false, deeper: true, milestone: false, null: false, links: [] }], en = false

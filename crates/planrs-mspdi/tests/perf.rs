@@ -1,9 +1,12 @@
-//! Performance de la lecture (ADR-0009 § 7.8), en `--release`, tests ignorés
+//! Performance de la lecture (ADR-0009 § 7.8) et de l'écriture (ADR-0010),
+//! en `--release`, tests ignorés
 //! par défaut :
 //! - informative : un MSPDI généré de 5 000 tâches et 10 000 liens, cible
 //!   < 100 ms, médiane affichée, aucun seuil ;
 //! - coût linéaire des liens (§ 7.5, relecture J2) : une tâche à 199 999
-//!   prédécesseurs, surcoût < 1 s, vérifié par le job CI `perf`.
+//!   prédécesseurs, surcoût < 1 s, vérifié par le job CI `perf` ;
+//! - écriture (J3) : 5 000 tâches et 10 000 liens avec les valeurs du
+//!   moteur, échec au-delà de 100 ms (cible 30 ms), job CI `perf`.
 //!
 //! `cargo test -p planrs-mspdi --release --test perf -- --ignored --nocapture`
 
@@ -137,4 +140,31 @@ fn read_200k_predecessors_under_a_second() {
          sur une tâche (surcoût {extra:?}, limite 1 s en release)"
     );
     assert!(extra < Duration::from_secs(1), "{extra:?}");
+}
+
+/// Écriture de 5 000 tâches et 10 000 liens (R-120, ADR-0010 § 9.2) avec les
+/// valeurs du moteur : échec au-delà de 100 ms en release, cible 30 ms.
+#[test]
+#[ignore = "mesure, à lancer en --release"]
+fn write_5000_tasks_under_100_ms() {
+    use planrs_mspdi::write::{Computed, WriteOptions, write};
+    let xml = generated(5_000);
+    let opts = ReadOptions::new("2026-01-01T00:00".parse().unwrap());
+    let doc = read(xml.as_bytes(), &opts).unwrap();
+    let schedule = planrs_core::schedule(&doc.project);
+    let options = WriteOptions::default();
+    let mut times: Vec<Duration> = (0..15)
+        .map(|_| {
+            let t = Instant::now();
+            let out = write(&doc.project, Computed::Schedule(&schedule), &options);
+            assert_eq!(out.diagnostics, Vec::new());
+            t.elapsed()
+        })
+        .collect();
+    times.sort();
+    let median = times[7];
+    println!(
+        "écriture MSPDI, 5 000 tâches et 10 000 liens : médiane {median:?} (limite 100 ms, cible 30 ms)"
+    );
+    assert!(median < Duration::from_millis(100), "{median:?}");
 }

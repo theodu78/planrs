@@ -4,13 +4,15 @@
 //! Récapitulatives : dates (R-053, agrégat de la passe avant), durée
 //! (R-054), % achevé (R-055), dates au plus tard agrégées (R-060, dans
 //! `backward.rs`), récapitulative manuelle datée (R-064), récapitulative du
-//! projet (R-068).
+//! projet (R-068), dates planifiées (R-112 : au plus tôt depuis le début, au
+//! plus tard à rebours, enveloppe de celles des enfants).
 
 use std::collections::BTreeMap;
 use std::ops::Range;
 
+use super::constraint::Mode;
 use super::network::{NodeIx, NodeKind, PROJECT, Role, Status, TaskInfo, pos};
-use super::{Calc, Driver, Exclusion, Schedule, TaskOutcome, TaskRole, TaskSchedule};
+use super::{Calc, Driver, Exclusion, LateDriver, Schedule, TaskOutcome, TaskRole, TaskSchedule};
 use crate::calendar::Span;
 use crate::diagnostic::Diagnostic;
 use crate::duration::Minutes;
@@ -61,9 +63,16 @@ impl Calc<'_, '_> {
     /// R-068 : récapitulative du projet (UID 0), agrégat des tâches actives
     /// planifiées de premier niveau (R-053, R-054, R-055, R-060) sur le
     /// calendrier du projet ; sans lien, sa marge libre égale sa marge
-    /// totale. `None` si aucune tâche n'est planifiée.
+    /// totale ; dates planifiées et durée sur l'enveloppe des dates
+    /// planifiées de ces tâches (R-112). `None` si aucune tâche n'est
+    /// planifiée.
     fn project_summary(&self, tasks: &BTreeMap<crate::ids::TaskUid, TaskOutcome>) -> Option<TaskSchedule> {
-        let (mut early, mut late, mut degraded): (Option<Span>, Option<Span>, bool) = (None, None, false);
+        let (mut early, mut late, mut planned, mut degraded): (
+            Option<Span>,
+            Option<Span>,
+            Option<Span>,
+            bool,
+        ) = (None, None, None, false);
         let hull = |a: Option<Span>, b: Span| {
             Some(a.map_or(b, |a| Span {
                 start: a.start.min(b.start),
@@ -79,12 +88,19 @@ impl Calc<'_, '_> {
             };
             early = hull(early, ts.early);
             late = hull(late, ts.late);
+            planned = hull(
+                planned,
+                Span {
+                    start: ts.start,
+                    finish: ts.finish,
+                },
+            );
             degraded |= ts.degraded;
         }
-        let (early, late) = (early?, late?);
+        let (early, late, planned) = (early?, late?, planned?);
         let scale = self.net.scale(PROJECT);
         let between = |a, b| scale.and_then(|s| s.between(a, b).ok());
-        let duration = between(early.start, early.finish);
+        let duration = between(planned.start, planned.finish);
         let tf = match (
             between(early.start, late.start),
             between(early.finish, late.finish),
@@ -97,16 +113,18 @@ impl Calc<'_, '_> {
         Some(TaskSchedule {
             role: TaskRole::Summary,
             manual: false,
-            start: early.start,
-            finish: early.finish,
+            start: planned.start,
+            finish: planned.finish,
             early,
             late,
             duration: duration.unwrap_or(Minutes::ZERO),
             total_slack: tf,
-            free_slack: tf,
+            // R-101 : sans lien, marge libre = marge totale, bornée à 0.
+            free_slack: tf.max(Minutes::ZERO),
             critical: tf <= self.critical_limit(),
             percent_complete: self.percent_over(0..self.net.tasks.len()),
             driver: Driver::Rollup,
+            late_driver: LateDriver::Rollup,
             degraded,
         })
     }
@@ -186,13 +204,33 @@ impl Calc<'_, '_> {
                 detail: format!("tâche {} sans dates au plus tard", task.uid()),
             });
         }
+        // Cause de la fin au plus tard : agrégat des enfants pour une
+        // récapitulative automatique (R-060), repli sans dates au plus tard
+        // (R-069).
+        let late_driver = if state.late.is_none() {
+            LateDriver::Fallback
+        } else if info.role == Role::Summary && !fixed {
+            LateDriver::Rollup
+        } else {
+            state.late_driver
+        };
+        // R-112 : dates planifiées, au plus tôt depuis le début, au plus tard
+        // à rebours (enveloppe de celles des enfants pour une récapitulative
+        // automatique, par R-053 et R-060).
+        let planned = match self.mode {
+            Mode::FromStart => early,
+            Mode::FromFinish => late,
+        };
         let (role, manual, duration, percent_complete) = if info.role == Role::Summary {
-            // R-054 ; récapitulative manuelle datée : durée utilisée (R-064).
+            // R-054, mesurée sur les dates planifiées (R-112) ; récapitulative
+            // manuelle datée : durée utilisée (R-064).
             let duration = if fixed {
                 node.map(|n| n.duration)
             } else {
-                node.and_then(|n| self.net.scale(n.place))
-                    .and_then(|s| s.between(early.start, early.finish).ok())
+                // R-113 : mesurée sur le calendrier du projet (de base) pour
+                // une récapitulative sans calendrier propre.
+                node.and_then(|n| self.net.scale(self.net.measure(n.place)))
+                    .and_then(|s| s.between(planned.start, planned.finish).ok())
             };
             if duration.is_none() {
                 degraded = true;
@@ -214,8 +252,8 @@ impl Calc<'_, '_> {
         TaskOutcome::Scheduled(TaskSchedule {
             role,
             manual,
-            start: early.start,
-            finish: early.finish,
+            start: planned.start,
+            finish: planned.finish,
             early,
             late,
             duration,
@@ -224,6 +262,7 @@ impl Calc<'_, '_> {
             critical: state.total_slack <= self.critical_limit(),
             percent_complete,
             driver: state.driver,
+            late_driver,
             degraded,
         })
     }

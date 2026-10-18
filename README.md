@@ -17,6 +17,7 @@ Pré-alpha : rien d'utilisable. Le dépôt ne contient encore que le socle techn
 - [`docs/decisions.md`](docs/decisions.md) — décisions d'architecture
 - [`docs/scheduling-rules.md`](docs/scheduling-rules.md) — règles de calcul `R-xxx`
 - [`docs/scorecard.md`](docs/scorecard.md) — parité mesurée avec MS Project
+- [`docs/user/ms-project-export.md`](docs/user/ms-project-export.md) — échanger avec MS Project (XML et CSV) / exchanging with MS Project
 
 Le nom `planrs` est provisoire.
 

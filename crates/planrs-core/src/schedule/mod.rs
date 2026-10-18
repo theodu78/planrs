@@ -1,5 +1,6 @@
 //! Moteur de planification : chemin critique (ADR-0009, spécification J2
-//! § 3, règles R-035 à R-069).
+//! § 3, règles R-035 à R-069), contraintes et planification à rebours
+//! (ADR-0010, spécification J3 § 3, règles R-090 à R-112).
 //!
 //! [`schedule`] est une fonction pure du projet : aucune horloge, aucune
 //! entrée/sortie, aucun état gardé entre deux appels. Elle n'échoue jamais et
@@ -12,15 +13,21 @@
 //!    (manuelles R-063, inactives R-062), nœuds canoniques, liens effectifs
 //!    (R-059), adjacence CSR ;
 //! 5. ordre topologique et cycles ([`order`], R-035, R-065) ;
-//! 6. passe avant ([`forward`], R-036 à R-045, R-069) ;
-//! 7. passe arrière ([`backward`], R-046, R-047, R-051) ;
-//! 8. marges et critique ([`slack`], R-048 à R-050) ;
-//! 9. agrégats des récapitulatives et sortie ([`rollup`]).
+//! 6. depuis le début : passe avant principale ([`forward`], R-036 à
+//!    R-045, R-069), passe arrière secondaire ([`backward`], R-046, R-047,
+//!    R-051), épingle des tâches ALAP et repasse avant (R-092) ; à rebours :
+//!    passe arrière principale depuis l'ancre `F` (R-106, R-111), début
+//!    calculé `S*` (R-107), passe avant secondaire, épingle des tâches ASAP
+//!    et repasse arrière (R-108) ;
+//! 7. marges et critique ([`slack`], R-048 à R-050, R-101), contraintes non
+//!    tenues et échéances dépassées (R-099, R-102) ;
+//! 8. agrégats des récapitulatives et sortie ([`rollup`], R-112).
 //!
 //! Les décalages passent tous par [`transfer`] (transfert avant `g`,
 //! adjoint `h` en passe arrière, R-047).
 
 mod backward;
+mod constraint;
 mod forward;
 mod network;
 mod order;
@@ -32,18 +39,29 @@ mod types;
 use std::collections::BTreeMap;
 
 pub use crate::diagnostic::Pass;
-pub use types::{Driver, Exclusion, Schedule, TaskOutcome, TaskRole, TaskSchedule};
+pub use types::{Driver, Exclusion, LateDriver, Schedule, TaskOutcome, TaskRole, TaskSchedule};
 
 use crate::arena::Arena;
-use crate::calendar::{CalendarSet, CompiledCalendar, Span, builtin};
+use crate::calendar::{CalendarKind, CalendarSet, CompiledCalendar, Span, builtin};
 use crate::diagnostic::{Diagnostic, Diagnostics};
 use crate::duration::Minutes;
+use crate::ids::TaskUid;
 use crate::model::{Project, ScheduleAnchor};
 use crate::time::Moment;
+use constraint::{Mode, PassRole};
 use network::{Fail, Network, NodeIx, pos};
+
+/// Cause de `link.unschedulable` pour un lien à décalage en % depuis une
+/// récapitulative automatique, à rebours (R-110) : sa durée (R-054) dépend
+/// des dates au plus tard de ses sous-tâches, que ce lien plafonne.
+const PERCENT_LAG_FROM_SUMMARY: &str = "lag.percent_of_summary_from_finish";
 
 /// État calculé d'un nœud canonique.
 #[derive(Clone, Copy, Debug)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "drapeaux indépendants du calcul d'un nœud (échecs par passe, repli, prédécesseur effectif), lus séparément par les passes"
+)]
 struct NodeState {
     /// Dates au plus tôt ; porte : `(G, G)` ; agrégat : (min ES, max EF),
     /// ou les dates saisies d'une récapitulative manuelle datée (R-064).
@@ -58,15 +76,29 @@ struct NodeState {
     driver: Driver,
     /// Dates de repli (R-069).
     degraded: bool,
-    /// Conversion impossible en passe avant (R-069).
+    /// Conversion impossible en passe avant depuis le début (R-069).
     failed: bool,
+    /// Conversion impossible en passe arrière principale à rebours
+    /// (R-111) : la tâche est exclue, ses liens ignorés.
+    back_failed: bool,
+    /// Passe avant : le nœud a un prédécesseur effectif (lien appliqué,
+    /// propre ou hérité de la porte d'une récapitulative ancêtre) ; miroir
+    /// de R-051 à rebours (R-110).
+    linked: bool,
     /// Dates au plus tard et marges de repli : elles dépendent d'un
     /// successeur dégradé ou non planifiable (R-069, propagé vers l'amont).
     late_degraded: bool,
-    /// Agrégat : plafond de fin hérité `C(S)` (R-057).
-    cap_finish: Option<Moment>,
-    /// Agrégat : plafond de début hérité `K(S)` (R-057, A11).
-    cap_start: Option<Moment>,
+    /// Cause de la fin au plus tard (R-047).
+    late_driver: LateDriver,
+    /// Agrégat : plafond de fin hérité `C(S)` (R-057) et la récapitulative
+    /// qui l'a posé.
+    cap_finish: Option<(Moment, TaskUid)>,
+    /// Agrégat : plafond de début hérité `K(S)` (R-057, A11) et la
+    /// récapitulative qui l'a posé.
+    cap_start: Option<(Moment, TaskUid)>,
+    /// Épingle d'une tâche à placement opposé (ALAP depuis le début,
+    /// R-092) : dates fixes de la repasse.
+    pin: Option<Span>,
     /// Marge totale (R-048).
     total_slack: Minutes,
     /// Marge libre (R-049).
@@ -81,9 +113,13 @@ impl NodeState {
         driver: Driver::ProjectStart,
         degraded: false,
         failed: false,
+        back_failed: false,
+        linked: false,
         late_degraded: false,
+        late_driver: LateDriver::ProjectFinish,
         cap_finish: None,
         cap_start: None,
+        pin: None,
         total_slack: Minutes::ZERO,
         free_slack: Minutes::ZERO,
     };
@@ -93,9 +129,18 @@ impl NodeState {
 struct Calc<'n, 'a> {
     net: &'n Network<'a>,
     project: &'n Project,
-    /// Début du projet (brut, R-036).
+    /// Sens de planification.
+    mode: Mode,
+    /// Rôle de la passe en cours.
+    role: PassRole,
+    /// Repasse (R-092) : aucun diagnostic, sauf `schedule.internal`.
+    quiet: bool,
+    /// Début du projet : depuis le début, l'ancre brute (R-036) ; à rebours,
+    /// le début calculé `S*` (R-107), plancher de la passe avant secondaire.
     start: Moment,
-    /// Fin du projet (R-045), connue après la passe avant.
+    /// Plafond commun de la passe arrière (R-046) : depuis le début, la fin
+    /// du projet (R-045), connue après la passe avant ; à rebours, l'ancre
+    /// brute `F` (R-106).
     finish: Moment,
     /// États, par nœud.
     st: Vec<NodeState>,
@@ -114,6 +159,29 @@ impl Calc<'_, '_> {
         self.st.get(pos(v)?)
     }
 
+    /// Le nœud `v` peut servir de borne à ses voisins dans la passe
+    /// arrière (ADR-0010) : depuis le début (passe secondaire), il a des
+    /// dates au plus tôt ; à rebours (passe principale ou repasse), sa passe
+    /// arrière principale n'a pas échoué (R-111). Remplace les tests directs
+    /// sur `early` de la passe arrière.
+    fn reached(&self, v: NodeIx) -> bool {
+        match self.mode {
+            Mode::FromStart => self.state(v).is_some_and(|s| s.early.is_some()),
+            Mode::FromFinish => self.state(v).is_some_and(|s| !s.back_failed),
+        }
+    }
+
+    /// Le plafond de début hérité `K(parent)` s'applique au nœud de début
+    /// au plus tôt `es` (R-057, A11) : depuis le début, aux seuls nœuds de
+    /// même début que la récapitulative ; à rebours, à tous, les dates au
+    /// plus tôt n'existant pas encore (R-110, ADR-0010).
+    fn k_applies(&self, parent_start: Option<Moment>, es: Option<Moment>) -> bool {
+        match self.mode {
+            Mode::FromStart => es.is_some() && parent_start == es,
+            Mode::FromFinish => true,
+        }
+    }
+
     /// État modifiable du nœud `v`.
     fn state_mut(&mut self, v: NodeIx) -> Option<&mut NodeState> {
         self.st.get_mut(pos(v)?)
@@ -123,7 +191,7 @@ impl Calc<'_, '_> {
     /// nœud dégradé, en échec ou aux dates au plus tard de repli ; pour une
     /// porte, aussi l'agrégat de ses sous-tâches.
     fn unreliable(&self, v: NodeIx) -> bool {
-        let bad = |s: &NodeState| s.degraded || s.failed || s.late_degraded;
+        let bad = |s: &NodeState| s.degraded || s.failed || s.back_failed || s.late_degraded;
         let Some(s) = self.state(v) else { return true };
         let twin = self
             .net
@@ -139,8 +207,29 @@ impl Calc<'_, '_> {
         pos(a).and_then(|i| self.dropped.get(i)).copied().unwrap_or(false)
     }
 
-    /// Signale l'échec du calcul de la tâche `uid` dans la passe `pass`.
-    fn report(&mut self, uid: crate::ids::TaskUid, pass: Pass, fail: Fail) {
+    /// Ajoute un diagnostic ; en repasse (`quiet`), seul un invariant violé
+    /// (`schedule.internal`) est gardé : la passe principale a déjà tout
+    /// signalé.
+    fn emit(&mut self, d: Diagnostic) {
+        if !self.quiet || matches!(d, Diagnostic::ScheduleInternal { .. }) {
+            self.diags.push(d);
+        }
+    }
+
+    /// Signale l'échec du calcul de la tâche `uid` dans la passe `pass`. En
+    /// repasse, un échec est un invariant violé (la passe principale a
+    /// réussi sur ce nœud).
+    fn report(&mut self, uid: TaskUid, pass: Pass, fail: Fail) {
+        if self.quiet {
+            let detail = match fail {
+                Fail::Conversion(cause) => cause,
+                Fail::Internal(detail) => detail,
+            };
+            self.diags.push(Diagnostic::ScheduleInternal {
+                detail: format!("tâche {uid} : échec en repasse ({detail})"),
+            });
+            return;
+        }
         match fail {
             Fail::Conversion(cause) => self.diags.push(Diagnostic::TaskUnschedulable {
                 task: uid,
@@ -234,7 +323,7 @@ impl Calc<'_, '_> {
 
     /// Durée d'un nœud prédécesseur : feuille (manuelle : durée utilisée) ;
     /// agrégat : temps ouvré entre son début et sa fin sur le calendrier de
-    /// la récapitulative (R-054) ; récapitulative manuelle datée : durée
+    /// la récapitulative, sinon du projet (R-054, R-113) ; récapitulative manuelle datée : durée
     /// utilisée (R-064).
     fn duration_of(&self, v: NodeIx) -> Result<Minutes, Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
@@ -244,17 +333,39 @@ impl Calc<'_, '_> {
         match node.kind {
             network::NodeKind::Leaf => Ok(node.duration),
             network::NodeKind::Rollup => {
-                let e = self
-                    .state(v)
-                    .and_then(|s| s.early)
-                    .ok_or(Fail::Internal("agrégat sans dates"))?;
+                // À rebours, la durée d'une récapitulative dépend des dates de
+                // ses sous-tâches, inconnues quand la passe arrière principale
+                // lit ses liens sortants (R-110) : le lien est ignoré.
+                let missing = match self.mode {
+                    Mode::FromStart => Fail::Internal("agrégat sans dates"),
+                    Mode::FromFinish => Fail::Conversion(PERCENT_LAG_FROM_SUMMARY),
+                };
+                let e = self.state(v).and_then(|s| s.early).ok_or(missing)?;
                 let scale = self
                     .net
-                    .scale(node.place)
+                    .scale(self.net.measure(node.place))
                     .ok_or(Fail::Internal("échelle hors bornes"))?;
                 Ok(scale.between(e.start, e.finish)?)
             }
             network::NodeKind::Gate => Err(Fail::Internal("porte prise comme prédécesseur")),
+        }
+    }
+}
+
+/// Plafonds de taille du calcul (règle 10 : un fichier hostile ne doit pas
+/// épuiser la mémoire).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    /// Arcs dépliés par R-058 (lien FF ou SF vers une récapitulative, un
+    /// arc par feuille), tous liens confondus ; au-delà, les liens restants
+    /// sont ignorés avec `link.expansion_limit`.
+    pub expanded_arcs: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            expanded_arcs: network::DEFAULT_EXPANDED_ARC_BUDGET,
         }
     }
 }
@@ -266,10 +377,17 @@ impl Calc<'_, '_> {
 /// sont compilés à chaque appel.
 #[must_use]
 pub fn schedule(project: &Project) -> Schedule {
-    let start = match project.anchor {
-        ScheduleAnchor::FromStart(m) => m,
-        ScheduleAnchor::FromFinish(m) => return from_finish(project, m),
+    schedule_with(project, Limits::default())
+}
+
+/// [`schedule`] avec des plafonds explicites (tests des plafonds, outils).
+#[must_use]
+pub fn schedule_with(project: &Project, limits: Limits) -> Schedule {
+    let (mode, anchor) = match project.anchor {
+        ScheduleAnchor::FromStart(m) => (Mode::FromStart, m),
+        ScheduleAnchor::FromFinish(m) => (Mode::FromFinish, m),
     };
+    let start = anchor;
     let mut diags = Diagnostics::new();
     // Étape 0 : calendriers et replis (R-066).
     let (set, compile_diags) = CalendarSet::compile(project);
@@ -295,9 +413,18 @@ pub fn schedule(project: &Project) -> Schedule {
             "calendrier Standard intégré non compilable",
         );
     };
-    let sc = network::scales(project, &set, project_cal, &mut diags);
+    // R-113 : le calendrier du projet est un calendrier de base. S'il en
+    // désigne un dérivé (calendrier de ressource), sa base mesure durées des
+    // récapitulatives, marges et décalages ; le calendrier désigné place les
+    // tâches sans calendrier propre (substitut des calendriers de ressource,
+    // J5).
+    let (project_cal, designated) = match (&fallback, derived_base(project, &set)) {
+        (None, Some(base)) => (base, Some(project_cal)),
+        _ => (project_cal, None),
+    };
+    let sc = network::scales(project, &set, project_cal, designated, &mut diags);
     // Étapes 1 à 5.
-    let Some(mut net) = network::build(project, sc, &mut diags) else {
+    let Some(mut net) = network::build(project, sc, mode, limits.expanded_arcs, &mut diags) else {
         return internal_failure(project, start, diags, "construction du réseau");
     };
     let Some(order) = order::order(&mut net, &mut diags) else {
@@ -306,19 +433,58 @@ pub fn schedule(project: &Project) -> Schedule {
     let mut calc = Calc {
         net: &net,
         project,
-        start,
-        finish: start,
+        mode,
+        role: PassRole::Primary,
+        quiet: false,
+        start: anchor,
+        finish: anchor,
         st: vec![NodeState::NEW; net.nodes.len()],
         lag: vec![None; net.arcs.len()],
         dropped: vec![false; net.arcs.len()],
         diags,
     };
-    // Étapes 6 à 9.
-    calc.forward(&order);
-    calc.backward(&order);
+    // Étape 6.
+    match mode {
+        Mode::FromStart => {
+            calc.forward(&order, PassRole::Primary);
+            calc.backward(&order, PassRole::Secondary);
+            // R-092 : tâches ALAP épinglées sur leurs dates au plus tard,
+            // puis une seule repasse de la passe avant, seulement s'il y a
+            // une épingle.
+            if calc.pin_opposite() {
+                calc.forward(&order, PassRole::Replay);
+            }
+        }
+        Mode::FromFinish => {
+            // R-106 : passe arrière principale sous le plafond commun `F`.
+            calc.backward(&order, PassRole::Primary);
+            // R-107 : début calculé `S*`, plancher de la passe avant
+            // secondaire.
+            calc.start = calc.earliest_late_start();
+            calc.forward(&order, PassRole::Secondary);
+            // R-108 : tâches ASAP épinglées sur leurs dates au plus tôt, puis
+            // une seule repasse de la passe arrière.
+            if calc.pin_opposite() {
+                calc.backward(&order, PassRole::Replay);
+            }
+        }
+    }
+    // Étapes 7 et 8.
     calc.summary_late();
     calc.slack();
+    calc.check_constraints();
     calc.output(&order)
+}
+
+/// R-113 : calendrier de base du calendrier du projet quand celui-ci est
+/// dérivé, compilé et doté de temps ouvré ; `None` sinon (calendrier du
+/// projet de base, base inutilisable : le calendrier désigné sert à tout).
+fn derived_base<'s>(project: &Project, set: &'s CalendarSet) -> Option<&'s CompiledCalendar> {
+    let calendar = project.calendars.get(project.calendar)?;
+    let CalendarKind::Derived { base, .. } = calendar.kind() else {
+        return None;
+    };
+    set.get(*base).ok().filter(|c| c.has_working_time())
 }
 
 /// Calendrier Standard intégré, compilé seul, sous l'UID du calendrier du
@@ -327,39 +493,6 @@ fn compile_builtin_standard(project: &Project) -> Option<CompiledCalendar> {
     let standard = builtin::standard(project.calendar, "Standard".to_owned());
     let arena = Arena::try_from(vec![standard]).ok()?;
     CompiledCalendar::compile(&arena, project.calendar).ok()
-}
-
-/// Planification à rebours (J3) : toutes les tâches non vides sont exclues,
-/// avec `schedule.from_finish_unsupported` (A13). Jamais de fausses dates.
-fn from_finish(project: &Project, at: Moment) -> Schedule {
-    let tasks = project
-        .tasks
-        .iter()
-        .map(|t| {
-            let reason = if t.is_null {
-                Exclusion::NullRow
-            } else {
-                Exclusion::UnsupportedAnchor
-            };
-            (
-                t.uid(),
-                TaskOutcome::Excluded {
-                    reason,
-                    display: None,
-                },
-            )
-        })
-        .collect();
-    let mut diags = Diagnostics::new();
-    diags.push(Diagnostic::ScheduleFromFinishUnsupported);
-    Schedule {
-        project_start: at,
-        project_finish: at,
-        project_summary: None,
-        tasks,
-        order: Vec::new(),
-        diagnostics: diags.finish(),
-    }
 }
 
 /// Invariant interne violé avant les passes : `schedule.internal`, toutes
@@ -568,14 +701,18 @@ mod tests {
     }
 
     #[test]
-    fn from_finish_excludes_every_task() {
+    fn from_finish_schedules_backward_from_the_anchor() {
+        // R-106 : A 1 j ALAP, F ven 23/10 17:00 → A ven 08:00 – 17:00 ;
+        // début calculé (R-107) = ven 08:00 ; fin du projet = F.
         let mut p = project(&[(1, 1, 480)], &[]);
-        p.anchor = ScheduleAnchor::FromFinish(m("2026-12-31T17:00"));
+        p.anchor = ScheduleAnchor::FromFinish(m("2026-10-23T17:00"));
+        p.tasks.get_mut(TaskUid::new(1)).unwrap().constraint = crate::model::Constraint::AsLateAsPossible;
         let s = schedule(&p);
-        assert_eq!(s.project_finish, m("2026-12-31T17:00"));
-        assert!(s.scheduled(TaskUid::new(1)).is_none());
-        assert_eq!(s.diagnostics.len(), 1);
-        assert_eq!(s.diagnostics[0].code(), "schedule.from_finish_unsupported");
+        assert_eq!(s.project_finish, m("2026-10-23T17:00"));
+        assert_eq!(s.project_start, m("2026-10-23T08:00"));
+        assert_eq!(at(&s, 1).start, m("2026-10-23T08:00"));
+        assert_eq!(at(&s, 1).late_driver, super::LateDriver::ProjectFinish);
+        assert!(s.diagnostics.is_empty(), "{:?}", s.diagnostics);
     }
 
     #[test]
@@ -587,6 +724,10 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains(r#""status":"scheduled""#), "{json}");
         assert!(json.contains(r#""kind":"rollup""#), "{json}");
+        assert!(
+            json.contains(r#""late_driver":{"kind":"project_finish"}"#),
+            "{json}"
+        );
         assert_eq!(serde_json::from_str::<Schedule>(&json).unwrap(), s);
     }
 }

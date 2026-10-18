@@ -19,8 +19,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use planrs_core::calendar::CalendarKind;
 use planrs_core::{
-    Constraint, Driver, Exclusion, LagValue, LinkType, Minutes, Moment, Project, Schedule, SchedulingMode,
-    Task, TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis,
+    Constraint, ConstraintKind, Driver, Exclusion, LagValue, LinkType, Minutes, Moment, Project, Schedule,
+    SchedulingMode, Task, TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis,
 };
 use planrs_mspdi::{MspdiDocument, RecordedTask, Tenths};
 use serde::Serialize;
@@ -209,7 +209,6 @@ impl Excluded {
                     Exclusion::ManualUndated => "manual_undated",
                     Exclusion::EmptySummary => "empty_summary",
                     Exclusion::Unschedulable => "unschedulable",
-                    Exclusion::UnsupportedAnchor => "unsupported_anchor",
                 }
             ),
         }
@@ -439,7 +438,12 @@ fn case_for(
         return Err(Excluded::NoComparableValue);
     }
     let causes = causes(project, outline, task, kind, recorded);
-    let rules = rules(outline, task, kind, ts, &compared);
+    let mut rules = rules(outline, task, kind, ts, &compared);
+    // Calendrier du projet dérivé (R-113) : mesure sur sa base, placement
+    // sur le calendrier désigné, pour une tâche sans calendrier propre.
+    if causes.contains(&Cause::ProjectCalendarDerived) && task.calendar.is_none() {
+        rules.insert("R-113");
+    }
     let id = if kind == CaseKind::ProjectSummary {
         Some(0)
     } else {
@@ -697,6 +701,21 @@ fn rules(
             if outline.summaries.contains(&predecessor) {
                 out.insert("R-057");
             }
+        }
+        Driver::Constraint { kind } => {
+            // Contrainte qui pilote le début (ADR-0010) : normalisation de
+            // la date (R-090) et règle du type.
+            out.insert("R-090");
+            out.insert(match kind {
+                ConstraintKind::AsSoonAsPossible => "R-091",
+                ConstraintKind::AsLateAsPossible => "R-092",
+                ConstraintKind::StartNoEarlierThan => "R-093",
+                ConstraintKind::FinishNoEarlierThan => "R-094",
+                ConstraintKind::StartNoLaterThan => "R-095",
+                ConstraintKind::FinishNoLaterThan => "R-096",
+                ConstraintKind::MustStartOn => "R-097",
+                ConstraintKind::MustFinishOn => "R-098",
+            });
         }
         Driver::Manual | Driver::Rollup => {}
     }

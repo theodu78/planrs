@@ -5,7 +5,11 @@
 //! change pas le projet lu.
 //!
 //! L'égalité porte sur le `Project` entier, entrée unique du moteur, et sur
-//! `schedule(&doc.project)`.
+//! `schedule(&doc.project)`. Seuls les enfants directs des tâches sont
+//! retirés : ceux des éléments conservés en `Extras` (R-087) restent.
+//!
+//! Aussi : aucun élément calculé (classe C) ni calculé non recalculé
+//! (classe X) n'entre dans les `Extras` (spécification J3, § 5.2).
 
 #![allow(
     clippy::unwrap_used,
@@ -56,23 +60,49 @@ fn first(fragment: &str, name: &str) -> Option<String> {
     Some(fragment[start..end].trim().to_owned())
 }
 
-/// Retire toutes les occurrences de `<name>…</name>` (et `<name/>`).
+/// Retire les enfants directs `<name>…</name>` (et `<name/>`) d'un corps
+/// d'élément (le texte qui suit sa balise ouvrante) : les éléments de même
+/// nom plus profonds (`Start` d'une `TimephasedData` ou d'une `Baseline`,
+/// conservées en `Extras`, R-087) restent.
 fn strip(fragment: &str, name: &str) -> String {
-    let open = format!("<{name}>");
-    let close = format!("</{name}>");
     let mut out = String::with_capacity(fragment.len());
+    let mut depth: i32 = 0;
     let mut rest = fragment;
-    while let Some(i) = rest.find(&open) {
+    while let Some(i) = rest.find('<') {
         out.push_str(&rest[..i]);
-        let after = &rest[i..];
-        let Some(j) = after.find(&close) else {
-            rest = after;
-            break;
-        };
-        rest = &after[j + close.len()..];
+        let tag = &rest[i..];
+        let end = tag.find('>').map_or(tag.len(), |j| j + 1);
+        let inner = &tag[1..end.saturating_sub(1)];
+        let closing = inner.starts_with('/');
+        let self_closing = inner.ends_with('/');
+        let tag_name: String = inner
+            .trim_start_matches('/')
+            .chars()
+            .take_while(|c| !c.is_whitespace() && *c != '/')
+            .collect();
+        if depth == 0 && !closing && tag_name == name {
+            if self_closing {
+                rest = &tag[end..];
+                continue;
+            }
+            let close = format!("</{name}>");
+            let Some(j) = tag.find(&close) else {
+                out.push_str(tag);
+                return out;
+            };
+            rest = &tag[j + close.len()..];
+            continue;
+        }
+        if closing {
+            depth -= 1;
+        } else if !self_closing && !inner.starts_with('?') && !inner.starts_with('!') {
+            depth += 1;
+        }
+        out.push_str(&tag[..end]);
+        rest = &tag[end..];
     }
     out.push_str(rest);
-    out.replace(&format!("<{name}/>"), "")
+    out
 }
 
 /// Le document sans les valeurs calculées. Récapitulative : déduite de la
@@ -164,10 +194,49 @@ fn p19_corpus_no_leak() {
     }
 }
 
+/// Aucune clé d'`Extras` ne nomme un élément de classe C ou X.
+fn check_extras(name: &str, xml: &str) {
+    use planrs_mspdi::extras::ExtraKey;
+    use planrs_mspdi::schema::{Class, Parent, sequence};
+    let doc = read(xml.as_bytes(), &opts()).unwrap_or_else(|e| panic!("{name} : {e}"));
+    let p = &doc.project;
+    let entities = std::iter::once((Parent::Project, &p.extras))
+        .chain(p.calendars.iter().map(|c| (Parent::Calendar, &c.extras)))
+        .chain(
+            p.summary_task
+                .iter()
+                .chain(p.tasks.iter())
+                .map(|t| (Parent::Task, &t.extras)),
+        )
+        .chain(p.resources.iter().map(|r| (Parent::Resource, &r.extras)))
+        .chain(p.assignments.iter().map(|a| (Parent::Assignment, &a.extras)));
+    for (parent, extras) in entities {
+        for e in &extras.0 {
+            let key = ExtraKey::parse(&e.key).unwrap_or_else(|| panic!("{name} : clé {}", e.key));
+            let class = sequence(parent).class(&key.name);
+            assert!(
+                !matches!(class, Some(Class::Computed | Class::Dropped)),
+                "{name} : {} ({class:?}) dans les Extras",
+                e.key
+            );
+        }
+    }
+}
+
+#[test]
+fn p19_no_computed_value_in_extras() {
+    for (name, xml) in xml_files(&repo("tests/fixtures/mspdi"))
+        .into_iter()
+        .chain(xml_files(&repo("tests/corpus/files")))
+    {
+        check_extras(&name, &xml);
+    }
+}
+
 #[test]
 fn stripping_helpers() {
-    assert_eq!(strip("<a><B>1</B><C>2</C><B>3</B></a>", "B"), "<a><C>2</C></a>");
-    assert_eq!(strip("<a><B/></a>", "B"), "<a></a>");
+    assert_eq!(strip("<B>1</B><C>2</C><B>3</B>", "B"), "<C>2</C>");
+    assert_eq!(strip("<B/><a><B>1</B></a>", "B"), "<a><B>1</B></a>");
     assert_eq!(first("<x><B> 7 </B></x>", "B").as_deref(), Some("7"));
     let xml = "<Project><Tasks><Task><UID>1</UID><OutlineLevel>1</OutlineLevel><Duration>D</Duration>\
                <Start>s</Start></Task><Task><UID>2</UID><OutlineLevel>2</OutlineLevel><Duration>E</Duration>\

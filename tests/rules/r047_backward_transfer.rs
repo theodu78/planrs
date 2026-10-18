@@ -4,7 +4,7 @@
 //! `h(y) = next_working_σ(add_σ(y, −L))`. Source : S22 ; adjoint :
 //! hypothèse (aucun décalage dans le corpus).
 
-use planrs_core::{LinkType, Minutes};
+use planrs_core::{LateDriver, LinkType, Minutes};
 use planrs_tests::moment;
 use planrs_tests::net::{Net, lag_e, lag_w};
 
@@ -325,4 +325,111 @@ fn r047_finish_link_into_milestone_anchor() {
         finish_with(net, "A", a.late.start, a.late.finish),
         moment("2026-10-21T17:00")
     );
+}
+
+#[test]
+fn r047_late_driver_project_finish_and_successor() {
+    // N1 : C et D finissent à la fin du projet (aucun successeur) ; B et A
+    // sont plafonnés par leur lien FS vers C (premier minimum strict).
+    let run = Net::new("2026-10-19T08:00")
+        .task("A", 480)
+        .task("B", 960)
+        .task("C", 480)
+        .task("D", 480)
+        .fs("A", "C")
+        .fs("B", "C")
+        .run();
+    let c = run.uid("C");
+    for name in ["C", "D"] {
+        assert_eq!(run.at(name).late_driver, LateDriver::ProjectFinish, "{name}");
+    }
+    for name in ["A", "B"] {
+        assert_eq!(
+            run.at(name).late_driver,
+            LateDriver::Successor {
+                successor: c,
+                link: LinkType::FinishToStart
+            },
+            "{name}"
+        );
+    }
+    // Récapitulative du projet : agrégat.
+    assert_eq!(
+        run.schedule.project_summary.unwrap().late_driver,
+        LateDriver::Rollup
+    );
+}
+
+#[test]
+fn r047_late_driver_equal_caps_keep_the_first() {
+    // A 1 j FS → B 1 j, B finale ; la fin du projet (mar 17:00) est aussi le
+    // plafond de B : égalité, la fin du projet (première) reste la cause.
+    // A : plafond h(LS_B = mar 08:00) = mar 08:00 < fin du projet → B.
+    let run = Net::new("2026-10-19T08:00")
+        .task("A", 480)
+        .task("B", 480)
+        .fs("A", "B")
+        .run();
+    assert_eq!(run.at("B").late_driver, LateDriver::ProjectFinish);
+    assert_eq!(
+        run.at("A").late_driver,
+        LateDriver::Successor {
+            successor: run.uid("B"),
+            link: LinkType::FinishToStart
+        }
+    );
+}
+
+#[test]
+fn r047_late_driver_summary_cap_and_rollup() {
+    // S {A 1 j, B 2 j} FS → Y 1 j : C(S) = h(LS_Y = mer 08:00) = mer 08:00
+    // plafonne A et B (fin du projet mer 17:00) ; S : agrégat.
+    let run = Net::new("2026-10-19T08:00")
+        .task("S", 0)
+        .task("A", 480)
+        .task("B", 960)
+        .task("Y", 480)
+        .level("A", 2)
+        .level("B", 2)
+        .fs("S", "Y")
+        .run();
+    let s = run.uid("S");
+    for name in ["A", "B"] {
+        assert_eq!(
+            run.at(name).late_driver,
+            LateDriver::SummaryCap { summary: s },
+            "{name}"
+        );
+    }
+    assert_eq!(run.at("S").late_driver, LateDriver::Rollup);
+    // Plafond hérité d'un ancêtre : la cause nomme la récapitulative qui l'a
+    // posé. P {S {A 1 j}} FS → Y : A plafonnée par C(P), posé par P.
+    let run = Net::new("2026-10-19T08:00")
+        .task("P", 0)
+        .task("S", 0)
+        .task("A", 480)
+        .task("Y", 480)
+        .level("S", 2)
+        .level("A", 3)
+        .fs("P", "Y")
+        .run();
+    assert_eq!(
+        run.at("A").late_driver,
+        LateDriver::SummaryCap {
+            summary: run.uid("P")
+        }
+    );
+}
+
+#[test]
+fn r047_late_driver_multiple_critical_paths() {
+    // R-051 : A 1 j sans successeur, C 3 j, option active → LF(A) = EF(A).
+    let run = Net::new("2026-10-19T08:00")
+        .task("A", 480)
+        .task("C", 1_440)
+        .options(|o| o.multiple_critical_paths = true)
+        .run();
+    assert_eq!(run.at("A").late_driver, LateDriver::MultipleCriticalPaths);
+    // C finit à la fin du projet : égalité, la fin du projet reste la cause.
+    assert_eq!(run.at("C").late_driver, LateDriver::ProjectFinish);
 }

@@ -6,4 +6,15 @@
 //! `link.add`…). Cette crate ne dépend d'aucune interface graphique
 //! (règle 9, vérifiée par `cargo xtask layers`).
 //!
-//! État : squelette du jalon J1, pas encore de registre.
+//! État : le registre arrive en J4. Modules livrés en J3 (ADR-0010) :
+//! - [`text`] : texte des durées, des décalages, des prédécesseurs et des
+//!   dates à la manière de MS Project, en français et en anglais (R-140 à
+//!   R-143) ;
+//! - [`csv`] : import et export des tâches en CSV, depuis et vers MS Project
+//!   ou un tableur (R-144 à R-146).
+//!
+//! Aucune entrée/sortie dans ces modules : du texte ou des octets en entrée,
+//! une valeur du modèle en sortie.
+
+pub mod csv;
+pub mod text;

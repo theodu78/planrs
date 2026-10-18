@@ -8,7 +8,7 @@
 //! en entiers, puis arrondies par la règle unique R-001.
 
 use chrono::NaiveDate;
-use planrs_core::{Minutes, Moment, TimeOfDay, round_div};
+use planrs_core::{Decimal, Minutes, Moment, TimeOfDay, round_div};
 
 /// Booléen MSPDI (`xsd:boolean`) : `1`/`true` ou `0`/`false`, espaces de tête
 /// et de fin ignorés (R-076). Toute autre écriture rend `None`.
@@ -410,6 +410,145 @@ pub const fn percent_lag_from_link_lag(link_lag: i64) -> Option<i64> {
     link_lag.checked_mul(10)
 }
 
+/// R-120 : date `AAAA-MM-JJThh:mm:00`, sans fuseau (inverse de R-075).
+/// Calcul direct du calendrier civil (l'écriture de 5 000 tâches en formate
+/// plus de 50 000) ; repli sur l'affichage de `Moment` en cas d'échec.
+#[must_use]
+pub fn format_datetime(m: Moment) -> String {
+    civil(m.minutes()).map_or_else(
+        || format!("{m}:00"),
+        |(y, mo, d, h, mi)| format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:00"),
+    )
+}
+
+/// Minutes depuis le 01/01/1984 → (année, mois, jour, heure, minute), par
+/// l'algorithme des jours civils (ère de 400 ans, mars en premier mois).
+pub(crate) fn civil(minutes: i64) -> Option<(i64, i64, i64, i64, i64)> {
+    let days = minutes.checked_div_euclid(1_440)?;
+    let in_day = minutes.checked_rem_euclid(1_440)?;
+    // 01/01/1984 = jour 5 113 depuis le 01/01/1970 ; 719 468 : 01/03/0000.
+    let z = days.checked_add(5_113 + 719_468)?;
+    let era = z.checked_div_euclid(146_097)?;
+    let doe = z.checked_sub(era.checked_mul(146_097)?)?;
+    let yoe = doe
+        .checked_sub(doe.checked_div(1_460)?)?
+        .checked_add(doe.checked_div(36_524)?)?
+        .checked_sub(doe.checked_div(146_096)?)?
+        .checked_div(365)?;
+    let doy = doe.checked_sub(
+        yoe.checked_mul(365)?
+            .checked_add(yoe.checked_div(4)?)?
+            .checked_sub(yoe.checked_div(100)?)?,
+    )?;
+    let mp = doy.checked_mul(5)?.checked_add(2)?.checked_div(153)?;
+    let d = doy
+        .checked_sub(mp.checked_mul(153)?.checked_add(2)?.checked_div(5)?)?
+        .checked_add(1)?;
+    let mo = if mp < 10 {
+        mp.checked_add(3)?
+    } else {
+        mp.checked_sub(9)?
+    };
+    let y = yoe
+        .checked_add(era.checked_mul(400)?)?
+        .checked_add(i64::from(mo <= 2))?;
+    Some((y, mo, d, in_day.checked_div(60)?, in_day.checked_rem(60)?))
+}
+
+/// R-120 : heure `hh:mm:00`. 24:00 s'écrit `00:00:00` pour une fin de
+/// plage (`end_of_range`, R-077) et `24:00:00` sinon (heure par défaut du
+/// projet).
+#[must_use]
+pub fn format_time(t: TimeOfDay, end_of_range: bool) -> String {
+    let minutes = t.minutes();
+    if minutes >= 1_440 {
+        return if end_of_range { "00:00:00" } else { "24:00:00" }.to_owned();
+    }
+    format!("{:02}:{:02}:00", minutes / 60, minutes % 60)
+}
+
+/// R-120 : durée ISO 8601 `PT{h}H{m}M0S` (inverse de R-070), `-PT…` si
+/// négative. Exemple : 2 400 → `PT40H0M0S`.
+#[must_use]
+pub fn format_iso_duration(minutes: i64) -> String {
+    let sign = if minutes < 0 { "-" } else { "" };
+    let abs = minutes.unsigned_abs();
+    format!("{sign}PT{}H{}M0S", abs / 60, abs % 60)
+}
+
+/// R-120 : booléen `0` / `1`.
+#[must_use]
+pub const fn format_bool(b: bool) -> &'static str {
+    if b { "1" } else { "0" }
+}
+
+/// R-120 : décimal au point, sans zéro final (`1.50` → `1.5`, `2.00` →
+/// `2`).
+#[must_use]
+pub fn format_decimal(d: Decimal) -> String {
+    d.normalized().to_string()
+}
+
+/// Décimal lu (`xsd:decimal`, `xsd:float` sans exposant) : valeur exacte au
+/// plus à 6 décimales, et vrai si des décimales au-delà de la sixième ont
+/// été arrondies (R-001).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ParsedDecimal {
+    /// Valeur.
+    pub value: Decimal,
+    /// Vrai si la valeur a été arrondie à 6 décimales.
+    pub rounded: bool,
+}
+
+/// R-088 : nombre décimal `[+-]chiffres[.chiffres]` (espaces de tête et de
+/// fin ignorés ; `.5` et `5.` admis), sans flottant. Au-delà de 6
+/// décimales, arrondi par R-001 (`rounded`). Exposant, valeur vide ou trop
+/// grande pour un `i64` : `None`. Exemples : `1.00` → 1 ; `4.15875` →
+/// 4,15875 ; `0.5` → 0,5 ; `-3` → −3 ; `0.1234567` → 0,123457 (arrondi).
+#[must_use]
+pub fn parse_decimal(s: &str) -> Option<ParsedDecimal> {
+    let t = s.trim();
+    let (negative, body) = match t.as_bytes().first() {
+        Some(b'-') => (true, t.get(1..)?),
+        Some(b'+') => (false, t.get(1..)?),
+        _ => (false, t),
+    };
+    let (int, frac) = body.split_once('.').unwrap_or((body, ""));
+    if (int.is_empty() && frac.is_empty()) || !int.bytes().chain(frac.bytes()).all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let digits = |d: &str| -> Option<i128> {
+        d.bytes().try_fold(0_i128, |acc, b| {
+            acc.checked_mul(10)?.checked_add(i128::from(b.checked_sub(b'0')?))
+        })
+    };
+    let max = usize::from(Decimal::MAX_SCALE);
+    let (kept, dropped) = if frac.len() > max {
+        (frac.get(..max)?, frac.get(max..)?)
+    } else {
+        (frac, "")
+    };
+    let scale = u8::try_from(kept.len()).ok()?;
+    let mut mantissa = digits(int)?
+        .checked_mul(10_i128.checked_pow(u32::from(scale))?)?
+        .checked_add(digits(kept)?)?;
+    let mut rounded = false;
+    if !dropped.is_empty() {
+        // Arrondi à 6 décimales : (mantisse × 10^k + reste) / 10^k, R-001.
+        let k = u32::try_from(dropped.len()).ok()?;
+        let rest = digits(dropped)?;
+        rounded = rest != 0;
+        let den = 10_i128.checked_pow(k)?;
+        let num = mantissa.checked_mul(den)?.checked_add(rest)?;
+        mantissa = i128::from(round_div(num, den)?);
+    }
+    if negative {
+        mantissa = mantissa.checked_neg()?;
+    }
+    let value = Decimal::new(i64::try_from(mantissa).ok()?, scale).ok()?;
+    Some(ParsedDecimal { value, rounded })
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -418,7 +557,8 @@ mod tests {
     )]
 
     use super::{
-        DateTimeError, IsoDuration, IsoDurationError, parse_bool, parse_datetime, parse_int,
+        DateTimeError, IsoDuration, IsoDurationError, format_bool, format_datetime, format_decimal,
+        format_iso_duration, format_time, parse_bool, parse_datetime, parse_decimal, parse_int,
         parse_iso_duration, parse_time, percent_lag_from_link_lag, tenths_to_minutes,
     };
     use planrs_core::{Minutes, Moment, TimeOfDay};
@@ -569,5 +709,68 @@ mod tests {
         assert_eq!(percent_lag_from_link_lag(500), Some(5_000));
         assert_eq!(percent_lag_from_link_lag(-250), Some(-2_500));
         assert_eq!(percent_lag_from_link_lag(i64::MAX), None);
+    }
+
+    #[test]
+    fn r088_decimals() {
+        let d = |t: &str| parse_decimal(t).map(|p| (p.value.normalized().to_string(), p.rounded));
+        assert_eq!(d("1.00"), Some(("1".to_owned(), false)));
+        assert_eq!(d(" 4.15875 "), Some(("4.15875".to_owned(), false)));
+        assert_eq!(d("0.5"), Some(("0.5".to_owned(), false)));
+        assert_eq!(d(".5"), Some(("0.5".to_owned(), false)));
+        assert_eq!(d("5."), Some(("5".to_owned(), false)));
+        assert_eq!(d("-3"), Some(("-3".to_owned(), false)));
+        assert_eq!(d("+2.25"), Some(("2.25".to_owned(), false)));
+        assert_eq!(d("0.1234567"), Some(("0.123457".to_owned(), true)));
+        assert_eq!(d("-0.0000005"), Some(("-0.000001".to_owned(), true)));
+        assert_eq!(d("1.0000000"), Some(("1".to_owned(), false)));
+        for bad in ["", ".", "-", "1e5", "1,5", "abc", "1.2.3", "99999999999999999999"] {
+            assert_eq!(parse_decimal(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn r120_value_forms_round_trip() {
+        let at = m("2026-10-19T08:00");
+        assert_eq!(format_datetime(at), "2026-10-19T08:00:00");
+        assert_eq!(parse_datetime(&format_datetime(at)).unwrap().moment, at);
+        assert_eq!(format_datetime(Moment::MAX), "2150-01-01T00:00:00");
+        assert_eq!(
+            parse_datetime(&format_datetime(Moment::MAX)).unwrap().moment,
+            Moment::MAX
+        );
+        assert_eq!(format_time(TimeOfDay::hm(8, 5).unwrap(), true), "08:05:00");
+        assert_eq!(format_time(TimeOfDay::END_OF_DAY, true), "00:00:00");
+        assert_eq!(format_time(TimeOfDay::END_OF_DAY, false), "24:00:00");
+        assert_eq!(parse_time("24:00:00").unwrap().0, TimeOfDay::END_OF_DAY);
+        for minutes in [0, 1, 59, 60, 480, 2_400, 87_308_640, -480, -1] {
+            let text = format_iso_duration(minutes);
+            assert_eq!(parse_iso_duration(&text).unwrap().minutes, minutes, "{text}");
+        }
+        assert_eq!(format_iso_duration(2_400), "PT40H0M0S");
+        assert_eq!(format_iso_duration(-90), "-PT1H30M0S");
+        assert_eq!(format_bool(true), "1");
+        assert_eq!(format_bool(false), "0");
+        let d = |m: i64, s: u8| planrs_core::Decimal::new(m, s).unwrap();
+        assert_eq!(format_decimal(d(150, 2)), "1.5");
+        assert_eq!(format_decimal(d(200, 2)), "2");
+        assert_eq!(format_decimal(d(-415_875, 5)), "-4.15875");
+        assert_eq!(format_decimal(d(5, 1)), "0.5");
+    }
+
+    #[test]
+    fn r120_fast_dates_match_the_calendar() {
+        // Tout le domaine, un jour sur 7 et une minute variable : même texte
+        // que l'affichage de `Moment` (chrono).
+        let mut minutes = 0_i64;
+        while minutes <= Moment::MAX.minutes() {
+            let at = Moment::from_minutes(minutes).unwrap();
+            assert_eq!(format_datetime(at), format!("{at}:00"), "{minutes}");
+            minutes += 7 * 1_440 + 37;
+        }
+        assert_eq!(format_datetime(Moment::MAX), "2150-01-01T00:00:00");
+        assert_eq!(format_datetime(Moment::MIN), "1984-01-01T00:00:00");
+        assert_eq!(format_datetime(m("2024-02-29T23:59")), "2024-02-29T23:59:00");
+        assert_eq!(format_datetime(m("2100-03-01T00:00")), "2100-03-01T00:00:00");
     }
 }

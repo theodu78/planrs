@@ -26,3 +26,37 @@ fn r082_work_week_with_inherited_day() {
     assert_eq!(calendar.work_weeks().len(), 1);
     assert_eq!(calendar.work_weeks()[0].name, "Winter Break");
 }
+
+#[test]
+fn r082_pj15_work_week_form() {
+    // Amendement J3 (R-128) : forme du schéma pj15, `WeekDay` direct sous
+    // `WorkWeek` (`DayType`, `DayWorking`, sans plages) ; un jour ouvré sans
+    // plage reçoit 08:00-12:00 et 13:00-17:00 (R-078).
+    let xml = "<Project xmlns=\"http://schemas.microsoft.com/project\"><StartDate>2026-10-19T08:00:00</StartDate>\
+               <CalendarUID>1</CalendarUID><Calendars><Calendar><UID>1</UID><IsBaseCalendar>1</IsBaseCalendar>\
+               <WeekDays><WeekDay><DayType>1</DayType><DayWorking>0</DayWorking></WeekDay></WeekDays>\
+               <WorkWeeks><WorkWeek><TimePeriod><FromDate>2026-12-21T00:00:00</FromDate><ToDate>2026-12-26T23:59:00</ToDate>\
+               </TimePeriod><Name>Hiver</Name><WeekDay><DayType>6</DayType><DayWorking>0</DayWorking></WeekDay>\
+               <WeekDay><DayType>1</DayType><DayWorking>1</DayWorking></WeekDay></WorkWeek></WorkWeeks></Calendar>\
+               </Calendars></Project>";
+    let doc = planrs_mspdi::read(
+        xml.as_bytes(),
+        &planrs_mspdi::ReadOptions::new(planrs_tests::moment("2026-01-01T00:00")),
+    )
+    .unwrap();
+    let cal = doc.project.calendars.at(0).unwrap();
+    let ww = &cal.work_weeks()[0];
+    assert_eq!(ww.name, "Hiver");
+    assert_eq!(
+        *ww.days.get(planrs_core::Weekday::Friday),
+        planrs_core::calendar::DayRule::NonWorking
+    );
+    match ww.days.get(planrs_core::Weekday::Sunday) {
+        planrs_core::calendar::DayRule::Working(h) => assert_eq!(h.total(), planrs_core::Minutes::new(480)),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        *ww.days.get(planrs_core::Weekday::Monday),
+        planrs_core::calendar::DayRule::Inherit
+    );
+}

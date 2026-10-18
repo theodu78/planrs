@@ -76,6 +76,15 @@ toml = "1.1.8"
 # Empreintes SHA-256 du corpus public (`cargo xtask corpus fetch` et harnais
 # `tests/corpus`) : aucun téléchargement dans `cargo test`.
 sha2 = "0.11.1"
+# `cargo xtask schema fetch` (ADR-0010, D18) : lecture du MSI du SDK de
+# Project 2013 et de son archive CAB, en Rust pur (MIT).
+msi = "0.10.0"
+cab = "0.6.0"
+# CSV des tâches (ADR-0010, D17) dans planrs-automation : lecture RFC 4180
+# (Unlicense OR MIT) et décodage UTF-16 / Windows-1252 ((Apache-2.0 OR MIT)
+# AND BSD-3-Clause), plutôt que des décodeurs faits main.
+csv = "1.4.0"
+encoding_rs = "0.8.42"
 # Dépendances de développement de planrs-core (ADR-0008) : JSON de référence et
 # aller-retour serde, tests de propriétés. proptest sans `fork` ni `timeout`
 # (inutiles ici, et autant de crates en moins).
@@ -86,6 +95,9 @@ proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 # `tests/benches/schedule.rs`, exécuté par le job CI `perf`). Sans rayon ni
 # plotters : ni parallélisme ni graphiques, autant de crates en moins.
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+# Validation XSD des documents écrits (P26, ADR-0010 D17) : dépendance de
+# développement de planrs-tests, Rust pur, BSD-2-Clause.
+uppsala = "0.12.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

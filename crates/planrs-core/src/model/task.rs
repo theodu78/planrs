@@ -33,6 +33,49 @@ pub enum TaskType {
     FixedWork,
 }
 
+/// Type de contrainte, sans sa date (S27, S34). Les codes MSPDI
+/// (`ConstraintType` 0 à 7) vivent dans `planrs-mspdi`, jamais dans le cœur
+/// (ADR-0008).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConstraintKind {
+    /// Le plus tôt possible.
+    AsSoonAsPossible,
+    /// Le plus tard possible.
+    AsLateAsPossible,
+    /// Doit commencer le.
+    MustStartOn,
+    /// Doit finir le.
+    MustFinishOn,
+    /// Ne pas commencer avant le.
+    StartNoEarlierThan,
+    /// Ne pas commencer après le.
+    StartNoLaterThan,
+    /// Ne pas finir avant le.
+    FinishNoEarlierThan,
+    /// Ne pas finir après le.
+    FinishNoLaterThan,
+}
+
+impl ConstraintKind {
+    /// Vrai pour les six types datés (S29 : « All the constraints except As
+    /// Soon As Possible and As Late As Possible require a date »).
+    #[must_use]
+    pub const fn is_dated(self) -> bool {
+        !matches!(self, Self::AsSoonAsPossible | Self::AsLateAsPossible)
+    }
+
+    /// Vrai pour les types dont la date est un début (MSO, SNET, SNLT),
+    /// normalisée côté début (R-090).
+    #[must_use]
+    pub const fn is_start_side(self) -> bool {
+        matches!(
+            self,
+            Self::MustStartOn | Self::StartNoEarlierThan | Self::StartNoLaterThan
+        )
+    }
+}
+
 /// Contrainte de date ; une contrainte datée porte sa date.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -72,6 +115,66 @@ pub enum Constraint {
         /// Date limite.
         date: Moment,
     },
+}
+
+impl Constraint {
+    /// Type de la contrainte.
+    #[must_use]
+    pub const fn kind(&self) -> ConstraintKind {
+        match self {
+            Self::AsSoonAsPossible => ConstraintKind::AsSoonAsPossible,
+            Self::AsLateAsPossible => ConstraintKind::AsLateAsPossible,
+            Self::MustStartOn { .. } => ConstraintKind::MustStartOn,
+            Self::MustFinishOn { .. } => ConstraintKind::MustFinishOn,
+            Self::StartNoEarlierThan { .. } => ConstraintKind::StartNoEarlierThan,
+            Self::StartNoLaterThan { .. } => ConstraintKind::StartNoLaterThan,
+            Self::FinishNoEarlierThan { .. } => ConstraintKind::FinishNoEarlierThan,
+            Self::FinishNoLaterThan { .. } => ConstraintKind::FinishNoLaterThan,
+        }
+    }
+
+    /// Date de la contrainte ; `None` pour ASAP et ALAP.
+    #[must_use]
+    pub const fn date(&self) -> Option<Moment> {
+        match self {
+            Self::AsSoonAsPossible | Self::AsLateAsPossible => None,
+            Self::MustStartOn { date }
+            | Self::MustFinishOn { date }
+            | Self::StartNoEarlierThan { date }
+            | Self::StartNoLaterThan { date }
+            | Self::FinishNoEarlierThan { date }
+            | Self::FinishNoLaterThan { date } => Some(*date),
+        }
+    }
+
+    /// Contrainte à partir de son type et de sa date. `None` si la date
+    /// manque pour un type daté, ou est donnée pour ASAP ou ALAP.
+    #[must_use]
+    pub const fn from_parts(kind: ConstraintKind, date: Option<Moment>) -> Option<Self> {
+        Some(match (kind, date) {
+            (ConstraintKind::AsSoonAsPossible, None) => Self::AsSoonAsPossible,
+            (ConstraintKind::AsLateAsPossible, None) => Self::AsLateAsPossible,
+            (ConstraintKind::MustStartOn, Some(date)) => Self::MustStartOn { date },
+            (ConstraintKind::MustFinishOn, Some(date)) => Self::MustFinishOn { date },
+            (ConstraintKind::StartNoEarlierThan, Some(date)) => Self::StartNoEarlierThan { date },
+            (ConstraintKind::StartNoLaterThan, Some(date)) => Self::StartNoLaterThan { date },
+            (ConstraintKind::FinishNoEarlierThan, Some(date)) => Self::FinishNoEarlierThan { date },
+            (ConstraintKind::FinishNoLaterThan, Some(date)) => Self::FinishNoLaterThan { date },
+            _ => return None,
+        })
+    }
+
+    /// R-108 : contrainte par défaut d'une nouvelle tâche selon le sens de
+    /// planification : « le plus tôt possible » depuis le début, « le plus
+    /// tard possible » à rebours (S28, S29, S33). Pour l'ajout d'une tâche
+    /// (J4) et l'import CSV ; [`Task::new`] reste ASAP.
+    #[must_use]
+    pub const fn default_for(anchor: &crate::model::ScheduleAnchor) -> Self {
+        match anchor {
+            crate::model::ScheduleAnchor::FromStart(_) => Self::AsSoonAsPossible,
+            crate::model::ScheduleAnchor::FromFinish(_) => Self::AsLateAsPossible,
+        }
+    }
 }
 
 /// Mode de planification. Une tâche manuelle est stockée, pas recalculée
@@ -342,7 +445,7 @@ mod tests {
         reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
     )]
 
-    use super::{Constraint, OutlineLevel, Priority, SchedulingMode, Task, TaskType};
+    use super::{Constraint, ConstraintKind, OutlineLevel, Priority, SchedulingMode, Task, TaskType};
     use crate::duration::{DurationUnit, Minutes};
     use crate::error::ModelError;
     use crate::ids::TaskUid;
@@ -383,6 +486,43 @@ mod tests {
         assert!(!t.duration.is_estimated());
         assert_eq!(t.task_type, TaskType::FixedWork);
         assert!(t.effort_driven);
+    }
+
+    #[test]
+    fn constraint_kind_date_and_parts() {
+        let d: crate::time::Moment = "2026-10-21T13:00".parse().unwrap();
+        let all = [
+            ConstraintKind::AsSoonAsPossible,
+            ConstraintKind::AsLateAsPossible,
+            ConstraintKind::MustStartOn,
+            ConstraintKind::MustFinishOn,
+            ConstraintKind::StartNoEarlierThan,
+            ConstraintKind::StartNoLaterThan,
+            ConstraintKind::FinishNoEarlierThan,
+            ConstraintKind::FinishNoLaterThan,
+        ];
+        for kind in all {
+            let date = kind.is_dated().then_some(d);
+            let c = Constraint::from_parts(kind, date).unwrap();
+            assert_eq!(c.kind(), kind);
+            assert_eq!(c.date(), date);
+            // Date manquante ou en trop : refus.
+            let wrong = if kind.is_dated() { None } else { Some(d) };
+            assert_eq!(Constraint::from_parts(kind, wrong), None);
+        }
+        let start_side: Vec<_> = all.into_iter().filter(|k| k.is_start_side()).collect();
+        assert_eq!(
+            start_side,
+            [
+                ConstraintKind::MustStartOn,
+                ConstraintKind::StartNoEarlierThan,
+                ConstraintKind::StartNoLaterThan
+            ]
+        );
+        assert_eq!(
+            serde_json::to_string(&ConstraintKind::FinishNoEarlierThan).unwrap(),
+            r#""finish_no_earlier_than""#
+        );
     }
 
     #[test]

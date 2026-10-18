@@ -7,8 +7,8 @@
 //! `None`, que l'appelant signale (`mspdi.unknown_code`) avant d'appliquer la
 //! valeur par défaut.
 
-use planrs_core::calendar::{MonthItem, MonthPosition};
-use planrs_core::{DurationUnit, LinkType, Month, TaskType, TimeBasis, Week, Weekday};
+use planrs_core::calendar::{MonthItem, MonthPosition, Recurrence};
+use planrs_core::{DurationUnit, LinkType, Month, RateUnit, TaskType, TimeBasis, Week, Weekday, WorkContour};
 
 /// Écart entre un code de durée et sa variante estimée (« ? ») : 32.
 const ESTIMATED_OFFSET: i64 = 32;
@@ -92,26 +92,9 @@ pub fn duration_format(code: i64) -> Option<DurationCode> {
     }
 }
 
-/// Type de contrainte, sans sa date (`ConstraintType`, 0 à 7).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConstraintKind {
-    /// 0 : le plus tôt possible.
-    AsSoonAsPossible,
-    /// 1 : le plus tard possible.
-    AsLateAsPossible,
-    /// 2 : doit commencer le.
-    MustStartOn,
-    /// 3 : doit finir le.
-    MustFinishOn,
-    /// 4 : ne pas commencer avant le.
-    StartNoEarlierThan,
-    /// 5 : ne pas commencer après le.
-    StartNoLaterThan,
-    /// 6 : ne pas finir avant le.
-    FinishNoEarlierThan,
-    /// 7 : ne pas finir après le.
-    FinishNoLaterThan,
-}
+/// Type de contrainte, sans sa date : défini dans le cœur (ADR-0010), les
+/// codes `ConstraintType` (0 à 7) restent ici (ADR-0008).
+pub use planrs_core::ConstraintKind;
 
 /// `ConstraintType` : 0 ASAP, 1 ALAP, 2 MSO, 3 MFO, 4 SNET, 5 SNLT, 6 FNET,
 /// 7 FNLT.
@@ -303,6 +286,302 @@ pub const fn work_format(code: i64) -> Option<DurationUnit> {
         4 => Some(DurationUnit::Week),
         5 => Some(DurationUnit::Month),
         _ => None,
+    }
+}
+
+/// Type de ressource MSPDI (`Resource/Type`, R-124) : 0 matérielle,
+/// 1 travail ; 2 (coût) n'est pas dans pj15 mais se lit (le drapeau
+/// `IsCostResource` l'emporte, voir `resource.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResourceTypeCode {
+    /// 0 : matérielle.
+    Material,
+    /// 1 : travail.
+    Work,
+    /// 2 : coût.
+    Cost,
+}
+
+/// `Resource/Type` : 0, 1, 2.
+#[must_use]
+pub const fn resource_type(code: i64) -> Option<ResourceTypeCode> {
+    match code {
+        0 => Some(ResourceTypeCode::Material),
+        1 => Some(ResourceTypeCode::Work),
+        2 => Some(ResourceTypeCode::Cost),
+        _ => None,
+    }
+}
+
+/// `StandardRateFormat`, `OvertimeRateFormat` (R-124) : unité d'affichage
+/// du taux — 1 minute, 2 heure, 3 jour, 4 semaine, 5 mois, 7 an,
+/// 8 matériel (unité de la ressource matérielle).
+#[must_use]
+pub const fn rate_format(code: i64) -> Option<RateUnit> {
+    match code {
+        1 => Some(RateUnit::Minute),
+        2 => Some(RateUnit::Hour),
+        3 => Some(RateUnit::Day),
+        4 => Some(RateUnit::Week),
+        5 => Some(RateUnit::Month),
+        7 => Some(RateUnit::Year),
+        8 => Some(RateUnit::MaterialUnit),
+        _ => None,
+    }
+}
+
+/// `WorkContour` (R-125) : 0 uniforme, 1 croissant, 2 décroissant, 3 deux
+/// pics, 4 pic au début, 5 pic à la fin, 6 cloche, 7 tortue, 8 modifié.
+#[must_use]
+pub const fn work_contour(code: i64) -> Option<WorkContour> {
+    match code {
+        0 => Some(WorkContour::Flat),
+        1 => Some(WorkContour::BackLoaded),
+        2 => Some(WorkContour::FrontLoaded),
+        3 => Some(WorkContour::DoublePeak),
+        4 => Some(WorkContour::EarlyPeak),
+        5 => Some(WorkContour::LatePeak),
+        6 => Some(WorkContour::Bell),
+        7 => Some(WorkContour::Turtle),
+        8 => Some(WorkContour::Contoured),
+        _ => None,
+    }
+}
+
+// --- Tables inverses (écriture, R-120) -------------------------------------
+
+/// `DurationFormat` / `LagFormat` d'une durée : code de (unité, base),
+/// + 32 si estimée (inverse de [`duration_format`]).
+#[must_use]
+pub const fn duration_format_code(unit: DurationUnit, basis: TimeBasis, estimated: bool) -> i64 {
+    let base: i64 = match (unit, basis) {
+        (DurationUnit::Minute, TimeBasis::Working) => 3,
+        (DurationUnit::Minute, TimeBasis::Elapsed) => 4,
+        (DurationUnit::Hour, TimeBasis::Working) => 5,
+        (DurationUnit::Hour, TimeBasis::Elapsed) => 6,
+        (DurationUnit::Day, TimeBasis::Working) => 7,
+        (DurationUnit::Day, TimeBasis::Elapsed) => 8,
+        (DurationUnit::Week, TimeBasis::Working) => 9,
+        (DurationUnit::Week, TimeBasis::Elapsed) => 10,
+        (DurationUnit::Month, TimeBasis::Working) => 11,
+        (DurationUnit::Month, TimeBasis::Elapsed) => 12,
+    };
+    if estimated {
+        base.saturating_add(ESTIMATED_OFFSET)
+    } else {
+        base
+    }
+}
+
+/// `LagFormat` d'un décalage en pourcentage : 19 (`%`), 20 (`e%`).
+#[must_use]
+pub const fn percent_lag_format_code(basis: TimeBasis) -> i64 {
+    match basis {
+        TimeBasis::Working => 19,
+        TimeBasis::Elapsed => 20,
+    }
+}
+
+/// `PredecessorLink/Type` (inverse de [`link_type`]).
+#[must_use]
+pub const fn link_type_code(kind: LinkType) -> i64 {
+    match kind {
+        LinkType::FinishToFinish => 0,
+        LinkType::FinishToStart => 1,
+        LinkType::StartToFinish => 2,
+        LinkType::StartToStart => 3,
+    }
+}
+
+/// `ConstraintType` (inverse de [`constraint_type`]).
+#[must_use]
+pub const fn constraint_code(kind: ConstraintKind) -> i64 {
+    match kind {
+        ConstraintKind::AsSoonAsPossible => 0,
+        ConstraintKind::AsLateAsPossible => 1,
+        ConstraintKind::MustStartOn => 2,
+        ConstraintKind::MustFinishOn => 3,
+        ConstraintKind::StartNoEarlierThan => 4,
+        ConstraintKind::StartNoLaterThan => 5,
+        ConstraintKind::FinishNoEarlierThan => 6,
+        ConstraintKind::FinishNoLaterThan => 7,
+    }
+}
+
+/// `Type` d'une tâche, `DefaultTaskType` (inverse de [`task_type`]).
+#[must_use]
+pub const fn task_type_code(t: TaskType) -> i64 {
+    match t {
+        TaskType::FixedUnits => 0,
+        TaskType::FixedDuration => 1,
+        TaskType::FixedWork => 2,
+    }
+}
+
+/// `DayType` d'un jour de la semaine : 1 dimanche … 7 samedi.
+#[must_use]
+pub const fn day_type_code(d: Weekday) -> i64 {
+    match d {
+        Weekday::Sunday => 1,
+        Weekday::Monday => 2,
+        Weekday::Tuesday => 3,
+        Weekday::Wednesday => 4,
+        Weekday::Thursday => 5,
+        Weekday::Friday => 6,
+        Weekday::Saturday => 7,
+    }
+}
+
+/// `WeekStartDay` : 0 dimanche … 6 samedi.
+#[must_use]
+pub const fn week_start_code(d: Weekday) -> i64 {
+    match d {
+        Weekday::Sunday => 0,
+        Weekday::Monday => 1,
+        Weekday::Tuesday => 2,
+        Weekday::Wednesday => 3,
+        Weekday::Thursday => 4,
+        Weekday::Friday => 5,
+        Weekday::Saturday => 6,
+    }
+}
+
+/// `WorkFormat` : 1 m, 2 h, 3 j, 4 sem, 5 mois.
+#[must_use]
+pub const fn work_format_code(unit: DurationUnit) -> i64 {
+    match unit {
+        DurationUnit::Minute => 1,
+        DurationUnit::Hour => 2,
+        DurationUnit::Day => 3,
+        DurationUnit::Week => 4,
+        DurationUnit::Month => 5,
+    }
+}
+
+/// `Month` : 0 janvier … 11 décembre.
+#[must_use]
+pub const fn month_code(m: Month) -> i64 {
+    match m {
+        Month::January => 0,
+        Month::February => 1,
+        Month::March => 2,
+        Month::April => 3,
+        Month::May => 4,
+        Month::June => 5,
+        Month::July => 6,
+        Month::August => 7,
+        Month::September => 8,
+        Month::October => 9,
+        Month::November => 10,
+        Month::December => 11,
+    }
+}
+
+/// `MonthItem` (inverse de [`month_item`]).
+#[must_use]
+pub const fn month_item_code(item: MonthItem) -> i64 {
+    match item {
+        MonthItem::Day => 0,
+        MonthItem::Weekday => 1,
+        MonthItem::WeekendDay => 2,
+        MonthItem::On(d) => match d {
+            Weekday::Sunday => 3,
+            Weekday::Monday => 4,
+            Weekday::Tuesday => 5,
+            Weekday::Wednesday => 6,
+            Weekday::Thursday => 7,
+            Weekday::Friday => 8,
+            Weekday::Saturday => 9,
+        },
+    }
+}
+
+/// `MonthPosition` (inverse de [`month_position`]).
+#[must_use]
+pub const fn month_position_code(p: MonthPosition) -> i64 {
+    match p {
+        MonthPosition::First => 0,
+        MonthPosition::Second => 1,
+        MonthPosition::Third => 2,
+        MonthPosition::Fourth => 3,
+        MonthPosition::Last => 4,
+    }
+}
+
+/// `DaysOfWeek` : masque, 1 = dimanche … 64 = samedi (inverse de
+/// [`days_of_week`]).
+#[must_use]
+pub const fn days_of_week_mask(w: &Week<bool>) -> i64 {
+    let mut mask = 0;
+    if w.sunday {
+        mask |= 1;
+    }
+    if w.monday {
+        mask |= 2;
+    }
+    if w.tuesday {
+        mask |= 4;
+    }
+    if w.wednesday {
+        mask |= 8;
+    }
+    if w.thursday {
+        mask |= 16;
+    }
+    if w.friday {
+        mask |= 32;
+    }
+    if w.saturday {
+        mask |= 64;
+    }
+    mask
+}
+
+/// `StandardRateFormat` / `OvertimeRateFormat` (inverse de
+/// [`rate_format`]).
+#[must_use]
+pub const fn rate_format_code(unit: RateUnit) -> i64 {
+    match unit {
+        RateUnit::Minute => 1,
+        RateUnit::Hour => 2,
+        RateUnit::Day => 3,
+        RateUnit::Week => 4,
+        RateUnit::Month => 5,
+        RateUnit::Year => 7,
+        RateUnit::MaterialUnit => 8,
+    }
+}
+
+/// `WorkContour` (inverse de [`work_contour`]).
+#[must_use]
+pub const fn work_contour_code(c: WorkContour) -> i64 {
+    match c {
+        WorkContour::Flat => 0,
+        WorkContour::BackLoaded => 1,
+        WorkContour::FrontLoaded => 2,
+        WorkContour::DoublePeak => 3,
+        WorkContour::EarlyPeak => 4,
+        WorkContour::LatePeak => 5,
+        WorkContour::Bell => 6,
+        WorkContour::Turtle => 7,
+        WorkContour::Contoured => 8,
+    }
+}
+
+/// `Exception/Type` d'une récurrence ; `Period` (chaque jour de la
+/// période) s'écrit `1` (quotidienne de pas 1, forme de MS Project pour un
+/// férié, D15 ; relue `Daily { every: 1 }`, mêmes jours).
+#[must_use]
+pub const fn exception_type_code(r: &Recurrence) -> i64 {
+    match r {
+        Recurrence::Period | Recurrence::Daily { .. } => 1,
+        Recurrence::YearlyByDay { .. } => 2,
+        Recurrence::YearlyByPosition { .. } => 3,
+        Recurrence::MonthlyByDay { .. } => 4,
+        Recurrence::MonthlyByPosition { .. } => 5,
+        Recurrence::Weekly { .. } => 6,
+        Recurrence::ByDayCount { .. } => 7,
+        Recurrence::ByWeekdayCount { .. } => 8,
     }
 }
 
@@ -499,5 +778,123 @@ mod tests {
         assert_eq!(work_format(0), None);
         assert_eq!(work_format(6), None);
         assert!(OUT.iter().all(|c| work_format(*c).is_none()));
+    }
+
+    #[test]
+    fn r088_resource_rate_and_contour_codes() {
+        use super::{ResourceTypeCode, rate_format, resource_type, work_contour};
+        use planrs_core::{RateUnit, WorkContour};
+        assert_eq!(resource_type(0), Some(ResourceTypeCode::Material));
+        assert_eq!(resource_type(1), Some(ResourceTypeCode::Work));
+        assert_eq!(resource_type(2), Some(ResourceTypeCode::Cost));
+        assert_eq!(resource_type(3), None);
+        let units = [
+            (1, RateUnit::Minute),
+            (2, RateUnit::Hour),
+            (3, RateUnit::Day),
+            (4, RateUnit::Week),
+            (5, RateUnit::Month),
+            (7, RateUnit::Year),
+            (8, RateUnit::MaterialUnit),
+        ];
+        for (code, unit) in units {
+            assert_eq!(rate_format(code), Some(unit));
+        }
+        assert_eq!(rate_format(6), None);
+        assert_eq!(rate_format(0), None);
+        assert_eq!(work_contour(0), Some(WorkContour::Flat));
+        assert_eq!(work_contour(8), Some(WorkContour::Contoured));
+        assert_eq!(work_contour(9), None);
+        assert!(
+            OUT.iter().all(|c| resource_type(*c).is_none()
+                && rate_format(*c).is_none()
+                && work_contour(*c).is_none())
+        );
+    }
+
+    #[test]
+    fn r120_inverse_tables_round_trip() {
+        use super::{
+            constraint_code, day_type_code, days_of_week_mask, duration_format_code, link_type_code,
+            month_code, month_item_code, month_position_code, percent_lag_format_code, task_type_code,
+            week_start_code, work_format_code,
+        };
+        use DurationUnit::{Day, Hour, Minute, Month as Mo, Week};
+        use TimeBasis::{Elapsed as E, Working as W};
+        for unit in [Minute, Hour, Day, Week, Mo] {
+            for basis in [W, E] {
+                for estimated in [false, true] {
+                    let code = duration_format_code(unit, basis, estimated);
+                    assert_eq!(
+                        duration_format(code),
+                        Some(DurationCode::Time {
+                            unit,
+                            basis,
+                            estimated
+                        })
+                    );
+                }
+            }
+            assert_eq!(work_format(work_format_code(unit)), Some(unit));
+        }
+        assert_eq!(duration_format_code(Day, W, true), 39);
+        for basis in [W, E] {
+            assert!(matches!(
+                duration_format(percent_lag_format_code(basis)),
+                Some(DurationCode::Percent { basis: b, .. }) if b == basis
+            ));
+        }
+        for code in 0..4 {
+            assert_eq!(link_type_code(link_type(code).unwrap()), code);
+        }
+        for code in 0..8 {
+            assert_eq!(constraint_code(constraint_type(code).unwrap()), code);
+        }
+        for code in 0..3 {
+            assert_eq!(task_type_code(task_type(code).unwrap()), code);
+        }
+        for d in Weekday::ALL {
+            assert_eq!(day_type(day_type_code(d)), Some(DayType::Weekday(d)));
+            assert_eq!(week_start_day(week_start_code(d)), Some(d));
+        }
+        for m in Month::ALL {
+            assert_eq!(month(month_code(m)), Some(m));
+        }
+        for code in 0..10 {
+            assert_eq!(month_item_code(month_item(code).unwrap()), code);
+        }
+        for code in 0..5 {
+            assert_eq!(month_position_code(month_position(code).unwrap()), code);
+        }
+        for mask in 0..128 {
+            assert_eq!(days_of_week_mask(&days_of_week(mask).unwrap()), mask);
+        }
+    }
+
+    #[test]
+    fn r128_exception_types() {
+        use super::exception_type_code;
+        use planrs_core::calendar::Recurrence;
+        assert_eq!(exception_type_code(&Recurrence::Period), 1);
+        assert_eq!(exception_type_code(&Recurrence::Daily { every: 3 }), 1);
+        assert_eq!(exception_type_code(&Recurrence::ByWeekdayCount { every: 1 }), 8);
+        assert_eq!(
+            exception_type(exception_type_code(&Recurrence::YearlyByDay {
+                month: Month::March,
+                day: 4
+            })),
+            Some(ExceptionType::YearlyByDay)
+        );
+    }
+
+    #[test]
+    fn r124_r125_inverse_codes() {
+        use super::{rate_format, rate_format_code, work_contour, work_contour_code};
+        for code in [1, 2, 3, 4, 5, 7, 8] {
+            assert_eq!(rate_format_code(rate_format(code).unwrap()), code);
+        }
+        for code in 0..9 {
+            assert_eq!(work_contour_code(work_contour(code).unwrap()), code);
+        }
     }
 }

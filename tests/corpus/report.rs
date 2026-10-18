@@ -15,6 +15,7 @@ use serde::Serialize;
 
 use crate::corpus::FileRun;
 use crate::corpus::compare::{Case, CaseKind, Field};
+use crate::corpus::roundtrip::{self, RoundTrip};
 use crate::corpus::verdict::{AbsentReason, FileStatus, Verdict};
 
 /// Nombre de divergences détaillées par fichier dans le rapport Markdown
@@ -35,6 +36,8 @@ pub struct Report {
     pub rules_verified: BTreeMap<&'static str, Vec<CaseRef>>,
     /// Verdict.
     pub verdict: Verdict,
+    /// Aller-retour MSPDI des fichiers présents (P25).
+    pub round_trips: Vec<RoundTrip>,
 }
 
 /// Planchers.
@@ -107,6 +110,9 @@ pub struct FileReport {
     pub name: String,
     /// Licence du manifeste.
     pub license: String,
+    /// Note du manifeste (contenu du fichier, divergences connues et leur
+    /// jalon).
+    pub note: String,
     /// Producteur déclaré au manifeste.
     pub producer: &'static str,
     /// État (absent et raison, erreur de lecture, comparé).
@@ -215,6 +221,7 @@ pub fn build(runs: &[FileRun], floors: Floors, verdict: Verdict) -> Report {
         files,
         rules_verified,
         verdict,
+        round_trips: Vec::new(),
     }
 }
 
@@ -298,6 +305,7 @@ fn file_report(run: &FileRun) -> FileReport {
     FileReport {
         name: run.entry.name.clone(),
         license: run.entry.license.clone(),
+        note: run.entry.note.clone(),
         producer: run.entry.producer.as_str(),
         status: run.status.clone(),
         save_version: run.document.as_ref().and_then(|d| d.source.save_version),
@@ -433,6 +441,7 @@ fn file_markdown(s: &mut String, f: &FileReport) {
             .map_or_else(|| "absent".to_owned(), |v| v.to_string()),
         f.license
     );
+    let _ = writeln!(s, "- Note du manifeste : {}", f.note);
     if let Some(sig) = &f.signature {
         let _ = writeln!(
             s,
@@ -524,6 +533,16 @@ fn file_markdown(s: &mut String, f: &FileReport) {
     }
 }
 
+/// Rapport Markdown complet : parité puis aller-retour MSPDI.
+#[must_use]
+pub fn full_markdown(report: &Report) -> String {
+    let mut s = markdown(report);
+    if !report.round_trips.is_empty() {
+        s.push_str(&roundtrip::markdown(&report.round_trips));
+    }
+    s
+}
+
 /// Résumé court pour la sortie standard.
 #[must_use]
 pub fn summary(report: &Report) -> String {
@@ -560,5 +579,5 @@ pub fn write(dir: &Path, report: &Report) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{} : {e}", dir.display()))?;
     let json = serde_json::to_string_pretty(report).map_err(|e| e.to_string())?;
     std::fs::write(dir.join("corpus-report.json"), format!("{json}\n")).map_err(|e| e.to_string())?;
-    std::fs::write(dir.join("corpus-report.md"), markdown(report)).map_err(|e| e.to_string())
+    std::fs::write(dir.join("corpus-report.md"), full_markdown(report)).map_err(|e| e.to_string())
 }

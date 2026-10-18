@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 
 pub mod corpus;
 pub mod generate;
+pub mod mspdi;
 pub mod net;
 
 /// Dossier `tests/` du dépôt, quel que soit le répertoire courant.

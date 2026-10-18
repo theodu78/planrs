@@ -11,7 +11,7 @@ use crate::calendar::Span;
 use crate::diagnostic::Diagnostic;
 use crate::duration::Minutes;
 use crate::ids::TaskUid;
-use crate::model::LinkType;
+use crate::model::{ConstraintKind, LinkType};
 use crate::quantity::Percent;
 use crate::time::Moment;
 
@@ -19,10 +19,14 @@ use crate::time::Moment;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Schedule {
-    /// Ancre du projet telle que saisie (brute, non recalée).
+    /// Début du projet : depuis le début, l'ancre telle que saisie (brute,
+    /// non recalée, R-036) ; à rebours, le début calculé `S*` (R-107 : min
+    /// des débuts au plus tard des tâches actives planifiées, l'ancre `F` si
+    /// rien n'est planifié).
     pub project_start: Moment,
-    /// R-045 : max des fins au plus tôt des tâches actives planifiées ;
-    /// `project_start` si rien n'est planifié.
+    /// Fin du projet : depuis le début, R-045 (max des fins au plus tôt des
+    /// tâches actives planifiées ; `project_start` si rien n'est planifié) ;
+    /// à rebours, l'ancre `F` telle que saisie (brute, R-106).
     pub project_finish: Moment,
     /// R-068 : récapitulative du projet (UID 0), si une tâche est planifiée.
     pub project_summary: Option<TaskSchedule>,
@@ -96,10 +100,9 @@ pub enum Exclusion {
     ManualUndated,
     /// Récapitulative sans aucun enfant planifié (R-053).
     EmptySummary,
-    /// Conversion impossible en passe avant (R-069).
+    /// Conversion impossible dans la passe principale : passe avant depuis
+    /// le début (R-069), passe arrière à rebours (R-111).
     Unschedulable,
-    /// Planification à rebours, non prise en charge avant J3.
-    UnsupportedAnchor,
 }
 
 /// Valeurs calculées d'une tâche planifiée.
@@ -110,10 +113,12 @@ pub struct TaskSchedule {
     pub role: TaskRole,
     /// Tâche en mode manuel (dates saisies conservées, R-063, R-064).
     pub manual: bool,
-    /// Début planifié : égal à `early.start` en J2 (distinct en J3 : le plus
-    /// tard possible, planification à rebours).
+    /// Début planifié (`Start` MSPDI) : `early.start` depuis le début,
+    /// `late.start` à rebours (R-106) ; une tâche épinglée a `early ==
+    /// late` (R-092, R-097, R-108) ; récapitulative et UID 0 : enveloppe des
+    /// dates planifiées de leurs enfants (R-112).
     pub start: Moment,
-    /// Fin planifiée : égale à `early.finish` en J2.
+    /// Fin planifiée (`Finish` MSPDI), comme `start`.
     pub finish: Moment,
     /// Dates au plus tôt.
     pub early: Span,
@@ -132,6 +137,9 @@ pub struct TaskSchedule {
     pub percent_complete: Percent,
     /// Cause du début au plus tôt (base d'`explain_date`, J6).
     pub driver: Driver,
+    /// Cause de la fin au plus tard (R-047 ; base d'`explain_date` à
+    /// rebours et pour une tâche « le plus tard possible »).
+    pub late_driver: LateDriver,
     /// Dates de repli : une conversion a échoué ici ou en amont (R-069).
     pub degraded: bool,
 }
@@ -168,4 +176,57 @@ pub enum Driver {
     Manual,
     /// Agrégat des sous-tâches (récapitulative, R-053).
     Rollup,
+    /// Contrainte de date qui déplace le début placé (R-044, R-093, R-094).
+    Constraint {
+        /// Type de la contrainte (`constraint` en JSON : le champ `kind`
+        /// porte déjà la variante).
+        #[serde(rename = "constraint")]
+        kind: ConstraintKind,
+    },
+}
+
+/// Cause de la fin au plus tard d'une tâche (R-047) : le premier plafond
+/// strictement le plus petit, dans l'ordre fin du projet (ou ancre `F` à
+/// rebours), plusieurs chemins critiques, plafond hérité d'une
+/// récapitulative, liens sortants, contrainte, échéance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LateDriver {
+    /// Fin du projet (R-046) ou ancre `F` de la planification à rebours
+    /// (R-106).
+    ProjectFinish,
+    /// Plafond d'un lien sortant (R-047).
+    Successor {
+        /// Successeur (d'origine, éventuellement récapitulatif).
+        successor: TaskUid,
+        /// Type du lien.
+        link: LinkType,
+    },
+    /// Plafond hérité d'une récapitulative ancêtre : `C(S)` ou `K(S)`
+    /// (R-057).
+    SummaryCap {
+        /// Récapitulative dont le plafond s'applique.
+        summary: TaskUid,
+    },
+    /// Plusieurs chemins critiques : fin au plus tard = fin au plus tôt
+    /// (R-051).
+    MultipleCriticalPaths,
+    /// Contrainte de date : plafond (SNLT, FNLT, R-095, R-096), fenêtre ou
+    /// épingle (R-097, R-098), serrage à rebours (SNET, FNET, R-109), épingle
+    /// d'une tâche ASAP à rebours (R-108).
+    Constraint {
+        /// Type de la contrainte (`constraint` en JSON : le champ `kind`
+        /// porte déjà la variante).
+        #[serde(rename = "constraint")]
+        kind: ConstraintKind,
+    },
+    /// Échéance : plafond brut de la fin au plus tard (R-102).
+    Deadline,
+    /// Dates saisies d'une tâche ou d'une récapitulative manuelle, prises
+    /// comme dates au plus tard à rebours (R-063, R-064, R-106).
+    Manual,
+    /// Récapitulative : max des fins au plus tard de ses enfants (R-060).
+    Rollup,
+    /// Repli : dates au plus tard = dates au plus tôt (R-069).
+    Fallback,
 }

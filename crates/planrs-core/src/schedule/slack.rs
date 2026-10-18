@@ -4,13 +4,16 @@
 //! - Marge totale : `min(M.between(ES, LS), M.between(EF, LF))`, `M` étant
 //!   l'échelle de marge (placement de la feuille, temps civil pour une durée
 //!   écoulée ; calendrier d'une récapitulative).
-//! - Marge libre : `min(TF, écarts aux successeurs)`, arcs sortants propres
-//!   et hérités des récapitulatives ancêtres ; aucune troncature (A3).
+//! - Marge libre : `max(0, min(TF, écarts aux successeurs))`, arcs sortants
+//!   propres et hérités des récapitulatives ancêtres (R-101 : sans
+//!   contrainte ni échéance, la borne à 0 est sans effet).
 //! - Critique : `TF ≤ seuil × minutes par jour`.
 
+use super::constraint::{ConstraintRule, Mode, Side};
 use super::network::{Fail, NodeIx, NodeKind};
 use super::{Calc, Pass, transfer};
 use crate::calendar::{Span, TimeScale};
+use crate::diagnostic::Diagnostic;
 use crate::duration::Minutes;
 use crate::model::LinkType;
 
@@ -56,7 +59,13 @@ impl Calc<'_, '_> {
     /// Marge totale et marge libre du nœud `v`.
     fn node_slack(&mut self, v: NodeIx, early: Span, late: Span) -> Result<(Minutes, Minutes), Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+        // Échelle de mesure (R-048, R-113) ; le dernier début plaçable d'un
+        // lien SS/SF reste sur l'échelle de placement.
         let m = *self
+            .net
+            .scale(self.net.measure(node.place))
+            .ok_or(Fail::Internal("échelle hors bornes"))?;
+        let place = *self
             .net
             .scale(node.place)
             .ok_or(Fail::Internal("échelle hors bornes"))?;
@@ -73,7 +82,9 @@ impl Calc<'_, '_> {
         while let Some(o) = owner {
             let anc_start = self.state(o).and_then(|s| s.early).map(|e| e.start);
             for &a in net.outgoing(o).unwrap_or_default() {
-                if let Some(gap) = self.gap(v, a, m, early, !first && anc_start != Some(early.start))? {
+                if let Some(gap) =
+                    self.gap(v, a, m, place, early, !first && anc_start != Some(early.start))?
+                {
                     fs = fs.min(gap);
                 }
             }
@@ -86,11 +97,91 @@ impl Calc<'_, '_> {
                 .filter(|&r| !self.net.is_fixed_rollup(r));
             first = false;
         }
-        Ok((tf, fs.min(tf)))
+        // R-101 : marge libre bornée à 0 (Q10 : MS Project affiche 0 quand
+        // la marge totale est négative) ; sans contrainte ni échéance, la
+        // borne est sans effet (FS ≥ 0 reste une propriété, P13).
+        Ok((tf, fs.min(tf).max(Minutes::ZERO)))
+    }
+
+    /// Échéances dépassées (R-102) et contraintes non tenues (R-099, R-103,
+    /// R-109), après les marges, sur les dates planifiées (au plus tôt depuis
+    /// le début, au plus tard à rebours ; une porte lit les dates de sa
+    /// récapitulative). Une échéance est dépassée si la fin planifiée la
+    /// dépasse en temps ouvré de l'échelle. Une contrainte n'est pas tenue
+    /// (`constraint.not_honored`, avec la date saisie) : depuis le début, un
+    /// plafond ou une fenêtre (option inactive) dont la date planifiée
+    /// dépasse l'ancrage ; à rebours, un plancher ou une fenêtre dont la date
+    /// planifiée le précède, ou un plafond dépassé (FNLT d'une
+    /// récapitulative). Début comparé en brut, fin en temps ouvré ; la porte
+    /// d'une récapitulative (SNET, R-103) compare son début à la date brute.
+    pub(super) fn check_constraints(&mut self) {
+        let from_finish = self.mode == Mode::FromFinish;
+        let planned_of = |s: &super::NodeState| if from_finish { s.late } else { s.early };
+        let mut found = Vec::new();
+        for (node, s) in self.net.nodes.iter().zip(&self.st) {
+            let planned = if node.kind == NodeKind::Gate {
+                node.twin.and_then(|r| self.state(r)).and_then(planned_of)
+            } else {
+                planned_of(s)
+            };
+            let (Some(planned), Some(scale)) = (planned, self.net.scale(node.place)) else {
+                continue;
+            };
+            let after = |a: crate::time::Moment, b: crate::time::Moment| {
+                scale.between(a, b).is_ok_and(|m| m.get() > 0)
+            };
+            // R-102 : échéance dépassée, jugée sur la fin planifiée, en temps
+            // ouvré de l'échelle.
+            if let Some(deadline) = node.deadline
+                && after(deadline, planned.finish)
+            {
+                found.push(Diagnostic::TaskDeadlineMissed {
+                    task: node.uid,
+                    deadline,
+                    finish: planned.finish,
+                });
+            }
+            let Some(c) = node.constraint else { continue };
+            let Some(date) = c.date else { continue };
+            let a = match c.anchor {
+                Some(Ok(a)) => a,
+                // Porte d'une récapitulative : date brute (R-103).
+                None => Span {
+                    start: date,
+                    finish: date,
+                },
+                Some(Err(_)) => continue,
+            };
+            let exceeds = |side: Side| match side {
+                Side::Start => planned.start > a.start,
+                Side::Finish => after(a.finish, planned.finish),
+            };
+            let precedes = |side: Side| match side {
+                Side::Start => planned.start < a.start,
+                Side::Finish => after(planned.finish, a.finish),
+            };
+            let violated = match (c.rule, from_finish) {
+                (ConstraintRule::Cap(side) | ConstraintRule::Window(side), false)
+                | (ConstraintRule::Cap(side), true) => exceeds(side),
+                (ConstraintRule::Floor(side) | ConstraintRule::Window(side), true) => precedes(side),
+                _ => false,
+            };
+            if violated {
+                found.push(Diagnostic::ConstraintNotHonored {
+                    task: node.uid,
+                    kind: c.kind,
+                    date,
+                });
+            }
+        }
+        for d in found {
+            self.diags.push(d);
+        }
     }
 
     /// Écart de l'arc de lien `a` pour le nœud `v` (R-049) : `M.between(ancre propre,
-    /// h(ancre au plus tôt du successeur))`. `None` pour un arc ignoré
+    /// h(ancre au plus tôt du successeur))`, `M` échelle de mesure, `place`
+    /// échelle de placement (dernier début plaçable, R-113). `None` pour un arc ignoré
     /// (hiérarchie, coupé, vers une tâche inactive, cible sans dates, ou arc
     /// SS/SF hérité écarté).
     fn gap(
@@ -98,6 +189,7 @@ impl Calc<'_, '_> {
         v: NodeIx,
         a: u32,
         m: TimeScale<'_>,
+        place: TimeScale<'_>,
         own: Span,
         skip_start_kind: bool,
     ) -> Result<Option<Minutes>, Fail> {
@@ -143,7 +235,7 @@ impl Calc<'_, '_> {
             LinkType::StartToStart | LinkType::StartToFinish => {
                 let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
                 let bound = if node.kind == NodeKind::Leaf || node.fixed.is_some() {
-                    m.latest_start(bound, node.duration)?
+                    place.latest_start(bound, node.duration)?
                 } else {
                     bound
                 };

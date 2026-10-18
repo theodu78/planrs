@@ -164,19 +164,43 @@ fn depth_limit_set_to_the_maximum_cannot_overflow_the_stack() {
 }
 
 #[test]
-fn unknown_task_children_are_not_kept() {
+fn unknown_task_children_are_not_kept_without_extras() {
     // Relecture J2 (bloquant) : tout enfant d'une tâche était construit en
-    // mémoire. Deux millions d'enfants inconnus sont désormais sautés et
-    // comptés ; la tâche se lit normalement.
+    // mémoire. Sans `Extras` (`keep_extras` faux), deux millions d'enfants
+    // inconnus sont sautés et comptés ; la tâche se lit normalement.
     let n = 2_000_000;
     let xml = format!(
         "<Project><StartDate>2026-10-19T08:00:00</StartDate><Tasks><Task><UID>1</UID><Name>t</Name>\
          <Duration>PT8H0M0S</Duration>{}</Task></Tasks></Project>",
         "<X/>".repeat(n)
     );
-    let doc = read(xml.as_bytes(), &opts()).unwrap();
+    let options = ReadOptions {
+        keep_extras: false,
+        ..opts()
+    };
+    let doc = read(xml.as_bytes(), &options).unwrap();
     assert_eq!(doc.project.tasks.len(), 1);
+    assert!(doc.project.tasks.at(0).unwrap().extras.is_empty());
     assert_eq!(doc.source.skipped_elements, u64::try_from(n).unwrap());
+}
+
+#[test]
+fn r087_many_unknown_task_children_are_kept_in_linear_time() {
+    // Avec `Extras` (défaut), chaque inconnu est capturé (une capture
+    // compte pour un élément retenu) ; clés calculées en un parcours.
+    let n = 200_000;
+    let xml = format!(
+        "<Project><StartDate>2026-10-19T08:00:00</StartDate><Tasks><Task><UID>1</UID><Name>t</Name>\
+         <Duration>PT8H0M0S</Duration>{}</Task></Tasks></Project>",
+        "<X/>".repeat(n)
+    );
+    let doc = read(xml.as_bytes(), &opts()).unwrap();
+    let extras = &doc.project.tasks.at(0).unwrap().extras;
+    assert_eq!(extras.0.len(), n);
+    // `Duration` est M? (absente selon le rôle de la tâche) : l'ancre est
+    // `Name`, le dernier élément toujours réécrit.
+    assert!(extras.0.iter().all(|e| e.key == "Name>X" && e.payload == "<X/>"));
+    assert_eq!(doc.source.skipped_elements, 0);
 }
 
 #[test]

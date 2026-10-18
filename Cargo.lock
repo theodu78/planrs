@@ -3269,10 +3269,12 @@ dependencies = [
  "chrono",
  "csv",
  "encoding_rs",
+ "getrandom 0.3.4",
  "planrs-core",
  "planrs-mspdi",
  "planrs-render",
  "proptest",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -3283,7 +3285,12 @@ name = "planrs-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "planrs-automation",
  "planrs-core",
+ "planrs-mcp",
+ "planrs-mspdi",
+ "planrs-render",
+ "serde_json",
 ]
 
 [[package]]
@@ -3303,7 +3310,12 @@ name = "planrs-mcp"
 version = "0.1.0"
 dependencies = [
  "planrs-automation",
+ "planrs-core",
+ "planrs-render",
  "rmcp",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]
@@ -3354,6 +3366,7 @@ dependencies = [
  "fluent-syntax",
  "js-sys",
  "log",
+ "planrs-automation",
  "planrs-core",
  "planrs-mspdi",
  "pollster 1.0.1",
@@ -3775,6 +3788,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tracing",
  "uuid",
@@ -4431,6 +4445,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "tokio-stream"
+version = "0.1.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3d06f0b082ba57c26b79407372e57cf2a1e28124f78e9479fe80322cf53420b"
+dependencies = [
+ "futures-core",
+ "pin-project-lite",
+ "tokio",
 ]
 
 [[package]]

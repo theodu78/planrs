@@ -4,13 +4,15 @@
 //! dans une file, appliquée par le réducteur unique d'`App` en fin d'image.
 //! Une action sérialisée préfigure aussi le canal de contrôle (ADR-0002).
 
+use planrs_automation::Batch;
 use planrs_core::TaskUid;
 
 use crate::state::{LanguagePref, ThemePref};
 use crate::timescale::TimeScaleZoom;
 
-/// Intention de l'utilisateur, appliquée en fin d'image.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Intention de l'utilisateur, appliquée en fin d'image. Pas `Copy` :
+/// [`Action::Exec`] porte un lot de commandes (ADR-0012 D11).
+#[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     /// Ouvre le projet d'exemple embarqué.
     OpenDemo,
@@ -51,4 +53,11 @@ pub enum Action {
     ToggleDiagnostics,
     /// Referme le bandeau de messages.
     DismissMessage,
+    /// Applique un lot de commandes à la session du document (toute
+    /// édition passe par le registre). Sans effet jusqu'au lot L11.
+    Exec(Batch),
+    /// Annule le dernier lot. Sans effet jusqu'au lot L11.
+    Undo,
+    /// Rétablit le dernier lot annulé. Sans effet jusqu'au lot L11.
+    Redo,
 }

@@ -1,16 +1,31 @@
 //! Canal de contrôle de l'application (ADR-0002) : protocole, rendez-vous,
 //! écouteur `hello` (hors wasm ; lot L10). En J4, le canal garde le fichier
 //! (pas de double écrivain) sans relayer les commandes.
+//!
+//! Déroulé (détail dans `docs/features/control.md`) :
+//! 1. l'application crée un jeton ([`new_token`]), lance l'écouteur
+//!    ([`spawn_hello_listener`]) puis publie son rendez-vous ([`publish`],
+//!    fichier 0600 dans un dossier 0700) ;
+//! 2. `planrs mcp`, avant d'ouvrir un fichier, appelle [`find_live_for`] :
+//!    un rendez-vous vivant qui tient ce fichier ⇒ `file.open_in_app` ;
+//! 3. à la fermeture, le garde et la poignée suppriment fichier et socket.
 
 mod frame;
+mod listener;
 mod rendezvous;
 
-use std::sync::{Arc, Mutex};
+use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-pub use frame::{Frame, Method, Reply, WireError};
-pub use rendezvous::{Rendezvous, RendezvousGuard, find_live_for, publish, state_dir};
-
-use crate::view::SummaryView;
+pub use frame::{
+    Frame, LineError, MAX_LINE_BYTES, Method, PROTOCOL_VERSION, Reply, WireError, codes, read_line_bounded,
+    to_line,
+};
+pub use listener::{ListenerHandle, spawn_hello_listener, spawn_hello_listener_in};
+pub use rendezvous::{
+    Rendezvous, RendezvousGuard, STATE_DIR_ENV, canonical_project, find_live_for, find_live_for_in, probe,
+    publish, publish_in, state_dir,
+};
 
 /// Erreur du canal.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -24,23 +39,156 @@ pub enum ControlError {
     /// Non pris en charge (plateforme, ou squelette L0).
     #[error("canal de contrôle non pris en charge")]
     Unsupported,
+    /// Jeton qui n'est pas fait de 64 chiffres hexadécimaux.
+    #[error("jeton du canal de contrôle invalide")]
+    InvalidToken,
+    /// Rendez-vous incohérent (version, chemin non UTF-8…).
+    #[error("rendez-vous invalide : {0}")]
+    Invalid(String),
+    /// L'application a refusé la requête.
+    #[error("canal de contrôle : refus {}", .0.code)]
+    Refused(WireError),
 }
 
-/// Écouteur en cours ; arrêté à sa destruction (L10).
-#[derive(Debug)]
-pub struct ListenerHandle {
-    _private: (),
+impl ControlError {
+    fn io(context: &str, e: &std::io::Error) -> Self {
+        Self::Io(format!("{context} : {e}"))
+    }
 }
 
-/// Lance l'écouteur `hello`/`query` dans un fil dédié. Squelette L0.
+/// Octets du jeton.
+const TOKEN_BYTES: usize = 32;
+
+/// Nouveau jeton aléatoire : 32 octets du système, en 64 chiffres
+/// hexadécimaux minuscules.
 ///
 /// # Errors
 ///
-/// [`ControlError`] ; en L0, toujours [`ControlError::Unsupported`].
-pub fn spawn_hello_listener(
-    token: String,
-    summary: Arc<Mutex<Option<SummaryView>>>,
-) -> Result<ListenerHandle, ControlError> {
-    drop((token, summary));
-    Err(ControlError::Unsupported)
+/// [`ControlError::Io`] si le générateur du système est indisponible.
+pub fn new_token() -> Result<String, ControlError> {
+    let mut bytes = [0u8; TOKEN_BYTES];
+    getrandom::fill(&mut bytes).map_err(|e| ControlError::Io(format!("aléa du système : {e}")))?;
+    Ok(encode_hex(&bytes))
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len().saturating_mul(2));
+    for &b in bytes {
+        for nibble in [b.checked_shr(4).unwrap_or(0), b & 0x0f] {
+            if let Some(&d) = DIGITS.get(usize::from(nibble)) {
+                out.push(char::from(d));
+            }
+        }
+    }
+    out
+}
+
+/// Décode un jeton de 64 chiffres hexadécimaux (casse indifférente).
+fn decode_token(token: &str) -> Option<[u8; TOKEN_BYTES]> {
+    let digits = token.as_bytes();
+    if digits.len() != TOKEN_BYTES.saturating_mul(2) {
+        return None;
+    }
+    let mut out = [0u8; TOKEN_BYTES];
+    let (pairs, _) = digits.as_chunks::<2>();
+    for (slot, [hi, lo]) in out.iter_mut().zip(pairs) {
+        *slot = hex_value(*hi)?.checked_shl(4)? | hex_value(*lo)?;
+    }
+    Some(out)
+}
+
+fn hex_value(d: u8) -> Option<u8> {
+    match d {
+        b'0'..=b'9' => d.checked_sub(b'0'),
+        b'a'..=b'f' => d.checked_sub(b'a').and_then(|v| v.checked_add(10)),
+        b'A'..=b'F' => d.checked_sub(b'A').and_then(|v| v.checked_add(10)),
+        _ => None,
+    }
+}
+
+/// Comparaison en temps constant (boucle XOR sur les 32 octets).
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "utilisée par l'écouteur, absent hors Unix en J4")
+)]
+fn token_matches(expected: &[u8; TOKEN_BYTES], given: &str) -> bool {
+    // Un jeton mal formé est comparé à zéro pour garder la même boucle.
+    let (well_formed, given) = match decode_token(given) {
+        Some(bytes) => (true, bytes),
+        None => (false, [0u8; TOKEN_BYTES]),
+    };
+    let mut diff = 0u8;
+    for (a, b) in expected.iter().zip(given.iter()) {
+        diff |= a ^ b;
+    }
+    well_formed && diff == 0
+}
+
+/// Suffixe unique par processus des fichiers du canal (`<pid>-<n>`).
+fn next_stem() -> String {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("{}-{n}", std::process::id())
+}
+
+/// Crée le dossier d'état (0700 sous Unix) et resserre ses droits s'il
+/// existait déjà.
+fn ensure_dir(dir: &Path) -> Result<(), ControlError> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        builder.mode(0o700);
+        builder
+            .create(dir)
+            .map_err(|e| ControlError::io("création du dossier d'état", &e))?;
+        let meta = std::fs::metadata(dir).map_err(|e| ControlError::io("dossier d'état", &e))?;
+        if meta.permissions().mode() & 0o777 != 0o700 {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+                .map_err(|e| ControlError::io("droits du dossier d'état", &e))?;
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        builder
+            .create(dir)
+            .map_err(|e| ControlError::io("création du dossier d'état", &e))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::string_slice,
+        reason = "tests : un échec doit s'arrêter net"
+    )]
+
+    use super::*;
+
+    #[test]
+    fn control_token_hex_roundtrip() {
+        let token = new_token().unwrap();
+        assert_eq!(token.len(), 64);
+        let bytes = decode_token(&token).unwrap();
+        assert_eq!(encode_hex(&bytes), token);
+        assert!(token_matches(&bytes, &token));
+        assert!(token_matches(&bytes, &token.to_uppercase()));
+    }
+
+    #[test]
+    fn control_token_mismatch_and_malformed() {
+        let bytes = [7u8; TOKEN_BYTES];
+        let good = encode_hex(&bytes);
+        let mut bad = good.clone();
+        bad.replace_range(63.., "8");
+        assert!(!token_matches(&bytes, &bad));
+        assert!(!token_matches(&bytes, ""));
+        assert!(!token_matches(&bytes, &"g".repeat(64)));
+        assert!(!token_matches(&bytes, &good[..62]));
+        assert!(!token_matches(&[0u8; TOKEN_BYTES], "zz"));
+    }
 }

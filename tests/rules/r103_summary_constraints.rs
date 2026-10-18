@@ -8,7 +8,7 @@
 //! subtask can't be scheduled any earlier than the summary task »), S8
 //! (échéances sur les récapitulatives), Q11.
 
-use planrs_core::{Constraint, ConstraintKind, Diagnostic, Driver, LateDriver, Minutes};
+use planrs_core::{Constraint, ConstraintKind, Diagnostic, Driver, LateDriver, Minutes, Pass, TaskOutcome};
 use planrs_tests::moment;
 use planrs_tests::net::Net;
 
@@ -147,7 +147,7 @@ fn r103_other_kinds_are_ignored() {
 
 #[test]
 fn r103_inactive_summary_ignores_everything() {
-    // S inactive, SNET et échéance : ignorées, sans diagnostic propre.
+    // S inactive, MSO et échéance : ignorées, sans diagnostic propre.
     let run = net()
         .inactive("S")
         .constraint(
@@ -162,5 +162,84 @@ fn r103_inactive_summary_ignores_everything() {
         !run.codes()
             .iter()
             .any(|c| c.starts_with("constraint.") || *c == "task.deadline_missed")
+    );
+    // S inactive, SNET mer 21/10 08:00 (qui, active, ferait porte) : ses
+    // sous-tâches, inactives, ne sont pas bornées par elle (R-104) ; leur
+    // placement d'affichage reste A lun 19/10, B mar 20/10 (FS de A).
+    let run = net()
+        .inactive("S")
+        .constraint(
+            "S",
+            Constraint::StartNoEarlierThan {
+                date: moment("2026-10-21T08:00"),
+            },
+        )
+        .run();
+    for (name, start) in [("A", "2026-10-19T08:00"), ("B", "2026-10-20T08:00")] {
+        let TaskOutcome::Excluded { display: Some(d), .. } = run.outcome(name) else {
+            panic!("{name} doit être exclue avec un affichage");
+        };
+        assert_eq!(d.start, moment(start), "{name}");
+    }
+    assert!(!run.codes().iter().any(|c| c.starts_with("constraint.")));
+}
+
+/// Début lun 02/01/1984 08:00 : S {A 1 j} FS → Y 2 j, S FNLT 01/01/1984
+/// 00:00 (ancrage `f*` hors du domaine des dates).
+fn out_of_domain_net() -> Net {
+    Net::new("1984-01-02T08:00")
+        .task("S", 0)
+        .task("A", 480)
+        .level("A", 2)
+        .task("Y", 960)
+        .fs("S", "Y")
+        .constraint(
+            "S",
+            Constraint::FinishNoLaterThan {
+                date: moment("1984-01-01T00:00"),
+            },
+        )
+}
+
+#[test]
+fn r103_fnlt_out_of_domain_keeps_link_caps() {
+    // L'ancrage du FNLT ne se convertit pas : `task.unschedulable { S,
+    // Backward }` (R-069), seule sa contribution à `C(S)` est ignorée. Le
+    // plafond du lien S FS → Y reste posé : Y au plus tard mar 03/01 08:00
+    // → LF(A) lun 02/01 17:00, TF(A) = 0 (960 si `C(S)` était perdu).
+    let run = out_of_domain_net().run();
+    let a = run.at("A");
+    assert_eq!(a.late.finish, moment("1984-01-02T17:00"));
+    assert_eq!(a.total_slack, Minutes::ZERO);
+    assert_eq!(
+        a.late_driver,
+        LateDriver::SummaryCap {
+            summary: run.uid("S")
+        }
+    );
+    assert!(!a.degraded);
+    assert!(
+        run.schedule
+            .diagnostics
+            .iter()
+            .any(|d| matches!(d, Diagnostic::TaskUnschedulable { task, pass: Pass::Backward, .. } if *task == run.uid("S")))
+    );
+}
+
+#[test]
+fn r103_fnlt_out_of_domain_keeps_link_caps_from_finish() {
+    // Miroir à rebours (R-111) : F = mer 04/01/1984 17:00 ; Y au plus tard
+    // mar 03/01 08:00 – mer 17:00 ; le plafond du lien S FS → Y place A
+    // lun 02/01 08:00 – 17:00, sans dates de repli.
+    let run = out_of_domain_net().from_finish("1984-01-04T17:00").run();
+    let a = run.at("A");
+    assert_eq!(a.late.start, moment("1984-01-02T08:00"));
+    assert_eq!(a.late.finish, moment("1984-01-02T17:00"));
+    assert!(!a.degraded);
+    assert!(
+        run.schedule
+            .diagnostics
+            .iter()
+            .any(|d| matches!(d, Diagnostic::TaskUnschedulable { task, pass: Pass::Backward, .. } if *task == run.uid("S")))
     );
 }

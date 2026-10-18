@@ -235,6 +235,8 @@ Une entrée par décision, datée, avec le contexte, les options écartées et l
 
 **Statut (2026-10-18), relecture finale, lot core (`j3-fix-core`).**
 - **Budget du dépliage R-058** : 4 000 000 arcs dépliés au plus (`Limits::expanded_arcs`, `schedule_with` pour l'abaisser en test) ; au-delà, le lien qui ne tient plus et tous les suivants sont ignorés, un seul `link.expansion_limit` (avertissement, comme `link.ignored_in_cycle`, pas une erreur : le calcul reste complet pour le reste du réseau). Écarté : déplier partiellement ou choisir les liens selon leur taille (résultat dépendant de l'ordre de façon peu lisible). Le tri CSR se fait en place (permutation par cycles) : plus de seconde copie des arcs. R-056, R-057, R-110 ne déplient rien (vérifié).
+- **FNLT de récapitulative hors domaine** : seule sa contribution à `C(S)` est ignorée (R-103), les plafonds des liens et `C(parent)` restent ; avant, toute la récapitulative perdait ses plafonds hérités.
+- **Épingle à rebours** : les liens sortants d'une MSO/MFO sont lus (`link.excluded_endpoint`, drapeau `degraded`, R-111) ; dates inchangées. Depuis le début, l'épingle (R-097, R-098) rend toujours avant les liens : `link.excluded_endpoint` n'y existe pas (R-111 est propre au rebours), laissé tel quel.
 
 ## ADR-0011 — 2026-10-17 — Fondations de l'interface egui (branche `ui-foundations`, lecture seule)
 

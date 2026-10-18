@@ -42,8 +42,9 @@ fn contract_compiles() {
     assert!(!s.is_dirty());
     assert_eq!(s.origin().name, "Projet1");
 
-    // Lot vide ou non : le squelette refuse sans rien toucher.
-    let batch = Batch {
+    // Lot vide : sans effet (pipeline L2) ; version inconnue : refusée sans
+    // rien toucher.
+    let mut batch = Batch {
         format_version: 1,
         lang: None,
         ops: Vec::new(),
@@ -51,10 +52,13 @@ fn contract_compiles() {
     };
     let before = s.project().clone();
     for mode in [ApplyMode::Commit, ApplyMode::DryRun] {
-        let err = s.apply(&batch, mode).unwrap_err();
-        assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE);
-        assert_ne!(err.message(Language::Fr), "");
+        let outcome = s.apply(&batch, mode).unwrap();
+        assert!(!outcome.committed);
     }
+    batch.format_version = 2;
+    let err = s.apply(&batch, ApplyMode::Commit).unwrap_err();
+    assert_eq!(err.code, codes::BATCH_UNSUPPORTED_VERSION);
+    assert_ne!(err.message(Language::Fr), "");
     assert_eq!(s.project(), &before);
     assert_eq!(s.undo().unwrap_err(), HistoryError::Empty);
     assert_eq!(s.redo().unwrap_err().code(), codes::HISTORY_EMPTY);

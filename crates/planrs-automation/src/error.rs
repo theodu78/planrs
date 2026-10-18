@@ -5,7 +5,7 @@
 //! par le MCP, la CLI et l'interface (clé de traduction `.ftl`). Les messages
 //! FR/EN sont rédigés par le lot L3.
 
-use planrs_core::{Diagnostic, Subject, TaskUid};
+use planrs_core::{Diagnostic, ModelError, Subject, TaskUid};
 use planrs_mspdi::MspdiError;
 
 use crate::text::{Language, TextError};
@@ -69,6 +69,9 @@ pub mod codes {
     pub const FILE_OPEN_IN_APP: &str = "file.open_in_app";
     /// Rien à annuler ou à rétablir.
     pub const HISTORY_EMPTY: &str = "history.empty";
+    /// Entrée d'historique incohérente avec le projet : annulation refusée,
+    /// session intacte (R-164 ; jamais attendu).
+    pub const HISTORY_INCONSISTENT: &str = "history.inconsistent";
 }
 
 /// Commande refusée. L'état de la session est intact (atomicité du lot).
@@ -184,6 +187,10 @@ pub enum HistoryError {
     /// Rien à annuler ou à rétablir (`history.empty`).
     #[error("rien à annuler ou à rétablir")]
     Empty,
+    /// Delta d'historique inapplicable (`history.inconsistent`) : la
+    /// session reste intacte.
+    #[error("historique incohérent : {0}")]
+    Inconsistent(ModelError),
 }
 
 impl HistoryError {
@@ -192,6 +199,7 @@ impl HistoryError {
     pub const fn code(&self) -> &'static str {
         match self {
             Self::Empty => codes::HISTORY_EMPTY,
+            Self::Inconsistent(_) => codes::HISTORY_INCONSISTENT,
         }
     }
 }

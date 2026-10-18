@@ -249,19 +249,19 @@ fn r113_measure_calendar_public_matches_engine() {
             .elapsed("F", 600)
     };
     let names = build();
-    let (a, d, e, s) = (names.uid("A"), names.uid("D"), names.uid("E"), names.uid("S"));
-    let mut p = build().build();
-    p.summary_task = Some(Task::new(TaskUid::PROJECT_SUMMARY, "P".to_owned(), &p.options));
-    let task = |u| p.tasks.get(u).unwrap();
-    assert_eq!(measure_calendar(&p, task(a)), Some(uid(BASE)));
-    assert_eq!(measure_calendar(&p, task(s)), Some(uid(BASE)));
-    assert_eq!(measure_calendar(&p, task(d)), Some(uid(DERIVED)));
-    assert_eq!(measure_calendar(&p, task(e)), Some(uid(2)));
+    let (ua, ud, ue, us) = (names.uid("A"), names.uid("D"), names.uid("E"), names.uid("S"));
+    let mut proj = build().build();
+    proj.summary_task = Some(Task::new(TaskUid::PROJECT_SUMMARY, "P".to_owned(), &proj.options));
+    let task = |u| proj.tasks.get(u).unwrap();
+    assert_eq!(measure_calendar(&proj, task(ua)), Some(uid(BASE)));
+    assert_eq!(measure_calendar(&proj, task(us)), Some(uid(BASE)));
+    assert_eq!(measure_calendar(&proj, task(ud)), Some(uid(DERIVED)));
+    assert_eq!(measure_calendar(&proj, task(ue)), Some(uid(2)));
     assert_eq!(
-        measure_calendar(&p, p.summary_task.as_ref().unwrap()),
+        measure_calendar(&proj, proj.summary_task.as_ref().unwrap()),
         Some(uid(BASE))
     );
-    assert_matches_engine(&p);
+    assert_matches_engine(&proj);
     // Réseau qui distingue les deux calendriers : A 4 h, C 1 j. A lun
     // 08:00-12:00, au plus tard 13:00-17:00 ; TF(A) = min(base(08:00,
     // 13:00), base(12:00, 17:00)) = min(240, 180) = 180 ; sur le dérivé,
@@ -278,21 +278,24 @@ fn r113_measure_calendar_public_matches_engine() {
     );
     assert_matches_engine(&small);
     // UID 0 doté d'un calendrier propre : non lu (R-068), la base mesure.
-    let mut q = p.clone();
-    if let Some(t) = q.summary_task.as_mut() {
+    let mut summary_own = proj.clone();
+    if let Some(t) = summary_own.summary_task.as_mut() {
         t.calendar = Some(uid(2));
     }
     assert_eq!(
-        measure_calendar(&q, q.summary_task.as_ref().unwrap()),
+        measure_calendar(&summary_own, summary_own.summary_task.as_ref().unwrap()),
         Some(uid(BASE))
     );
-    assert_matches_engine(&q);
+    assert_matches_engine(&summary_own);
     // Calendrier propre inconnu (R-066) : repli sur le calendrier du projet,
     // donc sa base.
-    let mut r = p.clone();
-    r.tasks.get_mut(a).unwrap().calendar = Some(uid(99));
-    assert_eq!(measure_calendar(&r, r.tasks.get(a).unwrap()), Some(uid(BASE)));
-    assert_matches_engine(&r);
+    let mut unknown_own = proj.clone();
+    unknown_own.tasks.get_mut(ua).unwrap().calendar = Some(uid(99));
+    assert_eq!(
+        measure_calendar(&unknown_own, unknown_own.tasks.get(ua).unwrap()),
+        Some(uid(BASE))
+    );
+    assert_matches_engine(&unknown_own);
     // Calendrier du projet de base : lui-même.
     let base_project = Net::new("2026-10-19T08:00")
         .project(|p| {

@@ -8,7 +8,7 @@ use planrs_core::{
     ProjectInit, Task, TaskUid, schedule,
 };
 
-use super::decode::{decode, detect_separator};
+use super::decode::{decode, detect_separator, preamble};
 use super::header::{Field, HeaderLanguage, recognize};
 use super::{
     CsvCode, CsvColumn, CsvDates, CsvDiagnostic, CsvError, CsvImport, CsvImportOptions, CsvLimits, CsvLocale,
@@ -167,11 +167,13 @@ struct Lines<'a> {
 }
 
 impl<'a> Lines<'a> {
-    const fn new(text: &'a [u8]) -> Self {
+    /// Compteur sur `text`, dont le premier octet est sur la ligne physique
+    /// `line` du fichier.
+    const fn new(text: &'a [u8], line: u64) -> Self {
         Self {
             text,
             offset: 0,
-            line: 1,
+            line,
         }
     }
 
@@ -421,16 +423,21 @@ pub fn import(bytes: &[u8], options: &CsvImportOptions) -> Result<CsvImport, Csv
     if decoded.malformed {
         diags.push(0, None, CsvCode::InvalidChar, None);
     }
+    // Ligne Excel `sep=X` en tête : fixe le séparateur (sauf séparateur
+    // imposé) et n'est pas lue.
+    let pre = preamble(&decoded.text);
+    let body = decoded.text.get(pre.body_start..).unwrap_or("");
     let separator = options
         .separator
-        .unwrap_or_else(|| detect_separator(&decoded.text));
+        .or(pre.separator)
+        .unwrap_or_else(|| detect_separator(body));
     let mut reader = ReaderBuilder::new()
         .delimiter(separator)
         .has_headers(false)
         .flexible(true)
-        .from_reader(decoded.text.as_bytes());
+        .from_reader(body.as_bytes());
     let mut record = StringRecord::new();
-    let mut lines = Lines::new(decoded.text.as_bytes());
+    let mut lines = Lines::new(body.as_bytes(), pre.body_line);
     let (columns, fr, en) = read_header(&mut reader, &mut record, &mut lines, limits, &mut diags)?;
     let locale = options.locale.unwrap_or(locale_of(fr, en, separator));
     let rows = read_rows(&mut reader, &mut record, &mut lines, &columns, limits, &mut diags)?;

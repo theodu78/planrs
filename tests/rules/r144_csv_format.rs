@@ -218,6 +218,29 @@ fn r144_file_refusals() {
 }
 
 #[test]
+fn r144_leading_blank_lines_and_excel_sep_line() {
+    // Lignes vides de tête : le séparateur est détecté sur l'en-tête, pas sur
+    // la première ligne physique (vide).
+    let i = read(b"\n\r\nName,Duration\nA,2d\nB,5x\n");
+    assert_eq!(i.detected.separator, b',');
+    assert_eq!(names(&i), ["A", "B"]);
+    assert_eq!(codes(&i), vec![(5, "csv.bad_value", Some("Duration".to_owned()))]);
+    // Ligne Excel `sep=X` : fixe le séparateur, n'est pas l'en-tête ; les
+    // numéros de ligne restent physiques.
+    let i = read(b"\nsep=;\nName;Duration\nA;2d\nB;5x\n");
+    assert_eq!(i.detected.separator, b';');
+    assert_eq!(names(&i), ["A", "B"]);
+    assert_eq!(i.project.tasks.iter().next().unwrap().duration, days(2));
+    assert_eq!(codes(&i), vec![(5, "csv.bad_value", Some("Duration".to_owned()))]);
+    // Le séparateur fixé l'emporte sur la détection : « Name;Duration » est
+    // alors une seule colonne inconnue.
+    assert_eq!(
+        import(b"SEP=,\nName;Duration\nA;2d\n", &options()),
+        Err(CsvError::NoKnownColumn)
+    );
+}
+
+#[test]
 fn r144_diagnostics_are_capped() {
     // Règle 10 : 3 000 prédécesseurs inconnus → 1 000 gardés pour ce code,
     // les autres codes ne sont pas masqués, un `csv.truncated` final.

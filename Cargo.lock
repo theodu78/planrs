@@ -3335,6 +3335,9 @@ name = "planrs-render"
 version = "0.1.0"
 dependencies = [
  "planrs-core",
+ "planrs-mspdi",
+ "proptest",
+ "quick-xml 0.42.0",
 ]
 
 [[package]]

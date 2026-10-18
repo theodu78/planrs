@@ -10,5 +10,13 @@ repository.workspace = true
 [dependencies]
 planrs-core.workspace = true
 
+[dev-dependencies]
+# Golden de la maison de démonstration (lecteur MSPDI), relecture XML des noms
+# hostiles et tests de propriétés (ADR-0012, lot L7).
+planrs-mspdi.workspace = true
+quick-xml.workspace = true
+proptest.workspace = true
+
 [lints]
 workspace = true
+

@@ -178,7 +178,7 @@ Une entrée par décision, datée, avec le contexte, les options écartées et l
 - R-062 / A9 : les liens entre deux tâches inactives sont gardés pour le placement d'affichage (une récapitulative inactive affiche ses liens internes) ; seuls les liens d'une inactive vers une active sont ignorés (`link.inactive`). A9 (« placée par ses prédécesseurs ») et R-062 sont alignés. Un cycle entre tâches inactives est désormais signalé (`link.cycle`) et coupé ; l'oracle de cycles de P17 suit la règle (écart trouvé par P17 à 10 000 cas, graine gardée dans les régressions).
 - Lecteur MSPDI, corpus et CI : voir les décisions ci-dessus (mémoire, profondeur, diagnostics, doublons de liens ; comparaison complète ; plus de cache du corpus ; taille du téléchargement bornée).
 
-## ADR-0010 — 2026-10-18 — Plan J3 (contraintes, échéances, planification à rebours, écriture MSPDI, aller-retour) — PROPOSITION À VALIDER
+## ADR-0010 — 2026-10-18 — Plan J3 (contraintes, échéances, planification à rebours, écriture MSPDI, aller-retour)
 
 **Contexte.** J3 selon le brief : « contraintes, planification à rebours, import/export MSPDI ; critère de fin : aller-retour MSPDI sans perte ». État du code (inventaire du 2026-10-18, tête 4bea962) : le modèle porte déjà `Constraint` (huit types, date incluse), `Task.deadline`, `ScheduleAnchor::FromFinish` et `ProjectOptions.honor_constraints`, sérialisés et couverts par le golden et P11 ; le lecteur MSPDI lit `ConstraintType`, `ConstraintDate`, `Deadline`, `HonorConstraints`, `ScheduleFromStart` ; le moteur ignore tout cela (aucune occurrence dans `schedule/`), `FromFinish` exclut toutes les tâches, aucun `Driver` ni diagnostic de contrainte n'existe, il n'y a ni écrivain MSPDI ni formateur de durée ou de date, `Extras` n'est jamais rempli et le lecteur saute `Resources`, `Assignments`, `Baseline`, `ExtendedAttribute`, `TimephasedData` et les éléments inconnus. Corpus : A6 porte une FNET, A7 onze FNET et une échéance (parité 0/37 et 0/11) ; l'exemple de l'interface (`house.xml`, tâche 41 SNET) démarre sans avertissement (`docs/ui-needs.md` N4). Les choix marqués **[choix n]** sont soumis au propriétaire avant tout code.
 
@@ -208,7 +208,7 @@ Une entrée par décision, datée, avec le contexte, les options écartées et l
 
 **Conséquences.** `house.xml` (SNET sur la tâche 41) change de dates de fin et produit un diagnostic : les tests de l'interface et les sept captures de référence sont régénérés ; `TaskSchedule.start` peut différer de `early.start` (l'interface lit déjà `start`). Le modèle JSON ne change pas de version. La taille du JSON d'un projet importé grandit de la charge opaque.
 
-**Statut.** Proposition du 2026-10-18 en attente des réponses du propriétaire aux choix 1 à 8 ; aucune ligne de code.
+**Statut.** Choix 1 à 8 validés par le propriétaire le 2026-10-18 (« go »), tels que proposés. Branche `j3` ouverte depuis `main` ; conception en cours.
 
 ## ADR-0011 — 2026-10-17 — Fondations de l'interface egui (branche `ui-foundations`, lecture seule)
 

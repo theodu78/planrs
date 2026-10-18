@@ -4,7 +4,7 @@
 //! Récapitulatives : dates (R-053, agrégat de la passe avant), durée
 //! (R-054), % achevé (R-055), dates au plus tard agrégées (R-060, dans
 //! `backward.rs`), récapitulative manuelle datée (R-064), récapitulative du
-//! projet (R-068).
+//! projet (R-068), échéance dépassée (R-108, R-109).
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -211,11 +211,13 @@ impl Calc<'_, '_> {
                 task.progress.percent_complete,
             )
         };
+        let (start, finish) = (early.start, early.finish);
+        self.deadline_missed(node.and_then(|n| n.deadline), node.map(|n| n.place), task, finish);
         TaskOutcome::Scheduled(TaskSchedule {
             role,
             manual,
-            start: early.start,
-            finish: early.finish,
+            start,
+            finish,
             early,
             late,
             duration,
@@ -226,6 +228,31 @@ impl Calc<'_, '_> {
             driver: state.driver,
             degraded,
         })
+    }
+
+    /// R-108, R-109 : `task.deadline_missed` si la fin planifiée dépasse
+    /// l'échéance effective du nœud de sortie, en temps ouvré de son échelle
+    /// (une fin `D'` brute posée sur le même temps ouvré que l'échéance ne la
+    /// dépasse pas). Aucun effet sur les dates.
+    fn deadline_missed(
+        &mut self,
+        deadline: Option<crate::time::Moment>,
+        place: Option<u32>,
+        task: &Task,
+        finish: crate::time::Moment,
+    ) {
+        let Some(deadline) = deadline else { return };
+        let late = place
+            .and_then(|p| self.net.scale(p))
+            .and_then(|s| s.between(deadline, finish).ok())
+            .is_some_and(|m| m.get() > 0);
+        if late {
+            self.diags.push(Diagnostic::TaskDeadlineMissed {
+                task: task.uid(),
+                deadline,
+                finish,
+            });
+        }
     }
 
     /// R-055 : % achevé d'une récapitulative,

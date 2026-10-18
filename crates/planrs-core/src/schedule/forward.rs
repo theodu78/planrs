@@ -4,13 +4,24 @@
 //! Chaque arc entrant donne une borne candidate ; la plus grande en
 //! `Moment` brut gagne, et à égalité la première atteinte reste pilote
 //! (R-044 : début du projet, porte du parent, liens dans l'ordre de
-//! stockage).
+//! stockage). Le plancher d'une contrainte est évalué après eux, sur le
+//! début placé : il ne pilote que s'il place la tâche strictement plus tard
+//! (une borne de lien brute, par exemple mar 17:00, et un plancher normalisé
+//! mer 08:00 donnent le même début : le lien reste pilote).
+//!
+//! Contraintes (R-090 à R-103) : les planchers (SNET, FNET, MSO, MFO)
+//! s'ajoutent aux bornes, quelle que soit l'option ; avec l'option « toujours
+//! respecter les dates de contrainte », MSO et MFO, et SNLT ou FNLT quand ils
+//! mordent, épinglent la tâche sur son placement de référence, et chaque
+//! lien violé est signalé (`link.not_honored_constraint`) ; sans l'option,
+//! un plafond violé donne `task.constraint_conflict` (la passe arrière en
+//! fait une marge négative).
 
-use super::network::{Fail, NodeIx, NodeKind};
+use super::network::{DateConstraint, Fail, NodeIx, NodeKind};
 use super::{Calc, Driver, Pass, transfer};
 use crate::calendar::Span;
 use crate::diagnostic::Diagnostic;
-use crate::model::LinkType;
+use crate::model::{ConstraintKind, LinkType};
 use crate::time::Moment;
 
 /// Bornes d'un nœud : plus grande borne de début et son pilote, drapeau
@@ -19,6 +30,28 @@ struct Bounds {
     start: Moment,
     driver: Driver,
     degraded: bool,
+    /// Placement épinglé par une contrainte : une borne de porte (arc de
+    /// hiérarchie) le dépasse (R-101).
+    gate_violated: bool,
+}
+
+/// Nature d'un placement imposé, vérifié contre les bornes sans être
+/// déplacé par elles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PinKind {
+    /// Dates saisies d'une tâche manuelle (R-063) : `link.manual_not_honored`.
+    Manual,
+    /// Contrainte respectée (R-099) : `link.not_honored_constraint`.
+    Constraint,
+}
+
+/// Placement imposé d'une feuille.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Pin {
+    /// Dates imposées.
+    pub span: Span,
+    /// Nature.
+    pub kind: PinKind,
 }
 
 /// Une borne candidate.
@@ -68,16 +101,20 @@ impl Calc<'_, '_> {
         self.finish = finish;
     }
 
-    /// Bornes de début du nœud `v` (R-036, R-044). Pour une feuille
-    /// manuelle (`fixed`), chaque borne violée donne
-    /// `link.manual_not_honored` (R-063) et aucune conversion n'est faite.
-    fn bounds(&mut self, v: NodeIx, fixed: Option<Span>) -> Result<Bounds, Fail> {
+    /// Bornes de début du nœud `v` (R-036, R-044). Pour une feuille au
+    /// placement imposé (`pin`), aucune borne ne la déplace et aucune
+    /// conversion n'est faite : chaque lien violé donne
+    /// `link.manual_not_honored` (manuelle, R-063) ou
+    /// `link.not_honored_constraint` (contrainte respectée, R-099) ; une
+    /// porte violée est rendue dans `gate_violated` (R-101).
+    fn bounds(&mut self, v: NodeIx, pin: Option<Pin>) -> Result<Bounds, Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
         let (place, duration, kind) = (node.place, node.duration, node.kind);
         let mut b = Bounds {
             start: self.start,
             driver: Driver::ProjectStart,
             degraded: false,
+            gate_violated: false,
         };
         let incoming = self
             .net
@@ -140,27 +177,19 @@ impl Calc<'_, '_> {
                 .net
                 .scale(place)
                 .ok_or(Fail::Internal("échelle hors bornes"))?;
-            let start = match (cand, fixed) {
-                // Feuille manuelle : la borne ne la déplace pas (R-063).
-                (Candidate::Start(x), Some(f)) => {
-                    if x > f.start
-                        && let Some(l) = arc.link
-                    {
-                        self.diags.push(Diagnostic::LinkManualNotHonored {
-                            predecessor: l.pred,
-                            successor: l.succ,
-                        });
+            let start = match (cand, pin) {
+                // Placement imposé : la borne ne le déplace pas (R-063,
+                // R-099) ; borne de début en brut, borne de fin en temps
+                // ouvré de P(t).
+                (Candidate::Start(x), Some(p)) => {
+                    if x > p.span.start {
+                        self.pin_violated(p.kind, arc.link, &mut b);
                     }
                     continue;
                 }
-                (Candidate::Finish(x), Some(f)) => {
-                    if scale.between(f.finish, x)?.get() > 0
-                        && let Some(l) = arc.link
-                    {
-                        self.diags.push(Diagnostic::LinkManualNotHonored {
-                            predecessor: l.pred,
-                            successor: l.succ,
-                        });
+                (Candidate::Finish(x), Some(p)) => {
+                    if scale.between(p.span.finish, x)?.get() > 0 {
+                        self.pin_violated(p.kind, arc.link, &mut b);
                     }
                     continue;
                 }
@@ -176,6 +205,23 @@ impl Calc<'_, '_> {
             }
         }
         Ok(b)
+    }
+
+    /// Borne violée par un placement imposé : diagnostic du lien selon la
+    /// nature du placement ; porte violée notée dans `b`.
+    fn pin_violated(&mut self, kind: PinKind, link: Option<super::network::LinkArc>, b: &mut Bounds) {
+        match (kind, link) {
+            (PinKind::Manual, Some(l)) => self.diags.push(Diagnostic::LinkManualNotHonored {
+                predecessor: l.pred,
+                successor: l.succ,
+            }),
+            (PinKind::Constraint, Some(l)) => self.diags.push(Diagnostic::LinkNotHonoredConstraint {
+                predecessor: l.pred,
+                successor: l.succ,
+            }),
+            (PinKind::Constraint, None) => b.gate_violated = true,
+            (PinKind::Manual, None) => {}
+        }
     }
 
     /// Borne `g(ancre)` de l'arc de lien `a` (R-037 à R-043) : fin ou début
@@ -207,9 +253,21 @@ impl Calc<'_, '_> {
     }
 
     /// Porte d'une récapitulative : plus grande borne de début (début du
-    /// projet, porte du parent, liens FS/SS entrants), non recalée.
+    /// projet, porte du parent, liens FS/SS entrants, puis SNET de la
+    /// récapitulative, R-102), non recalée.
     fn gate(&mut self, v: NodeIx) -> Result<(), Fail> {
-        let b = self.bounds(v, None)?;
+        let constraint = self
+            .net
+            .node(v)
+            .ok_or(Fail::Internal("nœud hors bornes"))?
+            .constraint;
+        let mut b = self.bounds(v, None)?;
+        if let Some(c) = constraint.filter(|c| c.kind == ConstraintKind::StartNoEarlierThan)
+            && c.date > b.start
+        {
+            b.start = c.date;
+            b.driver = Driver::Constraint { constraint: c.kind };
+        }
         let s = self.state_mut(v).ok_or(Fail::Internal("nœud hors bornes"))?;
         s.early = Some(Span {
             start: b.start,
@@ -220,31 +278,111 @@ impl Calc<'_, '_> {
         Ok(())
     }
 
-    /// Feuille : automatique (R-030, R-031 sur la borne), manuelle (dates
-    /// saisies, R-063) ou inactive (même calcul qu'une automatique, pour
-    /// l'affichage, R-062).
+    /// Feuille : automatique (R-030, R-031 sur la borne, contraintes R-090
+    /// à R-101), manuelle (dates saisies, R-063, contrainte ignorée, R-103)
+    /// ou inactive (même calcul qu'une automatique, contrainte comprise,
+    /// pour l'affichage, sans diagnostic, R-062, R-103).
     fn leaf(&mut self, v: NodeIx) -> Result<(), Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
-        let (place, duration) = (node.place, node.duration);
+        let (place, duration, uid, inactive) = (node.place, node.duration, node.uid, node.inactive);
         let fixed = match node.fixed {
             Some(r) => Some(r?),
             None => None,
         };
-        let b = self.bounds(v, fixed)?;
-        let (early, driver) = if let Some(f) = fixed {
-            (f, Driver::Manual)
-        } else {
-            let scale = self
-                .net
-                .scale(place)
-                .ok_or(Fail::Internal("échelle hors bornes"))?;
-            (scale.forward_span(b.start, duration)?, b.driver)
-        };
+        if let Some(f) = fixed {
+            let b = self.bounds(
+                v,
+                Some(Pin {
+                    span: f,
+                    kind: PinKind::Manual,
+                }),
+            )?;
+            let s = self.state_mut(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+            s.early = Some(f);
+            s.driver = Driver::Manual;
+            s.degraded = b.degraded;
+            return Ok(());
+        }
+        let scale = *self
+            .net
+            .scale(place)
+            .ok_or(Fail::Internal("échelle hors bornes"))?;
+        let norm = self.net.normalized(v)?;
+        let b = self.bounds(v, None)?;
+        let mut early = scale.forward_span(b.start, duration)?;
+        let mut driver = b.driver;
+        let degraded = b.degraded;
+        // Plancher (R-093, R-094, R-097, R-098), après les liens (R-044) :
+        // début `D'`, ou début de `backward_span(D', d)` pour une fin, déjà
+        // placés sur P(t) ; il ne pilote que s'il retarde le début placé.
+        if let Some(n) = norm.filter(|n| n.c.floor()) {
+            let floor = if n.c.on_start() { n.at } else { n.span.start };
+            if floor > early.start {
+                early = scale.forward_span(floor, duration)?;
+                driver = Driver::Constraint { constraint: n.c.kind };
+            }
+        }
+        if let Some(n) = norm {
+            // R-094, R-098 (O14) : une fin au plus tôt contrainte finit sur
+            // `D'` brute quand elle pilote (même temps ouvré que la fin
+            // calculée, qui n'est jamais plus tardive en temps ouvré).
+            if n.c.floor() && !n.c.on_start() && n.at > early.finish {
+                early.finish = n.at;
+            }
+            // Plafond dépassé (R-095, R-096), en temps ouvré de P(t).
+            let exceeded = n.c.ceiling()
+                && if n.c.on_start() {
+                    scale.between(n.at, early.start)?.get() > 0
+                } else {
+                    scale.between(n.at, early.finish)?.get() > 0
+                };
+            if self.project.options.honor_constraints && (n.c.must() || exceeded) {
+                // R-097 à R-099 : la contrainte l'emporte.
+                if early != n.span {
+                    early = n.span;
+                    driver = Driver::Constraint { constraint: n.c.kind };
+                }
+                if !inactive {
+                    let rescan = self.bounds(
+                        v,
+                        Some(Pin {
+                            span: early,
+                            kind: PinKind::Constraint,
+                        }),
+                    )?;
+                    // R-101 : début du projet ou porte d'une récapitulative
+                    // violés.
+                    if rescan.gate_violated || early.start < self.start {
+                        self.conflict(uid, n.c, true);
+                    }
+                }
+            } else if exceeded && !inactive {
+                // R-100 : les liens l'emportent.
+                self.conflict(uid, n.c, false);
+            }
+            if n.at != n.c.date && !inactive {
+                self.diags.push(Diagnostic::TaskConstraintMoved {
+                    task: uid,
+                    from: n.c.date,
+                    to: n.at,
+                });
+            }
+        }
         let s = self.state_mut(v).ok_or(Fail::Internal("nœud hors bornes"))?;
         s.early = Some(early);
         s.driver = driver;
-        s.degraded = b.degraded;
+        s.degraded = degraded;
         Ok(())
+    }
+
+    /// `task.constraint_conflict` (R-099 à R-102).
+    fn conflict(&mut self, task: crate::ids::TaskUid, c: DateConstraint, honored: bool) {
+        self.diags.push(Diagnostic::TaskConstraintConflict {
+            task,
+            constraint: c.kind,
+            date: c.date,
+            honored,
+        });
     }
 
     /// Agrégat d'une récapitulative (R-053) : min des débuts, max des fins
@@ -291,6 +429,23 @@ impl Calc<'_, '_> {
         // Tous les enfants en échec : l'agrégat compte comme non planifiable
         // pour ses successeurs (dégradés, R-069).
         s.failed = span.is_none() && failed;
+        // R-102 : FNLT d'une récapitulative, jamais épinglée ; dépassée par
+        // sa fin agrégée (en temps ouvré de son calendrier) → conflit. Un
+        // échec de mesure (jamais attendu) ne rend pas l'agrégat non
+        // planifiable : pas de diagnostic.
+        let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+        if let (Some(c), Some(e)) = (node.constraint, span)
+            && c.kind == ConstraintKind::FinishNoLaterThan
+            && !node.inactive
+            && self
+                .net
+                .scale(node.place)
+                .and_then(|m| m.between(c.date, e.finish).ok())
+                .is_some_and(|m| m.get() > 0)
+        {
+            let uid = node.uid;
+            self.conflict(uid, c, false);
+        }
         Ok(())
     }
 }

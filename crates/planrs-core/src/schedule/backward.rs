@@ -8,6 +8,14 @@
 //! début, A11). Une porte est traitée après ses enfants : `LG(S)` = min des
 //! débuts au plus tard de ses enfants actifs, lu par les liens FS/SS qui la
 //! visent.
+//!
+//! Contraintes et échéances (R-095 à R-098, R-108, R-109), quelle que soit
+//! l'option « toujours respecter les dates de contrainte » : le plafond d'une
+//! contrainte (SNLT, MSO : fin du placement de référence ; FNLT, MFO : `D'`)
+//! et l'échéance (brute) plafonnent la fin au plus tard d'une feuille ; la
+//! FNLT et l'échéance d'une récapitulative automatique plafonnent `C(S)`,
+//! donc toutes ses feuilles. Le plafond se propage aux prédécesseurs par les
+//! transferts ordinaires : marge négative en amont (R-099, R-100, R-108).
 
 use super::network::{Fail, NodeIx, NodeKind, pos};
 use super::{Calc, Pass, transfer};
@@ -184,12 +192,20 @@ impl Calc<'_, '_> {
     /// plafond de fin = min(fin du projet ; EF si plusieurs chemins critiques
     /// et aucun successeur ; `C(parent)` ; liens FS/FF) ; plafonds de début
     /// (liens SS/SF, `K(parent)` si même début que le parent) convertis par
-    /// `forward_span(y, d).finish` ; `late = backward_span(plafond, d)`
-    /// (R-030, R-031 pour un jalon, R-061).
+    /// `forward_span(y, d).finish` ; plafond de contrainte (R-095 à R-098) et
+    /// échéance (R-108) ; `late = backward_span(plafond, d)` (R-030, R-031
+    /// pour un jalon, R-061).
     fn leaf_late(&mut self, v: NodeIx, early: Span, has_succ: bool) -> Result<Span, Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
-        let (place, duration, parent) = (node.place, node.duration, node.parent_rollup);
+        let (place, duration, parent, deadline) =
+            (node.place, node.duration, node.parent_rollup, node.deadline);
         let mut lf = self.finish;
+        if let Some(n) = self.net.normalized(v)?.filter(|n| n.c.ceiling()) {
+            lf = lf.min(n.span.finish);
+        }
+        if let Some(d) = deadline {
+            lf = lf.min(d);
+        }
         if self.project.options.multiple_critical_paths && !has_succ {
             lf = lf.min(early.finish);
         }
@@ -230,16 +246,24 @@ impl Calc<'_, '_> {
     }
 
     /// Plafonds hérités d'un agrégat (R-057) : `C(S) = min(C(parent), FS/FF
-    /// sortants)` ; `K(S) = min(SS/SF sortants, K(parent) si ES_S ==
-    /// ES_parent)`.
+    /// sortants, FNLT de S, échéance de S)` (R-102, R-109) ; `K(S) = min(SS/SF
+    /// sortants, K(parent) si ES_S == ES_parent)`.
     fn rollup_caps(&mut self, v: NodeIx, early: Span) -> Result<(), Fail> {
-        let parent = self
-            .net
-            .node(v)
-            .ok_or(Fail::Internal("nœud hors bornes"))?
-            .parent_rollup;
+        let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+        let parent = node.parent_rollup;
+        let own = node
+            .constraint
+            .filter(|c| c.kind == crate::model::ConstraintKind::FinishNoLaterThan)
+            .map(|c| c.date);
+        let own = match (own, node.deadline) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
         let caps = self.out_caps(v)?;
         let mut c = caps.finish;
+        if let Some(o) = own {
+            c = Some(min_opt(c, o));
+        }
         let mut k = caps.starts.iter().copied().min();
         let mut unreliable = caps.unreliable;
         if let Some(pr) = parent {

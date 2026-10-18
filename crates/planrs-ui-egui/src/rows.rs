@@ -402,6 +402,14 @@ mod tests {
         assert_eq!(model.text(17, Column::Predecessors), "17FF");
         assert_eq!(model.text(23, Column::Predecessors), "25DF");
         assert_eq!(model.text(8, Column::Predecessors), "7;6");
+        // Ligne 41 « Pose de la cuisine », SNET lun 26/04/2027 08:00 (R-093) :
+        // la contrainte la retarde du ven 16/04 au lun 26/04 ; marge 5 jours
+        // (LS lun 03/05), non critique ; aucun diagnostic.
+        assert_eq!(
+            row_texts(&model, 41)[2..],
+            ["3 jours", "lun 26/04/27", "mer 28/04/27", "38", "5 jours", "Non"]
+        );
+        assert!(doc.schedule.diagnostics.is_empty());
         // Tâche non critique : marge positive, « Non ».
         assert_eq!(model.text(5, Column::TotalSlack), "5 jours");
         assert_eq!(model.text(5, Column::Critical), "Non");
@@ -454,6 +462,10 @@ mod tests {
                 "0 days",
                 "Yes"
             ]
+        );
+        assert_eq!(
+            row_texts(&model, 41)[2..],
+            ["3 days", "Mon 4/26/27", "Wed 4/28/27", "38", "5 days", "No"]
         );
         assert_eq!(model.text(12, Column::Predecessors), "12FS+2 days");
         assert_eq!(model.text(23, Column::Predecessors), "25SF");

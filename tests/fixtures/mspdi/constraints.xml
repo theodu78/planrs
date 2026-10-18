@@ -1,0 +1,297 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Fixture planrs écrite à la main (licence du dépôt) : contraintes et échéances (R-090 à R-104, R-108, R-109). Calendrier Standard sans férié, début lun 19/10/2026 08:00, HonorConstraints 1 (les tests basculent l'option pour R-100). Aucune valeur calculée. -->
+<Project xmlns="http://schemas.microsoft.com/project">
+	<SaveVersion>14</SaveVersion>
+	<Name>constraints.xml</Name>
+	<ScheduleFromStart>1</ScheduleFromStart>
+	<StartDate>2026-10-19T08:00:00</StartDate>
+	<FinishDate>2026-10-26T17:00:00</FinishDate>
+	<CalendarUID>1</CalendarUID>
+	<MinutesPerDay>480</MinutesPerDay>
+	<MinutesPerWeek>2400</MinutesPerWeek>
+	<DaysPerMonth>20</DaysPerMonth>
+	<DurationFormat>7</DurationFormat>
+	<HonorConstraints>1</HonorConstraints>
+	<Calendars>
+		<Calendar>
+			<UID>1</UID>
+			<Name>Standard</Name>
+			<IsBaseCalendar>1</IsBaseCalendar>
+			<BaseCalendarUID>-1</BaseCalendarUID>
+			<WeekDays>
+				<WeekDay><DayType>1</DayType><DayWorking>0</DayWorking></WeekDay>
+				<WeekDay><DayType>2</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>
+				<WeekDay><DayType>3</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>
+				<WeekDay><DayType>4</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>
+				<WeekDay><DayType>5</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>
+				<WeekDay><DayType>6</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>
+				<WeekDay><DayType>7</DayType><DayWorking>0</DayWorking></WeekDay>
+			</WeekDays>
+		</Calendar>
+	</Calendars>
+	<Tasks>
+		<Task>
+			<UID>1</UID>
+			<ID>1</ID>
+			<Name>P prédécesseur 2 j</Name>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT16H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>0</ConstraintType>
+		</Task>
+		<Task>
+			<UID>2</UID>
+			<ID>2</ID>
+			<Name>D longue 5 j</Name>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT40H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>0</ConstraintType>
+		</Task>
+		<Task>
+			<UID>3</UID>
+			<ID>3</ID>
+			<Name>SNET jeu 08:00</Name>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT8H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>4</ConstraintType>
+			<ConstraintDate>2026-10-22T08:00:00</ConstraintDate>
+			<PredecessorLink><PredecessorUID>1</PredecessorUID><Type>1</Type><CrossProject>0</CrossProject><LinkLag>0</LinkLag><LagFormat>7</LagFormat></PredecessorLink>
+		</Task>
+		<Task>
+			<UID>4</UID>
+			<ID>4</ID>
+			<Name>FNET jeu 17:00</Name>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT8H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>6</ConstraintType>
+			<ConstraintDate>2026-10-22T17:00:00</ConstraintDate>
+			<PredecessorLink><PredecessorUID>1</PredecessorUID><Type>1</Type><CrossProject>0</CrossProject><LinkLag>0</LinkLag><LagFormat>7</LagFormat></PredecessorLink>
+		</Task>
+		<Task>
+			<UID>5</UID>
+			<ID>5</ID>
+			<Name>SNLT mar 08:00 en conflit</Name>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT8H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>5</ConstraintType>
+			<ConstraintDate>2026-10-20T08:00:00</ConstraintDate>
+			<PredecessorLink><PredecessorUID>1</PredecessorUID><Type>1</Type><CrossProject>0</CrossProject><LinkLag>0</LinkLag><LagFormat>7</LagFormat></PredecessorLink>
+		</Task>
+		<Task>
+			<UID>6</UID>
+			<ID>6</ID>
+			<Name>FNLT jeu 17:00</Name>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT8H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>7</ConstraintType>
+			<ConstraintDate>2026-10-22T17:00:00</ConstraintDate>
+			<PredecessorLink><PredecessorUID>1</PredecessorUID><Type>1</Type><CrossProject>0</CrossProject><LinkLag>0</LinkLag><LagFormat>7</LagFormat></PredecessorLink>
+		</Task>
+		<Task>
+			<UID>7</UID>
+			<ID>7</ID>
+			<Name>MSO lun 12:30 hors temps ouvré</Name>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT8H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>2</ConstraintType>
+			<ConstraintDate>2026-10-19T12:30:00</ConstraintDate>
+		</Task>
+		<Task>
+			<UID>8</UID>
+			<ID>8</ID>
+			<Name>MFO mar 17:00 en conflit</Name>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT8H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>3</ConstraintType>
+			<ConstraintDate>2026-10-20T17:00:00</ConstraintDate>
+			<PredecessorLink><PredecessorUID>1</PredecessorUID><Type>1</Type><CrossProject>0</CrossProject><LinkLag>0</LinkLag><LagFormat>7</LagFormat></PredecessorLink>
+		</Task>
+		<Task>
+			<UID>9</UID>
+			<ID>9</ID>
+			<Name>SNET sam 10:00</Name>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT8H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>4</ConstraintType>
+			<ConstraintDate>2026-10-24T10:00:00</ConstraintDate>
+		</Task>
+		<Task>
+			<UID>10</UID>
+			<ID>10</ID>
+			<Name>FNLT dim 12:00</Name>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT8H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>7</ConstraintType>
+			<ConstraintDate>2026-10-25T12:00:00</ConstraintDate>
+		</Task>
+		<Task>
+			<UID>11</UID>
+			<ID>11</ID>
+			<Name>FNET mer minuit</Name>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT8H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>6</ConstraintType>
+			<ConstraintDate>2026-10-21T00:00:00</ConstraintDate>
+			<PredecessorLink><PredecessorUID>1</PredecessorUID><Type>1</Type><CrossProject>0</CrossProject><LinkLag>0</LinkLag><LagFormat>7</LagFormat></PredecessorLink>
+		</Task>
+		<Task>
+			<UID>12</UID>
+			<ID>12</ID>
+			<Name>FNET lun 08:00 (forme O14)</Name>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT8H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>6</ConstraintType>
+			<ConstraintDate>2026-10-26T08:00:00</ConstraintDate>
+		</Task>
+		<Task>
+			<UID>13</UID>
+			<ID>13</ID>
+			<Name>SNET date sans heure</Name>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT8H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>4</ConstraintType>
+			<ConstraintDate>2026-10-21</ConstraintDate>
+		</Task>
+		<Task>
+			<UID>14</UID>
+			<ID>14</ID>
+			<Name>ASAP avec date</Name>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT8H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>0</ConstraintType>
+			<ConstraintDate>2026-10-21T08:00:00</ConstraintDate>
+		</Task>
+		<Task>
+			<UID>15</UID>
+			<ID>15</ID>
+			<Name>Échéance tenue</Name>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT8H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>0</ConstraintType>
+			<Deadline>2026-10-23T17:00:00</Deadline>
+		</Task>
+		<Task>
+			<UID>16</UID>
+			<ID>16</ID>
+			<Name>Échéance dépassée</Name>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT16H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>0</ConstraintType>
+			<Deadline>2026-10-21T17:00:00</Deadline>
+			<PredecessorLink><PredecessorUID>1</PredecessorUID><Type>1</Type><CrossProject>0</CrossProject><LinkLag>0</LinkLag><LagFormat>7</LagFormat></PredecessorLink>
+		</Task>
+		<Task>
+			<UID>17</UID>
+			<ID>17</ID>
+			<Name>Récap SNET mer</Name>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT8H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<Summary>1</Summary>
+			<ConstraintType>4</ConstraintType>
+			<ConstraintDate>2026-10-21T08:00:00</ConstraintDate>
+		</Task>
+		<Task>
+			<UID>18</UID>
+			<ID>18</ID>
+			<Name>Sous-tâche de la récap SNET</Name>
+			<OutlineLevel>2</OutlineLevel>
+			<Duration>PT8H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>0</ConstraintType>
+		</Task>
+		<Task>
+			<UID>19</UID>
+			<ID>19</ID>
+			<Name>Récap FNLT mar et échéance</Name>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT16H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<Summary>1</Summary>
+			<ConstraintType>7</ConstraintType>
+			<ConstraintDate>2026-10-20T17:00:00</ConstraintDate>
+			<Deadline>2026-10-20T17:00:00</Deadline>
+		</Task>
+		<Task>
+			<UID>20</UID>
+			<ID>20</ID>
+			<Name>Sous-tâche de la récap FNLT</Name>
+			<OutlineLevel>2</OutlineLevel>
+			<Duration>PT16H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>0</ConstraintType>
+		</Task>
+		<Task>
+			<UID>21</UID>
+			<ID>21</ID>
+			<Name>Récap MSO refusée</Name>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT8H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<Summary>1</Summary>
+			<ConstraintType>2</ConstraintType>
+			<ConstraintDate>2026-10-22T08:00:00</ConstraintDate>
+		</Task>
+		<Task>
+			<UID>22</UID>
+			<ID>22</ID>
+			<Name>Sous-tâche de la récap MSO</Name>
+			<OutlineLevel>2</OutlineLevel>
+			<Duration>PT8H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>0</ConstraintType>
+		</Task>
+		<Task>
+			<UID>23</UID>
+			<ID>23</ID>
+			<Name>Manuelle SNET et échéance</Name>
+			<Manual>1</Manual>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT8H0M0S</Duration>
+			<ManualStart>2026-10-19T08:00:00</ManualStart>
+			<ManualFinish>2026-10-19T17:00:00</ManualFinish>
+			<ManualDuration>PT8H0M0S</ManualDuration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>4</ConstraintType>
+			<ConstraintDate>2026-10-21T08:00:00</ConstraintDate>
+			<Deadline>2026-10-19T12:00:00</Deadline>
+		</Task>
+		<Task>
+			<UID>24</UID>
+			<ID>24</ID>
+			<Name>Jalon MSO lun 17:00</Name>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT0H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>2</ConstraintType>
+			<ConstraintDate>2026-10-19T17:00:00</ConstraintDate>
+		</Task>
+		<Task>
+			<UID>25</UID>
+			<ID>25</ID>
+			<Name>Inactive SNET mer</Name>
+			<Active>0</Active>
+			<OutlineLevel>1</OutlineLevel>
+			<Duration>PT8H0M0S</Duration>
+			<DurationFormat>7</DurationFormat>
+			<ConstraintType>4</ConstraintType>
+			<ConstraintDate>2026-10-21T08:00:00</ConstraintDate>
+			<Deadline>2026-10-19T12:00:00</Deadline>
+		</Task>
+	</Tasks>
+</Project>

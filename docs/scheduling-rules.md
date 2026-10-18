@@ -315,7 +315,8 @@ Le moteur (`planrs_core::schedule`, ADR-0009) calcule un `Schedule` hors du mod�
 - **Formulation** : toute borne de début est au moins le début du projet (brut) ; une tâche sans prédécesseur commence au début du projet recalé sur son échelle (R-030, R-031) ; une avance qui ferait commencer avant est tronquée. Le `Schedule` garde le début du projet brut. Exemples : début sam 17/10 00:00, A 2 j sans lien → lun 19/10 08:00 – mar 20/10 17:00 ; jalon sans lien → lun 08:00 ; A 1 j, B 1 j SS −1 j de A : `add(lun 08:00, −480)` = ven 16/10 08:00 → B lun 08:00 – 17:00, pilote « début du projet ».
 - **Source** : support.microsoft.com, « How Project schedules tasks: Behind the scenes » (S8), « Early Start » (S22) ; learn.microsoft.com, « Tasks aren't scheduled as expected » (S24) ; troncature : hypothèse.
 - **Statut** : `vérifié contre MS Project` pour le début sans avance (corpus A1 UID 4 ; A2 UID 1, 2, 3, 4 ; A4 UID 2) ; troncature d'une avance : `hypothèse` (aucun décalage dans le corpus).
-- **Tests** : `tests/rules/r036_project_start_floor.rs` (`r036_*`).
+- **Amendement (J3, R-101)** : une contrainte respectée (MSO, MFO, SNLT ou FNLT épinglée, option « toujours respecter les dates de contrainte ») peut placer une tâche avant le début du projet, avec `task.constraint_conflict { honored: true }` ; le `Schedule` garde le début saisi et la récapitulative du projet commence à la tâche. Hypothèse (ADR-0010, amendements).
+- **Tests** : `tests/rules/r036_project_start_floor.rs` (`r036_*`) ; `tests/rules/r101_constraint_vs_project_start_or_gate.rs` (`r101_constraint_before_project_start`).
 
 ## R-037 — Fin à début (FS)
 - **Formulation** : borne de début du successeur `g(EF_p)`, puis placement (R-030). Exemples : A 2 j (lun 08:00 – mar 17:00) ; B FS 1 j → mer 21/10 08:00 – 17:00 ; B FS+1 j : `add(mar 17:00, 480)` = mer 17:00 → jeu 22/10 08:00 – 17:00.
@@ -390,10 +391,10 @@ Le moteur (`planrs_core::schedule`, ADR-0009) calcule un `Schedule` hors du mod�
 - **Tests** : `tests/rules/r048_total_slack.rs` (`r048_*`).
 
 ## R-049 — Marge libre
-- **Formulation** : `FS = min(TF, écarts)` ; pour chaque lien sortant effectif (propre, ou hérité d'une récapitulative ancêtre), écart = `M.between(ancre propre, h(ancre au plus tôt du successeur))`, ancre propre EF pour FS/FF, ES pour SS/SF ; ancre du successeur ES pour FS/SS, `EF'` pour FF/SF (report de R-047, jalon compris) ; `h` en brut sous les mêmes conditions qu'en R-047 ; pour SS/SF, la borne d'une feuille est ramenée à son dernier début plaçable (`latest_start`, R-047) ; cible récapitulative : son début agrégé. Un lien SS/SF hérité ne compte que pour une tâche de même début que la récapitulative (comme son plafond, R-057). Sans lien : FS = TF. Aucune troncature : FS ≥ 0 est une propriété vérifiée. Exemples : N1 : A = `between(lun 17:00, mer 08:00)` = 480 ; D = 960. N2 (A 1 j → E 2 h → C ; B 2 j → C ; C 1 j) : E mar 08:00 – 10:00, C mer 08:00 – 17:00 ; E TF 360, FS 360 ; A TF 360, FS 0. A 1 j, B FS+1 j : `h(mer 08:00)` = mar 08:00 → FS(A) = 0. A 1 j, B 1 j SS+600 em de A (mar 08:00) : `h(mar 08:00)` = lun 22:00 → dernier début plaçable lun 16:59 → FS(A) = 479 (480 retarderait B au mer).
+- **Formulation** : `FS = min(TF, écarts)` ; pour chaque lien sortant effectif (propre, ou hérité d'une récapitulative ancêtre), écart = `M.between(ancre propre, h(ancre au plus tôt du successeur))`, ancre propre EF pour FS/FF, ES pour SS/SF ; ancre du successeur ES pour FS/SS, `EF'` pour FF/SF (report de R-047, jalon compris) ; `h` en brut sous les mêmes conditions qu'en R-047 ; pour SS/SF, la borne d'une feuille est ramenée à son dernier début plaçable (`latest_start`, R-047) ; cible récapitulative : son début agrégé. Un lien SS/SF hérité ne compte que pour une tâche de même début que la récapitulative (comme son plafond, R-057). Sans lien : FS = TF. Aucune troncature : FS ≥ 0 est une propriété vérifiée quand TF ≥ 0 (P13 (b), réseaux sans contrainte) ; avec une marge totale négative (contrainte, échéance : J3, R-104), FS peut être négative (amendement J3 ; hypothèse concurrente « FS ≥ 0 », à soumettre à l'oracle). Exemples : N1 : A = `between(lun 17:00, mer 08:00)` = 480 ; D = 960. N2 (A 1 j → E 2 h → C ; B 2 j → C ; C 1 j) : E mar 08:00 – 10:00, C mer 08:00 – 17:00 ; E TF 360, FS 360 ; A TF 360, FS 0. A 1 j, B FS+1 j : `h(mer 08:00)` = mar 08:00 → FS(A) = 0. A 1 j, B 1 j SS+600 em de A (mar 08:00) : `h(mar 08:00)` = lun 22:00 → dernier début plaçable lun 16:59 → FS(A) = 479 (480 retarderait B au mer).
 - **Source** : support.microsoft.com, « Free Slack (task field) » (S17) ; formule : hypothèse ; observé O2 (A2 UID 6, 14 : FS 0, TF > 0).
 - **Statut** : `vérifié contre MS Project` pour des liens FS sans décalage sur un seul calendrier (corpus A1, A2, A4 : 91 cas, dont O2, A2 UID 6 et 14) ; divergence connue entre calendriers (O11, A4).
-- **Tests** : `tests/rules/r049_free_slack.rs` (`r049_*`) ; `tests/rules/r047_backward_transfer.rs` (`r047_start_cap_off_working_time_elapsed_lag` : FS 479) ; propriétés P13 ((h) : retard de FS sans effet) et P15 (`crates/planrs-core/tests/schedule_properties.rs`).
+- **Tests** : `tests/rules/r049_free_slack.rs` (`r049_*`) ; `tests/rules/r047_backward_transfer.rs` (`r047_start_cap_off_working_time_elapsed_lag` : FS 479) ; `tests/rules/r104_constraint_links_and_critical_paths.rs` (FS négative) ; propriétés P13 ((h) : retard de FS sans effet), P15 et P15 étendue (`crates/planrs-core/tests/schedule_properties.rs`).
 
 ## R-050 — Critique
 - **Formulation** : une tâche est critique si `TF ≤ critical_slack_limit_days × minutes_per_day` (option `CriticalSlackLimit`, 0 par défaut). Exemples : N2, seuil 0 : B et C critiques ; seuil 1 j (480) : A, E, B, C critiques.
@@ -625,7 +626,7 @@ Bloc réservé à la lecture et à l'écriture MSPDI (`planrs-mspdi`) ; R-087 à
 
 ### Contraintes et échéances (R-090 à R-109)
 
-R-090 à R-104, R-108 et R-109 réservées, lot K1 ; R-105 à R-107 réservées, lot K2 (passe de placement). Titres fixés par le plan de J3 (ADR-0010, amendements) : chaque lot ajoute ses fiches sous la table de leur bloc, au format ci-dessus et dans l'ordre des numéros, avec leurs tests `tests/rules/rNNN_*.rs` (fichiers créés vides par L0) dans le même commit ; la table reste comme index.
+R-090 à R-104, R-108 et R-109 : lot K1 (fiches ci-dessous) ; R-105 à R-107 réservées, lot K2 (passe de placement). Titres fixés par le plan de J3 (ADR-0010, amendements) : chaque lot ajoute ses fiches sous la table de leur bloc, au format ci-dessus et dans l'ordre des numéros, avec leurs tests `tests/rules/rNNN_*.rs` (fichiers créés vides par L0) dans le même commit ; la table reste comme index.
 
 | N° | Titre | Lot |
 |---|---|---|
@@ -649,6 +650,110 @@ R-090 à R-104, R-108 et R-109 réservées, lot K1 ; R-105 à R-107 réservées,
 | R-107 | Pilote du début planifié | K2 |
 | R-108 | Échéance : plafond propagé et dépassement (feuille, manuelle, jalon) | K1 |
 | R-109 | Échéance d'une récapitulative | K1 |
+
+Notations du bloc : `D` = date saisie de la contrainte ; `D'` = date effective (R-090) ; `Sc = P.forward_span(D, d)` (contrainte de début) ; placement de référence d'une contrainte de fin `(P.backward_span(D', d).start, D')` ; « option » = `honor_constraints` (« Tasks will always honor their constraint dates », vrai par défaut, R-032, R-076 ; `HonorConstraints` vaut 0 dans les cinq fichiers du corpus, O15). Réseau Nc : A 2 j (lun 19 – mar 20/10), B 1 j FS de A (mer 21), D 5 j seule (lun – ven 23/10 17:00) ; sans contrainte TF(A) = TF(B) = 960. Réseau N : A 2 j → B 1 j → C 1 j (FS), X 6 j seule (fin lun 26/10 17:00). Pages Microsoft présumées, non consultées dans la session (le réseau refuse les hôtes Microsoft) : « Set task constraints », « Change how tasks are scheduled », « Set a deadline date », « Scheduling conflicts » ; abrégé **[S-K]**. Propriétés : P15 étendue (oracle en temps ouvré avec planchers, plafonds, épinglage et échéances) et P23 (a, b, c, e, f, g), sur les réseaux de P13 décorés par `decorate` (flux aléatoire séparé ; calibrage `decorate_conflict_rate` : 260 réseaux en conflit sur 1 000), `crates/planrs-core/tests/schedule_properties.rs` ; fixture `tests/fixtures/mspdi/constraints.xml` (écrite à la main : huit types, dates avec et sans heure, hors temps ouvré, échéances, récapitulatives SNET/FNLT/MSO, manuelle, jalon, inactive).
+
+## R-090 — Date de contrainte normalisée (début : moment ouvré suivant ; fin : convention de jalon arrière), `constraint_moved`
+- **Formulation** : sur l'échelle de placement `P(t)` de la feuille (R-066, R-067), une contrainte de début (SNET, SNLT, MSO) vaut `D' = Sc.start` (instant ouvré suivant ; jalon : `D` gardée si elle termine une minute ouvrée, R-031) ; une contrainte de fin (FNET, FNLT, MFO) vaut `D' = P.backward_span(D, 0).finish` (`D` gardée si elle commence une minute ouvrée ou une plage, sinon l'instant ouvré précédent) ; temps écoulé : `D`. `task.constraint_moved` (information, date saisie et date retenue) seulement si `D' ≠ D`, jamais pour une tâche inactive. La conversion échoue (hors domaine) : chemin de R-069. Exemples : SNET sam 24/10 10:00 → lun 26/10 08:00, déplacée ; FNET mer 21/10 00:00 → mar 20/10 17:00, déplacée (piège de minuit) ; FNET lun 26/10 08:00 → gardée (début de plage, forme O14) ; jalon MSO lun 19/10 17:00 → gardée ; jalon MFO dim 25/10 12:00 → ven 23/10 17:00 ; tâche écoulée SNET sam 10:00 → sam 10:00.
+- **Source** : [S-K] ; convention de fin observée (O14 : les huit FNET liantes de A7 sont des débuts de plage, gardées) ; convention de début et diagnostic : hypothèse.
+- **Statut** : `hypothèse` (la convention de fin est vérifiée pour FNET par R-094).
+- **Tests** : `tests/rules/r090_constraint_date_normalized.rs` (`r090_*`) ; `r099_fixture_constraints_xml` (quatre dates déplacées).
+
+## R-091 — Date de contrainte sans heure (`Constraint::on_day`, R-033)
+- **Formulation** : `Constraint::on_day(kind, day, &options)` donne à une contrainte de début (MSO, SNET, SNLT) l'heure de début par défaut, à une contrainte de fin (MFO, FNET, FNLT) l'heure de fin par défaut ; ASAP et ALAP ignorent le jour ; une échéance sans heure prend l'heure de fin (`ProjectOptions::finish_of`). Le moteur ne voit que des dates avec heure : la normalisation vient ensuite (R-090). Côté MSPDI, une `ConstraintDate` sans heure est illisible (R-075) : la tâche reste ASAP, avec le diagnostic de lecture. Exemples : SNET le 2026-10-21 → mer 08:00 ; FNLT le 2026-10-22 → jeu 17:00 ; début par défaut 07:00 : SNET mer 07:00, normalisée à 08:00 avec `task.constraint_moved`.
+- **Source** : support.microsoft.com, « Change default times for entered start or finish dates » (S9), par extension aux dates de contrainte : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r091_constraint_date_without_time.rs` (`r091_*`) ; `r099_fixture_constraints_xml` (UID 13, date sans heure).
+
+## R-092 — ASAP
+- **Formulation** : « le plus tôt possible » n'a aucun effet : dates, marges, pilote et diagnostics identiques au réseau sans contrainte, quelle que soit l'option ; une `ConstraintDate` lue avec ASAP est ignorée. Exemple : Nc avec B ASAP explicite : B mer 08:00 – 17:00, pilote `Link { A }`, TF(B) 960.
+- **Source** : [S-K].
+- **Statut** : `hypothèse` (comportement par défaut de toutes les tâches du corpus A1, A2, A4 : 91 cas identiques, mais sans ASAP « explicite » distinguable).
+- **Tests** : `tests/rules/r092_as_soon_as_possible.rs` (`r092_*`) ; `r099_fixture_constraints_xml` (UID 14).
+
+## R-093 — SNET
+- **Formulation** : plancher de début `D'` évalué après les autres bornes de la passe avant (début du projet, porte, liens) ; il ne pilote (`Driver::Constraint`) que s'il retarde strictement le début placé (une borne FS brute mar 17:00 et un plancher mer 08:00 donnent le même début : le lien reste pilote, R-044) ; aucun conflit possible ; sans effet sur la passe arrière ; mêmes résultats quelle que soit l'option. Exemples (Nc) : B SNET jeu 22/10 08:00 → B jeu 08:00 – 17:00, TF(B) 480, TF(A) 960, FS(A) = `between(mar 17:00, jeu 08:00)` = 480 ; SNET lun 19/10 ou mer 21/10 08:00 → sans effet, pilote `Link { A }`.
+- **Source** : [S-K].
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r093_start_no_earlier_than.rs` (`r093_*`) ; P23 (a) ; P15 étendue ; `house.xml` tâche 41 (`rows_demo_fr`, `rows_demo_en`).
+
+## R-094 — FNET (O14 : `EF = max(fin calculée, D')`)
+- **Formulation** : plancher de début `P.backward_span(D', d).start` (même conversion qu'une borne FF, R-039), évalué après les autres bornes ; fin au plus tôt `EF = max(P.forward_span(ES, d).finish, D')` en `Moment` brut : quand la FNET pilote, la tâche finit exactement sur `D'`, même temps ouvré que la fin calculée (marges inchangées) ; la fin du projet (R-045) et les successeurs lisent cette fin brute. Exemples (Nc) : B FNET jeu 22/10 17:00 → B jeu 08:00 – 17:00, TF(B) 480 ; B FNET lun 26/10 08:00 → B ven 23 08:00 → **lun 26/10 08:00**, fin du projet lun 08:00, TF(B) = TF(D) = 0 ; FNET mar 20/10 17:00 → non liante, B mer, fin calculée. Calendrier de la forme de A7 (ven 18-20 h et 21-23 h, sam 9-13 h et 14-18 h) : 480 min FNET ven 18/10/2024 18:00 → sam 12/10 09:00 – ven 18/10 18:00 ; 720 min FNET ven 29/11 18:00 → ven 22/11 18:00 – ven 29/11 18:00.
+- **Source** : [S-K] ; observé O14 (A7 UID 15 à 21 et 32 ; A6 UID 7 non liante).
+- **Statut** : `vérifié contre MS Project` (corpus A7 `projinteg.xml` UID 15, 16, 17, 18, 19, 20, 21, 32 : 8 cas identiques sur les dix champs, `HonorConstraints` 0) ; option vraie : `hypothèse` (aucun effet attendu sur un plancher).
+- **Tests** : `tests/rules/r094_finish_no_earlier_than.rs` (`r094_*`, dont `r094_corpus_o14_shape`) ; corpus (`cargo test -p planrs-tests --test corpus`, plancher de A7 relevé à 8) ; P23 (a) ; P15 étendue.
+
+## R-095 — SNLT
+- **Formulation** : plafond de la passe arrière, quelle que soit l'option : `LF ≤ Sc.finish`, donc `LS ≤ D'` ; sans effet sur la passe avant tant que la tâche peut commencer à temps (en temps ouvré de `P(t)`) ; dépassé : R-099 (option vraie, tâche épinglée sur `Sc`) ou R-100. Exemples (Nc) : B SNLT jeu 22/10 08:00 → B mer, LS(B) jeu 08:00, TF(B) 480, LF(A) mer 17:00, TF(A) 480, FS(A) 0 ; SNLT mar 20/10 08:00 : option vraie, B mar 08:00 – 17:00, lien A → B non respecté, TF(B) 0, TF(A) −480 (LS(A) ven 16/10 08:00) ; option fausse, B mer, TF(B) = TF(A) = −480, `task.constraint_conflict`.
+- **Source** : [S-K].
+- **Statut** : `hypothèse` (aucune SNLT dans le corpus, O15).
+- **Tests** : `tests/rules/r095_start_no_later_than.rs` (`r095_*`) ; P23 (b, c, f) ; P15 étendue.
+
+## R-096 — FNLT
+- **Formulation** : plafond `LF ≤ D'` de la passe arrière (normalisé ensuite par `backward_span`, comme les `LateFinish` automatiques de A7), quelle que soit l'option ; dépassé (fin au plus tôt au-delà de `D'` en temps ouvré de `P(t)`) : option vraie, tâche épinglée sur `(P.backward_span(D', d).start, D')` (R-099) ; option fausse, R-100. Exemples (Nc) : B FNLT jeu 22/10 17:00 → TF(B) = TF(A) = 480 ; FNLT mar 20/10 17:00 : option vraie, B mar 08:00 – 17:00, TF(B) 0, TF(A) −480 ; option fausse, B mer, TF(B) = FS(B) = −480, TF(A) −480, `task.constraint_conflict`.
+- **Source** : [S-K].
+- **Statut** : `hypothèse` (aucune FNLT sur une feuille du corpus, O15).
+- **Tests** : `tests/rules/r096_finish_no_later_than.rs` (`r096_*`) ; P23 (b, c, f) ; P15 étendue.
+
+## R-097 — MSO
+- **Formulation** : option vraie, la tâche est épinglée sur `Sc` dans la passe avant (pilote `Constraint` si elle est déplacée ; liens violés : R-099) et plafonnée par `Sc.finish` en passe arrière : TF ≤ 0, tâche critique ; option fausse, plancher `D'` (comme SNET) et plafond (comme SNLT), conflit si la tâche commence après `D'`. Exemples (Nc) : MSO jeu 22/10 08:00 → B jeu, TF(B) 0 (critique), TF(A) 480, les deux options ; MSO mar 20/10 08:00 : option vraie, B mar, TF(A) −480, lien non respecté ; option fausse, B mer, TF(B) −480, conflit.
+- **Source** : [S-K].
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r097_must_start_on.rs` (`r097_*`) ; P23 (b, c) ; P15 étendue.
+
+## R-098 — MFO
+- **Formulation** : miroir de R-097 en fin : option vraie, épinglée sur `(P.backward_span(D', d).start, D')`, fin `D'` brute comme une FNET liante (hypothèse par cohérence avec O14), plafond `D'` ; option fausse : plancher (comme FNET) et plafond (comme FNLT). Exemples (Nc) : MFO jeu 22/10 17:00 → mêmes valeurs qu'une MSO jeu 08:00 ; MFO mar 20/10 17:00 → mêmes valeurs qu'une MSO mar 08:00 ; MFO lun 26/10 08:00, option vraie → B ven 23 08:00 → lun 26/10 08:00 brute, fin du projet lun 08:00.
+- **Source** : [S-K] ; fin brute : hypothèse (O14 ne porte que sur FNET).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r098_must_finish_on.rs` (`r098_*`) ; P23 (b, c) ; P15 étendue.
+
+## R-099 — Conflit, contraintes respectées (`honor` vrai)
+- **Formulation** : quand les liens, la porte ou le début du projet placent une feuille au-delà du plafond de sa contrainte (SNLT, FNLT dépassés ; MSO, MFO toujours), la contrainte gagne : la tâche est placée sur son placement de référence, chaque lien entrant violé (borne de début en brut, borne de fin en temps ouvré de `P(t)`, comme R-063) donne `link.not_honored_constraint` (avertissement ; lien FF/SF vers une récapitulative : le lien d'origine), et la passe arrière propage le plafond : la tâche a TF 0, ses prédécesseurs une marge négative (critiques). Les successeurs lisent les dates épinglées. Exemples (N) : C MSO mer 21/10 08:00 → C mer 08:00 – 17:00, lien B → C non respecté, TF(C) 0, LS(B) mar 08:00, TF(B) = FS(B) = −480, LS(A) ven 16/10 08:00, TF(A) −480 ; C FNLT mer 21/10 12:00 → C mar 13:00 – mer 12:00, TF(B) = TF(A) = −720 (LS(B) lun 13:00, LS(A) jeu 15/10 13:00), D FS de C mer 13:00 – jeu 12:00.
+- **Source** : [S-K] ; ADR-0010, choix 1 ; Q8.
+- **Statut** : `hypothèse` (aucun plafond liant dans le corpus, O15).
+- **Tests** : `tests/rules/r099_conflict_constraints_honored.rs` (`r099_*`, dont `r099_fixture_constraints_xml`) ; P23 (b) ; P15 étendue.
+
+## R-100 — Conflit, liens prioritaires (`honor` faux ; marge négative sur la tâche et en amont)
+- **Formulation** : option décochée : la tâche est placée par ses liens, la contrainte n'est qu'un plafond de la passe arrière ; plafond dépassé (en temps ouvré de `P(t)`) → `task.constraint_conflict { honored: false }` (avertissement) ; la tâche porte une marge négative et ses prédécesseurs aussi (le plafond se propage comme tout plafond : précision de l'ADR, hypothèse). Exemple (N) : C MSO mer 21/10 08:00 → C jeu 22 08:00 – 17:00, LS(C) mer 08:00, TF(A) = TF(B) = TF(C) = −480, critiques ; X TF 0.
+- **Source** : [S-K] ; ADR-0010, choix 1 et amendements ; juge 1 § 4.
+- **Statut** : `hypothèse` (`HonorConstraints` 0 dans tout le corpus, mais sans plafond, O15).
+- **Tests** : `tests/rules/r100_conflict_links_win.rs` (`r100_*`, dont `r100_fixture_constraints_xml_links_win`) ; P23 (c, f) ; P15 étendue.
+
+## R-101 — Contrainte contre le début du projet ou une porte
+- **Formulation** : option vraie, une contrainte épinglée gagne aussi contre le début du projet et contre la porte d'une récapitulative ancêtre : la tâche peut commencer avant le début du projet (amende R-036) et `task.constraint_conflict { honored: true }` est émis (le diagnostic tâche ne sert qu'à ces deux cas ; un lien violé a son propre diagnostic, R-099). `Schedule.project_start` reste le début saisi ; la récapitulative du projet (UID 0) commence à la tâche. Option fausse : la tâche reste au début du projet, marge négative, conflit `honored: false`. Exemples : A 1 j MSO ven 16/10 08:00 (début lun 19/10) → option vraie, A ven 16 08:00 – 17:00, UID 0 depuis ven 16 ; option fausse, A lun 19, TF −480. X 2 j FS → S {A 1 j} (porte mer 08:00), A SNLT mar 20/10 08:00 → A mar, porte violée, conflit `honored: true`.
+- **Source** : [S-K] ; ADR-0010, choix 1.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r101_constraint_vs_project_start_or_gate.rs` (`r101_*`).
+
+## R-102 — Contrainte d'une récapitulative
+- **Formulation** : une récapitulative automatique n'accepte que SNET (borne brute de sa porte, après ses autres bornes, comme un lien FS entrant, R-056 : ses sous-tâches sont pilotées `SummaryGate`) et FNLT (plafond `C(S) = min(C(S), D)` de toutes ses feuilles, comme un lien FF sortant, R-057 ; jamais épinglée ; fin agrégée au-delà de `D` en temps ouvré de son calendrier → `task.constraint_conflict { honored: false }`) ; MSO, MFO, SNLT, FNET et ALAP sont remplacées par ASAP avec `task.constraint_on_summary` (avertissement ; aucun pour une inactive). Récapitulative manuelle datée : R-103. Exemples : S SNET mer 21/10 08:00 {A 1 j, B 1 j} → A, B mer 08:00 – 17:00 ; S FNLT mar 20/10 17:00 {A 2 j, B 1 j}, D 4 j → TF(A) 0, TF(B) 480 (sans : 960, 1 440), TF(S) 0 ; FNLT lun 19/10 17:00 → TF(A) = TF(S) = −480, conflit sur S.
+- **Source** : [S-K] ; ADR-0010, choix 4.
+- **Statut** : `hypothèse` (aucune contrainte de récapitulative automatique dans le corpus).
+- **Tests** : `tests/rules/r102_summary_constraint.rs` (`r102_*`) ; `r099_fixture_constraints_xml` (UID 17, 19, 21) ; P23 (g).
+
+## R-103 — Contrainte d'une manuelle ou d'une inactive
+- **Formulation** : une tâche manuelle (feuille, même inactive, ou récapitulative manuelle datée) garde ses dates saisies : sa contrainte est ignorée sans diagnostic (son échéance est évaluée, R-108) ; une tâche inactive est placée pour l'affichage avec sa contrainte, par le même calcul qu'une automatique (R-062), sans aucun diagnostic (ni déplacement, ni conflit, ni échéance). Exemples : M manuelle lun 08:00 – 17:00 SNET mer 21/10 → M lun, planning identique sans la contrainte ; I inactive 1 j SNET mer 21/10 08:00 → exclue, affichée mer 08:00 – 17:00, échéance lun 12:00 sans diagnostic.
+- **Source** : [S-K] (manuelle : la contrainte ne déplace pas une tâche planifiée manuellement) ; page « Inactivate a task » (affichage) ; observé, indice faible : O19 (A7 UID 4) ; ADR-0010, choix 4 et amendements.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r103_manual_or_inactive_constraint.rs` (`r103_*`) ; `r090_inactive_task_is_not_reported` ; P23 (g).
+
+## R-104 — FF/SF, chemins critiques multiples, seuil, marge négative ⇒ critique, FS non tronquée
+- **Formulation** : une borne de fin entrante (FF, SF) est vérifiée contre un placement épinglé en temps ouvré de `P(t)` ; le plafond d'une contrainte ou d'une échéance se combine par le minimum avec R-051 (`LF ≤ EF` sans successeur, option « plusieurs chemins critiques ») ; une marge totale négative rend la tâche critique (`TF ≤ seuil`, R-050) ; la marge libre n'est jamais tronquée (R-049) : `FS = min(TF, écarts)` est négative quand TF l'est, `FS ≥ 0` reste vrai quand `TF ≥ 0`. Exemples : P 2 j, C 1 j FF de P, C SNLT lun 19/10 08:00, option vraie → C lun, `between(lun 17:00, mar 17:00)` = 480 > 0 → lien non respecté ; N, plusieurs chemins critiques, C FNLT mer 21/10 17:00 → LF(C) = min(lun 26 17:00, EF jeu 17:00, mer 17:00) = mer 17:00, TF(C) −480, critique ; seuil 1 j, C SNLT ven 23/10 08:00 → TF(C) 480, critique (non critique avec le seuil 0) ; C MSO mer 08:00 → FS(B) −480.
+- **Source** : [S-K] ; support.microsoft.com, « Free Slack (task field) » (S17) ; marge libre négative : hypothèse (hypothèse concurrente « FS ≥ 0 », juge 1, à soumettre à l'oracle).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r104_constraint_links_and_critical_paths.rs` (`r104_*`) ; P15 étendue (FS négative comparée à l'oracle).
+
+## R-108 — Échéance : plafond propagé et dépassement (feuille, manuelle, jalon)
+- **Formulation** : une échéance ne déplace aucune date planifiée et n'est le pilote de rien ; elle plafonne la fin au plus tard d'une feuille active, automatique ou manuelle, et d'une récapitulative manuelle datée : `LF = min(LF, échéance)` (brute, normalisée ensuite par `backward_span`) ; la marge totale devient négative si la fin dépasse, et le plafond se propage aux prédécesseurs. `task.deadline_missed` (avertissement, échéance et fin planifiée) si la fin planifiée dépasse l'échéance en temps ouvré de `P(t)` (une fin `D'` brute posée sur le même temps ouvré ne la dépasse pas) ; dépassée ⇒ TF < 0. Tâche inactive : ignorée. Exemples : A 1 j, D 4 j, échéance de A mer 21/10 17:00 → TF(A) 960 (sans : 1 440) ; A 2 j, échéance lun 19/10 17:00 → TF = FS = −480, critique, dépassée ; X 2 j → A 1 j, échéance lun 19/10 12:00 → TF(A) = TF(X) = −1 200 (LS(A) ven 16/10 13:00, LS(X) mer 14/10 13:00) ; M manuelle lun, échéance lun 12:00 → TF −240, dépassée ; jalon mer 17:00 : échéance mer 17:00 tenue, mer 12:00 dépassée.
+- **Source** : support.microsoft.com, « Set a deadline date » ; observé O16 (A7 UID 30, manuelle : `LateFinish` = échéance, TS 0, non dépassée) ; ADR-0010, choix 3.
+- **Statut** : `hypothèse` (O16 concorde mais porte sur une manuelle, exclue des cas comparés).
+- **Tests** : `tests/rules/r108_deadline.rs` (`r108_*`) ; P23 (e) ; P15 étendue.
+
+## R-109 — Échéance d'une récapitulative
+- **Formulation** : l'échéance d'une récapitulative automatique plafonne toutes ses feuilles (`C(S) = min(C(S), échéance)`, comme une FNLT de récapitulative, R-102) ; ses dates au plus tard restent l'agrégat de R-060 ; `task.deadline_missed` sur la récapitulative si sa fin agrégée dépasse l'échéance en temps ouvré de son calendrier. Exemple : S {A 2 j, B 1 j}, échéance mar 20/10 12:00, D 4 j → LS(A) ven 16/10 13:00, TF(A) −240 ; LS(B) lun 13:00, TF(B) 240 ; TF(S) −240, dépassée (fin mar 17:00). Récapitulative imbriquée : le plafond traverse les niveaux.
+- **Source** : « Set a deadline date » (présumée) ; ADR-0010, choix 3 et amendements (juge 1 § 4) ; hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r109_summary_deadline.rs` (`r109_*`) ; `r099_fixture_constraints_xml` (UID 19) ; P23 (e).
 
 ### Planification à rebours (R-110 à R-119)
 
@@ -686,6 +791,7 @@ R-088 et R-089 réservées, lot W1 (R-088 complétée par W4 sur le corpus) ; R-
 | R-127 | Valeurs non représentables et `write_losses` | W3 |
 | R-128 | Capture opaque à la lecture et plafond | W2 |
 | R-129 | Réémission validée et sortie bornée | W3 |
+
 ## R-088 — Ordre des éléments, charge opaque à la place de sa clé, clé inconnue en fin
 - **Formulation** : les enfants d'une entité écrite (`Project`, `Task`, `PredecessorLink`, `Calendar`, `WeekDay`, `WorkingTime`, `TimePeriod`, `Exception`, `WorkWeek`) suivent l'ordre de sa table (`crates/planrs-mspdi/src/write/order.rs`, source unique : ni fichier d'ordre commité ni outil de génération). Pour chaque balise de la table, dans l'ordre : la valeur régénérée par l'écrivain s'il y en a une, puis les charges opaques (`Extras` d'origine `mspdi`) de même clé dans leur ordre de stockage ; les clés absentes de la table vont en fin d'entité, dans leur ordre de stockage. Forme canonique des `Extras` (`canonical_extras`) : tri stable par rang de clé, clé inconnue au rang `len` de la table. Exemple : tâche dont les `Extras` sont stockées `Baseline`, `FutureX`, `ExtendedAttribute` (1), `Cost`, `ExtendedAttribute` (2), `FutureY` → rangs 100, —, 93, 54, 93, — dans une table de 102 balises → ordre écrit `Cost`, `ExtendedAttribute` (1), `ExtendedAttribute` (2), `Baseline`, `FutureX`, `FutureY` ; projet : `LastSaved`, `Views`, `Resources`, `Assignments`, puis une section inconnue.
 - **Source** : `xs:sequence` du schéma `mspdi_pj15.xsd` (de mémoire, schéma non consulté dans la session) ; ordre observé dans les cinq fichiers du corpus (A1, A2, A4, A6, A7 : `cogito-advanced-sample-msp2010.xml`, `practicemap.xml`, `projinteg.xml`, `shopmetrics.xml`, `takeout-system-zh.xml`), fusion des suites d'enfants sans aucun conflit (5 projets, 174 tâches, 127 liens, 25 calendriers, 79 jours, 101 plages, 8 périodes, 4 exceptions, aucune semaine datée). Positions non observées, déduites du schéma de mémoire : `Subject`, `Category`, `StatusDate` (projet), `CrossProjectName` (lien), `WorkWeeks` (calendrier), `Period`, `DaysOfWeek`, `MonthItem`, `MonthPosition` (exception), les trois enfants de `WorkWeek`.

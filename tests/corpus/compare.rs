@@ -115,9 +115,10 @@ impl CaseKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Cause {
-    /// Contrainte autre que « le plus tôt possible » (J3).
+    /// Contrainte autre que « le plus tôt possible » (R-090 à R-103 depuis
+    /// J3 ; ALAP : placement, R-105).
     Constraint,
-    /// Échéance (J3).
+    /// Échéance (R-108, R-109 depuis J3).
     Deadline,
     /// Avancement : % achevé > 0 ou dates réelles (J6).
     Progress,
@@ -699,6 +700,8 @@ fn rules(
             }
         }
         Driver::Constraint { constraint } => {
+            // Contrainte pilote : date normalisée (R-090) et règle du type.
+            out.insert("R-090");
             out.insert(match constraint {
                 ConstraintKind::AsSoonAsPossible => "R-092",
                 ConstraintKind::StartNoEarlierThan => "R-093",
@@ -717,6 +720,19 @@ fn rules(
     }
     if task.predecessors.len() >= 2 {
         out.insert("R-044");
+    }
+    // Contrainte d'une récapitulative (porte SNET, plafond FNLT, refus).
+    if kind == CaseKind::Summary && task.constraint != Constraint::AsSoonAsPossible {
+        out.insert("R-102");
+    }
+    // Échéance : plafond de la fin au plus tard, propagé (R-108 feuille,
+    // R-109 récapitulative).
+    if task.deadline.is_some() && late {
+        out.insert(if kind == CaseKind::Summary {
+            "R-109"
+        } else {
+            "R-108"
+        });
     }
     out
 }

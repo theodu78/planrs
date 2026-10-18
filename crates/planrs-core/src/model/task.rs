@@ -12,14 +12,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::arena::HasUid;
 use crate::duration::{Duration, Minutes, TimeBasis, Work};
-use crate::error::ModelError;
+use crate::error::{ModelError, TimeError};
 use crate::ids::{BaselineNumber, CalendarUid, Guid, TaskUid};
 use crate::model::Extras;
 use crate::model::baseline::TaskBaseline;
 use crate::model::link::Link;
 use crate::model::options::ProjectOptions;
 use crate::quantity::Percent;
-use crate::time::Moment;
+use crate::time::{Day, Moment};
 
 /// Type de tâche : la grandeur tenue fixe quand on modifie les autres (J5).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -132,6 +132,46 @@ impl Constraint {
             Self::FinishNoEarlierThan { .. } => ConstraintKind::FinishNoEarlierThan,
             Self::FinishNoLaterThan { .. } => ConstraintKind::FinishNoLaterThan,
         }
+    }
+
+    /// R-091 (R-033) : contrainte saisie avec un jour sans heure. Une
+    /// contrainte de début (MSO, SNET, SNLT) reçoit l'heure de début par
+    /// défaut, une contrainte de fin (MFO, FNET, FNLT) l'heure de fin par
+    /// défaut ; ASAP et ALAP ignorent `day`. La normalisation sur le
+    /// calendrier de la tâche vient ensuite, au calcul (R-090). Une échéance
+    /// saisie sans heure suit la même convention qu'une fin
+    /// ([`ProjectOptions::finish_of`]).
+    ///
+    /// Exemple : SNET le 2026-10-21 → 2026-10-21T08:00 ; FNLT le 2026-10-22
+    /// → 2026-10-22T17:00 (options par défaut).
+    ///
+    /// # Errors
+    ///
+    /// [`TimeError`] si l'instant sort du domaine (voir
+    /// [`ProjectOptions::start_of`]).
+    pub fn on_day(kind: ConstraintKind, day: Day, options: &ProjectOptions) -> Result<Self, TimeError> {
+        Ok(match kind {
+            ConstraintKind::AsSoonAsPossible => Self::AsSoonAsPossible,
+            ConstraintKind::AsLateAsPossible => Self::AsLateAsPossible,
+            ConstraintKind::MustStartOn => Self::MustStartOn {
+                date: options.start_of(day)?,
+            },
+            ConstraintKind::StartNoEarlierThan => Self::StartNoEarlierThan {
+                date: options.start_of(day)?,
+            },
+            ConstraintKind::StartNoLaterThan => Self::StartNoLaterThan {
+                date: options.start_of(day)?,
+            },
+            ConstraintKind::MustFinishOn => Self::MustFinishOn {
+                date: options.finish_of(day)?,
+            },
+            ConstraintKind::FinishNoEarlierThan => Self::FinishNoEarlierThan {
+                date: options.finish_of(day)?,
+            },
+            ConstraintKind::FinishNoLaterThan => Self::FinishNoLaterThan {
+                date: options.finish_of(day)?,
+            },
+        })
     }
 
     /// Date saisie d'une contrainte datée ; `None` pour le plus tôt et le

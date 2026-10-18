@@ -20,7 +20,7 @@ use crate::calendar::{CalendarSet, CompiledCalendar, Span, TimeScale};
 use crate::diagnostic::{Diagnostic, Diagnostics};
 use crate::duration::{LagValue, Minutes, TimeBasis};
 use crate::ids::{CalendarUid, TaskUid};
-use crate::model::{LinkType, Project, SchedulingMode, Task};
+use crate::model::{ConstraintKind, LinkType, Project, SchedulingMode, Task};
 use crate::quantity::SignedPercent;
 use crate::time::Moment;
 
@@ -141,10 +141,93 @@ pub(super) struct Node {
     /// Feuille manuelle active (R-063) ou agrégat d'une récapitulative
     /// manuelle datée (R-064) : dates saisies, ou l'échec de leur calcul.
     pub fixed: Option<Result<Span, Fail>>,
+    /// Contrainte de date effective (R-090 à R-103) : feuille automatique
+    /// (active, ou inactive pour son placement d'affichage) à contrainte
+    /// datée ; porte et agrégat d'une récapitulative automatique : SNET ou
+    /// FNLT seulement (R-102). `None` sinon : ASAP, ALAP (placement, K2),
+    /// tâche manuelle ou récapitulative manuelle datée (R-103), contrainte
+    /// refusée sur une récapitulative.
+    pub constraint: Option<DateConstraint>,
+    /// Échéance effective (R-108, R-109) : feuille active (automatique ou
+    /// manuelle), agrégat d'une récapitulative active ; `None` sinon
+    /// (inactive ignorée).
+    pub deadline: Option<Moment>,
     /// Agrégat de la récapitulative parente.
     pub parent_rollup: Option<NodeIx>,
     /// Porte : son agrégat ; agrégat : sa porte.
     pub twin: Option<NodeIx>,
+}
+
+/// Contrainte datée d'un nœud : type et date saisie (brute).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DateConstraint {
+    /// Type (jamais ASAP ni ALAP).
+    pub kind: ConstraintKind,
+    /// Date saisie.
+    pub date: Moment,
+}
+
+impl DateConstraint {
+    /// Contrainte de début (SNET, SNLT, MSO) ; sinon de fin (FNET, FNLT,
+    /// MFO).
+    pub fn on_start(self) -> bool {
+        matches!(
+            self.kind,
+            ConstraintKind::StartNoEarlierThan
+                | ConstraintKind::StartNoLaterThan
+                | ConstraintKind::MustStartOn
+        )
+    }
+
+    /// Partie plancher, appliquée en passe avant (SNET, FNET, MSO, MFO).
+    pub fn floor(self) -> bool {
+        matches!(
+            self.kind,
+            ConstraintKind::StartNoEarlierThan
+                | ConstraintKind::FinishNoEarlierThan
+                | ConstraintKind::MustStartOn
+                | ConstraintKind::MustFinishOn
+        )
+    }
+
+    /// Partie plafond, appliquée en passe arrière (SNLT, FNLT, MSO, MFO).
+    pub fn ceiling(self) -> bool {
+        matches!(
+            self.kind,
+            ConstraintKind::StartNoLaterThan
+                | ConstraintKind::FinishNoLaterThan
+                | ConstraintKind::MustStartOn
+                | ConstraintKind::MustFinishOn
+        )
+    }
+
+    /// Date imposée (MSO, MFO) : épinglée quand l'option « toujours
+    /// respecter les dates de contrainte » est active (R-097, R-098).
+    pub fn must(self) -> bool {
+        matches!(
+            self.kind,
+            ConstraintKind::MustStartOn | ConstraintKind::MustFinishOn
+        )
+    }
+}
+
+/// Contrainte d'une feuille normalisée sur son échelle de placement `P(t)`
+/// (R-090).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Normalized {
+    /// Contrainte saisie.
+    pub c: DateConstraint,
+    /// Date effective `D'` : contrainte de début, début de
+    /// `P.forward_span(D, d)` (instant ouvré suivant, R-031 pour un jalon) ;
+    /// contrainte de fin, `P.backward_span(D, 0).finish` (convention de
+    /// jalon arrière : `D` gardée si elle commence une minute ouvrée ou une
+    /// plage, sinon l'instant ouvré précédent ; O14). Temps écoulé : `D`.
+    pub at: Moment,
+    /// Placement de référence : `P.forward_span(D, d)` pour une contrainte de
+    /// début ; `(P.backward_span(D', d).start, D')` pour une contrainte de
+    /// fin (la fin reste `D'` brute, O14). C'est le placement épinglé (MSO,
+    /// MFO, plafond mordant) et la borne de la passe arrière.
+    pub span: Span,
 }
 
 /// Décalage d'un lien, avant conversion.
@@ -257,6 +340,28 @@ impl<'a> Network<'a> {
         let a = pos(*self.out_off.get(i)?)?;
         let b = pos(*self.out_off.get(i.checked_add(1)?)?)?;
         self.out_idx.get(a..b)
+    }
+
+    /// R-090 : contrainte normalisée de la feuille `v`, `None` sans
+    /// contrainte datée effective (ou pour un nœud qui n'est pas une
+    /// feuille).
+    pub fn normalized(&self, v: NodeIx) -> Result<Option<Normalized>, Fail> {
+        let node = self.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+        let Some(c) = node.constraint.filter(|_| node.kind == NodeKind::Leaf) else {
+            return Ok(None);
+        };
+        let scale = self
+            .scale(node.place)
+            .ok_or(Fail::Internal("échelle hors bornes"))?;
+        let (at, span) = if c.on_start() {
+            let span = scale.forward_span(c.date, node.duration)?;
+            (span.start, span)
+        } else {
+            let at = scale.backward_span(c.date, Minutes::ZERO)?.finish;
+            let start = scale.backward_span(at, node.duration)?.start;
+            (at, Span { start, finish: at })
+        };
+        Ok(Some(Normalized { c, at, span }))
     }
 
     /// Agrégat d'une récapitulative manuelle datée (R-064) : ses dates ne
@@ -458,9 +563,54 @@ fn manual_span(
     }
 }
 
-/// Récapitulative ouverte pendant la numérotation : position, et dates
-/// saisies et durée utilisée d'une récapitulative manuelle datée (R-064).
-type OpenSummary = (usize, Option<Result<Span, Fail>>, Minutes);
+/// Récapitulative ouverte pendant la numérotation : position, dates
+/// saisies et durée utilisée d'une récapitulative manuelle datée (R-064),
+/// échéance effective (R-109).
+type OpenSummary = (usize, Option<Result<Span, Fail>>, Minutes, Option<Moment>);
+
+/// R-102, R-103 : contrainte effective d'une récapitulative. Récapitulative
+/// manuelle datée : ignorée sans diagnostic ; sinon SNET (porte) et FNLT
+/// (plafond de ses feuilles) gardées, MSO, MFO, SNLT, FNET et ALAP
+/// remplacées par ASAP avec `task.constraint_on_summary` (active
+/// seulement : une inactive n'a aucun diagnostic).
+fn summary_constraint(
+    task: &Task,
+    fixed: bool,
+    inactive: bool,
+    diags: &mut Diagnostics,
+) -> Option<DateConstraint> {
+    if fixed {
+        return None;
+    }
+    let kind = task.constraint.kind();
+    match (kind, task.constraint.date()) {
+        (ConstraintKind::AsSoonAsPossible, _) => None,
+        (ConstraintKind::StartNoEarlierThan | ConstraintKind::FinishNoLaterThan, Some(date)) => {
+            Some(DateConstraint { kind, date })
+        }
+        _ => {
+            if !inactive {
+                diags.push(Diagnostic::TaskConstraintOnSummary {
+                    task: task.uid(),
+                    constraint: kind,
+                });
+            }
+            None
+        }
+    }
+}
+
+/// R-093 à R-098, R-103 : contrainte effective d'une feuille. Manuelle
+/// (même inactive) : ignorée sans diagnostic ; ASAP, ALAP : aucune.
+fn leaf_constraint(task: &Task) -> Option<DateConstraint> {
+    if matches!(task.mode, SchedulingMode::Manual { .. }) {
+        return None;
+    }
+    task.constraint.date().map(|date| DateConstraint {
+        kind: task.constraint.kind(),
+        date,
+    })
+}
 
 /// Étape 3 : nœuds canoniques en pré-ordre (porte, feuille, agrégat).
 fn number_nodes(
@@ -473,28 +623,26 @@ fn number_nodes(
     // Récapitulatives ouvertes, la plus intérieure en dernier.
     let mut open: Vec<OpenSummary> = Vec::new();
     let n = tasks.len();
-    let close =
-        |(s, fixed, duration): OpenSummary, tasks: &mut [TaskInfo], nodes: &mut Vec<Node>| -> Option<()> {
-            let info = tasks.get_mut(s)?;
-            let gate = info.entry?;
-            let v = ix(nodes.len())?;
-            nodes.push(Node {
-                kind: NodeKind::Rollup,
-                task: s,
-                uid: info.uid,
-                inactive: info.inactive(),
-                place: info.cal,
-                duration,
-                fixed,
-                parent_rollup: None,
-                twin: Some(gate),
-            });
-            info.exit = Some(v);
-            nodes.get_mut(pos(gate)?)?.twin = Some(v);
-            Some(())
-        };
+    // L'agrégat reprend la porte (tâche, UID, activité, calendrier,
+    // contrainte) avec ses propres dates saisies, durée et échéance.
+    let close = |(s, fixed, duration, deadline): OpenSummary,
+                 tasks: &mut [TaskInfo],
+                 nodes: &mut Vec<Node>|
+     -> Option<()> {
+        let info = tasks.get_mut(s)?;
+        let gate = info.entry?;
+        let v = ix(nodes.len())?;
+        let mut rollup = nodes.get(pos(gate)?)?.clone();
+        rollup.kind = NodeKind::Rollup;
+        (rollup.duration, rollup.fixed, rollup.deadline) = (duration, fixed, deadline);
+        rollup.twin = Some(gate);
+        nodes.push(rollup);
+        info.exit = Some(v);
+        nodes.get_mut(pos(gate)?)?.twin = Some(v);
+        Some(())
+    };
     for p in 0..=n {
-        while let Some(&(s, _, _)) = open.last() {
+        while let Some(&(s, ..)) = open.last() {
             if tasks.get(s)?.end > p {
                 break;
             }
@@ -522,6 +670,7 @@ fn number_nodes(
             } else {
                 (None, Minutes::ZERO)
             };
+            let deadline = task.deadline.filter(|_| !info.inactive());
             nodes.push(Node {
                 kind: NodeKind::Gate,
                 task: p,
@@ -530,11 +679,13 @@ fn number_nodes(
                 place: info.cal,
                 duration: Minutes::ZERO,
                 fixed: None,
+                constraint: summary_constraint(task, fixed.is_some(), info.inactive(), diags),
+                deadline: None,
                 parent_rollup: None,
                 twin: None,
             });
             info.entry = Some(v);
-            open.push((p, fixed, duration));
+            open.push((p, fixed, duration, deadline));
         } else {
             let place = place_of(task, info.cal);
             let (fixed, duration) = if info.inactive() {
@@ -550,6 +701,8 @@ fn number_nodes(
                 place,
                 duration,
                 fixed,
+                constraint: leaf_constraint(task),
+                deadline: task.deadline.filter(|_| !info.inactive()),
                 parent_rollup: None,
                 twin: None,
             });

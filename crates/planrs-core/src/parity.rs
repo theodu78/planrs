@@ -14,8 +14,9 @@
 //! jamais, sauf ADR (fichier retiré, valeur enregistrée reconnue fausse).
 
 /// Somme des `floor` du manifeste du corpus (vérifiée par le harnais).
-/// Mesuré le 2026-10-17 : A1 51, A2 18, A4 22, A6 0, A7 0 (159 cas).
-pub const CORPUS_FLOOR: u32 = 91;
+/// Mesuré le 2026-10-17 : A1 51, A2 18, A4 22, A6 0, A7 0 (159 cas) ;
+/// relevé le 2026-10-18 (J3, lot K1, FNET liantes de A7, R-094) : A7 8.
+pub const CORPUS_FLOOR: u32 = 99;
 
 /// Cas de l'oracle MS Project (`tests/oracle`), zéro sans licence.
 pub const ORACLE_FLOOR: u32 = 0;

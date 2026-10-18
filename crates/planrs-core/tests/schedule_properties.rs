@@ -30,6 +30,22 @@
 //! - **P16** : monotonie de la fin du projet (liens FS et SS).
 //! - **P17** : chaos, aucune panique, cycles signalés, (a) et (b) hors des
 //!   tâches dégradées et des composantes qui contiennent une manuelle.
+//!
+//! Contraintes et échéances (J3, lot K1), sur les mêmes réseaux décorés par
+//! `decorate` (flux aléatoire séparé : P13 à P17 sont inchangées) :
+//! - **P15 étendue** : oracle en temps ouvré avec planchers, plafonds,
+//!   épinglage (option vraie) et échéances ;
+//! - **P23** (lot K1 : a, b, c, e, f, g) : (a) plancher SNET/FNET jamais
+//!   violé ; (b) option vraie : MSO/MFO sur leur date, SNLT/FNLT respectées,
+//!   lien non respecté seulement vers une tâche à plafond ; (c) option
+//!   fausse : plafond dépassé ⇔ `task.constraint_conflict`, et TF < 0 ;
+//!   (e) échéance dépassée ⇔ `task.deadline_missed`, et TF < 0 ; sans
+//!   échéance, dates au plus tôt inchangées ; (f) option fausse : un plafond
+//!   ne déplace aucun ES ni n'augmente aucune TF, un plancher n'avance aucun
+//!   ES ; (g) contrainte refusée sur une récapitulative = ASAP, contrainte
+//!   d'une manuelle ignorée ; contraintes et échéances non liantes : sorties
+//!   identiques au réseau nu. (d) et (h), placement : lot K2.
+//! - `decorate_conflict_rate` : calibrage, 10 % à 35 % de réseaux en conflit.
 
 #![allow(
     clippy::unwrap_used,
@@ -54,9 +70,10 @@ use planrs_core::calendar::{
     BuiltinCalendarNames, Calendar, CalendarSet, CompiledCalendar, DayHours, DaySetting, TimeRange, TimeScale,
 };
 use planrs_core::{
-    CalendarUid, Diagnostic, Driver, Duration, DurationUnit, Lag, LagValue, Link, LinkType, Minutes, Moment,
-    OutlineLevel, Project, ProjectInit, Schedule, ScheduleAnchor, SchedulingMode, SignedPercent, Task,
-    TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis, TimeOfDay, Week, percent_of, schedule,
+    CalendarUid, Constraint, ConstraintKind, Diagnostic, Driver, Duration, DurationUnit, Lag, LagValue, Link,
+    LinkType, Minutes, Moment, OutlineLevel, Project, ProjectInit, Schedule, ScheduleAnchor, SchedulingMode,
+    SignedPercent, Span, Task, TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis, TimeOfDay, Week,
+    percent_of, schedule,
 };
 use proptest::prelude::*;
 
@@ -1201,4 +1218,653 @@ fn p17_regressions() {
     // Lien FF vers une tâche qui finit sur son dernier temps ouvré avant la
     // fin du domaine : l'ancre reportée (R-047) est la fin du domaine.
     p17(&chaos(16_281_757_938_398_638_621));
+}
+
+// ---------------------------------------------------------------------------
+// Contraintes et échéances (J3, lot K1) : `decorate`, P15 étendue, P23
+// ---------------------------------------------------------------------------
+
+/// Les six contraintes datées.
+const DATED: [ConstraintKind; 6] = [
+    ConstraintKind::StartNoEarlierThan,
+    ConstraintKind::FinishNoEarlierThan,
+    ConstraintKind::StartNoLaterThan,
+    ConstraintKind::FinishNoLaterThan,
+    ConstraintKind::MustStartOn,
+    ConstraintKind::MustFinishOn,
+];
+
+fn dated(kind: ConstraintKind, date: Moment) -> Constraint {
+    match kind {
+        ConstraintKind::StartNoEarlierThan => Constraint::StartNoEarlierThan { date },
+        ConstraintKind::FinishNoEarlierThan => Constraint::FinishNoEarlierThan { date },
+        ConstraintKind::StartNoLaterThan => Constraint::StartNoLaterThan { date },
+        ConstraintKind::FinishNoLaterThan => Constraint::FinishNoLaterThan { date },
+        ConstraintKind::MustStartOn => Constraint::MustStartOn { date },
+        ConstraintKind::MustFinishOn => Constraint::MustFinishOn { date },
+        ConstraintKind::AsSoonAsPossible => Constraint::AsSoonAsPossible,
+        ConstraintKind::AsLateAsPossible => Constraint::AsLateAsPossible,
+    }
+}
+
+fn on_start(kind: ConstraintKind) -> bool {
+    matches!(
+        kind,
+        ConstraintKind::StartNoEarlierThan | ConstraintKind::StartNoLaterThan | ConstraintKind::MustStartOn
+    )
+}
+
+fn is_floor(kind: ConstraintKind) -> bool {
+    matches!(
+        kind,
+        ConstraintKind::StartNoEarlierThan
+            | ConstraintKind::FinishNoEarlierThan
+            | ConstraintKind::MustStartOn
+            | ConstraintKind::MustFinishOn
+    )
+}
+
+fn is_ceiling(kind: ConstraintKind) -> bool {
+    matches!(
+        kind,
+        ConstraintKind::StartNoLaterThan
+            | ConstraintKind::FinishNoLaterThan
+            | ConstraintKind::MustStartOn
+            | ConstraintKind::MustFinishOn
+    )
+}
+
+/// Part (en %) des feuilles contraintes par [`decorate`], réglée pour
+/// environ 20 % de réseaux en conflit (`decorate_conflict_rate`).
+const CONSTRAINED_PCT: u64 = 6;
+
+/// Date tirée autour de `base` : ±2 jours civils, au quart d'heure 4 fois
+/// sur 5, à une minute quelconque sinon (souvent hors temps ouvré).
+fn jitter(r: &mut Rng, base: Moment) -> Moment {
+    let mut delta = r.range(-2 * 1_440, 2 * 1_440);
+    if r.chance(80) {
+        delta -= delta.rem_euclid(15);
+    }
+    base.checked_add(Minutes::new(delta)).unwrap_or(base)
+}
+
+/// Décore un réseau de [`generate`] avec des contraintes et des échéances
+/// (spécification C § 2, juge 2 § 9.3) : flux aléatoire **séparé** (les
+/// réseaux, les graines et les régressions de P13 à P17 sont inchangés).
+/// Les dates sont tirées autour des dates au plus tôt du réseau nu, calculé
+/// une fois par le moteur (l'oracle est ailleurs) : contraintes de début
+/// autour de ES, de fin autour de EF ; `CONSTRAINED_PCT` % des feuilles
+/// contraintes (six types datés), 10 % d'échéances, 10 % des
+/// récapitulatives contraintes (SNET, FNLT ou un type refusé), option
+/// « toujours respecter » tirée à 50/50.
+fn decorate(p: &Project, seed: u64) -> Project {
+    let mut r = Rng((seed ^ 0x9E37_79B9_7F4A_7C15) | 1);
+    let bare = schedule(p);
+    let par = parents(p);
+    let mut q = p.clone();
+    q.options.honor_constraints = r.chance(50);
+    for (i, t) in p.tasks.iter().enumerate() {
+        let Some(TaskOutcome::Scheduled(ts)) = bare.get(t.uid()) else {
+            continue;
+        };
+        let ts = *ts;
+        let task = q.tasks.get_mut(t.uid()).unwrap();
+        if is_summary(&par, i) {
+            if r.chance(10) {
+                task.constraint = match r.range(0, 3) {
+                    0 => Constraint::StartNoEarlierThan {
+                        date: jitter(&mut r, ts.early.start),
+                    },
+                    1 => Constraint::FinishNoLaterThan {
+                        date: jitter(&mut r, ts.early.finish),
+                    },
+                    2 => Constraint::MustStartOn {
+                        date: jitter(&mut r, ts.early.start),
+                    },
+                    _ => Constraint::AsLateAsPossible,
+                };
+            }
+        } else if r.chance(CONSTRAINED_PCT) {
+            let kind = DATED[usize::try_from(r.range(0, 5)).unwrap()];
+            let around = if on_start(kind) {
+                ts.early.start
+            } else {
+                ts.early.finish
+            };
+            task.constraint = dated(kind, jitter(&mut r, around));
+        }
+        if r.chance(10) {
+            task.deadline = Some(jitter(&mut r, ts.early.finish));
+        }
+    }
+    q
+}
+
+/// Date effective `D'` (R-090), par les primitives du calendrier seules :
+/// début, instant ouvré suivant (jalon : gardée si elle termine une minute
+/// ouvrée) ; fin, gardée si elle commence une minute ouvrée ou une plage,
+/// sinon l'instant ouvré précédent ; temps écoulé : `D`.
+fn effective(scale: TimeScale<'_>, kind: ConstraintKind, d: Moment, duration: Minutes) -> Option<Moment> {
+    let TimeScale::Working(c) = scale else {
+        return Some(d);
+    };
+    if on_start(kind) {
+        if duration == Minutes::ZERO && c.previous_working_moment(d) == Ok(d) {
+            return Some(d);
+        }
+        c.next_working_moment(d).ok()
+    } else if c.next_working_moment(d) == Ok(d) {
+        Some(d)
+    } else {
+        c.previous_working_moment(d).ok()
+    }
+}
+
+/// Planning sans les diagnostics `task.constraint_moved` et
+/// `task.deadline_missed` (comparaisons des métamorphoses).
+fn diags_without(s: &Schedule, codes: &[&str]) -> Vec<Diagnostic> {
+    s.diagnostics
+        .iter()
+        .filter(|d| !codes.contains(&d.code()))
+        .cloned()
+        .collect()
+}
+
+/// Remplace les contraintes datées des feuilles de `q` selon `f` (type,
+/// date) ; celles des récapitulatives sont gardées ; retire ou garde les
+/// échéances.
+fn rewrite(q: &Project, keep_deadlines: bool, f: impl Fn(ConstraintKind, Moment) -> Constraint) -> Project {
+    let par = parents(q);
+    let mut out = q.clone();
+    for (i, uid) in q.tasks.iter().map(Task::uid).enumerate().collect::<Vec<_>>() {
+        let t = out.tasks.get_mut(uid).unwrap();
+        if let Some(date) = t.constraint.date()
+            && !is_summary(&par, i)
+        {
+            t.constraint = f(t.constraint.kind(), date);
+        }
+        if !keep_deadlines {
+            t.deadline = None;
+        }
+    }
+    out
+}
+
+/// P23 (lot K1 : a, b, c, e, f, g) sur un réseau décoré. Oracles
+/// indépendants : primitives du calendrier, inégalités sur les entrées,
+/// métamorphoses. Hors tâches dégradées, inactives et récapitulatives (sauf
+/// mention).
+fn p23(p: &Project, q: &Project) {
+    let s = schedule(q);
+    check_shape(q, &s);
+    let honor = q.options.honor_constraints;
+    let cals = Cals::new(q);
+    let par = parents(q);
+    let has = |d: &Diagnostic| s.diagnostics.contains(d);
+    for (i, t) in q.tasks.iter().enumerate() {
+        let Some(ts) = planned(&s, t.uid()) else { continue };
+        // (e) Échéance : dépassée ⇔ fin planifiée au-delà en temps ouvré de
+        // l'échelle de la tâche ; dépassée ⇒ TF < 0.
+        if let Some(deadline) = t.deadline {
+            let scale = if ts.role == TaskRole::Summary {
+                cals.of(q, t).map(TimeScale::Working)
+            } else {
+                cals.place(q, t)
+            };
+            if let Some(m) = scale {
+                let late = m.between(deadline, ts.finish).unwrap() > Minutes::ZERO;
+                let reported = has(&Diagnostic::TaskDeadlineMissed {
+                    task: t.uid(),
+                    deadline,
+                    finish: ts.finish,
+                });
+                assert_eq!(
+                    late,
+                    reported,
+                    "{} : échéance {deadline} fin {}",
+                    t.uid(),
+                    ts.finish
+                );
+                if late {
+                    assert!(
+                        ts.total_slack < Minutes::ZERO,
+                        "{} : échéance dépassée, TF {:?}",
+                        t.uid(),
+                        ts.total_slack
+                    );
+                    assert!(ts.critical, "{}", t.uid());
+                }
+            }
+        }
+        if is_summary(&par, i) {
+            continue;
+        }
+        let Some(date) = t.constraint.date() else { continue };
+        let kind = t.constraint.kind();
+        let Some(m) = cals.place(q, t) else { continue };
+        let Some(d) = effective(m, kind, date, ts.duration) else {
+            continue;
+        };
+        let w = |a: Moment, b: Moment| m.between(a, b).unwrap();
+        // (a) Plancher : jamais violé (aucune option ne l'annule).
+        if kind == ConstraintKind::StartNoEarlierThan || (kind == ConstraintKind::MustStartOn && !honor) {
+            assert!(ts.start >= d, "{} : SNET {d} violée, début {}", t.uid(), ts.start);
+        }
+        if kind == ConstraintKind::FinishNoEarlierThan || (kind == ConstraintKind::MustFinishOn && !honor) {
+            assert!(ts.finish >= d, "{} : FNET {d} violée, fin {}", t.uid(), ts.finish);
+        }
+        let exceeded = if on_start(kind) {
+            w(d, ts.start) > Minutes::ZERO
+        } else {
+            w(d, ts.finish) > Minutes::ZERO
+        };
+        if honor {
+            // (b) Contrainte respectée.
+            match kind {
+                ConstraintKind::MustStartOn => assert_eq!(ts.start, d, "{} : MSO", t.uid()),
+                ConstraintKind::MustFinishOn => assert_eq!(ts.finish, d, "{} : MFO", t.uid()),
+                ConstraintKind::StartNoLaterThan | ConstraintKind::FinishNoLaterThan => {
+                    assert!(!exceeded, "{} : {kind:?} {d} dépassée", t.uid());
+                }
+                _ => {}
+            }
+        } else if is_ceiling(kind) {
+            // (c) Liens prioritaires : plafond dépassé ⇔ conflit signalé, et
+            // marge négative.
+            let reported = has(&Diagnostic::TaskConstraintConflict {
+                task: t.uid(),
+                constraint: kind,
+                date,
+                honored: false,
+            });
+            assert_eq!(exceeded, reported, "{} : {kind:?} {d}, {ts:?}", t.uid());
+            if exceeded {
+                assert!(
+                    ts.total_slack < Minutes::ZERO,
+                    "{} : TF {:?}",
+                    t.uid(),
+                    ts.total_slack
+                );
+            }
+        }
+    }
+    // (b) Un lien non respecté vise, avec l'option, une tâche à plafond ou
+    // une récapitulative (lien FF/SF déplié sur ses feuilles, R-058).
+    for d in &s.diagnostics {
+        if let Diagnostic::LinkNotHonoredConstraint { successor, .. } = d {
+            assert!(honor);
+            let pos = q.tasks.position(*successor).unwrap();
+            let c = q.tasks.get(*successor).unwrap().constraint.kind();
+            assert!(is_ceiling(c) || is_summary(&par, pos), "{successor} : {c:?}");
+        }
+    }
+    let early = |x: &Schedule| -> BTreeMap<TaskUid, (Span, Driver)> {
+        x.tasks
+            .iter()
+            .filter_map(|(u, o)| match o {
+                TaskOutcome::Scheduled(ts) => Some((*u, (ts.early, ts.driver))),
+                TaskOutcome::Excluded { .. } => None,
+            })
+            .collect()
+    };
+    // (e) Métamorphose : sans échéance, mêmes dates au plus tôt et planifiées.
+    let no_deadline = rewrite(q, false, dated);
+    let sn = schedule(&no_deadline);
+    assert_eq!(early(&sn), early(&s), "échéances retirées");
+    assert_eq!(
+        diags_without(&sn, &["task.deadline_missed"]),
+        diags_without(&s, &["task.deadline_missed"])
+    );
+    // (f) Sans l'option : ajouter des plafonds ne change aucun ES et
+    // n'augmente aucune marge totale ; ajouter des planchers n'avance aucun
+    // début et ne raccourcit pas le projet.
+    let mut loose = q.clone();
+    loose.options.honor_constraints = false;
+    let sl = schedule(&loose);
+    // Récapitulatives : la FNLT (plafond) est retirée, la SNET (plancher)
+    // gardée, les autres sont déjà refusées.
+    let mut loose_floors = loose.clone();
+    for (i, t) in loose.tasks.iter().enumerate() {
+        if is_summary(&par, i) && t.constraint.kind() == ConstraintKind::FinishNoLaterThan {
+            loose_floors.tasks.get_mut(t.uid()).unwrap().constraint = Constraint::AsSoonAsPossible;
+        }
+    }
+    let floors_only = rewrite(&loose_floors, false, |k, date| match k {
+        ConstraintKind::MustStartOn => Constraint::StartNoEarlierThan { date },
+        ConstraintKind::MustFinishOn => Constraint::FinishNoEarlierThan { date },
+        k if is_floor(k) => dated(k, date),
+        _ => Constraint::AsSoonAsPossible,
+    });
+    let sf = schedule(&floors_only);
+    let bare = schedule(p);
+    // Un décalage en % depuis une récapitulative suit sa durée R-054, qui
+    // diminue quand une sous-tâche est retardée (comme pour P16) : la
+    // monotonie des planchers ne vaut pas alors.
+    let summary_percent = q.tasks.iter().any(|t| {
+        t.predecessors.iter().any(|l| {
+            matches!(l.lag.value, LagValue::Percent { .. })
+                && q.tasks
+                    .position(l.predecessor)
+                    .is_some_and(|k| is_summary(&par, k))
+        })
+    });
+    for (uid, o) in &sl.tasks {
+        let (TaskOutcome::Scheduled(a), Some(TaskOutcome::Scheduled(b)), Some(TaskOutcome::Scheduled(c))) =
+            (o, sf.tasks.get(uid), bare.tasks.get(uid))
+        else {
+            continue;
+        };
+        if a.degraded || b.degraded || c.degraded {
+            continue;
+        }
+        assert_eq!(a.early.start, b.early.start, "{uid} : un plafond a déplacé ES");
+        assert!(a.total_slack <= b.total_slack, "{uid} : un plafond a augmenté TF");
+        assert!(
+            summary_percent || b.early.start >= c.early.start,
+            "{uid} : un plancher a avancé ES"
+        );
+    }
+    assert!(summary_percent || sf.project_finish >= bare.project_finish);
+    // (g) Contrainte refusée sur une récapitulative : comme ASAP, au
+    // diagnostic près.
+    let mut accepted = q.clone();
+    for (i, t) in q.tasks.iter().enumerate() {
+        let k = t.constraint.kind();
+        if is_summary(&par, i)
+            && !matches!(
+                k,
+                ConstraintKind::AsSoonAsPossible
+                    | ConstraintKind::StartNoEarlierThan
+                    | ConstraintKind::FinishNoLaterThan
+            )
+        {
+            accepted.tasks.get_mut(t.uid()).unwrap().constraint = Constraint::AsSoonAsPossible;
+        }
+    }
+    let sa = schedule(&accepted);
+    assert_eq!(sa.tasks, s.tasks, "contrainte refusée");
+    assert_eq!(sa.diagnostics, diags_without(&s, &["task.constraint_on_summary"]));
+    // (g) Contrainte d'une manuelle ignorée : feuilles actives passées en
+    // manuelles à leurs dates planifiées, avec ou sans leurs contraintes.
+    let mut manual = q.clone();
+    for uid in q.tasks.iter().map(Task::uid).collect::<Vec<_>>() {
+        if let Some(TaskOutcome::Scheduled(ts)) = s.get(uid)
+            && ts.role == TaskRole::Leaf
+        {
+            manual.tasks.get_mut(uid).unwrap().mode = SchedulingMode::Manual {
+                start: Some(ts.start),
+                finish: Some(ts.finish),
+                duration: None,
+            };
+        }
+    }
+    let unconstrained = rewrite(&manual, true, |_, _| Constraint::AsSoonAsPossible);
+    let (m1, m2) = (schedule(&manual), schedule(&unconstrained));
+    assert_eq!(m1.tasks, m2.tasks, "contrainte d'une manuelle");
+}
+
+/// Aucune contrainte liante ni échéance atteinte : planchers bien avant le
+/// début du projet, plafonds et échéances bien après la fin. Sorties
+/// identiques au réseau nu, aux `task.constraint_moved` près, quelle que
+/// soit l'option.
+fn p23_neutral(p: &Project, seed: u64) {
+    let bare = schedule(p);
+    let ScheduleAnchor::FromStart(start) = p.anchor else {
+        return;
+    };
+    // Fin la plus tardive, placements d'affichage des inactives compris
+    // (une inactive n'entre pas dans la fin du projet, R-062).
+    let last = bare
+        .tasks
+        .values()
+        .filter_map(|o| match o {
+            TaskOutcome::Scheduled(ts) => Some(ts.finish),
+            TaskOutcome::Excluded { display, .. } => display.map(|d| d.finish),
+        })
+        .fold(bare.project_finish, Moment::max);
+    let before = start.checked_add(Minutes::new(-14 * 1_440)).unwrap();
+    let after = last.checked_add(Minutes::new(30 * 1_440)).unwrap();
+    let mut r = Rng(seed.rotate_left(41) | 1);
+    let mut q = p.clone();
+    q.options.honor_constraints = r.chance(50);
+    for uid in p.tasks.iter().map(Task::uid).collect::<Vec<_>>() {
+        let t = q.tasks.get_mut(uid).unwrap();
+        t.constraint = match r.range(0, 3) {
+            0 => Constraint::StartNoEarlierThan { date: before },
+            1 => Constraint::FinishNoEarlierThan { date: before },
+            2 => Constraint::FinishNoLaterThan { date: after },
+            _ => Constraint::StartNoLaterThan { date: after },
+        };
+        if r.chance(50) {
+            t.deadline = Some(after);
+        }
+    }
+    // Les contraintes refusées sur une récapitulative (FNET, SNLT) donnent
+    // `task.constraint_on_summary` : retirées de la comparaison.
+    let s = schedule(&q);
+    assert_eq!(s.tasks, bare.tasks, "contraintes non liantes");
+    assert_eq!(
+        diags_without(&s, &["task.constraint_moved", "task.constraint_on_summary"]),
+        bare.diagnostics
+    );
+}
+
+/// P15 étendue : oracle en temps ouvré avec contraintes et échéances (réseau
+/// plat, un calendrier, sans jalon). En temps ouvré `W`, `W(D') = W(D)`
+/// (R-090 ne change pas le temps ouvré cumulé) : planchers `W(D)` (début) et
+/// `W(D) − d` (fin) ; plafonds de fin `W(D) + d` (SNLT, MSO) et `W(D)`
+/// (FNLT, MFO) ; échéance `W(DL)` ; avec l'option, épinglage `ES = W(D)`
+/// (MSO), `W(D) − d` (MFO), `min(ES, W(D))` (SNLT), `min(ES, W(D) − d)`
+/// (FNLT). Point fixe par balayages jusqu'à stabilité (réseau acyclique).
+fn p15_constraints(p: &Project) {
+    let s = schedule(p);
+    let (set, _) = CalendarSet::compile(p);
+    let cal = set.get(p.calendar).unwrap();
+    let origin: Moment = "2025-01-01T00:00".parse().unwrap();
+    let w = |m: Moment| cal.working_between(origin, m).unwrap().get();
+    let ScheduleAnchor::FromStart(start) = p.anchor else {
+        panic!("ancre")
+    };
+    let w_start = w(start);
+    let honor = p.options.honor_constraints;
+    let n = p.tasks.len();
+    let d: Vec<i64> = p.tasks.iter().map(|t| t.duration.minutes().get()).collect();
+    let cons: Vec<Option<(ConstraintKind, i64)>> = p
+        .tasks
+        .iter()
+        .map(|t| t.constraint.date().map(|x| (t.constraint.kind(), w(x))))
+        .collect();
+    let deadline: Vec<Option<i64>> = p.tasks.iter().map(|t| t.deadline.map(w)).collect();
+    let mut links = Vec::new();
+    for (si, t) in p.tasks.iter().enumerate() {
+        for l in &t.predecessors {
+            let pi = p.tasks.position(l.predecessor).unwrap();
+            let lag = match l.lag.value {
+                LagValue::Time { minutes, .. } => minutes.get(),
+                LagValue::Percent { percent } => percent_of(Minutes::new(d[pi]), percent).unwrap().get(),
+            };
+            links.push((pi, si, l.kind, lag));
+        }
+    }
+    let mut es = vec![w_start; n];
+    for _ in 0..=n + 1 {
+        let mut changed = false;
+        for i in 0..n {
+            let mut c = w_start;
+            for &(pi, si, kind, lag) in &links {
+                if si != i {
+                    continue;
+                }
+                c = c.max(match kind {
+                    LinkType::FinishToStart => es[pi] + d[pi] + lag,
+                    LinkType::StartToStart => es[pi] + lag,
+                    LinkType::FinishToFinish => es[pi] + d[pi] + lag - d[i],
+                    LinkType::StartToFinish => es[pi] + lag - d[i],
+                });
+            }
+            if let Some((k, x)) = cons[i] {
+                if is_floor(k) {
+                    c = c.max(if on_start(k) { x } else { x - d[i] });
+                }
+                if honor {
+                    c = match k {
+                        ConstraintKind::MustStartOn => x,
+                        ConstraintKind::MustFinishOn => x - d[i],
+                        ConstraintKind::StartNoLaterThan => c.min(x),
+                        ConstraintKind::FinishNoLaterThan => c.min(x - d[i]),
+                        _ => c,
+                    };
+                }
+            }
+            if es[i] != c {
+                es[i] = c;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let ef: Vec<i64> = (0..n).map(|i| es[i] + d[i]).collect();
+    let finish = ef.iter().copied().max().unwrap_or(w_start).max(w_start);
+    let mut lf = vec![finish; n];
+    for _ in 0..=n + 1 {
+        let mut changed = false;
+        for i in 0..n {
+            let mut c = finish;
+            for &(pi, si, kind, lag) in &links {
+                if pi != i {
+                    continue;
+                }
+                let ls_s = lf[si] - d[si];
+                c = c.min(match kind {
+                    LinkType::FinishToStart => ls_s - lag,
+                    LinkType::StartToStart => ls_s - lag + d[i],
+                    LinkType::FinishToFinish => lf[si] - lag,
+                    LinkType::StartToFinish => lf[si] - lag + d[i],
+                });
+            }
+            if let Some((k, x)) = cons[i]
+                && is_ceiling(k)
+            {
+                c = c.min(if on_start(k) { x + d[i] } else { x });
+            }
+            if let Some(x) = deadline[i] {
+                c = c.min(x);
+            }
+            if lf[i] != c {
+                lf[i] = c;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut free: Vec<i64> = (0..n).map(|i| lf[i] - ef[i]).collect();
+    for &(pi, si, kind, lag) in &links {
+        let gap = match kind {
+            LinkType::FinishToStart => es[si] - lag - ef[pi],
+            LinkType::StartToStart => es[si] - lag - es[pi],
+            LinkType::FinishToFinish => ef[si] - lag - ef[pi],
+            LinkType::StartToFinish => ef[si] - lag - es[pi],
+        };
+        free[pi] = free[pi].min(gap);
+    }
+    for (i, t) in p.tasks.iter().enumerate() {
+        let ts = s.scheduled(t.uid()).unwrap();
+        let got = (
+            w(ts.early.start),
+            w(ts.early.finish),
+            w(ts.late.start),
+            w(ts.late.finish),
+            ts.total_slack.get(),
+            ts.free_slack.get(),
+        );
+        let want = (es[i], ef[i], lf[i] - d[i], lf[i], lf[i] - ef[i], free[i]);
+        assert_eq!(
+            got,
+            want,
+            "tâche {} (ES, EF, LS, LF, TF, FS) {:?}",
+            t.uid(),
+            cons[i]
+        );
+    }
+}
+
+/// Le réseau a-t-il un conflit de contrainte (signalé) ?
+fn has_conflict(s: &Schedule) -> bool {
+    s.diagnostics.iter().any(|d| {
+        matches!(
+            d,
+            Diagnostic::TaskConstraintConflict { .. } | Diagnostic::LinkNotHonoredConstraint { .. }
+        )
+    })
+}
+
+/// Calibrage de [`decorate`] : sur les graines 0 à 999, la part des réseaux
+/// avec au moins un conflit est entre 10 % et 35 % (cible : 20 %).
+#[test]
+fn decorate_conflict_rate() {
+    let conflicts = (0..1_000_u64)
+        .filter(|&seed| has_conflict(&schedule(&decorate(&generate(seed, GENERAL), seed))))
+        .count();
+    println!("decorate : {conflicts} réseaux en conflit sur 1 000");
+    assert!(
+        (100..=350).contains(&conflicts),
+        "{conflicts} réseaux en conflit sur 1 000"
+    );
+}
+
+/// `decorate` ne touche pas le réseau : liens, durées, calendriers et
+/// hiérarchie identiques ; les graines de P13 à P17 donnent les mêmes
+/// réseaux qu'avant J3.
+#[test]
+fn decorate_keeps_the_network() {
+    for seed in 0..50 {
+        let p = generate(seed, GENERAL);
+        let mut q = decorate(&p, seed);
+        q.options.honor_constraints = p.options.honor_constraints;
+        for uid in q.tasks.iter().map(Task::uid).collect::<Vec<_>>() {
+            let t = q.tasks.get_mut(uid).unwrap();
+            t.constraint = Constraint::AsSoonAsPossible;
+            t.deadline = None;
+        }
+        assert_eq!(q, p);
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::default())]
+
+    #[test]
+    fn p23_constraints_and_deadlines(seed in any::<u64>()) {
+        let p = generate(seed, GENERAL);
+        p23(&p, &decorate(&p, seed));
+    }
+}
+
+proptest! {
+    #![proptest_config(capped(1_024))]
+
+    #[test]
+    fn p15_constraints_match_working_time_oracle(seed in any::<u64>()) {
+        p15_constraints(&decorate(&generate(seed, FLAT_NO_MILESTONE), seed));
+    }
+
+    #[test]
+    fn p23_neutral_constraints_change_nothing(seed in any::<u64>()) {
+        p23_neutral(&generate(seed, GENERAL), seed);
+    }
+}
+
+/// Graines fixes des propriétés de contraintes.
+#[test]
+fn fixed_seeds_constraints() {
+    for seed in 0..100 {
+        let p = generate(seed, GENERAL);
+        p23(&p, &decorate(&p, seed));
+        p23_neutral(&p, seed);
+        p15_constraints(&decorate(&generate(seed, FLAT_NO_MILESTONE), seed));
+    }
 }

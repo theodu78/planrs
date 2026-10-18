@@ -1,0 +1,36 @@
+# Configuration clippy propre à planrs-mspdi (J3, ADR-0010, lot L0).
+#
+# Clippy lit le `clippy.toml` le plus proche du manifeste de la crate et ne
+# fusionne pas les fichiers : copie adaptée de `crates/planrs-core/clippy.toml`.
+# Elle s'applique aussi aux tests de la crate (`--all-targets`) : le système
+# de fichiers (lecture des fixtures) et `std::time::Instant` (mesures de
+# `tests/perf.rs` et de `tests/robustness.rs`) n'y sont donc pas interdits.
+# La bibliothèque ne lit aucun fichier : elle reçoit des octets.
+#
+# Règle 5 : la lecture et l'écriture MSPDI sont déterministes (aucune
+# horloge, aucune variable d'environnement, aucun flottant, aucun ordre
+# d'itération de table de hachage dans la sortie de l'écrivain).
+
+disallowed-methods = [
+    # Règle 5 : aucune horloge système, « maintenant » est injecté.
+    { path = "chrono::Utc::now", reason = "règle 5 : aucune horloge dans planrs-mspdi, « maintenant » est injecté" },
+    { path = "chrono::Local::now", reason = "règle 5 : aucune horloge dans planrs-mspdi, « maintenant » est injecté", allow-invalid = true },
+    { path = "std::time::SystemTime::now", reason = "règle 5 : aucune horloge dans planrs-mspdi (et panique en wasm32)" },
+    # Règle 5 : pas d'entrée cachée qui rendrait la lecture ou l'écriture non déterministe.
+    { path = "std::env::var", reason = "règle 5 : déterminisme, toute entrée est passée par l'appelant" },
+    { path = "std::env::var_os", reason = "règle 5 : déterminisme, toute entrée est passée par l'appelant" },
+    { path = "std::env::vars", reason = "règle 5 : déterminisme, toute entrée est passée par l'appelant" },
+    # Règle 10 : pas de sortie brutale du processus.
+    { path = "std::process::exit", reason = "règle 10 : toute erreur remonte à l'appelant" },
+]
+
+disallowed-types = [
+    # Règle 5 et ADR-0005 : aucun flottant (point fixe entier).
+    { path = "f32", reason = "règle 5 : pas de flottant dans planrs-mspdi, point fixe entier (ADR-0005)" },
+    { path = "f64", reason = "règle 5 : pas de flottant dans planrs-mspdi, point fixe entier (ADR-0005)" },
+    # Règle 5 : ordre d'itération non déterministe (ordre de sortie de l'écrivain).
+    { path = "std::collections::HashMap", reason = "règle 5 : itération non déterministe, utiliser BTreeMap ou un Vec indexé" },
+    { path = "std::collections::HashSet", reason = "règle 5 : itération non déterministe, utiliser BTreeSet ou un Vec indexé" },
+    # Règle 5 : aucune horloge, même en type.
+    { path = "std::time::SystemTime", reason = "règle 5 : aucune horloge dans planrs-mspdi" },
+]

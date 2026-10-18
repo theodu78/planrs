@@ -6,6 +6,7 @@
 //! entrées.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
@@ -72,6 +73,81 @@ pub enum Constraint {
         /// Date limite.
         date: Moment,
     },
+}
+
+/// Type de contrainte, sans sa date : les huit types de MS Project.
+///
+/// Sert aux diagnostics et aux pilotes du calcul (`Driver::Constraint`), qui
+/// nomment le type sans répéter la date, et aux tables de codes du format
+/// MSPDI. L'ordre dérivé (celui des variantes) ne sert qu'au tri
+/// déterministe des diagnostics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConstraintKind {
+    /// Le plus tôt possible.
+    AsSoonAsPossible,
+    /// Le plus tard possible.
+    AsLateAsPossible,
+    /// Doit commencer le.
+    MustStartOn,
+    /// Doit finir le.
+    MustFinishOn,
+    /// Ne pas commencer avant le.
+    StartNoEarlierThan,
+    /// Ne pas commencer après le.
+    StartNoLaterThan,
+    /// Ne pas finir avant le.
+    FinishNoEarlierThan,
+    /// Ne pas finir après le.
+    FinishNoLaterThan,
+}
+
+impl fmt::Display for ConstraintKind {
+    /// Libellé français (messages des diagnostics).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::AsSoonAsPossible => "le plus tôt possible",
+            Self::AsLateAsPossible => "le plus tard possible",
+            Self::MustStartOn => "doit commencer le",
+            Self::MustFinishOn => "doit finir le",
+            Self::StartNoEarlierThan => "début au plus tôt le",
+            Self::StartNoLaterThan => "début au plus tard le",
+            Self::FinishNoEarlierThan => "fin au plus tôt le",
+            Self::FinishNoLaterThan => "fin au plus tard le",
+        })
+    }
+}
+
+impl Constraint {
+    /// Type de la contrainte, sans sa date.
+    #[must_use]
+    pub const fn kind(&self) -> ConstraintKind {
+        match self {
+            Self::AsSoonAsPossible => ConstraintKind::AsSoonAsPossible,
+            Self::AsLateAsPossible => ConstraintKind::AsLateAsPossible,
+            Self::MustStartOn { .. } => ConstraintKind::MustStartOn,
+            Self::MustFinishOn { .. } => ConstraintKind::MustFinishOn,
+            Self::StartNoEarlierThan { .. } => ConstraintKind::StartNoEarlierThan,
+            Self::StartNoLaterThan { .. } => ConstraintKind::StartNoLaterThan,
+            Self::FinishNoEarlierThan { .. } => ConstraintKind::FinishNoEarlierThan,
+            Self::FinishNoLaterThan { .. } => ConstraintKind::FinishNoLaterThan,
+        }
+    }
+
+    /// Date saisie d'une contrainte datée ; `None` pour le plus tôt et le
+    /// plus tard possible.
+    #[must_use]
+    pub const fn date(&self) -> Option<Moment> {
+        match self {
+            Self::AsSoonAsPossible | Self::AsLateAsPossible => None,
+            Self::MustStartOn { date }
+            | Self::MustFinishOn { date }
+            | Self::StartNoEarlierThan { date }
+            | Self::StartNoLaterThan { date }
+            | Self::FinishNoEarlierThan { date }
+            | Self::FinishNoLaterThan { date } => Some(*date),
+        }
+    }
 }
 
 /// Mode de planification. Une tâche manuelle est stockée, pas recalculée
@@ -342,7 +418,7 @@ mod tests {
         reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
     )]
 
-    use super::{Constraint, OutlineLevel, Priority, SchedulingMode, Task, TaskType};
+    use super::{Constraint, ConstraintKind, OutlineLevel, Priority, SchedulingMode, Task, TaskType};
     use crate::duration::{DurationUnit, Minutes};
     use crate::error::ModelError;
     use crate::ids::TaskUid;
@@ -383,6 +459,73 @@ mod tests {
         assert!(!t.duration.is_estimated());
         assert_eq!(t.task_type, TaskType::FixedWork);
         assert!(t.effort_driven);
+    }
+
+    #[test]
+    fn constraint_kind_and_date() {
+        let d = "2026-10-21T08:00".parse().unwrap();
+        let all = [
+            (
+                Constraint::AsSoonAsPossible,
+                ConstraintKind::AsSoonAsPossible,
+                None,
+            ),
+            (
+                Constraint::AsLateAsPossible,
+                ConstraintKind::AsLateAsPossible,
+                None,
+            ),
+            (
+                Constraint::MustStartOn { date: d },
+                ConstraintKind::MustStartOn,
+                Some(d),
+            ),
+            (
+                Constraint::MustFinishOn { date: d },
+                ConstraintKind::MustFinishOn,
+                Some(d),
+            ),
+            (
+                Constraint::StartNoEarlierThan { date: d },
+                ConstraintKind::StartNoEarlierThan,
+                Some(d),
+            ),
+            (
+                Constraint::StartNoLaterThan { date: d },
+                ConstraintKind::StartNoLaterThan,
+                Some(d),
+            ),
+            (
+                Constraint::FinishNoEarlierThan { date: d },
+                ConstraintKind::FinishNoEarlierThan,
+                Some(d),
+            ),
+            (
+                Constraint::FinishNoLaterThan { date: d },
+                ConstraintKind::FinishNoLaterThan,
+                Some(d),
+            ),
+        ];
+        for (c, kind, date) in all {
+            assert_eq!(c.kind(), kind);
+            assert_eq!(c.date(), date);
+        }
+        // Sérialisation : étiquette en snake_case, aller-retour.
+        let json = serde_json::to_string(&ConstraintKind::FinishNoEarlierThan).unwrap();
+        assert_eq!(json, r#""finish_no_earlier_than""#);
+        assert_eq!(
+            serde_json::from_str::<ConstraintKind>(&json).unwrap(),
+            ConstraintKind::FinishNoEarlierThan
+        );
+        assert_eq!(
+            serde_json::to_string(&ConstraintKind::AsSoonAsPossible).unwrap(),
+            r#""as_soon_as_possible""#
+        );
+        assert!(serde_json::from_str::<ConstraintKind>(r#""asap""#).is_err());
+        assert_eq!(
+            ConstraintKind::StartNoEarlierThan.to_string(),
+            "début au plus tôt le"
+        );
     }
 
     #[test]

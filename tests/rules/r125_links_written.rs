@@ -1,0 +1,5 @@
+//! R-125 — Liens écrits, lien abandonné conservé.
+//!
+//! Lot W3 (J3, ADR-0010). Emplacement réservé par le lot L0 : la fiche
+//! de `docs/scheduling-rules.md` et les tests `r125_*` arrivent avec le
+//! lot, dans le même commit (règles 4 et 7).

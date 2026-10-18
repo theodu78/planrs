@@ -14,7 +14,7 @@ Les identifiants ne sont jamais réattribués. Une règle abandonnée garde son 
 
 ## Règles
 
-Sources citées : pages Microsoft uniquement ; « Q » = Microsoft Q&A, communautaire, jamais suffisant pour le statut « vérifié ». Aucune source tierce (MPXJ, ProjectLibre, GanttProject, autres clones) n'a été lue. Les codes S1 à S26 et Q1 à Q9 renvoient à la table ci-dessous, les codes O1 à O12 aux observations du corpus (données de fichiers enregistrés par MS Project, lues comme des données) ; chaque règle reprend aussi le nom de la page. Repère : 1984-01-01 est un dimanche ; `Moment(2026-10-19T08:00)` = 22 510 560.
+Sources citées : pages Microsoft uniquement ; « Q » = Microsoft Q&A, communautaire, jamais suffisant pour le statut « vérifié ». Aucune source tierce (MPXJ, ProjectLibre, GanttProject, autres clones) n'a été lue. Les codes S1 à S26 et Q1 à Q9 renvoient à la table ci-dessous, les codes O1 à O20 aux observations du corpus (données de fichiers enregistrés par MS Project, lues comme des données) ; chaque règle reprend aussi le nom de la page. Repère : 1984-01-01 est un dimanche ; `Moment(2026-10-19T08:00)` = 22 510 560.
 
 | Réf. | Page | Utilisée pour |
 |---|---|---|
@@ -71,6 +71,13 @@ Observations du corpus (fichiers du manifeste `tests/corpus/manifest.toml`, ADR-
 | O11 | A4 | Calendrier du projet dérivé ; marge libre de 2 h entre une fin à 17:00 et un début le matin ouvré suivant : cause non établie, divergence attendue |
 | O12 | A6 | Calendrier du projet ouvré le samedi, tâches affectées jamais placées le samedi : calendrier de ressource probable (J5), divergence attendue |
 | O13 | A4 UID 0, 1, 5, 8, 12… (récapitulatives) ; UID 14, 20, 21, 24… (feuilles affectées) | Mesuré par le harnais : `Duration` enregistrée = durée du moteur − 120 min sur les 11 récapitulatives et l'UID 0 ; `FreeSlack` 1 200 (2 h) sur 8 feuilles affectées là où le moteur donne 0 (O11). Les deux écarts sont ceux d'une mesure sur le calendrier de base UID 2 (09:00-13:00, 15:00-19:00) : dernier jour terminé à 17:00 = 6 h au lieu de 8 h ; de 17:00 au matin ouvré suivant = 2 h. Hypothèse, non retenue sans second cas : un calendrier de projet dérivé (que MS Project n'accepte pas comme calendrier de projet) fait mesurer durées des récapitulatives et marges libres sur sa base, les feuilles étant placées par le calendrier UID 1 de leurs ressources (J5) |
+| O14 | A7 UID 15, 16, 17, 18, 19, 20, 21, 32 ; A6 UID 7 | FNET liante sans prédécesseur : `Start` = `EarlyStart` = `backward_span(D,d).start`, `Finish` = `EarlyFinish` = **D brute** (ven 18:00, début de plage du calendrier 5), LS/LF et TS = `between(ES, LS)` (6 480 à 1 440 min) ; D = date + `DefaultFinishTime` (18:00 en A7, 17:00 en A6 : R-033) ; A6 UID 7 non liante (FF de UID 6) |
+| O15 | A1, A2, A4, A6, A7 (projet) | `HonorConstraints` 0 dans les cinq fichiers ; aucune SNLT, FNLT, MSO ni MFO dans le corpus : sémantique et défaut non testables |
+| O16 | A7 UID 30 (manuelle) | `Deadline` mar 08/10 18:00 (jour chômé du calendrier 5) : `LateFinish` = échéance brute, `TotalSlack` 0, `Critical` 1, fin 17:00 ≤ échéance (non dépassée) ; sans échéance, LF serait la fin du projet : plafond de LF observé (ADR-0010, choix 3) |
+| O17 | A7 UID 7, 35, 8, 11, 10, 36, 37, 31, 38 (manuelles) contre UID 15-20, 32 (automatiques) | `LateFinish` des manuelles = `FinishDate` brute (ven 20/12 18:00), celui des automatiques = sam 14/12 18:00 (`previous_working_moment`) ; dates au plus tard des manuelles non normalisées (R-063, informatif) ; UID 38 TS 0 et `Critical` 0, cause non établie |
+| O18 | A6 calendrier 9 ; A7 calendriers 1, 2 | Les deux formes d'exception sont écrites ; la forme ancienne est l'expansion des occurrences (A6 `Type 2` sur 04/04-06/04/2025 → `DayType 0` du 04/04 seul) |
+| O19 | A7 UID 4 (manuelle, FNET sam 05/10 18:00, achevée) | Fin 17:00 avant la date FNET : contrainte d'une manuelle sans effet (indice faible, tâche achevée) |
+| O20 | A1, A2, A4 ; les cinq fichiers | Aucune contrainte datée, ALAP ni échéance dans A1, A2, A4 ; `ScheduleFromStart` 1 partout : rebours entièrement hypothétique |
 
 ### Point fixe et temps
 
@@ -512,7 +519,7 @@ Planification à rebours (`FromFinish`) : toutes les tâches non vides sont excl
 
 ### Import MSPDI (R-070 à R-089)
 
-Bloc réservé à la lecture et à l'écriture MSPDI (`planrs-mspdi`) ; R-087 à R-089 sont réservées (J3). Sources : schéma `mspdi_pj15.xsd` (Project 2013 SDK, https://www.microsoft.com/en-us/download/details.aspx?id=30435, révision 2012-07-18, sha256 `1c208a9732d6ba16f677a9f2fb9d5a629f0c200346b1851998a44765c502eb85`, jamais commité) et pages learn.microsoft.com « XML Schema for the Project / Tasks / Calendars Element » (S1 à S4). Chaque valeur illisible devient un diagnostic d'import (`mspdi.*`) et reçoit la valeur par défaut : la lecture n'échoue jamais pour un champ.
+Bloc réservé à la lecture et à l'écriture MSPDI (`planrs-mspdi`) ; R-087 à R-089 sont réservées à l'écriture (J3, section « Écriture MSPDI »). Sources : schéma `mspdi_pj15.xsd` (Project 2013 SDK, https://www.microsoft.com/en-us/download/details.aspx?id=30435, révision 2012-07-18, sha256 `1c208a9732d6ba16f677a9f2fb9d5a629f0c200346b1851998a44765c502eb85`, jamais commité) et pages learn.microsoft.com « XML Schema for the Project / Tasks / Calendars Element » (S1 à S4). Chaque valeur illisible devient un diagnostic d'import (`mspdi.*`) et reçoit la valeur par défaut : la lecture n'échoue jamais pour un champ.
 
 ## R-070 — Durée ISO 8601 → minutes
 - **Formulation** : `[-]PnDTnHnMnS` ; un jour vaut 24 h ; décimales admises dans la dernière composante seulement ; secondes arrondies à la minute par R-001 (diagnostic `mspdi.rounded`) ; années et mois non nuls refusés (longueur variable), semaines refusées (hors `xsd:duration`) ; une durée négative se lit signée, et la tâche la refuse (durée 0, diagnostic). Exemples : `PT80H0M0S` → 4 800 ; `PT8H30M0S` → 510 ; `PT0H0M30S` → 1 ; `PT1.5H` → 90 ; `P2D` → 2 880 ; `P1M` → refus ; `-PT8H` → −480 (durée de tâche 0 et diagnostic).
@@ -615,3 +622,67 @@ Bloc réservé à la lecture et à l'écriture MSPDI (`planrs-mspdi`) ; R-087 à
 - **Source** : learn.microsoft.com, « XML Schema for the Project Element » (S2).
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r086_cpm_options_import.rs` (`r086_*`).
+
+### Contraintes et échéances (R-090 à R-109)
+
+R-090 à R-104, R-108 et R-109 réservées, lot K1 ; R-105 à R-107 réservées, lot K2 (passe de placement). Titres fixés par le plan de J3 (ADR-0010, amendements) : chaque lot ajoute ses fiches sous la table de leur bloc, au format ci-dessus et dans l'ordre des numéros, avec leurs tests `tests/rules/rNNN_*.rs` (fichiers créés vides par L0) dans le même commit ; la table reste comme index.
+
+| N° | Titre | Lot |
+|---|---|---|
+| R-090 | Date de contrainte normalisée (début : moment ouvré suivant ; fin : convention de jalon arrière), `constraint_moved` | K1 |
+| R-091 | Date de contrainte sans heure (`Constraint::on_day`, R-033) | K1 |
+| R-092 | ASAP | K1 |
+| R-093 | SNET | K1 |
+| R-094 | FNET (O14 : `EF = max(fin calculée, D')`) | K1 |
+| R-095 | SNLT | K1 |
+| R-096 | FNLT | K1 |
+| R-097 | MSO | K1 |
+| R-098 | MFO | K1 |
+| R-099 | Conflit, contraintes respectées (`honor` vrai) | K1 |
+| R-100 | Conflit, liens prioritaires (`honor` faux ; marge négative sur la tâche et en amont) | K1 |
+| R-101 | Contrainte contre le début du projet ou une porte | K1 |
+| R-102 | Contrainte d'une récapitulative | K1 |
+| R-103 | Contrainte d'une manuelle ou d'une inactive | K1 |
+| R-104 | FF/SF, chemins critiques multiples, seuil, marge négative ⇒ critique, FS non tronquée | K1 |
+| R-105 | ALAP et passe de placement (feuille et successeurs) | K2 |
+| R-106 | Placement sans marge, récapitulatives, UID 0 | K2 |
+| R-107 | Pilote du début planifié | K2 |
+| R-108 | Échéance : plafond propagé et dépassement (feuille, manuelle, jalon) | K1 |
+| R-109 | Échéance d'une récapitulative | K1 |
+
+### Planification à rebours (R-110 à R-119)
+
+R-110 à R-119 réservées, lot K3.
+
+| N° | Titre | Lot |
+|---|---|---|
+| R-110 | Rebours : enchaînement | K3 |
+| R-111 | Rebours : bornes du projet | K3 |
+| R-112 | Rebours : placement selon la contrainte stockée | K3 |
+| R-113 | Rebours : contraintes et conflits | K3 |
+| R-114 | Rebours : récapitulatives (`K(S)` sur toutes les feuilles) | K3 |
+| R-115 | Rebours : manuelles et inactives | K3 |
+| R-116 | Rebours : conversion impossible | K3 |
+| R-117 | Rebours : plusieurs chemins critiques | K3 |
+| R-118 | Rebours : replanification depuis le début | K3 |
+| R-119 | Ancre `FromFinish` en MSPDI (lecture sans `unsupported`, aller-retour ; amende R-076) | K3 |
+
+### Écriture MSPDI (R-087 à R-089, R-120 à R-129)
+
+R-088 et R-089 réservées, lot W1 (R-088 complétée par W4 sur le corpus) ; R-128 réservée, lot W2 ; R-087, R-120 à R-127 et R-129 réservées, lot W3 (R-123 avec W2 pour la lecture).
+
+| N° | Titre | Lot |
+|---|---|---|
+| R-087 | Document écrit : en-tête, UTF-8 sans BOM, CRLF et tabulations, `SaveVersion` 14, forme canonique et idempotence | W3 |
+| R-088 | Ordre des éléments, charge opaque à la place de sa clé, clé inconnue en fin | W1 (unité), W4 (corpus) |
+| R-089 | Formats scalaires et codes inverses | W1 |
+| R-120 | Champs du projet écrits (options, ancre, autre borne tirée du `Schedule`) | W3 |
+| R-121 | Valeurs calculées des tâches tirées du `Schedule` | W3 |
+| R-122 | Identité, hiérarchie, lignes particulières (ID, `OutlineNumber`, UID 0, vide, inactive) | W3 |
+| R-123 | Tâches manuelles écrites (amende R-085) | W3 (+ W2 pour la lecture) |
+| R-124 | Contraintes et échéance écrites | W3 |
+| R-125 | Liens écrits, lien abandonné conservé | W3 |
+| R-126 | Calendriers écrits (forme `Exceptions`) | W3 |
+| R-127 | Valeurs non représentables et `write_losses` | W3 |
+| R-128 | Capture opaque à la lecture et plafond | W2 |
+| R-129 | Réémission validée et sortie bornée | W3 |

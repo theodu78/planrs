@@ -22,6 +22,13 @@
 //! - [`error`] : erreurs structurelles typées, positions ;
 //! - [`diag`] : diagnostics d'import.
 
+#![deny(
+    clippy::float_arithmetic,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    clippy::dbg_macro
+)]
+
 pub mod codes;
 pub mod diag;
 pub mod error;
@@ -32,6 +39,7 @@ mod fields;
 mod project;
 mod recorded;
 mod task;
+mod write;
 mod xml;
 
 use planrs_core::{Moment, Project};

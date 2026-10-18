@@ -11,9 +11,9 @@ use std::collections::BTreeMap;
 
 use planrs_core::calendar::BuiltinCalendarNames;
 use planrs_core::{
-    CalendarUid, Duration, DurationUnit, Lag, LagValue, Link, LinkType, Minutes, OutlineLevel, Project,
-    ProjectInit, ProjectOptions, Schedule, ScheduleAnchor, SchedulingMode, SignedPercent, Task, TaskOutcome,
-    TaskSchedule, TaskUid, TimeBasis,
+    CalendarUid, Constraint, Duration, DurationUnit, Lag, LagValue, Link, LinkType, Minutes, OutlineLevel,
+    Project, ProjectInit, ProjectOptions, Schedule, ScheduleAnchor, SchedulingMode, SignedPercent, Task,
+    TaskOutcome, TaskSchedule, TaskUid, TimeBasis,
 };
 
 use crate::moment;
@@ -161,6 +161,39 @@ impl Net {
     #[must_use]
     pub fn inactive(mut self, name: &str) -> Self {
         self.task_mut(name).active = false;
+        self
+    }
+
+    /// Contrainte de date de la tâche.
+    #[must_use]
+    pub fn constraint(mut self, name: &str, constraint: Constraint) -> Self {
+        self.task_mut(name).constraint = constraint;
+        self
+    }
+
+    /// Échéance de la tâche (`"2026-10-21T17:00"`).
+    #[must_use]
+    pub fn deadline(mut self, name: &str, deadline: &str) -> Self {
+        self.task_mut(name).deadline = Some(moment(deadline));
+        self
+    }
+
+    /// Contrainte « le plus tard possible ».
+    #[must_use]
+    pub fn alap(self, name: &str) -> Self {
+        self.constraint(name, Constraint::AsLateAsPossible)
+    }
+
+    /// Option « les tâches respectent toujours leurs dates de contrainte ».
+    #[must_use]
+    pub fn honor(self, honor: bool) -> Self {
+        self.options(|o| o.honor_constraints = honor)
+    }
+
+    /// Planification à rebours depuis la fin `finish` (`"2026-10-30T17:00"`).
+    #[must_use]
+    pub fn from_finish(mut self, finish: &str) -> Self {
+        self.project.anchor = ScheduleAnchor::FromFinish(moment(finish));
         self
     }
 
@@ -312,5 +345,39 @@ fn lag_percent(basis: TimeBasis, pct: i64) -> Lag {
     match Lag::new(basis, LagValue::Percent { percent }) {
         Ok(l) => l,
         Err(e) => panic!("décalage de test invalide {pct} % : {e}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use planrs_core::{Constraint, ScheduleAnchor};
+
+    use super::Net;
+    use crate::moment;
+
+    #[test]
+    fn constraint_helpers_set_the_model() {
+        let snet = Constraint::StartNoEarlierThan {
+            date: moment("2026-10-21T08:00"),
+        };
+        let p = Net::new("2026-10-19T08:00")
+            .task("A", 480)
+            .task("B", 480)
+            .constraint("A", snet)
+            .deadline("A", "2026-10-23T17:00")
+            .alap("B")
+            .honor(false)
+            .from_finish("2026-10-30T17:00")
+            .build();
+        let a = p
+            .tasks
+            .iter()
+            .find(|t| t.name == "A")
+            .map(|t| (t.constraint, t.deadline));
+        assert_eq!(a, Some((snet, Some(moment("2026-10-23T17:00")))));
+        let b = p.tasks.iter().find(|t| t.name == "B").map(|t| t.constraint);
+        assert_eq!(b, Some(Constraint::AsLateAsPossible));
+        assert!(!p.options.honor_constraints);
+        assert_eq!(p.anchor, ScheduleAnchor::FromFinish(moment("2026-10-30T17:00")));
     }
 }

@@ -11,7 +11,7 @@ use crate::calendar::Span;
 use crate::diagnostic::Diagnostic;
 use crate::duration::Minutes;
 use crate::ids::TaskUid;
-use crate::model::LinkType;
+use crate::model::{ConstraintKind, LinkType};
 use crate::quantity::Percent;
 use crate::time::Moment;
 
@@ -168,4 +168,44 @@ pub enum Driver {
     Manual,
     /// Agrégat des sous-tâches (récapitulative, R-053).
     Rollup,
+    /// Contrainte de date : plancher gagnant ou date imposée (posé par K1,
+    /// R-090 à R-104). Le champ ne s'appelle pas `kind`, nom de l'étiquette
+    /// serde.
+    Constraint {
+        /// Type de la contrainte.
+        constraint: ConstraintKind,
+    },
+    /// Placement sur les dates au plus tard (le plus tard possible, posé par
+    /// K2, R-105 à R-107).
+    LatePlacement,
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
+    )]
+
+    use super::Driver;
+    use crate::model::ConstraintKind;
+
+    #[test]
+    fn driver_constraint_and_late_placement_json() {
+        let d = Driver::Constraint {
+            constraint: ConstraintKind::FinishNoEarlierThan,
+        };
+        let json = serde_json::to_string(&d).unwrap();
+        assert_eq!(
+            json,
+            r#"{"kind":"constraint","constraint":"finish_no_earlier_than"}"#
+        );
+        assert_eq!(serde_json::from_str::<Driver>(&json).unwrap(), d);
+        let json = serde_json::to_string(&Driver::LatePlacement).unwrap();
+        assert_eq!(json, r#"{"kind":"late_placement"}"#);
+        assert_eq!(
+            serde_json::from_str::<Driver>(&json).unwrap(),
+            Driver::LatePlacement
+        );
+    }
 }

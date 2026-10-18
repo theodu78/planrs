@@ -65,9 +65,10 @@ pub use error::{
 pub use fixed::{Decimal, round_div};
 pub use ids::{AssignmentUid, BaselineNumber, CalendarUid, EntityUid, Guid, ResourceUid, TaskId, TaskUid};
 pub use model::{
-    Assignment, AssignmentBaseline, Constraint, ExtraEntry, Extras, Link, LinkType, OutlineLevel, Priority,
-    Progress, Project, ProjectInfo, ProjectInit, ProjectOptions, Resource, ResourceBaseline, ResourceKind,
-    ScheduleAnchor, SchedulingMode, Task, TaskBaseline, TaskType, WorkContour,
+    Assignment, AssignmentBaseline, Constraint, ConstraintKind, ExtraEntry, Extras, Link, LinkType,
+    OutlineLevel, Priority, Progress, Project, ProjectInfo, ProjectInit, ProjectOptions, Resource,
+    ResourceBaseline, ResourceKind, ScheduleAnchor, SchedulingMode, Task, TaskBaseline, TaskType,
+    WorkContour,
 };
 pub use quantity::{Money, Percent, Rate, RateUnit, SignedPercent, Units};
 pub use schedule::{Driver, Exclusion, Schedule, TaskOutcome, TaskRole, TaskSchedule, schedule};

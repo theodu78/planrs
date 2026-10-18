@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::duration::Minutes;
 use crate::error::CalendarError;
 use crate::ids::{AssignmentUid, CalendarUid, ResourceUid, TaskUid};
+use crate::model::ConstraintKind;
 use crate::time::Moment;
 
 /// Gravité d'un diagnostic.
@@ -357,6 +358,61 @@ pub enum Diagnostic {
         /// Code stable de l'erreur de conversion (`CalendarError::code`).
         cause: String,
     },
+    /// Contrainte de date en conflit avec les liens, le début du projet ou
+    /// une récapitulative (avertissement, R-099, R-100, R-101, R-102).
+    /// `honored` vrai : la contrainte l'emporte (option « toujours respecter
+    /// les dates de contrainte ») ; faux : les liens l'emportent et la tâche
+    /// porte une marge négative.
+    #[serde(rename = "task.constraint_conflict")]
+    TaskConstraintConflict {
+        /// Tâche.
+        task: TaskUid,
+        /// Type de la contrainte.
+        constraint: ConstraintKind,
+        /// Date saisie de la contrainte.
+        date: Moment,
+        /// Vrai si la contrainte a été respectée.
+        honored: bool,
+    },
+    /// Lien non respecté parce que la contrainte du successeur l'emporte
+    /// (avertissement, R-099).
+    #[serde(rename = "link.not_honored_constraint")]
+    LinkNotHonoredConstraint {
+        /// Prédécesseur.
+        predecessor: TaskUid,
+        /// Successeur (tâche contrainte).
+        successor: TaskUid,
+    },
+    /// Fin planifiée postérieure à l'échéance (avertissement, R-108, R-109).
+    #[serde(rename = "task.deadline_missed")]
+    TaskDeadlineMissed {
+        /// Tâche.
+        task: TaskUid,
+        /// Échéance saisie.
+        deadline: Moment,
+        /// Fin planifiée.
+        finish: Moment,
+    },
+    /// Contrainte non admise sur une récapitulative, remplacée par « le plus
+    /// tôt possible » (avertissement, R-102).
+    #[serde(rename = "task.constraint_on_summary")]
+    TaskConstraintOnSummary {
+        /// Récapitulative.
+        task: TaskUid,
+        /// Type de la contrainte ignorée.
+        constraint: ConstraintKind,
+    },
+    /// Date de contrainte hors du temps ouvré, ramenée au moment ouvré
+    /// voisin (info, R-090).
+    #[serde(rename = "task.constraint_moved")]
+    TaskConstraintMoved {
+        /// Tâche.
+        task: TaskUid,
+        /// Date saisie.
+        from: Moment,
+        /// Date retenue par le calcul.
+        to: Moment,
+    },
     /// Planification à rebours non prise en charge (J3) : aucune tâche
     /// planifiée (erreur).
     #[serde(rename = "schedule.from_finish_unsupported")]
@@ -437,10 +493,15 @@ impl Diagnostic {
             | Self::LinkIgnoredInCycle { .. }
             | Self::LinkFinishToSummary { .. }
             | Self::LinkManualNotHonored { .. }
-            | Self::TaskCalendarFallback { .. } => Severity::Warning,
+            | Self::TaskCalendarFallback { .. }
+            | Self::TaskConstraintConflict { .. }
+            | Self::LinkNotHonoredConstraint { .. }
+            | Self::TaskDeadlineMissed { .. }
+            | Self::TaskConstraintOnSummary { .. } => Severity::Warning,
             Self::LinkInactive { .. }
             | Self::LinkExcludedEndpoint { .. }
-            | Self::TaskManualUndated { .. } => Severity::Info,
+            | Self::TaskManualUndated { .. }
+            | Self::TaskConstraintMoved { .. } => Severity::Info,
         }
     }
 
@@ -471,7 +532,11 @@ impl Diagnostic {
             | Self::TaskManualUndated { task }
             | Self::TaskManualDatesInverted { task }
             | Self::TaskCalendarFallback { task, .. }
-            | Self::TaskUnschedulable { task, .. } => Subject::Task(*task),
+            | Self::TaskUnschedulable { task, .. }
+            | Self::TaskConstraintConflict { task, .. }
+            | Self::TaskDeadlineMissed { task, .. }
+            | Self::TaskConstraintOnSummary { task, .. }
+            | Self::TaskConstraintMoved { task, .. } => Subject::Task(*task),
             Self::LinkCycle { tasks } => tasks.iter().min().map_or(Subject::Project, |t| Subject::Task(*t)),
             Self::LinkSelf { task } => Subject::Link {
                 predecessor: *task,
@@ -506,6 +571,10 @@ impl Diagnostic {
                 successor,
             }
             | Self::LinkManualNotHonored {
+                predecessor,
+                successor,
+            }
+            | Self::LinkNotHonoredConstraint {
                 predecessor,
                 successor,
             }
@@ -559,6 +628,11 @@ impl Diagnostic {
             Self::TaskCalendarFallback { .. } => "task.calendar_fallback",
             Self::ProjectCalendarFallback { .. } => "project.calendar_fallback",
             Self::TaskUnschedulable { .. } => "task.unschedulable",
+            Self::TaskConstraintConflict { .. } => "task.constraint_conflict",
+            Self::LinkNotHonoredConstraint { .. } => "link.not_honored_constraint",
+            Self::TaskDeadlineMissed { .. } => "task.deadline_missed",
+            Self::TaskConstraintOnSummary { .. } => "task.constraint_on_summary",
+            Self::TaskConstraintMoved { .. } => "task.constraint_moved",
             Self::ScheduleFromFinishUnsupported => "schedule.from_finish_unsupported",
             Self::ScheduleInternal { .. } => "schedule.internal",
         }
@@ -750,6 +824,49 @@ impl fmt::Display for Diagnostic {
             Self::TaskUnschedulable { task, pass, cause } => {
                 write!(f, "la tâche {task} ne peut pas être planifiée ({pass} : {cause})")
             }
+            Self::TaskConstraintConflict {
+                task,
+                constraint,
+                date,
+                honored: true,
+            } => write!(
+                f,
+                "la tâche {task} respecte sa contrainte « {constraint} » {date}, \
+                 en conflit avec le début du projet ou une récapitulative"
+            ),
+            Self::TaskConstraintConflict {
+                task,
+                constraint,
+                date,
+                honored: false,
+            } => write!(
+                f,
+                "la tâche {task} ne respecte pas sa contrainte « {constraint} » {date} : ses liens l'emportent"
+            ),
+            Self::LinkNotHonoredConstraint {
+                predecessor,
+                successor,
+            } => write!(
+                f,
+                "le lien {predecessor} → {successor} n'est pas respecté : la contrainte de la tâche {successor} l'emporte"
+            ),
+            Self::TaskDeadlineMissed {
+                task,
+                deadline,
+                finish,
+            } => write!(
+                f,
+                "la tâche {task} finit le {finish}, après son échéance du {deadline}"
+            ),
+            Self::TaskConstraintOnSummary { task, constraint } => write!(
+                f,
+                "la contrainte « {constraint} » n'est pas admise sur la récapitulative {task} : \
+                 « le plus tôt possible » appliqué"
+            ),
+            Self::TaskConstraintMoved { task, from, to } => write!(
+                f,
+                "la date de contrainte de la tâche {task} ({from}) est hors du temps ouvré : {to} retenu"
+            ),
             Self::ScheduleFromFinishUnsupported => f.write_str(
                 "la planification à partir de la date de fin n'est pas encore prise en charge : \
                  aucune tâche n'est planifiée",
@@ -838,6 +955,7 @@ mod tests {
     use crate::duration::Minutes;
     use crate::error::tests::assert_tag;
     use crate::ids::{AssignmentUid, CalendarUid, ResourceUid, TaskUid};
+    use crate::model::ConstraintKind;
     use crate::time::Moment;
 
     /// Un exemple de chaque variante.
@@ -951,6 +1069,31 @@ mod tests {
             Diagnostic::ScheduleInternal {
                 detail: "nœud non visité".to_owned(),
             },
+            // Contraintes et échéances (J3), indices 35 à 39.
+            Diagnostic::TaskConstraintConflict {
+                task: t,
+                constraint: ConstraintKind::MustStartOn,
+                date: "2026-10-21T08:00".parse::<Moment>().unwrap(),
+                honored: false,
+            },
+            Diagnostic::LinkNotHonoredConstraint {
+                predecessor: TaskUid::new(2),
+                successor: t,
+            },
+            Diagnostic::TaskDeadlineMissed {
+                task: t,
+                deadline: "2026-10-21T17:00".parse::<Moment>().unwrap(),
+                finish: "2026-10-22T17:00".parse::<Moment>().unwrap(),
+            },
+            Diagnostic::TaskConstraintOnSummary {
+                task: t,
+                constraint: ConstraintKind::MustFinishOn,
+            },
+            Diagnostic::TaskConstraintMoved {
+                task: t,
+                from: "2026-10-24T10:00".parse::<Moment>().unwrap(),
+                to: "2026-10-26T08:00".parse::<Moment>().unwrap(),
+            },
         ]
     }
 
@@ -978,6 +1121,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "une liste de codes par gravité, rien à factoriser"
+    )]
     fn severities_and_subjects() {
         let warnings: Vec<&str> = all()
             .iter()
@@ -996,6 +1143,10 @@ mod tests {
                 "link.finish_to_summary",
                 "link.manual_not_honored",
                 "task.calendar_fallback",
+                "task.constraint_conflict",
+                "link.not_honored_constraint",
+                "task.deadline_missed",
+                "task.constraint_on_summary",
             ]
         );
         let infos: Vec<&str> = all()
@@ -1005,7 +1156,12 @@ mod tests {
             .collect();
         assert_eq!(
             infos,
-            ["link.inactive", "link.excluded_endpoint", "task.manual_undated"]
+            [
+                "link.inactive",
+                "link.excluded_endpoint",
+                "task.manual_undated",
+                "task.constraint_moved"
+            ]
         );
         let c = CalendarUid::new(5);
         let t = TaskUid::new(3);
@@ -1076,6 +1232,58 @@ mod tests {
             }
             .to_string(),
             "le lien 1 → 3"
+        );
+    }
+
+    #[test]
+    fn constraint_codes_are_stable() {
+        let t = TaskUid::new(3);
+        // Sujets et messages.
+        for i in [35, 37, 38, 39] {
+            assert_eq!(all()[i].subject(), Subject::Task(t));
+        }
+        assert_eq!(
+            all()[36].subject(),
+            Subject::Link {
+                predecessor: TaskUid::new(2),
+                successor: t
+            }
+        );
+        assert_eq!(
+            all()[35].to_string(),
+            "la tâche 3 ne respecte pas sa contrainte « doit commencer le » 2026-10-21T08:00 : \
+             ses liens l'emportent"
+        );
+        assert_eq!(
+            all()[37].to_string(),
+            "la tâche 3 finit le 2026-10-22T17:00, après son échéance du 2026-10-21T17:00"
+        );
+        let codes: Vec<&str> = all()[35..].iter().map(Diagnostic::code).collect();
+        assert_eq!(
+            codes,
+            [
+                "task.constraint_conflict",
+                "link.not_honored_constraint",
+                "task.deadline_missed",
+                "task.constraint_on_summary",
+                "task.constraint_moved",
+            ]
+        );
+        let honored = Diagnostic::TaskConstraintConflict {
+            task: TaskUid::new(1),
+            constraint: ConstraintKind::MustStartOn,
+            date: "2026-10-16T08:00".parse::<Moment>().unwrap(),
+            honored: true,
+        };
+        assert_eq!(honored.severity(), Severity::Warning);
+        assert_eq!(
+            serde_json::to_string(&honored).unwrap(),
+            r#"{"code":"task.constraint_conflict","task":1,"constraint":"must_start_on","date":"2026-10-16T08:00","honored":true}"#
+        );
+        assert!(
+            honored
+                .to_string()
+                .contains("respecte sa contrainte « doit commencer le »")
         );
     }
 

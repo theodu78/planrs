@@ -41,7 +41,7 @@ planrs-ui-egui = { path = "crates/planrs-ui-egui", version = "0.1.0" }
 chrono = { version = "0.4.45", default-features = false, features = ["std", "serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.21"
-quick-xml = { version = "0.42.0", features = ["serialize"] }
+quick-xml = "0.42.0"
 # rmcp épinglé exactement (ADR-0005 : API mouvante) ; toute montée est un commit dédié.
 rmcp = { version = "=3.5.1", default-features = false, features = ["server", "macros", "transport-io"] }
 egui = "0.37.0"

@@ -92,26 +92,10 @@ pub fn duration_format(code: i64) -> Option<DurationCode> {
     }
 }
 
-/// Type de contrainte, sans sa date (`ConstraintType`, 0 à 7).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConstraintKind {
-    /// 0 : le plus tôt possible.
-    AsSoonAsPossible,
-    /// 1 : le plus tard possible.
-    AsLateAsPossible,
-    /// 2 : doit commencer le.
-    MustStartOn,
-    /// 3 : doit finir le.
-    MustFinishOn,
-    /// 4 : ne pas commencer avant le.
-    StartNoEarlierThan,
-    /// 5 : ne pas commencer après le.
-    StartNoLaterThan,
-    /// 6 : ne pas finir avant le.
-    FinishNoEarlierThan,
-    /// 7 : ne pas finir après le.
-    FinishNoLaterThan,
-}
+/// Type de contrainte, sans sa date (`ConstraintType`, 0 à 7) : le type du
+/// cœur, réexporté (J3, lot L0 ; l'ancienne énumération locale avait les
+/// mêmes variantes).
+pub use planrs_core::ConstraintKind;
 
 /// `ConstraintType` : 0 ASAP, 1 ALAP, 2 MSO, 3 MFO, 4 SNET, 5 SNLT, 6 FNET,
 /// 7 FNLT.

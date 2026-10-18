@@ -43,7 +43,7 @@ Si MS Project refuse d'ouvrir le fichier, vérifier **Fichier › Options › Ce
 **Dates calculées.** planrs écrit ses propres dates (au plus tôt, au plus tard, marges, critique) quand son moteur sait tout calculer. Si le projet contient de l'avancement, des calendriers de ressource ou un retard de nivellement (pas encore calculés par planrs), il réécrit à la place les dates que MS Project avait enregistrées si le projet n'a pas été modifié ; sinon il n'écrit aucune date calculée et MS Project les recalcule à l'ouverture.
 
 **Perdu à l'aller-retour** :
-- la forme ancienne des exceptions de calendrier (MS Project la régénère) ;
+- la forme ancienne des exceptions de calendrier (`WeekDay` de `DayType 0`, que MS Project écrit en plus de la forme `Exceptions`) : planrs n'écrit que la forme `Exceptions`, que MS Project 2007 et suivants lisent ; qu'il régénère l'ancienne à l'enregistrement est une hypothèse, non vérifiée faute de licence ;
 - le nombre d'occurrences d'une exception qui n'a pas été saisie par occurrences ;
 - les éléments inconnus à l'intérieur d'un jour de calendrier, d'une exception, d'une semaine de travail ou d'un lien ;
 - les valeurs illisibles (remplacées par leur valeur par défaut, signalées à la lecture) et les liens invalides ;
@@ -108,7 +108,7 @@ If MS Project refuses the file, check **File › Options › Trust Center › Tr
 **Calculated dates.** planrs writes its own dates (early, late, slack, critical) when its engine can compute everything. If the project has progress, resource calendars or a leveling delay (not computed by planrs yet), it writes back the dates MS Project had saved if the project was not modified; otherwise it writes no calculated date and MS Project recomputes them on opening.
 
 **Lost in the round trip**:
-- the legacy form of calendar exceptions (MS Project regenerates it);
+- the legacy form of calendar exceptions (`WeekDay` with `DayType 0`, which MS Project writes alongside the `Exceptions` form): planrs writes only the `Exceptions` form, read by MS Project 2007 and later; that MS Project regenerates the legacy form on save is an assumption, not verified (no licence);
 - the occurrence count of an exception not entered by occurrences;
 - unknown elements inside a calendar day, an exception, a work week or a link;
 - unreadable values (replaced by their default, reported on reading) and invalid links;

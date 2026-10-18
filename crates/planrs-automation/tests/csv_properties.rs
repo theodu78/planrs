@@ -309,8 +309,13 @@ fn round_trip(p: &Project, locale: CsvLocale) -> (Vec<u8>, Project) {
     let back = import(&bytes, &options_for(p)).unwrap();
     assert_eq!(back.detected.locale, locale);
     // Aucune perte signalée : seuls des informations (durées de
-    // récapitulatives ignorées) peuvent apparaître.
+    // récapitulatives ignorées) peuvent apparaître, et l'avertissement de
+    // dates jour/mois ambiguës (R-144 amendée en J4) : l'export écrit les
+    // dates dans l'ordre de la langue de ses en-têtes, rien n'est perdu.
     for d in &back.diagnostics {
+        if d.code == planrs_automation::csv::CsvCode::DateAmbiguous {
+            continue;
+        }
         assert_eq!(d.code.severity(), planrs_core::Severity::Info, "{d:?}");
     }
     (bytes, back.project)

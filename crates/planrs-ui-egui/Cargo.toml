@@ -22,6 +22,10 @@ unic-langid.workspace = true
 sys-locale.workspace = true
 rfd.workspace = true
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Attente du sélecteur asynchrone dans un fil dédié (`io.rs`).
+pollster.workspace = true
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Langue du navigateur (`navigator.language`).
 sys-locale = { workspace = true, features = ["js"] }

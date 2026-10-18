@@ -52,6 +52,10 @@ eframe = "0.37.0"
 # `xdg-portal`). fluent pour les traductions (fichiers `.ftl` embarqués),
 # sys-locale pour la langue du système, js-sys pour « maintenant » sur le web.
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+# Attente du sélecteur rfd asynchrone dans un fil dédié sur le desktop
+# (ADR-0011 : le dialogue synchrone fait avorter winit sur macOS). Déjà tiré
+# par eframe ; aucune crate nouvelle.
+pollster = "1.0.1"
 fluent-bundle = "0.16.0"
 unic-langid = { version = "0.9.6", features = ["macros"] }
 sys-locale = "0.3.2"

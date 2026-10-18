@@ -245,8 +245,14 @@ impl Net {
     /// Calcule le planning.
     #[must_use]
     pub fn run(self) -> Run {
+        self.run_with(planrs_core::Limits::default())
+    }
+
+    /// Calcule le planning sous des plafonds explicites.
+    #[must_use]
+    pub fn run_with(self, limits: planrs_core::Limits) -> Run {
         Run {
-            schedule: planrs_core::schedule(&self.project),
+            schedule: planrs_core::schedule_with(&self.project, limits),
             names: self.names,
         }
     }

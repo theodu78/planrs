@@ -408,6 +408,17 @@ impl Calc<'_, '_> {
                 _ => None,
             };
             if let Some((a, kind, opposite)) = forced {
+                // Les liens sortants ne plafonnent pas une épingle, mais
+                // sont lus comme pour toute feuille : `link.excluded_endpoint`
+                // vers une cible exclue et drapeau « peu sûr » (R-111) ; un
+                // plafond qui ne se calcule pas ne fait pas échouer
+                // l'épingle.
+                if let Ok(caps) = self.out_caps(v, false)
+                    && caps.unreliable
+                    && let Some(s) = self.state_mut(v)
+                {
+                    s.late_degraded = true;
+                }
                 self.late_overrides(v, scale, a, kind, opposite);
                 return Ok((a, LateDriver::Constraint { kind }));
             }
@@ -688,10 +699,19 @@ impl Calc<'_, '_> {
         let mut c = caps.finish().map(|(m, _)| (m, uid));
         // R-103 : FNLT de la récapitulative (`f*` sur son calendrier) et son
         // échéance (brute) contribuent à `C(S)`.
+        // Un FNLT dont l'ancrage ne se convertit pas (hors du domaine des
+        // dates) est signalé (`task.unschedulable`, R-069, R-111) et seul
+        // ignoré : les plafonds des liens et `C(parent)` restent posés.
         if let Some(nc) = constraint
             && let ConstraintRule::Cap(_) = nc.rule
         {
-            c = Some(min_cap(c, (nc.span()?.finish, uid)));
+            match nc.span() {
+                Ok(a) => c = Some(min_cap(c, (a.finish, uid))),
+                // En repasse (R-108), l'échec a déjà été signalé par la
+                // passe principale.
+                Err(fail) if !self.quiet => self.report(uid, Pass::Backward, fail),
+                Err(_) => {}
+            }
         }
         if let Some(d) = deadline {
             c = Some(min_cap(c, (d, uid)));

@@ -5,7 +5,7 @@
 //! dates de repli (`degraded`, propagé vers l'amont). Source : hypothèse
 //! (règle 10).
 
-use planrs_core::{Diagnostic, Exclusion, Pass, TaskOutcome};
+use planrs_core::{Constraint, Diagnostic, Exclusion, Pass, TaskOutcome};
 use planrs_tests::moment;
 use planrs_tests::net::Net;
 
@@ -45,4 +45,39 @@ fn r111_out_of_domain_from_finish() {
             })
     );
     assert_eq!(run.codes().len(), 2, "{:?}", run.schedule.diagnostics);
+}
+
+#[test]
+fn r111_pinned_predecessor_reports_excluded_endpoint() {
+    // Même réseau, X épinglée MSO mar 03/01/1984 08:00 (option active) :
+    // l'épingle fixe ses dates, mais son lien vers A exclue est signalé
+    // (`link.excluded_endpoint`) et X est marquée peu sûre, comme toute
+    // feuille dont un successeur est exclu.
+    let run = Net::new("1984-01-02T08:00")
+        .from_finish("1984-01-03T17:00")
+        .honor(true)
+        .task("X", 480)
+        .task("A", 1_440)
+        .fs("X", "A")
+        .constraint(
+            "X",
+            Constraint::MustStartOn {
+                date: moment("1984-01-03T08:00"),
+            },
+        )
+        .run();
+    let x = run.at("X");
+    assert_eq!(x.late.start, moment("1984-01-03T08:00"));
+    assert_eq!(x.late.finish, moment("1984-01-03T17:00"));
+    assert!(x.degraded);
+    assert!(
+        run.schedule
+            .diagnostics
+            .contains(&Diagnostic::LinkExcludedEndpoint {
+                predecessor: run.uid("X"),
+                successor: run.uid("A")
+            }),
+        "{:?}",
+        run.schedule.diagnostics
+    );
 }

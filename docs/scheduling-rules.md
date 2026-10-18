@@ -940,3 +940,7 @@ Bloc réservé au texte des valeurs (durées, décalages, prédécesseurs, dates
 - **Source** : hypothèse ; garde de formule : pratique courante contre l'injection de formules dans un tableur ; RFC 4180 ; S36 (CSV).
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r146_csv_export.rs` (`r146_*`) ; P28 (`crates/planrs-automation/tests/csv_properties.rs` : projets générés — textes avec séparateurs, guillemets, fins de ligne et débuts de formule, durées de toutes unités et bases, estimées, niveaux, jalons, lignes vides, liens de tous types avec décalages — exportés en français et en anglais puis relus : même projection CSV, aucun diagnostic autre qu'une information, `export(import(export(p))) == export(p)` ; 256 cas).
+
+### Édition (R-150 à R-169)
+
+Bloc réservé aux commandes d'édition de `planrs-automation` (session, lot de commandes, historique, ADR-0012) : désignation des tâches, allocation des UID, ajout, hiérarchie, déplacement, suppression, liens, contraintes, refus sur nouvelle erreur, diff de planning, historique, exceptions de calendrier. Numérotation tenue par `docs/plans/j4.md` (§ 2) ; chaque fiche arrive avec ses tests `rNNN_*` dans le lot qui l'écrit. Les contrats de surface (MCP, CLI) sont des `C-MCP-xx`, pas des `R-xxx`.

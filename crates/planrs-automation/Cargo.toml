@@ -14,12 +14,17 @@ encoding_rs.workspace = true
 planrs-core.workspace = true
 planrs-mspdi.workspace = true
 planrs-render.workspace = true
+schemars.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Jeton du rendez-vous du canal de contrôle (`control`, ADR-0002).
+getrandom.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
-serde_json.workspace = true
 
 [lints]
 workspace = true

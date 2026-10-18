@@ -17,7 +17,11 @@ path = "src/main.rs"
 [dependencies]
 planrs-core.workspace = true
 planrs-ui-egui.workspace = true
-eframe.workspace = true
+# `persistence` : l'état d'interface (JSON) est relu et sauvegardé par le
+# stockage d'eframe ; la crate d'interface n'en a pas besoin (ADR-0011).
+eframe = { workspace = true, features = ["persistence"] }
+# `clock` : « maintenant » est lu ici seulement, puis injecté (Env::now).
+chrono = { workspace = true, features = ["clock"] }
 
 [lints]
 workspace = true

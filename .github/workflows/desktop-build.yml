@@ -1,0 +1,122 @@
+# Construction des binaires de l'interface (desktop macOS universel, Linux) et
+# du paquet web statique (`dist/` de trunk), publiés comme artefacts `.tar.gz`
+# (upload-artifact perd le bit exécutable : on archive nous-mêmes).
+#
+# Déclenchement : tag `ui-*` poussé (le workflow du commit tagué est utilisé),
+# ou à la main (`workflow_dispatch`, visible seulement une fois ce fichier sur
+# la branche par défaut). Aucun secret, aucune signature ni notarisation
+# (ADR-0011, décision 13).
+name: Desktop build
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags: ['ui-*']
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    name: macOS (universel aarch64 + x86_64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cible x86_64
+        run: rustup target add x86_64-apple-darwin
+
+      - name: Build aarch64
+        run: cargo build --release --locked -p planrs --target aarch64-apple-darwin
+
+      - name: Build x86_64
+        run: cargo build --release --locked -p planrs --target x86_64-apple-darwin
+
+      - name: Binaire universel et archive
+        run: |
+          lipo -create -output planrs-desktop \
+            target/aarch64-apple-darwin/release/planrs-desktop \
+            target/x86_64-apple-darwin/release/planrs-desktop
+          chmod +x planrs-desktop
+          lipo -info planrs-desktop
+          echo "planrs-desktop : binaire macOS universel (Apple Silicon et Intel), NON signé." > README.txt
+          echo "Premier lancement : clic droit sur le fichier puis Ouvrir, ou dans le Terminal : xattr -d com.apple.quarantine planrs-desktop" >> README.txt
+          echo "Lancer ensuite par double-clic ou dans le Terminal : ./planrs-desktop" >> README.txt
+          tar czf planrs-desktop-macos-universal.tar.gz planrs-desktop README.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planrs-desktop-macos-universal
+          path: planrs-desktop-macos-universal.tar.gz
+          if-no-files-found: error
+
+  linux:
+    name: Linux (x86_64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked -p planrs
+
+      - name: Archive
+        run: |
+          cp target/release/planrs-desktop planrs-desktop
+          chmod +x planrs-desktop
+          echo "planrs-desktop : binaire Linux x86_64, non signé ; lancer : ./planrs-desktop" > README.txt
+          echo "« Ouvrir... » exige un portail XDG (xdg-desktop-portal, présent sur GNOME et KDE) ; sinon, utiliser l'exemple." >> README.txt
+          echo "Requis : libxkbcommon-x11-0 (X11) ou une session Wayland, et un pilote Vulkan ou OpenGL." >> README.txt
+          tar czf planrs-desktop-linux-x86_64.tar.gz planrs-desktop README.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planrs-desktop-linux-x86_64
+          path: planrs-desktop-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  web:
+    name: Web (trunk, wasm32)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: trunk@0.21.14
+
+      - name: trunk build
+        working-directory: apps/planrs-web
+        run: trunk build --release --locked
+
+      - name: Archive
+        run: |
+          ls -l apps/planrs-web/dist
+          echo "Version web de planrs : fichiers statiques, à servir en HTTP (pas en file://)." > apps/planrs-web/dist/README.txt
+          echo "Par exemple, depuis le dossier qui contient dist : python3 -m http.server -d dist 8080" >> apps/planrs-web/dist/README.txt
+          echo "Puis ouvrir http://localhost:8080 dans un navigateur récent (WebGPU ou WebGL2)." >> apps/planrs-web/dist/README.txt
+          tar czf planrs-web-dist.tar.gz -C apps/planrs-web dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planrs-web-dist
+          path: planrs-web-dist.tar.gz
+          if-no-files-found: error

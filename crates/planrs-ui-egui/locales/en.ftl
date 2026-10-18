@@ -1,0 +1,193 @@
+# Traductions anglaises de l'interface (repli sur fr.ftl pour une clé absente).
+# Chaque clé correspond à une variante de `TextId` (src/i18n.rs) ; un test
+# vérifie que fr.ftl et en.ftl déclarent exactement les mêmes clés.
+# Pas de U+202F (absente des polices d'egui) ; points de suspension U+2026
+# « … » (présents dans les polices d'egui, qui s'en servent pour tronquer).
+
+## Écran d'accueil
+
+welcome-title = Welcome to { $product }
+welcome-subtitle = Free MS Project clone — read-only for now
+welcome-open-demo = Open the sample: house construction
+welcome-open-file = Open an MSPDI file (.xml)…
+welcome-web-note = The file stays in your browser; nothing is uploaded.
+welcome-language = Language
+welcome-theme = Theme
+
+## Menus
+
+menu-file = File
+menu-open = Open an MSPDI file (.xml)…
+menu-open-demo = Open the sample
+menu-close = Close
+menu-view = View
+menu-zoom = Zoom
+menu-theme = Theme
+menu-language = Language
+menu-diagnostics = Diagnostics
+
+## Barre d'outils et zoom
+
+toolbar-open = Open…
+toolbar-fit = Fit
+zoom-day = Day
+zoom-week = Week
+zoom-month = Month
+zoom-quarter = Quarter
+
+## Thème et langue (noms de langue dans leur propre langue)
+
+theme-system = System
+theme-light = Light
+theme-dark = Dark
+lang-system = System
+lang-fr = Français
+lang-en = English
+
+## Colonnes de la table
+
+col-id = ID
+col-name = Task Name
+col-duration = Duration
+col-start = Start
+col-finish = Finish
+col-predecessors = Predecessors
+col-total-slack = Total Slack
+col-critical = Critical
+yes = Yes
+no = No
+
+## Unités de durée (forme longue, hypothèse H-UI-04 : « 5 days », « 1 day? » ;
+## écoulé avec le préfixe « e » de MS Project : « 5 edays », ADR-0011 décision 9)
+
+unit-minute-one = minute
+unit-minute-other = minutes
+unit-hour-one = hour
+unit-hour-other = hours
+unit-day-one = day
+unit-day-other = days
+unit-week-one = week
+unit-week-other = weeks
+unit-month-one = month
+unit-month-other = months
+unit-minute-elapsed-one = eminute
+unit-minute-elapsed-other = eminutes
+unit-hour-elapsed-one = ehour
+unit-hour-elapsed-other = ehours
+unit-day-elapsed-one = eday
+unit-day-elapsed-other = edays
+unit-week-elapsed-one = eweek
+unit-week-elapsed-other = eweeks
+unit-month-elapsed-one = emonth
+unit-month-elapsed-other = emonths
+
+## Types de liens
+
+link-fs = FS
+link-ss = SS
+link-ff = FF
+link-sf = SF
+
+## Conventions de formatage (lues par Texts::format_labels) ; le point est
+## écrit en littéral fluent pour ne pas commencer une valeur par « . ».
+
+fmt-decimal-sep = {"."}
+fmt-list-sep = ,
+fmt-date-order = mdy
+fmt-unknown = ?
+# Règle de pluriel des unités : below-two (singulier si |v| < 2) ou
+# exactly-one (singulier si |v| = 1).
+fmt-plural-rule = exactly-one
+
+## Mois
+
+month-1-long = January
+month-1-short = Jan
+month-2-long = February
+month-2-short = Feb
+month-3-long = March
+month-3-short = Mar
+month-4-long = April
+month-4-short = Apr
+month-5-long = May
+month-5-short = May
+month-6-long = June
+month-6-short = Jun
+month-7-long = July
+month-7-short = Jul
+month-8-long = August
+month-8-short = Aug
+month-9-long = September
+month-9-short = Sep
+month-10-long = October
+month-10-short = Oct
+month-11-long = November
+month-11-short = Nov
+month-12-long = December
+month-12-short = Dec
+
+## Jours de la semaine
+
+weekday-mon-short = Mon
+weekday-mon-initial = M
+weekday-tue-short = Tue
+weekday-tue-initial = T
+weekday-wed-short = Wed
+weekday-wed-initial = W
+weekday-thu-short = Thu
+weekday-thu-initial = T
+weekday-fri-short = Fri
+weekday-fri-initial = F
+weekday-sat-short = Sat
+weekday-sat-initial = S
+weekday-sun-short = Sun
+weekday-sun-initial = S
+
+## Échelle de temps
+
+tier-quarter = Q
+tier-week = W
+
+## Barre d'état
+
+status-tasks =
+    { $count ->
+        [one] { $count } task
+       *[other] { $count } tasks
+    }
+status-range = { $start } – { $finish }
+status-errors =
+    { $count ->
+        [0] no errors
+        [one] { $count } error
+       *[other] { $count } errors
+    }
+status-warnings =
+    { $count ->
+        [0] no warnings
+        [one] { $count } warning
+       *[other] { $count } warnings
+    }
+status-no-document = No document open
+
+## Ouverture de fichiers
+
+open-in-progress = Opening…
+open-error-title = Could not open the file
+open-error-read = Could not read the file: { $detail }
+open-error-mspdi = Unreadable MSPDI file: { $detail }
+
+## Bandeau de messages
+
+message-dismiss = Dismiss
+range-truncated = Display range limited to 20 years
+
+## Accessibilité et divers
+
+row-label = Row { $id }: { $name }
+splitter-label = Splitter between the table and the Gantt chart
+gantt-scroll-label = Gantt chart horizontal scroll
+demo-file-name = Sample: house construction
+file-filter-mspdi = MSPDI file (XML)
+dialog-open-title = Open an MSPDI file
+state-load-warning = Display preferences ignored: { $detail }

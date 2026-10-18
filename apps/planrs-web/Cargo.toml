@@ -11,10 +11,16 @@ publish = false
 [dependencies]
 planrs-core.workspace = true
 planrs-ui-egui.workspace = true
-eframe.workspace = true
+# `persistence` : l'état d'interface (JSON) va dans le localStorage du
+# navigateur par le stockage d'eframe (ADR-0011).
+eframe = { workspace = true, features = ["persistence"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 log.workspace = true
+# « Maintenant » : date du navigateur (`js_sys::Date`), convertie en Moment
+# par chrono (sans `clock` ni `wasmbind`).
+chrono.workspace = true
+js-sys.workspace = true
 wasm-bindgen-futures.workspace = true
 web-sys.workspace = true
 

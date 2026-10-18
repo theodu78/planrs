@@ -1,31 +1,42 @@
-//! Interface egui de planrs : table des tâches, Gantt, vues secondaires,
-//! état d'interface sérialisable et canal de contrôle.
+//! Interface egui de planrs : table des tâches, Gantt, état d'interface
+//! sérialisable.
 //!
 //! C'est la seule crate (avec les applications) autorisée à dépendre d'egui,
 //! eframe, winit ou rfd (règle 9). Elle est partagée par l'application
-//! desktop (`apps/planrs`) et la version web (`apps/planrs-web`).
-//!
-//! État : squelette du jalon J1, une fenêtre vide.
+//! desktop (`apps/planrs`), la version web (`apps/planrs-web`) et les tests
+//! kittest : tous appellent [`ui`] avec un `&mut egui::Ui` (API d'egui 0.37)
+//! et une [`App`] indépendante d'eframe. Lecture seule dans les fondations :
+//! aucune date n'est calculée ici (règle 3), tout vient de `planrs_core`.
 
-use planrs_core::PRODUCT_NAME;
+pub mod action;
+pub mod app;
+pub mod column;
+pub mod document;
+pub mod format;
+pub mod geom;
+pub mod i18n;
+pub mod io;
+pub mod rows;
+pub mod shell;
+pub mod state;
+pub mod theme;
+pub mod timescale;
+pub mod view;
 
-/// Application egui de planrs, commune au desktop et au web.
-#[derive(Debug, Default)]
-pub struct PlanrsApp;
+pub use action::Action;
+pub use app::{App, DocOrigin, Env, OpenDocument};
+pub use i18n::Language;
+pub use io::{FileService, NoFileService, RfdFileService};
+pub use shell::PlanrsApp;
+pub use state::{LanguagePref, ThemePref, UiState};
+pub use timescale::TimeScaleZoom;
 
-impl PlanrsApp {
-    /// Crée l'application à partir du contexte de création d'eframe.
-    #[must_use]
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        Self
-    }
-}
+/// Projet de démonstration embarqué (construction d'une maison, MSPDI écrit à
+/// la main) : bouton « Ouvrir l'exemple » et fixture des tests.
+pub const DEMO_MSPDI: &[u8] = include_bytes!("../assets/demo/house.xml");
 
-impl eframe::App for PlanrsApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.heading(PRODUCT_NAME);
-            ui.label("Pré-alpha : rien d'utilisable pour l'instant.");
-        });
-    }
+/// Dessine une image complète de l'application dans `ui` : la même fonction
+/// sert au desktop, au web et aux tests (`Harness::build_ui_state`).
+pub fn ui(ui: &mut egui::Ui, app: &mut App) {
+    app.show(ui);
 }

@@ -5,7 +5,8 @@
 //! Aucun JavaScript écrit à la main (règle 8) : trunk génère la colle
 //! wasm-bindgen, `index.html` ne contient que le canevas. La CI vérifie la
 //! compilation en `wasm32-unknown-unknown` (clippy, sans trunk) ; seul
-//! `trunk build` attend le packaging web. Seul le squelette existe.
+//! `trunk build` attend le packaging web. « Maintenant » vient de la date du
+//! navigateur et la langue de `navigator.language`, injectés par `Env`.
 //!
 //! Compilée pour une cible native (ce que fait `cargo check --workspace`), le
 //! binaire se contente d'indiquer qu'il faut passer par trunk.
@@ -13,7 +14,8 @@
 #[cfg(target_arch = "wasm32")]
 mod web {
     use eframe::wasm_bindgen::{JsCast as _, JsValue};
-    use planrs_ui_egui::PlanrsApp;
+    use planrs_core::Moment;
+    use planrs_ui_egui::{Env, Language, PlanrsApp, RfdFileService};
 
     /// Identifiant du canevas déclaré dans `index.html`.
     const CANVAS_ID: &str = "planrs_canvas";
@@ -27,6 +29,31 @@ mod web {
                 log::error!("{} : échec du démarrage : {error:?}", planrs_core::PRODUCT_NAME);
             }
         });
+    }
+
+    /// « Maintenant » d'après l'horloge locale du navigateur, tronqué à la
+    /// minute ; repli sur un instant fixe (signalé) hors du domaine du cœur.
+    fn now() -> Moment {
+        let date = js_sys::Date::new_0();
+        let naive = i32::try_from(date.get_full_year())
+            .ok()
+            .zip(date.get_month().checked_add(1))
+            .and_then(|(year, month)| chrono::NaiveDate::from_ymd_opt(year, month, date.get_date()))
+            .and_then(|day| day.and_hms_opt(date.get_hours(), date.get_minutes(), 0));
+        match naive.map(Moment::from_naive_floor) {
+            Some(Ok((moment, _truncated))) => moment,
+            Some(Err(error)) => {
+                log::warn!(
+                    "date du navigateur inutilisable ({error}), repli sur {}",
+                    Moment::MIN
+                );
+                Moment::MIN
+            }
+            None => {
+                log::warn!("date du navigateur invalide, repli sur {}", Moment::MIN);
+                Moment::MIN
+            }
+        }
     }
 
     async fn start() -> Result<(), JsValue> {
@@ -43,7 +70,14 @@ mod web {
             .start(
                 canvas,
                 eframe::WebOptions::default(),
-                Box::new(|cc| Ok(Box::new(PlanrsApp::new(cc)))),
+                Box::new(|cc| {
+                    let env = Env {
+                        now: Box::new(now),
+                        system_language: Language::from_system(),
+                        files: Box::new(RfdFileService),
+                    };
+                    Ok(Box::new(PlanrsApp::new(cc, env)))
+                }),
             )
             .await
     }

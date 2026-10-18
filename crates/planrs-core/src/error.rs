@@ -431,6 +431,24 @@ pub enum ModelError {
         /// Priorité refusée.
         priority: u16,
     },
+    /// Réordonnancement d'une collection par une liste qui n'est pas une
+    /// permutation exacte de ses UID (longueur différente, UID inconnu ou en
+    /// double).
+    #[serde(rename = "model.not_a_permutation")]
+    #[error(
+        "ordre refusé ({entity}) : {given} UID fournis pour {expected} présents, chacun exactement une fois{}",
+        .uid.map_or_else(String::new, |u| format!(" (UID {u} inconnu ou en double)"))
+    )]
+    NotAPermutation {
+        /// Type d'entité.
+        entity: EntityKind,
+        /// Nombre d'éléments présents.
+        expected: usize,
+        /// Nombre d'UID fournis.
+        given: usize,
+        /// Premier UID inconnu ou répété, s'il y en a un.
+        uid: Option<u32>,
+    },
     /// Tâche récapitulative du projet dont l'UID n'est pas 0.
     #[serde(rename = "model.summary_task_uid")]
     #[error("la tâche récapitulative du projet doit avoir l'UID 0 (lu : {uid})")]
@@ -453,6 +471,7 @@ impl ModelError {
             Self::InvalidBaselineNumber { .. } => "model.invalid_baseline_number",
             Self::InvalidOutlineLevel { .. } => "model.invalid_outline_level",
             Self::InvalidPriority { .. } => "model.invalid_priority",
+            Self::NotAPermutation { .. } => "model.not_a_permutation",
             Self::SummaryTaskUid { .. } => "model.summary_task_uid",
         }
     }
@@ -607,6 +626,18 @@ pub(crate) mod tests {
             ModelError::InvalidBaselineNumber { number: 11 },
             ModelError::InvalidOutlineLevel { level: 0 },
             ModelError::InvalidPriority { priority: 1001 },
+            ModelError::NotAPermutation {
+                entity: EntityKind::Task,
+                expected: 3,
+                given: 2,
+                uid: None,
+            },
+            ModelError::NotAPermutation {
+                entity: EntityKind::Task,
+                expected: 3,
+                given: 3,
+                uid: Some(7),
+            },
             ModelError::SummaryTaskUid { uid: 3 },
         ] {
             assert_tag(&e, e.code());

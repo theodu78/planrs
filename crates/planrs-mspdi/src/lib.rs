@@ -7,7 +7,8 @@
 //! MS Project (clean-room, règle 1). Aucun flottant : les décimales des
 //! durées sont lues en entiers et arrondies par la règle unique R-001.
 //!
-//! État (J2, ADR-0009) : lecture seule ([`read`]). Lecture événementielle
+//! État (J2, ADR-0009 ; J3, ADR-0010) : lecture ([`read`]) avec capture
+//! opaque des éléments que l'écrivain ne régénère pas (R-128). Lecture événementielle
 //! quick-xml, arbre borné par sous-arbre (pile explicite, limites de taille,
 //! de profondeur, d'éléments et de texte ; DOCTYPE refusé), correspondance
 //! typée indulgente : une valeur illisible devient un diagnostic et reçoit sa
@@ -20,7 +21,9 @@
 //!   dixièmes de minute (R-070, R-072, R-073, R-075) ;
 //! - [`codes`] : tables des codes numériques MSPDI vers les types du cœur ;
 //! - [`error`] : erreurs structurelles typées, positions ;
-//! - [`diag`] : diagnostics d'import.
+//! - [`diag`] : diagnostics d'import ;
+//! - [`written`] : ensembles W des balises régénérées par l'écrivain,
+//!   contrat de la capture opaque (R-128).
 
 #![deny(
     clippy::float_arithmetic,
@@ -33,6 +36,7 @@ pub mod codes;
 pub mod diag;
 pub mod error;
 pub mod scalar;
+pub mod written;
 
 mod calendar;
 mod fields;
@@ -42,7 +46,7 @@ mod task;
 mod write;
 mod xml;
 
-use planrs_core::{Moment, Project};
+use planrs_core::{Moment, Project, Subject};
 
 pub use diag::{ImportCode, ImportDiagnostic, LinkIgnoredReason};
 pub use error::{Location, MspdiError};
@@ -58,7 +62,9 @@ pub const MAX_DEPTH: u16 = 256;
 /// Mémoire : les éléments sautés ne coûtent qu'un compteur ; seuls les
 /// éléments retenus (champs lus des tâches, calendriers, affectations et du
 /// projet) sont construits, environ 100 octets chacun, bornés par
-/// `max_retained` ; les diagnostics d'import sont plafonnés (10 000 au
+/// `max_retained` ; chaque charge opaque capturée (R-128) compte aussi
+/// comme un élément retenu, et leur total est borné par
+/// `max_opaque_bytes` ; les diagnostics d'import sont plafonnés (10 000 au
 /// total, 1 000 par code). Avec les valeurs par défaut, la mémoire de la
 /// lecture reste de l'ordre de quelques centaines de Mio au pire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,11 +79,16 @@ pub struct Limits {
     pub max_retained: u64,
     /// Longueur maximale du texte d'un élément, en octets.
     pub max_text_bytes: usize,
+    /// Total maximal des charges opaques capturées (R-128), en octets ; au
+    /// premier dépassement, cette capture et toutes les suivantes sont
+    /// abandonnées (`mspdi.truncated`, [`SourceInfo::opaque_dropped`]).
+    pub max_opaque_bytes: u64,
 }
 
 impl Default for Limits {
     /// 256 Mio, 64 niveaux, 20 000 000 éléments dont 3 000 000 retenus
-    /// (environ 60 000 tâches de 50 champs), 16 Mio de texte.
+    /// (environ 60 000 tâches de 50 champs, charges opaques comprises),
+    /// 16 Mio de texte, 64 Mio de charges opaques.
     fn default() -> Self {
         Self {
             max_bytes: 256 * 1024 * 1024,
@@ -85,6 +96,7 @@ impl Default for Limits {
             max_elements: 20_000_000,
             max_retained: 3_000_000,
             max_text_bytes: 16 * 1024 * 1024,
+            max_opaque_bytes: 64 * 1024 * 1024,
         }
     }
 }
@@ -128,6 +140,53 @@ pub struct SourceInfo {
     /// ([`diag::MAX_DIAGNOSTICS`], [`diag::MAX_DIAGNOSTICS_PER_CODE`]) ;
     /// un diagnostic [`ImportCode::Truncated`] les signale aussi.
     pub dropped_diagnostics: u64,
+    /// Total des charges opaques gardées dans les `Extras` (R-128), en
+    /// octets ; au plus [`Limits::max_opaque_bytes`].
+    pub opaque_bytes: u64,
+    /// Charges opaques abandonnées (plafond, entité non résolue), dans
+    /// l'ordre du document ; au plus [`MAX_OPAQUE_LOSSES`] entrées.
+    pub opaque_dropped: Vec<OpaqueLoss>,
+    /// Nombre total de charges opaques abandonnées, listées ou non.
+    pub opaque_dropped_total: u64,
+}
+
+/// Origine des entrées d'`Extras` capturées par la lecture MSPDI (R-128).
+pub const EXTRAS_ORIGIN: &str = "mspdi";
+
+/// Nombre maximal de pertes de charges opaques listées dans
+/// [`SourceInfo::opaque_dropped`] ; au-delà, seul
+/// [`SourceInfo::opaque_dropped_total`] croît.
+pub const MAX_OPAQUE_LOSSES: usize = 1_000;
+
+/// Cause de l'abandon d'une charge opaque (R-128).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum OpaqueLossReason {
+    /// Plafond atteint ([`Limits::max_opaque_bytes`] ou
+    /// [`Limits::max_retained`]) : cette capture et toutes les suivantes
+    /// sont abandonnées (`mspdi.truncated`).
+    Cap,
+    /// Entité non résolue dans la charge (`&nbsp;`…) : réémise telle quelle,
+    /// elle rendrait le document mal formé (`mspdi.inconsistent` signale
+    /// l'entité).
+    UnresolvedEntity,
+    /// Bornes de la charge hors de l'entrée (jamais attendu).
+    OutOfBounds,
+}
+
+/// Charge opaque abandonnée (R-128).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpaqueLoss {
+    /// Entité porteuse : projet, tâche ou calendrier ; `None` si son UID
+    /// n'a pas pu être lu.
+    pub subject: Option<Subject>,
+    /// Clé : nom qualifié de l'élément, tel qu'écrit.
+    pub key: String,
+    /// Taille de l'élément, balise englobante comprise, en octets.
+    pub bytes: u64,
+    /// Cause.
+    pub reason: OpaqueLossReason,
+    /// Position du début de l'élément.
+    pub at: Location,
 }
 
 /// Document MSPDI lu.
@@ -174,18 +233,34 @@ pub fn read(input: &[u8], options: &ReadOptions) -> Result<MspdiDocument, MspdiE
     })?;
     let lines = error::LineIndex::new(text);
     let mut sink = diag::Sink::new(&lines);
-    let raw = xml::read_document(text, limits, &lines, &mut sink)?;
+    let mut raw = xml::read_document(text, limits, &lines, &mut sink)?;
+    let mut budget = std::mem::take(&mut raw.budget);
     let project::Built {
         project,
         recorded,
         save_version,
-    } = project::build(&raw, options, &mut sink);
+        mut losses,
+    } = project::build(&raw, &mut budget, options, &mut sink);
+    budget.report(&mut sink);
+    losses.sort_by_key(|l| l.at);
     let source = SourceInfo {
         save_version,
         namespace: raw.namespace.clone(),
         ui_sections: raw.ui_sections.clone(),
         skipped_elements: raw.skipped_elements,
         dropped_diagnostics: sink.dropped,
+        opaque_bytes: budget.kept_bytes,
+        opaque_dropped: losses
+            .into_iter()
+            .map(|l| OpaqueLoss {
+                subject: l.subject,
+                key: l.key,
+                bytes: l.bytes,
+                reason: l.reason,
+                at: lines.locate(l.at),
+            })
+            .collect(),
+        opaque_dropped_total: budget.dropped_total,
     };
     let mut diagnostics = sink.finish();
     diagnostics.extend(

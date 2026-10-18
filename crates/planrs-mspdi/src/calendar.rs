@@ -13,7 +13,7 @@ use crate::codes::{self, DayType, ExceptionType};
 use crate::diag::{ImportCode, Sink};
 use crate::fields::Fields;
 use crate::project::{code, guid};
-use crate::xml::Element;
+use crate::xml::{self, Element, Opaques};
 
 /// Chemin des éléments d'un calendrier.
 const CAL: &str = "Calendars/Calendar";
@@ -45,6 +45,7 @@ enum Kind {
 pub(crate) fn import(
     elements: &[Element<'_>],
     project_calendar: CalendarUid,
+    opaques: &mut Opaques<'_, '_>,
     sink: &mut Sink<'_>,
 ) -> Arena<CalendarUid, Calendar> {
     // Premier passage : UID, doublons, nature déclarée.
@@ -52,6 +53,7 @@ pub(crate) fn import(
     for element in elements {
         let f = Fields::new(&element.children, CAL, None, element.at);
         let Some(uid) = calendar_uid(&f, sink) else {
+            opaques.attach(&element.lost, None);
             continue;
         };
         if headers.iter().any(|h| h.uid == uid) {
@@ -62,6 +64,7 @@ pub(crate) fn import(
                 Some(&uid.get().to_string()),
                 sink,
             );
+            opaques.attach(&element.lost, Some(Subject::Calendar(uid)));
             continue;
         }
         let mut f = f;
@@ -87,7 +90,10 @@ pub(crate) fn import(
             h.element.at,
         );
         let kind = kind(h, &f, project_calendar, &declared_base, sink);
-        let calendar = build(h.uid, kind, &f, sink);
+        let mut calendar = build(h.uid, kind, &f, sink);
+        // R-128 : enfants directs non régénérés, dans l'ordre du document.
+        calendar.extras = xml::extras(&h.element.opaque);
+        opaques.attach(&h.element.lost, Some(Subject::Calendar(h.uid)));
         // UID uniques (premier passage) : l'ajout ne peut pas échouer.
         let _ = out.push(calendar);
     }

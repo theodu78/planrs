@@ -18,21 +18,35 @@ use crate::diag::{ImportCode, Sink};
 use crate::fields::Fields;
 use crate::recorded::RecordedSchedule;
 use crate::task;
-use crate::xml::RawDocument;
+use crate::xml::{self, OpaqueBudget, Opaques, PendingLoss, RawDocument};
 
 /// Résultat de la correspondance.
 pub(crate) struct Built {
     pub(crate) project: Project,
     pub(crate) recorded: RecordedSchedule,
     pub(crate) save_version: Option<i64>,
+    /// Charges opaques abandonnées, rattachées à leur entité (R-128).
+    pub(crate) losses: Vec<PendingLoss>,
 }
 
 /// UID du calendrier du projet quand `CalendarUID` manque et qu'aucun
 /// calendrier n'est lu (hypothèse : celui du Standard d'un projet neuf).
 const FALLBACK_CALENDAR: CalendarUid = CalendarUid::new(1);
 
-/// Construit le projet et le planning enregistré.
-pub(crate) fn build(raw: &RawDocument<'_>, options: &ReadOptions, sink: &mut Sink<'_>) -> Built {
+/// Construit le projet et le planning enregistré ; les charges opaques
+/// capturées vont dans les `Extras` de leur entité (R-128).
+pub(crate) fn build(
+    raw: &RawDocument<'_>,
+    budget: &mut OpaqueBudget,
+    options: &ReadOptions,
+    sink: &mut Sink<'_>,
+) -> Built {
+    let mut losses: Vec<PendingLoss> = Vec::new();
+    let mut opaques = Opaques {
+        input: raw.input,
+        budget,
+        losses: &mut losses,
+    };
     let f = Fields::new(raw.fields.iter(), "", Some(Subject::Project), raw.root_at);
     let save_version = f.int("SaveVersion", sink).map(|(v, _)| v);
 
@@ -70,19 +84,29 @@ pub(crate) fn build(raw: &RawDocument<'_>, options: &ReadOptions, sink: &mut Sin
     project.status_date = f.datetime("StatusDate", sink);
     project.options = project_options(&f, sink);
     project.calendar = project_calendar(&f, sink);
-    project.calendars = calendar::import(&raw.calendars, project.calendar, sink);
+    project.calendars = calendar::import(&raw.calendars, project.calendar, &mut opaques, sink);
+    project.extras = xml::extras(&raw.opaque);
+    opaques.attach(&raw.lost, Some(Subject::Project));
     let mut recorded = RecordedSchedule {
         project_start: recorded_start,
         project_finish: recorded_finish,
         tasks: BTreeMap::new(),
     };
 
-    task::import(&raw.tasks, &raw.assignments, &mut project, &mut recorded, sink);
+    task::import(
+        &raw.tasks,
+        &raw.assignments,
+        &mut opaques,
+        &mut project,
+        &mut recorded,
+        sink,
+    );
 
     Built {
         project,
         recorded,
         save_version,
+        losses,
     }
 }
 

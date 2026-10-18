@@ -163,20 +163,66 @@ fn depth_limit_set_to_the_maximum_cannot_overflow_the_stack() {
     ));
 }
 
-#[test]
-fn unknown_task_children_are_not_kept() {
-    // Relecture J2 (bloquant) : tout enfant d'une tâche était construit en
-    // mémoire. Deux millions d'enfants inconnus sont désormais sautés et
-    // comptés ; la tâche se lit normalement.
-    let n = 2_000_000;
-    let xml = format!(
+/// Document hostile : `n` enfants inconnus `<X/>` dans une tâche.
+fn many_unknown_children(n: usize) -> String {
+    format!(
         "<Project><StartDate>2026-10-19T08:00:00</StartDate><Tasks><Task><UID>1</UID><Name>t</Name>\
          <Duration>PT8H0M0S</Duration>{}</Task></Tasks></Project>",
         "<X/>".repeat(n)
-    );
-    let doc = read(xml.as_bytes(), &opts()).unwrap();
+    )
+}
+
+#[test]
+fn unknown_task_children_capture_is_bounded() {
+    // Relecture J2 (bloquant) : tout enfant d'une tâche était construit en
+    // mémoire ; J2 les sautait. J3 (R-128) les capture en charge opaque,
+    // mais chaque capture compte comme un élément retenu et leur total est
+    // borné en octets : deux millions d'enfants inconnus ne font jamais
+    // croître la mémoire au-delà des plafonds ; la tâche se lit normalement.
+    let n: u64 = 2_000_000;
+    let xml = many_unknown_children(usize::try_from(n).unwrap());
+
+    // Plafond d'éléments retenus : 100 000, dont 5 construits avant les X
+    // (StartDate, Task, UID, Name, Duration).
+    let limits = Limits {
+        max_retained: 100_000,
+        ..Limits::default()
+    };
+    let doc = read(xml.as_bytes(), &ReadOptions { limits, ..opts() }).unwrap();
     assert_eq!(doc.project.tasks.len(), 1);
-    assert_eq!(doc.source.skipped_elements, u64::try_from(n).unwrap());
+    assert_eq!(doc.source.skipped_elements, n);
+    let kept = u64::try_from(doc.project.tasks.at(0).unwrap().extras.0.len()).unwrap();
+    assert_eq!(kept, 100_000 - 5);
+    assert_eq!(doc.source.opaque_bytes, kept * 4);
+    assert_eq!(doc.source.opaque_dropped_total, n - kept);
+    assert_eq!(doc.source.opaque_dropped.len(), planrs_mspdi::MAX_OPAQUE_LOSSES);
+    assert!(doc.diagnostics.iter().any(|d| d.code
+        == ImportCode::OpaqueTruncated {
+            dropped: n - kept,
+            bytes: (n - kept) * 4
+        }));
+
+    // Plafond d'octets : 4 Kio, soit 1 024 charges `<X/>` de 4 octets.
+    let limits = Limits {
+        max_opaque_bytes: 4 * 1024,
+        ..Limits::default()
+    };
+    let doc = read(xml.as_bytes(), &ReadOptions { limits, ..opts() }).unwrap();
+    let task = doc.project.tasks.at(0).unwrap();
+    assert_eq!(task.extras.0.len(), 1_024);
+    assert!(task.extras.0.iter().all(|e| e.key == "X" && e.payload == "<X/>"));
+    assert_eq!(doc.source.opaque_bytes, 4 * 1024);
+    assert_eq!(doc.source.opaque_dropped_total, n - 1_024);
+    let first = &doc.source.opaque_dropped[0];
+    assert_eq!(
+        (first.subject, first.key.as_str(), first.bytes, first.reason),
+        (
+            Some(planrs_core::Subject::Task(planrs_core::TaskUid::new(1))),
+            "X",
+            4,
+            planrs_mspdi::OpaqueLossReason::Cap
+        )
+    );
 }
 
 #[test]

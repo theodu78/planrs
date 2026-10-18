@@ -61,13 +61,28 @@ fn r085_fallback_to_start_finish_duration() {
 
 #[test]
 fn r085_start_only() {
-    // UID 9 : seul `ManualStart` (mer 21/10 08:00) ; la fin est laissée au
-    // moteur (R-063), la durée vient de `Duration` (16 h).
+    // UID 9 : seul `ManualStart` (mer 21/10 08:00). Amendement J3 : un
+    // `Manual*` présent interdit tout repli ; ni `Finish` ni `Duration`
+    // (16 h) ne sont lus comme saisis. La fin est laissée au moteur (R-063),
+    // la durée de la tâche reste `Duration`.
     let doc = fixture();
-    assert_eq!(
-        manual(&doc, 9),
-        (Some(moment("2026-10-21T08:00")), None, Some(960))
-    );
+    assert_eq!(manual(&doc, 9), (Some(moment("2026-10-21T08:00")), None, None));
+    let t = doc.project.tasks.get(TaskUid::new(9)).unwrap();
+    assert_eq!(t.duration.minutes(), Minutes::new(960));
+}
+
+#[test]
+fn r085_amended_no_fallback_when_any_manual_field_is_present() {
+    // Seul `ManualDuration` (PT23H0M0S = 1 380 min) : `Start` et `Finish`
+    // (lun 19/10 08:00 – mar 20/10 17:00) ne sont pas lus comme saisis.
+    let xml = "<Project xmlns=\"http://schemas.microsoft.com/project\">\
+               <StartDate>2026-10-19T08:00:00</StartDate><CalendarUID>1</CalendarUID>\
+               <Tasks><Task><UID>1</UID><ID>1</ID><Name>m</Name><Manual>1</Manual>\
+               <Start>2026-10-19T08:00:00</Start><Finish>2026-10-20T17:00:00</Finish>\
+               <Duration>PT16H0M0S</Duration><ManualDuration>PT23H0M0S</ManualDuration>\
+               </Task></Tasks></Project>";
+    let doc = read(xml.as_bytes(), &ReadOptions::new(moment("2026-01-01T00:00"))).unwrap();
+    assert_eq!(manual(&doc, 1), (None, None, Some(1_380)));
 }
 
 #[test]

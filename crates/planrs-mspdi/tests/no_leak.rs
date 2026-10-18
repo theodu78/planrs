@@ -4,8 +4,18 @@
 //! `*Slack`, `Critical`, `Summary` et la `Duration` des récapitulatives ne
 //! change pas le projet lu.
 //!
-//! L'égalité porte sur le `Project` entier, entrée unique du moteur, et sur
-//! `schedule(&doc.project)`.
+//! L'égalité porte sur le `Project` entier, entrée unique du moteur, hors
+//! `Extras`, et sur `schedule(&doc.project)`. Les `Extras` (charges opaques,
+//! R-128) sont comparées par clés : le retrait textuel, naïf, touche aussi
+//! les `Start`/`Finish`/`Duration` imbriqués dans une charge (`Baseline`),
+//! dont le contenu change donc légitimement ; `StartSlack` et `FinishSlack`,
+//! valeurs dérivées que l'écrivain ne régénère pas, sont capturées par
+//! construction (ADR-0010 amendé) et retirées des clés comparées.
+//!
+//! P19 reformulée (J3, juges 1 et 2) : aucune clé d'`Extras` d'origine
+//! `mspdi` n'appartient à l'ensemble W des balises que l'écrivain régénère
+//! pour son entité (`planrs_mspdi::written`), sinon émission double ; seule
+//! exception, le `PredecessorLink` abandonné d'une tâche.
 
 #![allow(
     clippy::unwrap_used,
@@ -19,8 +29,9 @@
 
 use std::path::{Path, PathBuf};
 
-use planrs_core::schedule;
-use planrs_mspdi::{ReadOptions, read};
+use planrs_core::{Extras, Project, schedule};
+use planrs_mspdi::written::{CALENDAR_WRITTEN, PROJECT_WRITTEN, TASK_CAPTURED_WRITTEN, TASK_WRITTEN};
+use planrs_mspdi::{EXTRAS_ORIGIN, ReadOptions, read};
 
 fn opts() -> ReadOptions {
     ReadOptions::new("2026-01-01T00:00".parse().unwrap())
@@ -132,14 +143,77 @@ fn without_calculated(xml: &str) -> String {
     out
 }
 
+/// Balises retirées par `without_calculated` mais capturées (non régénérées).
+const STRIPPED_CAPTURED: &[&str] = &["StartSlack", "FinishSlack"];
+
+/// Toutes les `Extras` du projet, par entité : (entité, extras).
+fn all_extras(p: &Project) -> Vec<(String, &Extras)> {
+    let mut out = vec![("projet".to_owned(), &p.extras)];
+    out.extend(
+        p.calendars
+            .iter()
+            .map(|c| (format!("calendrier {}", c.uid().get()), &c.extras)),
+    );
+    out.extend(p.summary_task.iter().map(|t| ("tâche 0".to_owned(), &t.extras)));
+    out.extend(
+        p.tasks
+            .iter()
+            .map(|t| (format!("tâche {}", t.uid().get()), &t.extras)),
+    );
+    out
+}
+
+/// Le projet sans ses `Extras`.
+fn without_extras(p: &Project) -> Project {
+    let mut p = p.clone();
+    p.extras = Extras::new();
+    let uids: Vec<_> = p.tasks.iter().map(planrs_core::Task::uid).collect();
+    for uid in uids {
+        p.tasks.get_mut(uid).unwrap().extras = Extras::new();
+    }
+    if let Some(t) = &mut p.summary_task {
+        t.extras = Extras::new();
+    }
+    let uids: Vec<_> = p
+        .calendars
+        .iter()
+        .map(planrs_core::calendar::Calendar::uid)
+        .collect();
+    for uid in uids {
+        p.calendars.get_mut(uid).unwrap().extras = Extras::new();
+    }
+    p
+}
+
+/// Clés des `Extras` par entité, hors balises retirées et capturées.
+fn extras_keys(p: &Project) -> Vec<(String, Vec<String>)> {
+    all_extras(p)
+        .into_iter()
+        .map(|(who, e)| {
+            let keys =
+                e.0.iter()
+                    .filter(|x| !STRIPPED_CAPTURED.contains(&x.key.as_str()))
+                    .map(|x| x.key.clone())
+                    .collect();
+            (who, keys)
+        })
+        .collect()
+}
+
 fn check(name: &str, xml: &str) {
     let full = read(xml.as_bytes(), &opts()).unwrap_or_else(|e| panic!("{name} : {e}"));
     let stripped_xml = without_calculated(xml);
     assert_ne!(stripped_xml.len(), xml.len(), "{name} : rien n'a été retiré");
     let stripped = read(stripped_xml.as_bytes(), &opts()).unwrap_or_else(|e| panic!("{name} : {e}"));
     assert_eq!(
-        full.project, stripped.project,
+        without_extras(&full.project),
+        without_extras(&stripped.project),
         "{name} : une valeur calculée a fuité"
+    );
+    assert_eq!(
+        extras_keys(&full.project),
+        extras_keys(&stripped.project),
+        "{name} : le retrait des valeurs calculées a changé les captures"
     );
     assert_eq!(
         schedule(&full.project),
@@ -161,6 +235,60 @@ fn p19_fixtures_no_leak() {
 fn p19_corpus_no_leak() {
     for (name, xml) in xml_files(&repo("tests/corpus/files")) {
         check(&name, &xml);
+    }
+}
+
+/// P19 reformulée : aucune clé d'`Extras` d'origine `mspdi` n'appartient à
+/// W de son entité (sauf le `PredecessorLink` abandonné d'une tâche).
+fn check_keys_not_written(name: &str, xml: &str) {
+    let doc = read(xml.as_bytes(), &opts()).unwrap_or_else(|e| panic!("{name} : {e}"));
+    let p = &doc.project;
+    let mut owners: Vec<(String, &Extras, &[&str], &[&str])> =
+        vec![("projet".to_owned(), &p.extras, PROJECT_WRITTEN, &[])];
+    for c in &p.calendars {
+        owners.push((
+            format!("calendrier {}", c.uid().get()),
+            &c.extras,
+            CALENDAR_WRITTEN,
+            &[],
+        ));
+    }
+    for t in p.summary_task.iter().chain(p.tasks.iter()) {
+        owners.push((
+            format!("tâche {}", t.uid().get()),
+            &t.extras,
+            TASK_WRITTEN,
+            TASK_CAPTURED_WRITTEN,
+        ));
+    }
+    for (who, extras, written, allowed) in owners {
+        for e in &extras.0 {
+            assert_eq!(e.origin, EXTRAS_ORIGIN, "{name}, {who}");
+            assert!(
+                !written.contains(&e.key.as_str()) || allowed.contains(&e.key.as_str()),
+                "{name}, {who} : clé régénérée capturée : {}",
+                e.key
+            );
+            assert!(
+                e.payload.starts_with(&format!("<{}", e.key)) && e.payload.ends_with('>'),
+                "{name}, {who} : charge mal découpée : {}",
+                e.payload
+            );
+        }
+    }
+}
+
+#[test]
+fn p19_extras_keys_are_not_written_tags() {
+    let mut files = xml_files(&repo("tests/fixtures/mspdi"));
+    files.extend(xml_files(&repo("tests/corpus/files")));
+    files.extend(
+        xml_files(&repo("crates/planrs-ui-egui/assets/demo"))
+            .into_iter()
+            .filter(|(n, _)| n == "house.xml"),
+    );
+    for (name, xml) in files {
+        check_keys_not_written(&name, &xml);
     }
 }
 

@@ -15,7 +15,7 @@ use crate::fields::Fields;
 use crate::project::{code, guid};
 use crate::recorded::{RecordedSchedule, RecordedTask, Tenths};
 use crate::scalar::{percent_lag_from_link_lag, tenths_to_minutes};
-use crate::xml::Element;
+use crate::xml::{self, Element, Opaque, Opaques};
 
 /// Chemin d'une tâche.
 const TASK: &str = "Tasks/Task";
@@ -35,6 +35,7 @@ struct Read<'e> {
 pub(crate) fn import(
     elements: &[Element<'_>],
     assignments: &[Element<'_>],
+    opaques: &mut Opaques<'_, '_>,
     project: &mut Project,
     recorded: &mut RecordedSchedule,
     sink: &mut Sink<'_>,
@@ -45,6 +46,7 @@ pub(crate) fn import(
     for element in elements {
         let mut f = Fields::new(&element.children, TASK, None, element.at);
         let Some(uid) = task_uid(&f, sink) else {
+            opaques.attach(&element.lost, None);
             continue;
         };
         if !seen.insert(uid) {
@@ -55,14 +57,18 @@ pub(crate) fn import(
                 Some(&uid.get().to_string()),
                 sink,
             );
+            opaques.attach(&element.lost, Some(Subject::Task(uid)));
             continue;
         }
+        opaques.attach(&element.lost, Some(Subject::Task(uid)));
         f.set_subject(Some(Subject::Task(uid)));
         let rec = recorded_task(&f, sink);
         let position = rows.len();
-        let (task, duration) = task(uid, &f, &rec, &options, position, sink);
+        let (mut task, duration) = task(uid, &f, &rec, &options, position, sink);
         recorded.tasks.insert(uid, rec);
         if uid == TaskUid::PROJECT_SUMMARY {
+            // R-128 : ses liens ne sont pas lus, seules ses charges comptent.
+            task.extras = xml::extras(&element.opaque);
             project.summary_task = Some(task);
         } else {
             rows.push(Read {
@@ -77,6 +83,7 @@ pub(crate) fn import(
     // niveau supérieur. Le drapeau `Summary` n'est lu que pour la comparer.
     let summaries = summary_flags(&rows);
     let known: BTreeSet<TaskUid> = rows.iter().map(|r| r.task.uid()).collect();
+    let mut link_children = LinkChildren::default();
     for (row, is_summary) in rows.iter_mut().zip(summaries) {
         let uid = row.task.uid();
         let f = Fields::new(
@@ -105,8 +112,26 @@ pub(crate) fn import(
         } else if !row.task.is_null && !f.has("Duration") {
             f.missing("Duration", sink);
         }
-        row.task.predecessors = links(uid, &row.element.children, &known, &options, sink);
+        let mut ctx = LinkContext {
+            successor: uid,
+            known: &known,
+            options: &options,
+            opaques: &mut *opaques,
+            children: &mut link_children,
+        };
+        let (predecessors, abandoned) = links(&mut ctx, &row.element.children, sink);
+        row.task.predecessors = predecessors;
+        // R-128 : charges de la tâche et liens abandonnés, ordre du document.
+        row.task.extras = if abandoned.is_empty() {
+            xml::extras(&row.element.opaque)
+        } else {
+            let mut opaque: Vec<Opaque<'_>> = row.element.opaque.clone();
+            opaque.extend(abandoned);
+            opaque.sort_by_key(|o| o.at);
+            xml::extras(&opaque)
+        };
     }
+    link_children.report(sink);
     if let Some(summary) = &mut project.summary_task {
         let duration = summary.duration;
         summary.duration = Duration::zero(duration.unit());
@@ -382,14 +407,27 @@ fn non_negative_minutes(f: &Fields<'_>, name: &str, sink: &mut Sink<'_>) -> Minu
     }
 }
 
-/// R-085 : mode manuel, depuis `ManualStart`, `ManualFinish`,
-/// `ManualDuration`, à défaut `Start`, `Finish`, `Duration`.
+/// R-085 (amendée en J3) : mode manuel, depuis `ManualStart`,
+/// `ManualFinish`, `ManualDuration` ; repli sur `Start`, `Finish`,
+/// `Duration` seulement si **aucun** des trois `Manual*` n'est présent
+/// (fichier antérieur ou écrit à la main) : sinon un champ `Manual*` absent
+/// reste absent, comme l'écrivain l'a voulu (R-123).
 fn mode(f: &Fields<'_>, rec: &RecordedTask, duration: Duration, sink: &mut Sink<'_>) -> SchedulingMode {
     if f.bool("Manual", sink) != Some(true) {
         return SchedulingMode::Auto;
     }
-    let start = f.datetime("ManualStart", sink).or(rec.start);
-    let finish = f.datetime("ManualFinish", sink).or(rec.finish);
+    let any_manual = ["ManualStart", "ManualFinish", "ManualDuration"]
+        .iter()
+        .any(|n| f.has(n));
+    if !any_manual {
+        return SchedulingMode::Manual {
+            start: rec.start,
+            finish: rec.finish,
+            duration: f.has("Duration").then_some(duration),
+        };
+    }
+    let start = f.datetime("ManualStart", sink);
+    let finish = f.datetime("ManualFinish", sink);
     let manual_duration = match f.duration("ManualDuration", sink) {
         Some((d, at)) => {
             let made = Duration::new(
@@ -403,7 +441,7 @@ fn mode(f: &Fields<'_>, rec: &RecordedTask, duration: Duration, sink: &mut Sink<
             }
             made.ok()
         }
-        None => f.has("Duration").then_some(duration),
+        None => None,
     };
     SchedulingMode::Manual {
         start,
@@ -429,15 +467,58 @@ fn summary_flags(rows: &[Read<'_>]) -> Vec<bool> {
     out
 }
 
-/// R-072 à R-074 : liens d'une tâche, dans l'ordre du document.
-fn links(
+/// Enfants inconnus des liens gardés : perdus (`Link` n'a pas d'`Extras`),
+/// comptés et signalés une fois par fichier (R-128).
+#[derive(Default)]
+struct LinkChildren {
+    count: u64,
+    first: Option<u64>,
+}
+
+impl LinkChildren {
+    fn add(&mut self, e: &Element<'_>) {
+        if e.skipped_children > 0 {
+            self.count = self.count.saturating_add(e.skipped_children);
+            self.first.get_or_insert(e.at);
+        }
+    }
+
+    /// `mspdi.unsupported` (`predecessor_link_child`), valeur = nombre.
+    fn report(&self, sink: &mut Sink<'_>) {
+        if let Some(at) = self.first {
+            sink.push(
+                ImportCode::Unsupported {
+                    what: "predecessor_link_child".to_owned(),
+                },
+                None,
+                at,
+                LINK,
+                Some(&self.count.to_string()),
+            );
+        }
+    }
+}
+
+/// Contexte de lecture des liens d'une tâche.
+struct LinkContext<'c, 'b, 'a> {
     successor: TaskUid,
+    known: &'c BTreeSet<TaskUid>,
+    options: &'c ProjectOptions,
+    opaques: &'c mut Opaques<'b, 'a>,
+    children: &'c mut LinkChildren,
+}
+
+/// R-072 à R-074 : liens d'une tâche, dans l'ordre du document ; rend aussi
+/// les liens abandonnés pour une cause non fautive (projet externe, type
+/// inconnu), capturés entiers (R-128).
+fn links<'a>(
+    ctx: &mut LinkContext<'_, '_, 'a>,
     children: &[Element<'_>],
-    known: &BTreeSet<TaskUid>,
-    options: &ProjectOptions,
     sink: &mut Sink<'_>,
-) -> Vec<Link> {
+) -> (Vec<Link>, Vec<Opaque<'a>>) {
+    let successor = ctx.successor;
     let mut out: Vec<Link> = Vec::new();
+    let mut abandoned: Vec<Opaque<'a>> = Vec::new();
     // Prédécesseurs déjà gardés : détection des doublons en O(log n), coût
     // linéaire (§ 7.5) même pour une tâche à des centaines de milliers de
     // prédécesseurs.
@@ -463,6 +544,7 @@ fn links(
         };
         if f.bool("CrossProject", sink) == Some(true) {
             ignored(LinkIgnoredReason::CrossProject, "CrossProject", &f, sink);
+            abandoned.extend(ctx.opaques.capture(e, Some(Subject::Task(successor))));
             continue;
         }
         let kind = match f.int("Type", sink) {
@@ -472,6 +554,7 @@ fn links(
                     k
                 } else {
                     ignored(LinkIgnoredReason::UnknownType, "Type", &f, sink);
+                    abandoned.extend(ctx.opaques.capture(e, Some(Subject::Task(successor))));
                     continue;
                 }
             }
@@ -480,7 +563,7 @@ fn links(
             ignored(LinkIgnoredReason::SelfLink, "PredecessorUID", &f, sink);
             continue;
         }
-        if !known.contains(&p) {
+        if !ctx.known.contains(&p) {
             f.report(
                 ImportCode::DanglingReference,
                 "PredecessorUID",
@@ -500,13 +583,14 @@ fn links(
             );
             continue;
         }
+        ctx.children.add(e);
         out.push(Link {
             predecessor: p,
             kind,
-            lag: lag(&f, options, sink),
+            lag: lag(&f, ctx.options, sink),
         });
     }
-    out
+    (out, abandoned)
 }
 
 /// R-072, R-073 : décalage (`LinkLag` en dixièmes, `LagFormat`).

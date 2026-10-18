@@ -69,7 +69,9 @@ pub enum ImportCode {
     },
     /// Secondes, durée ou décalage arrondis à la minute.
     Rounded,
-    /// Fonction non prise en charge (planification à rebours, `LevelingDelay`…).
+    /// Fonction non prise en charge (planification à rebours, `LevelingDelay`,
+    /// racine préfixée `prefixed_namespace`, enfants inconnus d'un lien gardé
+    /// `predecessor_link_child`…).
     Unsupported {
         /// Fonction, en code stable (`schedule_from_finish`…).
         what: String,
@@ -82,6 +84,17 @@ pub enum ImportCode {
     Truncated {
         /// Nombre de diagnostics supprimés.
         dropped: u64,
+    },
+    /// Charges opaques abandonnées au-delà du plafond
+    /// ([`crate::Limits::max_opaque_bytes`], [`crate::Limits::max_retained`]),
+    /// R-128 : un seul, à la première capture abandonnée ; le détail est dans
+    /// [`crate::SourceInfo::opaque_dropped`]. Même code stable que
+    /// [`ImportCode::Truncated`] (ADR-0010), variante distincte.
+    OpaqueTruncated {
+        /// Nombre de charges abandonnées par le plafond.
+        dropped: u64,
+        /// Leur taille totale, en octets.
+        bytes: u64,
     },
     /// Diagnostic de `Project::validate`, enveloppé.
     Core(Diagnostic),
@@ -101,7 +114,7 @@ impl ImportCode {
             Self::Rounded => "mspdi.rounded".to_owned(),
             Self::Unsupported { .. } => "mspdi.unsupported".to_owned(),
             Self::Inconsistent => "mspdi.inconsistent".to_owned(),
-            Self::Truncated { .. } => "mspdi.truncated".to_owned(),
+            Self::Truncated { .. } | Self::OpaqueTruncated { .. } => "mspdi.truncated".to_owned(),
             Self::Core(d) => format!("core.{}", d.code()),
         }
     }
@@ -120,6 +133,7 @@ impl ImportCode {
             Self::Inconsistent => 8,
             Self::Truncated { .. } => 9,
             Self::Core(_) => 10,
+            Self::OpaqueTruncated { .. } => 11,
         }
     }
 
@@ -133,6 +147,7 @@ impl ImportCode {
             | Self::Rounded
             | Self::Inconsistent
             | Self::Truncated { .. }
+            | Self::OpaqueTruncated { .. }
             | Self::LinkIgnored { .. }
             | Self::Unsupported { .. } => Severity::Warning,
             Self::MissingRequired | Self::DanglingReference => Severity::Error,
@@ -204,6 +219,9 @@ impl fmt::Display for ImportDiagnostic {
             ImportCode::LinkIgnored { reason } => write!(f, " ({})", reason.as_str())?,
             ImportCode::Unsupported { what } => write!(f, " ({what})")?,
             ImportCode::Truncated { dropped } => write!(f, " ({dropped} diagnostics supprimés)")?,
+            ImportCode::OpaqueTruncated { dropped, bytes } => {
+                write!(f, " ({dropped} charges opaques abandonnées, {bytes} octets)")?;
+            }
             _ => {}
         }
         if !self.element.is_empty() {
@@ -228,7 +246,7 @@ pub(crate) struct Sink<'a> {
     lines: &'a LineIndex<'a>,
     pub(crate) out: Vec<ImportDiagnostic>,
     /// Diagnostics gardés, par rang de code.
-    per_code: [u32; 11],
+    per_code: [u32; 12],
     /// Diagnostics supprimés.
     pub(crate) dropped: u64,
 }
@@ -238,7 +256,7 @@ impl<'a> Sink<'a> {
         Self {
             lines,
             out: Vec::new(),
-            per_code: [0; 11],
+            per_code: [0; 12],
             dropped: 0,
         }
     }
@@ -333,6 +351,14 @@ mod tests {
             (ImportCode::Inconsistent, "mspdi.inconsistent", Severity::Warning),
             (
                 ImportCode::Truncated { dropped: 5 },
+                "mspdi.truncated",
+                Severity::Warning,
+            ),
+            (
+                ImportCode::OpaqueTruncated {
+                    dropped: 2,
+                    bytes: 10,
+                },
                 "mspdi.truncated",
                 Severity::Warning,
             ),

@@ -13,15 +13,231 @@
 //! les limites sont vérifiées au fil de la lecture, avant l'allocation
 //! qu'elles protègent, dont le nombre d'éléments retenus
 //! ([`Limits::max_retained`]).
+//!
+//! Capture opaque (R-128, J3) : orthogonale au rôle de lecture, elle copie
+//! en octets bruts, balise englobante comprise, tout enfant direct de
+//! `Project`, `Tasks/Task` ou `Calendars/Calendar` que l'écrivain ne
+//! régénère pas (ensembles W de [`crate::written`]). Le sous-arbre capturé
+//! n'est pas construit : seules ses bornes (octet du `<` ouvrant, octet après
+//! le `>` fermant) sont lues, et la charge est empruntée à l'entrée. Chaque
+//! capture compte comme un élément retenu ; le total des charges est borné
+//! par [`Limits::max_opaque_bytes`] ([`OpaqueBudget`]).
 
 use std::borrow::Cow;
 
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
-use crate::Limits;
+use planrs_core::{ExtraEntry, Extras, Subject};
+
 use crate::diag::{ImportCode, Sink};
 use crate::error::{LineIndex, MspdiError};
+use crate::written;
+use crate::{EXTRAS_ORIGIN, Limits, MAX_OPAQUE_LOSSES, OpaqueLossReason};
+
+/// Charge opaque capturée (R-128) : élément complet, balise englobante
+/// comprise, emprunté à l'entrée.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Opaque<'a> {
+    /// Nom qualifié de l'élément, tel qu'écrit (clé de l'entrée d'`Extras`).
+    pub(crate) key: Cow<'a, str>,
+    /// Octets bruts de l'élément.
+    pub(crate) payload: &'a str,
+    /// Octet du `<` ouvrant.
+    pub(crate) at: u64,
+}
+
+/// Charge opaque abandonnée, en attente de son entité (UID lu plus tard).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Lost<'a> {
+    /// Nom qualifié de l'élément.
+    pub(crate) key: Cow<'a, str>,
+    /// Taille, balise englobante comprise.
+    pub(crate) bytes: u64,
+    /// Cause.
+    pub(crate) reason: OpaqueLossReason,
+    /// Octet du `<` ouvrant.
+    pub(crate) at: u64,
+}
+
+impl Lost<'_> {
+    /// Perte rattachée à son entité.
+    pub(crate) fn attach(&self, subject: Option<Subject>) -> PendingLoss {
+        PendingLoss {
+            subject,
+            key: self.key.to_string(),
+            bytes: self.bytes,
+            reason: self.reason,
+            at: self.at,
+        }
+    }
+}
+
+/// Perte rattachée à son entité, position encore en octets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PendingLoss {
+    pub(crate) subject: Option<Subject>,
+    pub(crate) key: String,
+    pub(crate) bytes: u64,
+    pub(crate) reason: OpaqueLossReason,
+    pub(crate) at: u64,
+}
+
+/// Budget des charges opaques (R-128) : total gardé borné, abandon
+/// déterministe de toute capture suivant le premier dépassement, pertes
+/// listées au plus [`MAX_OPAQUE_LOSSES`] fois.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct OpaqueBudget {
+    /// Plafond ([`Limits::max_opaque_bytes`]).
+    max_bytes: u64,
+    /// Octets gardés.
+    pub(crate) kept_bytes: u64,
+    /// Plafond atteint : toute capture suivante est abandonnée.
+    truncated: bool,
+    /// Charges abandonnées par le plafond, leur taille, la première position.
+    cap_dropped: u64,
+    cap_dropped_bytes: u64,
+    first_cap_drop: Option<u64>,
+    /// Charges abandonnées, toutes causes.
+    pub(crate) dropped_total: u64,
+    /// Pertes listées.
+    listed: usize,
+}
+
+impl OpaqueBudget {
+    pub(crate) fn new(max_bytes: u64) -> Self {
+        Self {
+            max_bytes,
+            ..Self::default()
+        }
+    }
+
+    /// Admet une charge de `bytes` octets commençant à `at` ; `false` :
+    /// abandonnée (plafond déjà atteint, ou atteint par elle).
+    pub(crate) fn admit(&mut self, bytes: u64, at: u64) -> bool {
+        let total = self.kept_bytes.checked_add(bytes);
+        match total {
+            Some(t) if !self.truncated && t <= self.max_bytes => {
+                self.kept_bytes = t;
+                true
+            }
+            _ => {
+                self.cap_drop(bytes, at);
+                false
+            }
+        }
+    }
+
+    /// Abandon par le plafond : toute capture suivante l'est aussi.
+    fn cap_drop(&mut self, bytes: u64, at: u64) {
+        self.truncated = true;
+        self.cap_dropped = self.cap_dropped.saturating_add(1);
+        self.cap_dropped_bytes = self.cap_dropped_bytes.saturating_add(bytes);
+        if self.first_cap_drop.is_none() {
+            self.first_cap_drop = Some(at);
+        }
+    }
+
+    /// Compte une perte ; vrai si elle doit être listée.
+    pub(crate) fn note_loss(&mut self) -> bool {
+        self.dropped_total = self.dropped_total.saturating_add(1);
+        if self.listed < MAX_OPAQUE_LOSSES {
+            self.listed = self.listed.saturating_add(1);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Diagnostic unique `mspdi.truncated` (`OpaqueTruncated`) si le
+    /// plafond a abandonné des charges.
+    pub(crate) fn report(&self, sink: &mut Sink<'_>) {
+        if let Some(at) = self.first_cap_drop {
+            sink.push(
+                ImportCode::OpaqueTruncated {
+                    dropped: self.cap_dropped,
+                    bytes: self.cap_dropped_bytes,
+                },
+                Some(Subject::Project),
+                at,
+                "",
+                None,
+            );
+        }
+    }
+}
+
+/// Entrées d'`Extras` (origine `mspdi`) des charges, dans l'ordre donné.
+pub(crate) fn extras(opaque: &[Opaque<'_>]) -> Extras {
+    Extras(
+        opaque
+            .iter()
+            .map(|o| ExtraEntry {
+                origin: EXTRAS_ORIGIN.to_owned(),
+                key: o.key.to_string(),
+                payload: o.payload.to_owned(),
+            })
+            .collect(),
+    )
+}
+
+/// Captures de la correspondance typée : entrée, budget, pertes rattachées.
+pub(crate) struct Opaques<'b, 'a> {
+    /// Entrée.
+    pub(crate) input: &'a str,
+    /// Budget partagé avec la lecture XML.
+    pub(crate) budget: &'b mut OpaqueBudget,
+    /// Pertes rattachées à leur entité.
+    pub(crate) losses: &'b mut Vec<PendingLoss>,
+}
+
+impl<'a> Opaques<'_, 'a> {
+    /// Rattache les pertes d'un élément à son entité.
+    pub(crate) fn attach(&mut self, lost: &[Lost<'_>], subject: Option<Subject>) {
+        self.losses.extend(lost.iter().map(|l| l.attach(subject)));
+    }
+
+    /// Capture un élément retenu entier (lien abandonné, R-128) ; `None` :
+    /// abandonné (plafond, bornes), perte listée.
+    pub(crate) fn capture(&mut self, e: &Element<'_>, subject: Option<Subject>) -> Option<Opaque<'a>> {
+        let bytes = e.end.saturating_sub(e.at);
+        let span = usize::try_from(e.at)
+            .ok()
+            .zip(usize::try_from(e.end).ok())
+            .and_then(|(a, b)| self.input.get(a..b))
+            .filter(|p| p.starts_with('<'));
+        let reason = match span {
+            Some(payload) if self.budget.admit(bytes, e.at) => {
+                return Some(Opaque {
+                    key: Cow::Borrowed(payload_key(payload)),
+                    payload,
+                    at: e.at,
+                });
+            }
+            Some(_) => OpaqueLossReason::Cap,
+            None => OpaqueLossReason::OutOfBounds,
+        };
+        if self.budget.note_loss() {
+            self.losses.push(PendingLoss {
+                subject,
+                key: e.name.to_string(),
+                bytes,
+                reason,
+                at: e.at,
+            });
+        }
+        None
+    }
+}
+
+/// Nom qualifié en tête d'une charge (`<Nom …`), emprunté.
+pub(crate) fn payload_key(payload: &str) -> &str {
+    let rest = payload.strip_prefix('<').unwrap_or(payload);
+    let end = rest
+        .find(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/')
+        .unwrap_or(rest.len());
+    rest.get(..end).unwrap_or(rest)
+}
 
 /// Élément XML retenu : nom local, texte concaténé, enfants retenus,
 /// position (octet du début de la balise ouvrante).
@@ -39,6 +255,15 @@ pub(crate) struct Element<'a> {
     pub(crate) structured: bool,
     /// Octet du début de la balise ouvrante.
     pub(crate) at: u64,
+    /// Octet suivant la fin de la balise fermante (`/>` d'un élément vide).
+    pub(crate) end: u64,
+    /// Enfants directs sautés (non retenus), capturés ou non.
+    pub(crate) skipped_children: u64,
+    /// Charges opaques capturées parmi ses enfants directs (tâche,
+    /// calendrier), dans l'ordre du document.
+    pub(crate) opaque: Vec<Opaque<'a>>,
+    /// Captures abandonnées parmi ses enfants directs (listées seulement).
+    pub(crate) lost: Vec<Lost<'a>>,
 }
 
 /// Champs scalaires de `Project` retenus (§ 7.6).
@@ -226,6 +451,14 @@ pub(crate) const UI_SECTIONS: &[&str] = &[
 /// Résultat de la lecture XML, avant la correspondance typée.
 #[derive(Debug, Default)]
 pub(crate) struct RawDocument<'a> {
+    /// Entrée (découpe des liens abandonnés capturés, R-128).
+    pub(crate) input: &'a str,
+    /// Charges opaques, enfants directs de `Project`, ordre du document.
+    pub(crate) opaque: Vec<Opaque<'a>>,
+    /// Captures abandonnées, enfants directs de `Project`.
+    pub(crate) lost: Vec<Lost<'a>>,
+    /// Budget des charges opaques.
+    pub(crate) budget: OpaqueBudget,
     /// Espace de noms de la racine, s'il est déclaré.
     pub(crate) namespace: Option<String>,
     /// Octet du début de la racine `Project`.
@@ -281,6 +514,31 @@ struct Frame<'a> {
     role: Role,
 }
 
+/// Porteur d'une capture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Owner {
+    /// `Project`.
+    Project,
+    /// Élément retenu en construction (tâche, calendrier).
+    Element,
+}
+
+/// Capture en cours (jamais imbriquée : un sous-arbre capturé ne contient ni
+/// tâche ni calendrier).
+struct Capture {
+    /// Profondeur de l'élément capturé (indice de son cadre).
+    depth: usize,
+    /// Octet du `<` ouvrant.
+    at: u64,
+    /// Longueur du nom qualifié.
+    qname_len: usize,
+    owner: Owner,
+    /// Abandonnée d'avance (plafond atteint à l'ouverture).
+    doomed: bool,
+    /// Entité non résolue rencontrée.
+    tainted: bool,
+}
+
 /// État de la lecture.
 struct State<'a, 's, 'l> {
     /// Entrée.
@@ -294,6 +552,9 @@ struct State<'a, 's, 'l> {
     /// Éléments retenus (construits), bornés par [`Limits::max_retained`].
     retained: u64,
     root_seen: bool,
+    /// Capture opaque active (racine sans préfixe).
+    capture_enabled: bool,
+    capture: Option<Capture>,
     sink: &'s mut Sink<'l>,
 }
 
@@ -317,10 +578,16 @@ pub(crate) fn read_document<'a>(
         limits,
         open: Vec::new(),
         building: Vec::new(),
-        doc: RawDocument::default(),
+        doc: RawDocument {
+            input: text,
+            budget: OpaqueBudget::new(limits.max_opaque_bytes),
+            ..RawDocument::default()
+        },
         elements: 0,
         retained: 0,
         root_seen: false,
+        capture_enabled: true,
+        capture: None,
         sink,
     };
     loop {
@@ -336,11 +603,12 @@ pub(crate) fn read_document<'a>(
         };
         match event {
             Event::Start(e) => state.start(&e, at, lines)?,
-            Event::End(_) => state.end(),
+            // Après la balise fermante (ou après `/>` d'un élément vide déplié).
+            Event::End(_) => state.end(reader.buffer_position()),
             Event::Empty(e) => {
                 // `expand_empty_elements` les déplie : branche gardée par sûreté.
                 state.start(&e, at, lines)?;
-                state.end();
+                state.end(reader.buffer_position());
             }
             Event::Text(t) => state.text(t.xml10_content(), at, lines)?,
             Event::CData(t) => state.text(t.xml10_content(), at, lines)?,
@@ -350,6 +618,11 @@ pub(crate) fn read_document<'a>(
                 } else {
                     quick_xml::escape::resolve_xml_entity(&r).map(str::to_owned)
                 };
+                if resolved.is_none()
+                    && let Some(capture) = &mut state.capture
+                {
+                    capture.tainted = true;
+                }
                 let piece = resolved.unwrap_or_else(|| {
                     let raw = format!("&{};", &*r);
                     state
@@ -420,6 +693,45 @@ impl<'a> State<'a, '_, '_> {
         names.join("/")
     }
 
+    /// Rôle de la racine : `Project`, unique ; préfixe → aucune capture.
+    fn root_role(
+        &mut self,
+        name: &str,
+        e: &BytesStart<'_>,
+        at: u64,
+        lines: &LineIndex<'_>,
+    ) -> Result<Role, MspdiError> {
+        if self.root_seen {
+            return Err(MspdiError::Xml {
+                at: lines.locate(at),
+                message: "plusieurs éléments racine".to_owned(),
+            });
+        }
+        if name != "Project" {
+            return Err(MspdiError::NotMspdi {
+                root: name.to_owned(),
+            });
+        }
+        self.root_seen = true;
+        self.doc.namespace = root_namespace(e);
+        self.doc.root_at = at;
+        if e.name().prefix().is_some() {
+            // R-128 : les charges porteraient un préfixe non déclaré une fois
+            // réémises ; rien n'est capturé.
+            self.capture_enabled = false;
+            self.sink.push(
+                ImportCode::Unsupported {
+                    what: "prefixed_namespace".to_owned(),
+                },
+                Some(Subject::Project),
+                at,
+                "",
+                Some(name),
+            );
+        }
+        Ok(Role::Root)
+    }
+
     fn start(&mut self, e: &BytesStart<'_>, at: u64, lines: &LineIndex<'_>) -> Result<(), MspdiError> {
         self.elements = self.elements.saturating_add(1);
         if self.elements > self.limits.max_elements {
@@ -436,23 +748,7 @@ impl<'a> State<'a, '_, '_> {
         }
         let name = local_name(self.input, at, e);
         let role = match self.open.last().map(|f| f.role) {
-            None => {
-                if self.root_seen {
-                    return Err(MspdiError::Xml {
-                        at: lines.locate(at),
-                        message: "plusieurs éléments racine".to_owned(),
-                    });
-                }
-                if name != "Project" {
-                    return Err(MspdiError::NotMspdi {
-                        root: name.into_owned(),
-                    });
-                }
-                self.root_seen = true;
-                self.doc.namespace = root_namespace(e);
-                self.doc.root_at = at;
-                Role::Root
-            }
+            None => self.root_role(&name, e, at, lines)?,
             Some(Role::Root) => match name.as_ref() {
                 "Calendars" => Role::Container(Container::Calendars),
                 "Tasks" => Role::Container(Container::Tasks),
@@ -495,8 +791,17 @@ impl<'a> State<'a, '_, '_> {
             }
             Some(Role::Skip) => Role::Skip,
         };
+        let parent_role = self.open.last().map(|f| f.role);
+        self.begin_capture(parent_role, &name, e, at);
         match role {
-            Role::Skip => self.doc.skipped_elements = self.doc.skipped_elements.saturating_add(1),
+            Role::Skip => {
+                self.doc.skipped_elements = self.doc.skipped_elements.saturating_add(1);
+                if matches!(parent_role, Some(Role::Build { .. }))
+                    && let Some(parent) = self.building.last_mut()
+                {
+                    parent.skipped_children = parent.skipped_children.saturating_add(1);
+                }
+            }
             Role::Build { .. } => {
                 self.retained = self.retained.saturating_add(1);
                 if self.retained > self.limits.max_retained {
@@ -507,10 +812,8 @@ impl<'a> State<'a, '_, '_> {
                 }
                 self.building.push(Element {
                     name: name.clone(),
-                    text: Cow::Borrowed(""),
-                    children: Vec::new(),
-                    structured: false,
                     at,
+                    ..Element::default()
                 });
             }
             Role::Root | Role::Container(_) => {}
@@ -519,16 +822,115 @@ impl<'a> State<'a, '_, '_> {
         Ok(())
     }
 
-    fn end(&mut self) {
+    /// Ouvre une capture si `name`, enfant direct de `Project`, d'une tâche
+    /// ou d'un calendrier, n'est pas régénéré par l'écrivain (R-128).
+    fn begin_capture(&mut self, parent_role: Option<Role>, name: &str, e: &BytesStart<'_>, at: u64) {
+        if self.capture.is_some() || !self.capture_enabled {
+            return;
+        }
+        let owner = match parent_role {
+            Some(Role::Root) => written::project_captures(name).then_some(Owner::Project),
+            Some(Role::Build { kind: Kind::Task, .. }) => {
+                written::task_captures(name).then_some(Owner::Element)
+            }
+            Some(Role::Build {
+                kind: Kind::Calendar, ..
+            }) => written::calendar_captures(name).then_some(Owner::Element),
+            _ => None,
+        };
+        let Some(owner) = owner else {
+            return;
+        };
+        // Chaque capture compte comme un élément retenu ; au-delà du plafond,
+        // abandon (comme pour le plafond d'octets).
+        let doomed = if self.doc.budget.truncated || self.retained >= self.limits.max_retained {
+            true
+        } else {
+            self.retained = self.retained.saturating_add(1);
+            false
+        };
+        self.capture = Some(Capture {
+            depth: self.open.len(),
+            at,
+            qname_len: e.name().as_ref().len(),
+            owner,
+            doomed,
+            tainted: false,
+        });
+    }
+
+    fn end(&mut self, end: u64) {
         let Some(frame) = self.open.pop() else {
             return;
         };
-        let Role::Build { top, .. } = frame.role else {
-            return;
+        if let Role::Build { top, .. } = frame.role
+            && let Some(mut done) = self.building.pop()
+        {
+            done.end = end;
+            self.finish_element(top, done);
+        }
+        if self.capture.as_ref().is_some_and(|c| c.depth == self.open.len())
+            && let Some(capture) = self.capture.take()
+        {
+            self.finish_capture(&capture, end);
+        }
+    }
+
+    /// Clôt une capture : charge gardée sur son porteur, ou perte listée.
+    fn finish_capture(&mut self, capture: &Capture, end: u64) {
+        let bytes = end.saturating_sub(capture.at);
+        let span = usize::try_from(capture.at)
+            .ok()
+            .zip(usize::try_from(end).ok())
+            .and_then(|(a, b)| self.input.get(a..b));
+        let key: Cow<'a, str> = span
+            .and_then(|p| p.get(1..capture.qname_len.checked_add(1)?))
+            .map_or(Cow::Borrowed(""), Cow::Borrowed);
+        let budget = &mut self.doc.budget;
+        let outcome = if capture.tainted {
+            Err(OpaqueLossReason::UnresolvedEntity)
+        } else if capture.doomed {
+            budget.cap_drop(bytes, capture.at);
+            Err(OpaqueLossReason::Cap)
+        } else if let Some(payload) = span {
+            if budget.admit(bytes, capture.at) {
+                Ok(payload)
+            } else {
+                Err(OpaqueLossReason::Cap)
+            }
+        } else {
+            Err(OpaqueLossReason::OutOfBounds)
         };
-        let Some(done) = self.building.pop() else {
-            return;
+        let (opaque, lost) = match capture.owner {
+            Owner::Project => (&mut self.doc.opaque, &mut self.doc.lost),
+            Owner::Element => {
+                let Some(owner) = self.building.last_mut() else {
+                    return;
+                };
+                (&mut owner.opaque, &mut owner.lost)
+            }
         };
+        match outcome {
+            Ok(payload) => opaque.push(Opaque {
+                key,
+                payload,
+                at: capture.at,
+            }),
+            Err(reason) => {
+                if self.doc.budget.note_loss() {
+                    lost.push(Lost {
+                        key,
+                        bytes,
+                        reason,
+                        at: capture.at,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Range un élément retenu fermé.
+    fn finish_element(&mut self, top: Option<Dest>, done: Element<'a>) {
         match top {
             None => {
                 if let Some(parent) = self.building.last_mut() {
@@ -765,13 +1167,126 @@ mod tests {
             read_with(text, limits).0,
             Err(MspdiError::TooManyRetained { max: 3, .. })
         ));
-        // Les éléments sautés ne comptent pas.
+        // Les éléments sautés ne sont pas construits ; chaque capture opaque
+        // compte comme un élément retenu (R-128) : Task, UID, puis une seule
+        // capture ; les 999 suivantes sont abandonnées, sans erreur.
         let skipped = format!(
             "<Project><Tasks><Task><UID>1</UID>{}</Task></Tasks></Project>",
             "<X/>".repeat(1_000)
         );
         let doc = read_with(&skipped, limits).0.unwrap();
         assert_eq!(doc.skipped_elements, 1_000);
+        assert_eq!(doc.tasks[0].opaque.len(), 1);
+        assert_eq!(doc.budget.dropped_total, 999);
+        assert_eq!(doc.tasks[0].lost.len(), 999);
+    }
+
+    #[test]
+    fn r128_capture_bounds_and_roles() {
+        // Bornes : du `<` ouvrant à l'octet après le `>` fermant ; `<X/>`
+        // déplié : après `/>`. Capture orthogonale au rôle : `LevelingDelay`
+        // construit et capturé, `Assignments` parcouru et capturé.
+        let text = "<Project><Title>t</Title><Foo a=\"1\">x<b/>&amp;</Foo>\n<Tasks><Task><UID>1</UID>\
+                    <LevelingDelay>48</LevelingDelay><X/><!-- c --><Baseline><Number>0</Number></Baseline>\
+                    </Task></Tasks><Calendars><Calendar><UID>1</UID><Bar>1</Bar></Calendar></Calendars>\
+                    <Assignments><Assignment><TaskUID>1</TaskUID></Assignment></Assignments></Project>";
+        let (doc, diags) = read(text);
+        let doc = doc.unwrap();
+        assert!(diags.is_empty(), "{diags:?}");
+        let pairs = |o: &[super::Opaque<'_>]| {
+            o.iter()
+                .map(|o| (o.key.to_string(), o.payload.to_owned()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            pairs(&doc.opaque),
+            [
+                ("Foo".to_owned(), "<Foo a=\"1\">x<b/>&amp;</Foo>".to_owned()),
+                (
+                    "Assignments".to_owned(),
+                    "<Assignments><Assignment><TaskUID>1</TaskUID></Assignment></Assignments>".to_owned()
+                ),
+            ]
+        );
+        assert_eq!(
+            pairs(&doc.tasks[0].opaque),
+            [
+                (
+                    "LevelingDelay".to_owned(),
+                    "<LevelingDelay>48</LevelingDelay>".to_owned()
+                ),
+                ("X".to_owned(), "<X/>".to_owned()),
+                (
+                    "Baseline".to_owned(),
+                    "<Baseline><Number>0</Number></Baseline>".to_owned()
+                ),
+            ]
+        );
+        let names: Vec<&str> = doc.tasks[0].children.iter().map(|c| c.name.as_ref()).collect();
+        assert_eq!(names, ["UID", "LevelingDelay"]);
+        assert_eq!(
+            pairs(&doc.calendars[0].opaque),
+            [("Bar".to_owned(), "<Bar>1</Bar>".to_owned())]
+        );
+        assert_eq!(doc.assignments.len(), 1);
+        let kept: u64 = [&doc.opaque, &doc.tasks[0].opaque, &doc.calendars[0].opaque]
+            .iter()
+            .flat_map(|o| o.iter())
+            .map(|o| u64::try_from(o.payload.len()).unwrap())
+            .sum();
+        assert_eq!(doc.budget.kept_bytes, kept);
+        // Positions : `<` ouvrant.
+        assert_eq!(
+            &text[usize::try_from(doc.tasks[0].opaque[1].at).unwrap()..][..4],
+            "<X/>"
+        );
+    }
+
+    #[test]
+    fn r128_prefixed_root_is_not_captured() {
+        let (doc, diags) = read(
+            r#"<p:Project xmlns:p="urn:x"><p:Foo>1</p:Foo><p:Tasks><p:Task><p:UID>1</p:UID><p:X/></p:Task></p:Tasks></p:Project>"#,
+        );
+        let doc = doc.unwrap();
+        assert!(doc.opaque.is_empty() && doc.tasks[0].opaque.is_empty());
+        assert_eq!(diags.len(), 1);
+        assert_eq!(
+            diags[0].code,
+            ImportCode::Unsupported {
+                what: "prefixed_namespace".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn r128_unresolved_entity_drops_the_capture() {
+        let (doc, diags) = read("<Project><Foo>&nbsp;x</Foo><Bar>&#233;</Bar></Project>");
+        let doc = doc.unwrap();
+        assert_eq!(doc.opaque.len(), 1);
+        assert_eq!(doc.opaque[0].payload, "<Bar>&#233;</Bar>");
+        assert_eq!(doc.lost.len(), 1);
+        assert_eq!(doc.lost[0].key, "Foo");
+        assert_eq!(doc.lost[0].reason, crate::OpaqueLossReason::UnresolvedEntity);
+        assert_eq!(doc.lost[0].bytes, 18);
+        assert_eq!(diags[0].code, ImportCode::Inconsistent);
+    }
+
+    #[test]
+    fn r128_byte_cap_is_deterministic() {
+        // Plafond de 10 octets : `<A>12</A>` (9) gardé, `<B>12</B>` (9)
+        // dépasse et toute capture suivante est abandonnée, même `<C/>` (4)
+        // qui tiendrait.
+        let limits = Limits {
+            max_opaque_bytes: 10,
+            ..Limits::default()
+        };
+        let text = "<Project><A>12</A><B>12</B><C/></Project>";
+        let doc = read_with(text, limits).0.unwrap();
+        assert_eq!(doc.opaque.len(), 1);
+        assert_eq!(doc.budget.kept_bytes, 9);
+        let lost: Vec<(&str, u64)> = doc.lost.iter().map(|l| (l.key.as_ref(), l.bytes)).collect();
+        assert_eq!(lost, [("B", 9), ("C", 4)]);
+        assert!(doc.lost.iter().all(|l| l.reason == crate::OpaqueLossReason::Cap));
     }
 
     #[test]

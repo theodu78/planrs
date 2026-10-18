@@ -158,9 +158,9 @@ impl NodeConstraint {
 impl Calc<'_, '_> {
     /// R-092 (R-108 à rebours) : après la passe secondaire, chaque feuille
     /// automatique active de règle `Opposite` (ALAP depuis le début, ASAP à
-    /// rebours), non dégradée, de marge totale ≥ 0 (R-048 sur son échelle) et
-    /// dont les dates au plus tard ne précèdent pas les dates au plus tôt en
-    /// brut, est épinglée sur ses dates secondaires (`pin` : au plus tard
+    /// rebours), non dégradée, de marge totale ≥ 0 (R-048, sur son échelle de
+    /// mesure, R-113) et dont les dates au plus tard ne précèdent pas les
+    /// dates au plus tôt en brut, est épinglée sur ses dates secondaires (`pin` : au plus tard
     /// depuis le début, au plus tôt à rebours) ; la repasse de la passe
     /// principale les tient pour fixes. Rend vrai si au moins une épingle
     /// déplace une tâche. Une tâche à marge négative n'est pas épinglée
@@ -178,7 +178,10 @@ impl Calc<'_, '_> {
         for k in 0..self.net.nodes.len() {
             let Some(v) = ix(k) else { continue };
             let Some(node) = self.net.node(v) else { continue };
-            let (Some(c), Some(scale)) = (node.constraint, self.net.scale(node.place).copied()) else {
+            // Marge mesurée comme R-048 : échelle de mesure (calendrier de
+            // base du projet pour une tâche sans calendrier propre, R-113).
+            let measure = self.net.measure(node.place);
+            let (Some(c), Some(scale)) = (node.constraint, self.net.scale(measure).copied()) else {
                 continue;
             };
             if node.kind != NodeKind::Leaf || node.inactive || c.rule != ConstraintRule::Opposite {

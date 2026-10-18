@@ -3,3 +3,5 @@
 * text=auto eol=lf
 # L'éditeur VBA de MS Project n'importe correctement un module .bas qu'en CRLF.
 *.bas text eol=crlf
+# Captures de référence d'egui_kittest : jamais de conversion de fin de ligne.
+*.png binary

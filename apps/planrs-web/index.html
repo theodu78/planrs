@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <!-- Titre remplacé au démarrage par planrs_core::PRODUCT_NAME. -->
   <title>planrs</title>
+  <!-- Pas d'icône : évite une requête /favicon.ico en 404 (erreur console). -->
+  <link rel="icon" href="data:,">
   <!-- trunk compile la crate en wasm et génère la colle wasm-bindgen : aucun JS écrit à la main. -->
   <link data-trunk rel="rust" data-bin="planrs-web" data-wasm-opt="z">
   <style>

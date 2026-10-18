@@ -8,3 +8,5 @@
 # Captures produites par les tests visuels (nouvelle capture / différence)
 *.new.png
 *.diff.png
+# Ancienne référence sauvée par UPDATE_SNAPSHOTS
+*.old.png

@@ -758,7 +758,7 @@ Bloc réservé à la lecture MSPDI (`planrs-mspdi`) ; l'écriture a son propre b
 - **Tests** : `tests/rules/r080_calendar_exceptions_import.rs` (`r080_*`).
 
 ## R-081 — Ancienne forme des exceptions (`WeekDay` de `DayType 0`)
-- **Formulation** : ignorée si le calendrier a un élément `Exceptions` ; sinon chaque entrée devient une exception `Period` sur sa `TimePeriod` (convention de R-080), avec son `DayWorking` et ses `WorkingTimes`. La comparaison des deux formes (oracle des récurrences) est reportée à J3. Exemples : fixture sans `Exceptions`, `DayType 0` du 01/02/2004 ouvré 08-12 et 13-17 → exception ouvrée de 480 min ; fichiers A6, A7 (deux formes) → seule la forme `Exceptions` est lue.
+- **Formulation** : ignorée si le calendrier a un élément `Exceptions` ; sinon chaque entrée devient une exception `Period` sur sa `TimePeriod` (convention de R-080), avec son `DayWorking` et ses `WorkingTimes`. La comparaison des deux formes (oracle des récurrences) est reportée sans échéance (relecture finale J3) : elle demande un oracle, un fichier où les deux formes divergent ou MS Project lui-même, et aucun n'est disponible ; cohérent avec l'ADR-0010 (statut de la confrontation `j3-cloud`), qui garde l'écriture de la seule forme `Exceptions` (R-128). Exemples : fixture sans `Exceptions`, `DayType 0` du 01/02/2004 ouvré 08-12 et 13-17 → exception ouvrée de 480 min ; fichiers A6, A7 (deux formes) → seule la forme `Exceptions` est lue.
 - **Source** : schéma MSPDI (S1) ; précédence : hypothèse.
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r081_legacy_exceptions.rs` (`r081_*`).

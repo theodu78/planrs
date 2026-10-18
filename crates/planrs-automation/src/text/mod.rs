@@ -21,6 +21,7 @@ pub(crate) mod lex;
 
 pub use date::{DateRole, format_date, parse_date};
 pub use duration::{format_duration, format_lag, parse_duration, parse_lag};
+pub(crate) use predecessors::predecessor_elements;
 pub use predecessors::{
     PredecessorRef, format_predecessor, format_predecessors, link_code, parse_predecessors,
 };
@@ -71,7 +72,8 @@ pub struct TextContext {
     /// Marque décimale à l'écriture.
     pub decimal: DecimalMark,
     /// Séparateur d'une liste de prédécesseurs (`;` en français, `,` en
-    /// anglais : séparateur de liste des paramètres régionaux, S38).
+    /// anglais : séparateur de liste des paramètres régionaux, S38) ; à la
+    /// lecture, l'anglais admet aussi `;` (R-142).
     pub list_separator: char,
     /// Facteurs de conversion des unités (R-006, R-007).
     pub factors: ConversionFactors,

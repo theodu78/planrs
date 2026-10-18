@@ -296,7 +296,7 @@ pub fn valid_payload(name: &str, payload: &str) -> bool {
         };
         match event {
             Event::Start(e) => {
-                if depth == 0 && !root(&e, &mut roots) {
+                if (depth == 0 && !root(&e, &mut roots)) || !attributes_well_formed(&e) {
                     return false;
                 }
                 depth = depth.saturating_add(1);
@@ -305,7 +305,7 @@ pub fn valid_payload(name: &str, payload: &str) -> bool {
                 }
             }
             Event::Empty(e) => {
-                if depth == 0 && !root(&e, &mut roots) {
+                if (depth == 0 && !root(&e, &mut roots)) || !attributes_well_formed(&e) {
                     return false;
                 }
             }
@@ -316,11 +316,37 @@ pub fn valid_payload(name: &str, payload: &str) -> bool {
                 }
             }
             Event::CData(_) | Event::GeneralRef(_) | Event::Comment(_) if depth == 0 => return false,
+            // R-087 : seules les entités prédéfinies et les références de
+            // caractère valides sont du XML bien formé sans DTD ; une entité
+            // inconnue (`&nbsp;`, tolérée à la lecture) rendrait le document
+            // illisible par MS Project.
+            Event::GeneralRef(r) => {
+                let known = if r.is_char_ref() {
+                    r.resolve_char_ref()
+                        .ok()
+                        .flatten()
+                        .is_some_and(crate::write::is_xml_char)
+                } else {
+                    matches!(&*r, "amp" | "lt" | "gt" | "quot" | "apos")
+                };
+                if !known {
+                    return false;
+                }
+            }
             Event::Decl(_) | Event::DocType(_) | Event::PI(_) => return false,
             Event::Eof => return depth == 0 && roots == 1,
             _ => {}
         }
     }
+}
+
+/// R-087 : attributs lisibles, sans entité inconnue ni caractère interdit.
+fn attributes_well_formed(e: &quick_xml::events::BytesStart<'_>) -> bool {
+    e.attributes().all(|a| {
+        a.ok()
+            .and_then(|a| a.normalized_value(quick_xml::XmlVersion::Implicit1_0).ok())
+            .is_some_and(|v| v.chars().all(crate::write::is_xml_char))
+    })
 }
 
 #[cfg(test)]
@@ -418,5 +444,30 @@ mod tests {
         }
         let deep = format!("<A>{}{}</A>", "<b>".repeat(70), "</b>".repeat(70));
         assert!(!valid_payload("A", &deep));
+    }
+
+    /// R-087 : entités d'une charge — prédéfinies et références de caractère
+    /// valides admises, toute autre refusée (XML mal formé sans DTD).
+    #[test]
+    fn r087_payload_entities() {
+        use super::valid_payload;
+        for good in [
+            "<H>a &amp; &lt;b&gt; &quot;c&quot; &apos;</H>",
+            "<H>&#233;&#xE9;&#x1F600;</H>",
+            "<H><i a=\"&amp;\">&#10;</i></H>",
+        ] {
+            assert!(valid_payload("H", good), "{good}");
+        }
+        for bad in [
+            "<H>a&nbsp;b</H>",
+            "<H><i>&eacute;</i></H>",
+            "<H>&#1;</H>",
+            "<H>&#xD800;</H>",
+            "<H>&#99999999;</H>",
+            "<H><i a=\"&nbsp;\"/></H>",
+            "<H a=\"&#1;\"/>",
+        ] {
+            assert!(!valid_payload("H", bad), "{bad}");
+        }
     }
 }

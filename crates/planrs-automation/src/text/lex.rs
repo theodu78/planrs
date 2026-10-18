@@ -3,7 +3,7 @@
 
 use planrs_core::Decimal;
 
-use super::{DecimalMark, MAX_INPUT_CHARS, TextError};
+use super::{DecimalMark, Language, MAX_INPUT_CHARS, TextError};
 
 /// Caractères d'une entrée bornée à [`MAX_INPUT_CHARS`].
 ///
@@ -121,6 +121,19 @@ impl<'a> Cursor<'a> {
     /// [`TextError::BadNumber`] sans chiffre ou au-delà de 6 décimales,
     /// [`TextError::OutOfRange`] si la mantisse ne tient pas dans un `i64`.
     pub(crate) fn decimal(&mut self) -> Result<Decimal, TextError> {
+        self.decimal_in(Language::Fr)
+    }
+
+    /// Nombre décimal de [`Cursor::decimal`], lu dans la langue `language`.
+    /// En anglais, une virgule suivie d'exactement trois chiffres puis de la
+    /// fin du nombre est un séparateur de milliers anglais (« 1,000 hrs »),
+    /// pas une marque décimale : refusée (`BadNumber` sur la virgule) plutôt
+    /// que lue 1 sans diagnostic (R-140).
+    ///
+    /// # Errors
+    ///
+    /// Comme [`Cursor::decimal`].
+    pub(crate) fn decimal_in(&mut self, language: Language) -> Result<Decimal, TextError> {
         let start = self.pos;
         let mut mantissa: i64 = 0;
         let mut digits = 0_usize;
@@ -142,6 +155,13 @@ impl<'a> Cursor<'a> {
         }
         let mut scale: u8 = 0;
         if matches!(self.peek(), Some(',' | '.')) && self.peek_at(1).is_some_and(|c| c.is_ascii_digit()) {
+            if language == Language::En
+                && self.peek() == Some(',')
+                && (1..=3).all(|i| self.peek_at(i).is_some_and(|c| c.is_ascii_digit()))
+                && !self.peek_at(4).is_some_and(|c| c.is_ascii_digit())
+            {
+                return Err(TextError::BadNumber { at: self.pos });
+            }
             self.bump();
             while let Some(c) = self.peek().filter(char::is_ascii_digit) {
                 if scale >= Decimal::MAX_SCALE {
@@ -234,7 +254,7 @@ mod tests {
     use planrs_core::Decimal;
 
     use super::{Cursor, bounded_chars, fold, format_decimal};
-    use crate::text::{DecimalMark, MAX_INPUT_CHARS, TextError};
+    use crate::text::{DecimalMark, Language, MAX_INPUT_CHARS, TextError};
 
     fn dec(s: &str) -> Result<(Decimal, usize), TextError> {
         let chars = bounded_chars(s).unwrap();
@@ -263,6 +283,22 @@ mod tests {
         assert_eq!(dec("0,1234567"), Err(TextError::BadNumber { at: 8 }));
         assert_eq!(dec("j"), Err(TextError::BadNumber { at: 0 }));
         assert_eq!(dec("99999999999999999999"), Err(TextError::OutOfRange));
+    }
+
+    /// R-140 : en anglais, « 1,000 » est un séparateur de milliers, refusé ;
+    /// une virgule suivie d'un autre nombre de chiffres reste décimale.
+    #[test]
+    fn r140_english_comma_thousands_refused() {
+        let en = |s: &str| {
+            let chars = bounded_chars(s).unwrap();
+            Cursor::new(&chars).decimal_in(Language::En)
+        };
+        assert_eq!(en("1,000 hrs"), Err(TextError::BadNumber { at: 1 }));
+        assert_eq!(en("12,345"), Err(TextError::BadNumber { at: 2 }));
+        assert_eq!(en("1,5"), Ok(Decimal::new(15, 1).unwrap()));
+        assert_eq!(en("1,0005"), Ok(Decimal::new(10_005, 4).unwrap()));
+        assert_eq!(en("1.000"), Ok(Decimal::new(1_000, 3).unwrap()));
+        assert_eq!(dec("1,000").unwrap().0, Decimal::new(1_000, 3).unwrap());
     }
 
     #[test]

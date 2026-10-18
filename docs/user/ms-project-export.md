@@ -34,18 +34,21 @@ Si MS Project refuse d'ouvrir le fichier, vérifier **Fichier › Options › Ce
 | Lignes de base 0 à 10 | lues et réécrites |
 | Avancement saisi (% achevé, dates et durées réelles), notes | lus et réécrits |
 | Tâches manuelles et inactives | lues et réécrites, telles quelles |
-| Champs personnalisés, codes hiérarchiques, vues, tables, filtres, groupes, tables de taux, disponibilités, répartitions détaillées | **recopiés tels quels**, sans être interprétés |
+| Champs personnalisés, codes hiérarchiques, vues, tables, filtres, groupes, tables de taux, disponibilités, répartitions détaillées (sauf le travail planifié d'une affectation, voir section 4) | **recopiés tels quels**, sans être interprétés |
 
 ## 4. Ce qui est recalculé ou perdu
 
-**Recalculé par MS Project à l'ouverture** (planrs ne les écrit pas) : coûts, valeur acquise, écarts, surutilisation des ressources, travail des ressources, début et fin des affectations.
+**Recalculé par MS Project à l'ouverture** (planrs ne les écrit pas) : coûts, valeur acquise, écarts, surutilisation des ressources, travail des ressources, début et fin des affectations, répartition du travail planifié d'une affectation (`TimephasedData` de type 1, écartée à la lecture sauf si le profil de travail a été modifié à la main).
 
 **Dates calculées.** planrs écrit ses propres dates (au plus tôt, au plus tard, marges, critique) quand son moteur sait tout calculer. Si le projet contient de l'avancement, des calendriers de ressource ou un retard de nivellement (pas encore calculés par planrs), il réécrit à la place les dates que MS Project avait enregistrées si le projet n'a pas été modifié ; sinon il n'écrit aucune date calculée et MS Project les recalcule à l'ouverture.
 
 **Perdu à l'aller-retour** :
 - la forme ancienne des exceptions de calendrier (`WeekDay` de `DayType 0`, que MS Project écrit en plus de la forme `Exceptions`) : planrs n'écrit que la forme `Exceptions`, que MS Project 2007 et suivants lisent ; qu'il régénère l'ancienne à l'enregistrement est une hypothèse, non vérifiée faute de licence ;
 - le nombre d'occurrences d'une exception qui n'a pas été saisie par occurrences ;
-- les éléments inconnus à l'intérieur d'un jour de calendrier, d'une exception, d'une semaine de travail ou d'un lien ;
+- les éléments inconnus à l'intérieur d'un jour de calendrier, d'une exception, d'une semaine de travail, d'une plage horaire ou d'un lien ;
+- un élément recopié tel quel qui contient une entité XML non définie (`&nbsp;`…) : il serait illisible par MS Project, planrs ne le réécrit pas et le signale ;
+- l'unité propre de la durée saisie d'une tâche manuelle (`ManualDuration`) : elle est relue avec l'unité, la base et l'estimation de la durée de la tâche ;
+- un retard d'affectation négatif (ramené à 0) ;
 - les valeurs illisibles (remplacées par leur valeur par défaut, signalées à la lecture) et les liens invalides ;
 - les textes au-delà de la longueur maximale du schéma (tronqués, signalés) ;
 - les pourcentages non entiers (arrondis au pour-cent) et la précision des décalages en % (arrondis au pas de 0,1 %) ;
@@ -58,11 +61,12 @@ Le CSV convient pour partir d'un tableur, ou depuis MS Project quand le XML n'es
 - **Depuis MS Project** : **Fichier › Enregistrer sous › Parcourir**, type **CSV**, puis l'assistant d'exportation : nouvelle table de correspondance, données « Tâches », colonnes recommandées ci-dessous. Le séparateur, pas l'extension, décide du type de fichier.
 - **Colonnes reconnues** (casse, accents et ponctuation ignorés ; en français ou en anglais) : N° / ID, N° unique / Unique ID, Nom / Name, Durée / Duration, Début / Start, Fin / Finish, Prédécesseurs / Predecessors, N° unique des prédécesseurs / Unique ID Predecessors, Niveau hiérarchique / Outline Level, Jalon / Milestone, Notes, WBS, % achevé / % Complete. « Noms des ressources » et « Travail » sont signalés et ignorés pour l'instant ; une colonne inconnue est signalée et ignorée. Il faut au moins Nom ou Durée.
 - **Durées** : « 5j », « 1,5 j », « 3h », « 2s », « 1mo », « 5ej » (jours écoulés), « 2j? » (estimée) ; en anglais « 5d », « 2w ». Sans unité : l'unité par défaut du projet (le jour).
-- **Prédécesseurs** : « 3FD+2j;5DD » en français, « 3FS+2d,5SS » en anglais ; un numéro seul = fin à début ; décalage en durée ou en % (« 3FS+50% »).
-- **Séparateurs et décimales** : français `;` et virgule, dates JJ/MM/AAAA ; anglais `,` et point, dates MM/JJ/AAAA. Séparateur, langue et encodage (UTF-8, UTF-16, Windows-1252) sont détectés.
-- **Dates** : ignorées par défaut (planrs recalcule et signale les écarts) ; sur option, Début devient « ne pas commencer avant le » et Fin « ne pas finir avant le », comme une date saisie à la main dans MS Project.
+- **Prédécesseurs** : « 3FD+2j;5DD » en français, « 3FS+2d,5SS » (ou « 3FS+2d;5SS ») en anglais ; un numéro seul = fin à début ; décalage en durée ou en % (« 3FS+50% »). La colonne « N° unique des prédécesseurs » n'est lue qu'avec la colonne « N° unique » (sans elle, les numéros uniques sont réattribués : la colonne est ignorée et signalée).
+- **Séparateurs et décimales** : français `;` et virgule, dates JJ/MM/AAAA ; anglais `,` et point, dates MM/JJ/AAAA. Séparateur, langue et encodage (UTF-8, UTF-16, Windows-1252) sont détectés ; une première ligne Excel `sep=;` fixe le séparateur. En anglais, « 1,000 » est refusé (séparateur de milliers, pas une décimale).
+- **Attention aux dates** : l'ordre jour/mois vient de la langue des en-têtes, pas des valeurs. « 03/04/2026 » est le 3 avril sous des en-têtes français et le 4 mars sous des en-têtes anglais, sans avertissement. Un fichier aux en-têtes anglais avec des dates JJ/MM (Excel en français, par exemple) doit être importé en imposant la langue.
+- **Dates** : ignorées par défaut (planrs recalcule et signale les écarts) ; sur option, Début devient « ne pas commencer avant le » ou, sans Début, Fin devient « ne pas finir avant le » (une seule contrainte par tâche), comme une date saisie à la main dans MS Project.
 - **Hiérarchie** : la colonne Niveau hiérarchique fait les récapitulatives ; leur durée est calculée (celle du fichier est ignorée).
-- **Erreurs** : une valeur illisible est signalée avec son numéro de ligne et remplacée par sa valeur par défaut ; le fichier n'est refusé que s'il est vide, trop grand ou sans colonne exploitable.
+- **Erreurs** : une valeur illisible est signalée avec son numéro de ligne et remplacée par sa valeur par défaut (au plus 10 000 signalements, 1 000 par type, puis leur nombre). Le fichier n'est refusé que s'il est vide, trop grand (plus de 64 Mio), sans ligne d'en-tête, sans colonne Nom ni Durée, s'il a plus de 200 000 lignes ou plus de 256 colonnes, ou si ses octets ne sont pas dans l'encodage imposé.
 - **Export** : UTF-8 avec BOM, fins de ligne CRLF ; un texte qui commence par `=`, `+`, `-` ou `@` est précédé d'une apostrophe pour qu'un tableur ne l'exécute pas comme une formule (retirée à la relecture).
 
 ---
@@ -99,18 +103,21 @@ If MS Project refuses the file, check **File › Options › Trust Center › Tr
 | Baselines 0 to 10 | read and written back |
 | Entered progress (% complete, actual dates and durations), notes | read and written back |
 | Manual and inactive tasks | read and written back, as they are |
-| Custom fields, outline codes, views, tables, filters, groups, cost rate tables, availability, detailed timephased data | **copied verbatim**, not interpreted |
+| Custom fields, outline codes, views, tables, filters, groups, cost rate tables, availability, detailed timephased data (except an assignment's scheduled work, see section 4) | **copied verbatim**, not interpreted |
 
 ## 4. What is recalculated or lost
 
-**Recalculated by MS Project on opening** (planrs does not write them): costs, earned value, variances, resource overallocation, resource work, assignment start and finish.
+**Recalculated by MS Project on opening** (planrs does not write them): costs, earned value, variances, resource overallocation, resource work, assignment start and finish, an assignment's scheduled work distribution (`TimephasedData` type 1, dropped on reading unless the work contour was edited by hand).
 
 **Calculated dates.** planrs writes its own dates (early, late, slack, critical) when its engine can compute everything. If the project has progress, resource calendars or a leveling delay (not computed by planrs yet), it writes back the dates MS Project had saved if the project was not modified; otherwise it writes no calculated date and MS Project recomputes them on opening.
 
 **Lost in the round trip**:
 - the legacy form of calendar exceptions (`WeekDay` with `DayType 0`, which MS Project writes alongside the `Exceptions` form): planrs writes only the `Exceptions` form, read by MS Project 2007 and later; that MS Project regenerates the legacy form on save is an assumption, not verified (no licence);
 - the occurrence count of an exception not entered by occurrences;
-- unknown elements inside a calendar day, an exception, a work week or a link;
+- unknown elements inside a calendar day, an exception, a work week, a working time or a link;
+- a verbatim element that contains an undefined XML entity (`&nbsp;`…): MS Project could not read it, planrs does not write it back and reports it;
+- the own unit of a manual task's entered duration (`ManualDuration`): it is read back with the unit, basis and estimate of the task's duration;
+- a negative assignment delay (set to 0);
 - unreadable values (replaced by their default, reported on reading) and invalid links;
 - text beyond the schema's maximum length (truncated, reported);
 - non-integer percentages (rounded to the percent) and percentage-lag precision (rounded to steps of 0.1 %);
@@ -123,9 +130,10 @@ CSV suits a start from a spreadsheet, or from MS Project when XML is not availab
 - **From MS Project**: **File › Save As › Browse**, type **CSV**, then the Export Wizard: new map, "Tasks" data, the columns below. The delimiter, not the file extension, decides the file type.
 - **Recognized columns** (case, accents and punctuation ignored; French or English): ID / N°, Unique ID / N° unique, Name / Nom, Duration / Durée, Start / Début, Finish / Fin, Predecessors / Prédécesseurs, Unique ID Predecessors, Outline Level / Niveau hiérarchique, Milestone / Jalon, Notes, WBS, % Complete / % achevé. "Resource Names" and "Work" are reported and ignored for now; an unknown column is reported and ignored. Name or Duration is required.
 - **Durations**: "5d", "1.5 d", "3h", "2w", "1mo", "5ed" (elapsed days), "2d?" (estimated); in French "5j", "2s". Without a unit: the project's default unit (day).
-- **Predecessors**: "3FS+2d,5SS" in English, "3FD+2j;5DD" in French; a number alone means finish-to-start; lag as a duration or a percentage ("3FS+50%").
-- **Separators and decimals**: English `,` and dot, dates MM/DD/YYYY; French `;` and comma, dates DD/MM/YYYY. Separator, language and encoding (UTF-8, UTF-16, Windows-1252) are detected.
-- **Dates**: ignored by default (planrs recomputes and reports differences); as an option, Start becomes "start no earlier than" and Finish "finish no earlier than", like a date typed by hand in MS Project.
+- **Predecessors**: "3FS+2d,5SS" (or "3FS+2d;5SS") in English, "3FD+2j;5DD" in French; a number alone means finish-to-start; lag as a duration or a percentage ("3FS+50%"). The Unique ID Predecessors column is read only with the Unique ID column (without it, unique IDs are reassigned: the column is ignored and reported).
+- **Separators and decimals**: English `,` and dot, dates MM/DD/YYYY; French `;` and comma, dates DD/MM/YYYY. Separator, language and encoding (UTF-8, UTF-16, Windows-1252) are detected; an Excel first line `sep=;` sets the separator. In English, "1,000" is refused (thousands separator, not a decimal).
+- **Beware of dates**: the day/month order comes from the language of the headers, not from the values. "03/04/2026" is 3 April under French headers and 4 March under English headers, without warning. A file with English headers and DD/MM dates (a French Excel, for instance) must be imported with the language forced.
+- **Dates**: ignored by default (planrs recomputes and reports differences); as an option, Start becomes "start no earlier than" or, without a Start, Finish becomes "finish no earlier than" (one constraint per task), like a date typed by hand in MS Project.
 - **Outline**: the Outline Level column makes summary tasks; their duration is calculated (the file's is ignored).
-- **Errors**: an unreadable value is reported with its line number and replaced by its default; the file is refused only if it is empty, too large or has no usable column.
+- **Errors**: an unreadable value is reported with its line number and replaced by its default (at most 10,000 reports, 1,000 per kind, then their count). The file is refused only if it is empty, too large (over 64 MiB), has no header line, has neither a Name nor a Duration column, has more than 200,000 rows or more than 256 columns, or if its bytes are not in the forced encoding.
 - **Export**: UTF-8 with BOM, CRLF line endings; a text starting with `=`, `+`, `-` or `@` gets a leading apostrophe so that a spreadsheet does not run it as a formula (removed on reading back).

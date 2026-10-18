@@ -174,16 +174,15 @@ fn r145_predecessor_diagnostics_and_uids() {
     let c = task(&i, "C");
     assert_eq!(c.predecessors.len(), 2);
     assert_eq!(c.predecessors[0].kind, LinkType::StartToStart);
-    let got: Vec<&str> = i.diagnostics.iter().map(|d| d.code.code()).collect();
-    assert_eq!(
-        got,
-        vec![
-            "csv.external_predecessor",
-            "csv.bad_value",
-            "csv.self_predecessor",
-            "csv.duplicate_predecessor",
-        ]
-    );
+    // Un seul diagnostic par cellule (règle 10) : premier élément fautif
+    // dans l'ordre de la cellule (« 2 », sur soi), puis le nombre des autres
+    // (« 1FF » en double, le chemin externe, « 1XY » illisible).
+    let got: Vec<(u64, &str, Option<&str>, u32)> = i
+        .diagnostics
+        .iter()
+        .map(|d| (d.line, d.code.code(), d.value.as_deref(), d.others))
+        .collect();
+    assert_eq!(got, vec![(3, "csv.self_predecessor", Some("2"), 3)]);
     // Par UID (colonne « N° unique des prédécesseurs », anglais ici).
     let csv = "Unique ID,Name,Unique ID Predecessors\n7,A,\n9,B,7SS\n";
     let i = read(csv);
@@ -299,4 +298,33 @@ fn r145_formula_guard_and_control_chars() {
         codes(&i),
         vec![(3, "csv.invalid_char", Some("A\u{fffd}B".to_owned()))]
     );
+}
+
+#[test]
+fn r145_unique_predecessors_without_unique_id_column_are_ignored() {
+    // Sans colonne « Unique ID », les UID sont réattribués 1..n : lire
+    // « Unique ID Predecessors » relierait de mauvaises tâches. Colonne
+    // ignorée, un seul diagnostic typé.
+    let i = read("Name,Duration,Unique ID Predecessors\nA,1d,\nB,1d,1\nC,1d,2\n");
+    assert!(i.project.tasks.iter().all(|t| t.predecessors.is_empty()));
+    assert_eq!(codes(&i), vec![(3, "csv.unique_predecessors_without_uid", None)]);
+    // La colonne Prédécesseurs (par ID) reste lue.
+    let i = read("Name,Predecessors,Unique ID Predecessors\nA,,\nB,1,7\n");
+    assert_eq!(task(&i, "B").predecessors.len(), 1);
+    assert_eq!(codes(&i), vec![]);
+}
+
+#[test]
+fn r145_one_diagnostic_per_predecessor_cell() {
+    // 200 prédécesseurs inconnus dans une cellule : un diagnostic, le premier
+    // élément et le nombre des 199 autres.
+    let cell: Vec<String> = (1_000..1_200).map(|n| n.to_string()).collect();
+    let csv = format!("Nom;Prédécesseurs\nA;\"{}\"\n", cell.join(";"));
+    let i = read(&csv);
+    let got: Vec<(&str, Option<&str>, u32)> = i
+        .diagnostics
+        .iter()
+        .map(|d| (d.code.code(), d.value.as_deref(), d.others))
+        .collect();
+    assert_eq!(got, vec![("csv.unknown_predecessor", Some("1000"), 199)]);
 }

@@ -216,3 +216,52 @@ fn r144_file_refusals() {
     assert_eq!(i.project.tasks.iter().next().unwrap().notes, "");
     assert_eq!(codes(&i), vec![(2, "csv.bad_value", Some("Notes".to_owned()))]);
 }
+
+#[test]
+fn r144_leading_blank_lines_and_excel_sep_line() {
+    // Lignes vides de tête : le séparateur est détecté sur l'en-tête, pas sur
+    // la première ligne physique (vide).
+    let i = read(b"\n\r\nName,Duration\nA,2d\nB,5x\n");
+    assert_eq!(i.detected.separator, b',');
+    assert_eq!(names(&i), ["A", "B"]);
+    assert_eq!(codes(&i), vec![(5, "csv.bad_value", Some("Duration".to_owned()))]);
+    // Ligne Excel `sep=X` : fixe le séparateur, n'est pas l'en-tête ; les
+    // numéros de ligne restent physiques.
+    let i = read(b"\nsep=;\nName;Duration\nA;2d\nB;5x\n");
+    assert_eq!(i.detected.separator, b';');
+    assert_eq!(names(&i), ["A", "B"]);
+    assert_eq!(i.project.tasks.iter().next().unwrap().duration, days(2));
+    assert_eq!(codes(&i), vec![(5, "csv.bad_value", Some("Duration".to_owned()))]);
+    // Le séparateur fixé l'emporte sur la détection : « Name;Duration » est
+    // alors une seule colonne inconnue.
+    assert_eq!(
+        import(b"SEP=,\nName;Duration\nA;2d\n", &options()),
+        Err(CsvError::NoKnownColumn)
+    );
+}
+
+#[test]
+fn r144_diagnostics_are_capped() {
+    // Règle 10 : 3 000 prédécesseurs inconnus → 1 000 gardés pour ce code,
+    // les autres codes ne sont pas masqués, un `csv.truncated` final.
+    use planrs_automation::csv::{CsvCode, MAX_DIAGNOSTICS_PER_CODE};
+    use std::fmt::Write as _;
+    let mut csv = String::from("Nom;Durée;Prédécesseurs\n");
+    for k in 0..3_000 {
+        writeln!(csv, "T{k};1j;99999").unwrap();
+    }
+    csv.push_str("X;5x;\n");
+    let i = read(csv.as_bytes());
+    let count = |code: &str| i.diagnostics.iter().filter(|d| d.code.code() == code).count();
+    assert_eq!(
+        count("csv.unknown_predecessor"),
+        MAX_DIAGNOSTICS_PER_CODE as usize
+    );
+    assert_eq!(count("csv.bad_value"), 1);
+    let last = i.diagnostics.last().unwrap();
+    assert_eq!(
+        (last.line, &last.code),
+        (0, &CsvCode::Truncated { dropped: 2_000 })
+    );
+    assert_eq!(i.diagnostics.len(), 1_002);
+}

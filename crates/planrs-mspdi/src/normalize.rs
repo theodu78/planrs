@@ -26,7 +26,7 @@ use crate::resource::rate_amount;
 use crate::scalar::parse_decimal;
 use crate::schema::{Class, Parent, Profile, sequence};
 use crate::task::computed_zero;
-use crate::write::{OrderProfile, WriteOptions, escape_text, hourly_rate_text, sanitize_text};
+use crate::write::{OrderProfile, WriteOptions, escape_text, hourly_rate_text, remaining, sanitize_text};
 
 /// R-133 : image de `project` par l'écriture (profil de `options`) suivie
 /// de la lecture.
@@ -166,6 +166,8 @@ fn task(t: &mut Task, summary: bool, options: &WriteOptions) {
     if options.profile == OrderProfile::Strict {
         t.guid = None;
     }
+    // R-127 : reste dérivé d'une tâche sans avancement saisi, relu tel quel.
+    (t.progress.remaining_duration, t.progress.remaining_work) = remaining(t, summary);
     let pr = &mut t.progress;
     pr.percent_complete = whole_percent(pr.percent_complete);
     pr.percent_work_complete = whole_percent(pr.percent_work_complete);

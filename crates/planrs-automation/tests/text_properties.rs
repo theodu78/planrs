@@ -79,6 +79,20 @@ fn predecessor() -> impl Strategy<Value = PredecessorRef> {
     (0_u32..=u32::MAX, link_type(), lag()).prop_map(|(id, kind, lag)| PredecessorRef { id, kind, lag })
 }
 
+/// Vrai si le nombre en tête du texte a une virgule suivie d'exactement
+/// trois chiffres (« 5,025j ») : forme refusée en anglais (R-140).
+fn comma_then_three_digits(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    chars.iter().position(|c| *c == ',').is_some_and(|i| {
+        let digits = chars
+            .iter()
+            .skip(i + 1)
+            .take_while(|c| c.is_ascii_digit())
+            .count();
+        digits == 3
+    })
+}
+
 fn context(f: ConversionFactors, language: Language) -> TextContext {
     let options = ProjectOptions {
         factors: f,
@@ -99,9 +113,19 @@ proptest! {
         let ctx = context(f, lang);
         let text = format_duration(&d, &ctx);
         prop_assert_eq!(parse_duration(&text, &ctx), Ok(d), "{}", text);
-        // La lecture accepte l'autre langue (marque et abréviations).
-        let other = context(f, match lang { Language::Fr => Language::En, Language::En => Language::Fr });
-        prop_assert_eq!(parse_duration(&text, &other), Ok(d), "{}", text);
+        // La lecture accepte l'autre langue (marque et abréviations), sauf
+        // une virgule suivie d'exactement trois chiffres lue en anglais :
+        // séparateur de milliers anglais, refusé (R-140).
+        let other_lang = match lang { Language::Fr => Language::En, Language::En => Language::Fr };
+        let other = context(f, other_lang);
+        if other_lang == Language::En && comma_then_three_digits(&text) {
+            prop_assert!(
+                matches!(parse_duration(&text, &other), Err(TextError::BadNumber { .. })),
+                "{}", text
+            );
+        } else {
+            prop_assert_eq!(parse_duration(&text, &other), Ok(d), "{}", text);
+        }
     }
 
     #[test]

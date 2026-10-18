@@ -49,3 +49,39 @@ fn r127_percentages_are_whole_and_work_is_iso() {
     assert_eq!(t.progress.actual_work.minutes(), Minutes::new(90));
     assert_eq!(t.work.minutes(), Minutes::new(960));
 }
+
+#[test]
+fn r127_remaining_of_a_task_without_progress_is_duration_minus_actual() {
+    // Tâche de 5 j non commencée importée d'un CSV (avancement par défaut) :
+    // MS Project écrit toujours reste = durée − réel ; planrs aussi, au lieu
+    // de 0. Le travail restant suit le travail. Relu : valeurs gardées,
+    // image décrite par `normalize` (R-133).
+    use planrs_automation::csv::{CsvImportOptions, import};
+    use planrs_core::ScheduleAnchor;
+    use planrs_mspdi::write::WriteOptions;
+    use planrs_tests::moment;
+    let options = CsvImportOptions::new(
+        ScheduleAnchor::FromStart(moment("2026-10-19T08:00")),
+        moment("2026-10-17T08:00"),
+    );
+    let csv = "Nom;Durée\nA;5j\n";
+    let mut proj = import(csv.as_bytes(), &options).unwrap().project;
+    let opts = proj.options;
+    let mut w = Task::new(TaskUid::new(2), "B".to_owned(), &opts);
+    w.work = Work::new(Minutes::new(960)).unwrap();
+    proj.tasks.push(w).unwrap();
+    let out = written(&proj);
+    let xml = compact(&text(&out));
+    assert!(xml.contains("<Name>A</Name>"));
+    assert!(
+        xml.contains("<RemainingDuration>PT40H0M0S</RemainingDuration>"),
+        "{xml}"
+    );
+    assert!(xml.contains("<RemainingWork>PT16H0M0S</RemainingWork>"));
+    assert!(xml.contains("<ActualDuration>PT0H0M0S</ActualDuration>"));
+    let back = reread(&out.xml).project;
+    let a = back.tasks.get(TaskUid::new(1)).unwrap();
+    assert_eq!(a.progress.remaining_duration, Minutes::new(2_400));
+    assert_eq!(back, planrs_mspdi::normalize(&proj, &WriteOptions::default()));
+    // Avancement saisi : valeurs écrites telles quelles (premier test).
+}

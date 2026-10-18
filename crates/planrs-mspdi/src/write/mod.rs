@@ -32,6 +32,7 @@ pub use computed::{Computed, ScheduleGap, choose_computed, schedule_gaps};
 use emit::Emitter;
 pub(crate) use emit::is_xml_char;
 pub(crate) use resource::hourly_rate_text;
+pub(crate) use task::remaining;
 
 /// Texte échappé tel que l'écrivain l'écrit (R-131).
 pub(crate) fn escape_text(s: &str) -> String {

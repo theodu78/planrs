@@ -212,3 +212,46 @@ fn r122_schedule_from_finish_writes_the_computed_start() {
     // `StartDate` = début calculé du moteur (`Schedule::project_start`).
     assert!(xml.contains(&format!("<StartDate>{}:00</StartDate>", sched.project_start)));
 }
+
+#[test]
+fn r122_start_slack_on_base_of_derived_project_calendar() {
+    // R-122 amendée (dette R-113) : calendrier du projet dérivé (calendrier
+    // de ressource, comme A4) d'une base lun-ven 09:00-13:00, 15:00-19:00 ;
+    // `StartSlack`/`FinishSlack` mesurés sur la base, comme la marge du
+    // moteur. A 1 j, C 3 j : TF(A) = 2 j = 960 → `StartSlack` 9 600.
+    use crate::r113_derived_project_calendar::net;
+    let proj = net().task("A", 480).task("C", 1_440).build();
+    let sched = schedule(&proj);
+    let (computed, diags) = choose_computed(&proj, &sched, None);
+    assert!(matches!(computed, Computed::Schedule(_)));
+    assert_eq!(diags, Vec::new());
+    let xml = compact(&text(&write(&proj, computed, &WriteOptions::default())));
+    let a = task_xml(&xml, 1);
+    assert!(a.contains("<TotalSlack>9600</TotalSlack>"), "{a}");
+    assert!(
+        a.contains("<StartSlack>9600</StartSlack><FinishSlack>9600</FinishSlack>"),
+        "{a}"
+    );
+    // A 4 h, C 1 j : ES lun 08:00, EF 12:00, LS 13:00, LF 17:00 (placement
+    // sur le dérivé). Sur la base : début 240 (09:00-13:00), fin 180
+    // (12:00-13:00, 15:00-17:00), TF = 180. Sur le dérivé, l'écrivain aurait trouvé
+    // 240/240, dont le minimum ne redonne pas la marge : valeurs omises
+    // avant l'amendement.
+    let proj = net().task("A", 240).task("C", 480).build();
+    let sched = schedule(&proj);
+    assert_eq!(
+        sched.scheduled(TaskUid::new(1)).unwrap().total_slack,
+        Minutes::new(180)
+    );
+    let xml = compact(&text(&write(
+        &proj,
+        Computed::Schedule(&sched),
+        &WriteOptions::default(),
+    )));
+    let a = task_xml(&xml, 1);
+    assert!(a.contains("<TotalSlack>1800</TotalSlack>"), "{a}");
+    assert!(
+        a.contains("<StartSlack>2400</StartSlack><FinishSlack>1800</FinishSlack>"),
+        "{a}"
+    );
+}

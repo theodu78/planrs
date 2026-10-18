@@ -1,14 +1,19 @@
 //! Tables des codes numériques MSPDI → types du cœur (ADR-0008 : aucun code
-//! MSPDI dans `planrs-core`).
+//! MSPDI dans `planrs-core`), et leurs inverses pour l'écriture (R-089, J3).
 //!
 //! Source : schéma `mspdi_pj15.xsd` (Project 2013 SDK) et pages
 //! learn.microsoft.com « XML Schema for the Tasks / Calendars / Project
 //! Element » (S1 à S4). Une fonction par table ; un code hors liste rend
 //! `None`, que l'appelant signale (`mspdi.unknown_code`) avant d'appliquer la
 //! valeur par défaut.
+//!
+//! Chaque table a son inverse `*_code` (R-089), totale sur le domaine du
+//! type : pour tout code valide `c`, `encode(decode(c)) == c`, et pour toute
+//! valeur `v`, `decode(encode(v)) == Some(v)` (bijection testée de façon
+//! exhaustive).
 
 use planrs_core::calendar::{MonthItem, MonthPosition};
-use planrs_core::{DurationUnit, LinkType, Month, TaskType, TimeBasis, Week, Weekday};
+use planrs_core::{DurationUnit, Lag, LagValue, LinkType, Month, TaskType, TimeBasis, Week, Weekday};
 
 /// Écart entre un code de durée et sa variante estimée (« ? ») : 32.
 const ESTIMATED_OFFSET: i64 = 32;
@@ -290,20 +295,254 @@ pub const fn work_format(code: i64) -> Option<DurationUnit> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Inverses (écriture, R-089) : une fonction par table, totale.
+// ---------------------------------------------------------------------------
+
+/// Inverse de [`link_type`] : FF 0, FS 1, SF 2, SS 3.
+#[must_use]
+pub const fn link_type_code(kind: LinkType) -> i64 {
+    match kind {
+        LinkType::FinishToFinish => 0,
+        LinkType::FinishToStart => 1,
+        LinkType::StartToFinish => 2,
+        LinkType::StartToStart => 3,
+    }
+}
+
+/// Code de base (non estimé) d'une unité de temps : 3 m … 12 emois.
+const fn time_code(unit: DurationUnit, basis: TimeBasis) -> i64 {
+    match (unit, basis) {
+        (DurationUnit::Minute, TimeBasis::Working) => 3,
+        (DurationUnit::Minute, TimeBasis::Elapsed) => 4,
+        (DurationUnit::Hour, TimeBasis::Working) => 5,
+        (DurationUnit::Hour, TimeBasis::Elapsed) => 6,
+        (DurationUnit::Day, TimeBasis::Working) => 7,
+        (DurationUnit::Day, TimeBasis::Elapsed) => 8,
+        (DurationUnit::Week, TimeBasis::Working) => 9,
+        (DurationUnit::Week, TimeBasis::Elapsed) => 10,
+        (DurationUnit::Month, TimeBasis::Working) => 11,
+        (DurationUnit::Month, TimeBasis::Elapsed) => 12,
+    }
+}
+
+/// Inverse de [`duration_format`] : code de base, + 32 pour la variante
+/// estimée. Exemples : jour ouvré → 7 ; jour ouvré estimé → 39 ; `e%` → 20 ;
+/// nul estimé → 53.
+#[must_use]
+pub const fn duration_format_code(code: DurationCode) -> i64 {
+    let (base, estimated) = match code {
+        DurationCode::Time {
+            unit,
+            basis,
+            estimated,
+        } => (time_code(unit, basis), estimated),
+        DurationCode::Percent {
+            basis: TimeBasis::Working,
+            estimated,
+        } => (19, estimated),
+        DurationCode::Percent {
+            basis: TimeBasis::Elapsed,
+            estimated,
+        } => (20, estimated),
+        DurationCode::Null { estimated } => (21, estimated),
+    };
+    if estimated {
+        // Constantes : 21 + 32 au plus, aucun débordement possible.
+        base.saturating_add(ESTIMATED_OFFSET)
+    } else {
+        base
+    }
+}
+
+/// `DurationFormat` d'une durée de tâche : code de son unité et de sa base,
+/// + 32 si elle est estimée (raccourci de [`duration_format_code`]).
+#[must_use]
+pub const fn duration_code(unit: DurationUnit, basis: TimeBasis, estimated: bool) -> i64 {
+    duration_format_code(DurationCode::Time {
+        unit,
+        basis,
+        estimated,
+    })
+}
+
+/// `LagFormat` d'un décalage : code de durée non estimé de son unité et de sa
+/// base (temps), 19 (`%`) ou 20 (`e%`) pour un pourcentage. Un décalage nul
+/// en jours ouvrés s'écrit 7 (observé : `LinkLag 0`, `LagFormat 7`).
+#[must_use]
+pub const fn lag_format_code(lag: &Lag) -> i64 {
+    match lag.value {
+        LagValue::Time { unit, .. } => duration_code(unit, lag.basis, false),
+        LagValue::Percent { .. } => duration_format_code(DurationCode::Percent {
+            basis: lag.basis,
+            estimated: false,
+        }),
+    }
+}
+
+/// Inverse de [`constraint_type`] : 0 ASAP, 1 ALAP, 2 MSO, 3 MFO, 4 SNET,
+/// 5 SNLT, 6 FNET, 7 FNLT.
+#[must_use]
+pub const fn constraint_type_code(kind: ConstraintKind) -> i64 {
+    match kind {
+        ConstraintKind::AsSoonAsPossible => 0,
+        ConstraintKind::AsLateAsPossible => 1,
+        ConstraintKind::MustStartOn => 2,
+        ConstraintKind::MustFinishOn => 3,
+        ConstraintKind::StartNoEarlierThan => 4,
+        ConstraintKind::StartNoLaterThan => 5,
+        ConstraintKind::FinishNoEarlierThan => 6,
+        ConstraintKind::FinishNoLaterThan => 7,
+    }
+}
+
+/// Inverse de [`task_type`] : 0 unités fixes, 1 durée fixe, 2 travail fixe.
+#[must_use]
+pub const fn task_type_code(kind: TaskType) -> i64 {
+    match kind {
+        TaskType::FixedUnits => 0,
+        TaskType::FixedDuration => 1,
+        TaskType::FixedWork => 2,
+    }
+}
+
+/// Rang d'un jour de semaine depuis le dimanche (0 dimanche … 6 samedi).
+const fn weekday_index(d: Weekday) -> i64 {
+    match d {
+        Weekday::Sunday => 0,
+        Weekday::Monday => 1,
+        Weekday::Tuesday => 2,
+        Weekday::Wednesday => 3,
+        Weekday::Thursday => 4,
+        Weekday::Friday => 5,
+        Weekday::Saturday => 6,
+    }
+}
+
+/// Inverse de [`day_type`] : 0 ancienne exception, 1 dimanche … 7 samedi.
+#[must_use]
+pub const fn day_type_code(day: DayType) -> i64 {
+    match day {
+        DayType::LegacyException => 0,
+        // Rang 0 à 6, + 1 : aucun débordement possible.
+        DayType::Weekday(d) => weekday_index(d).saturating_add(1),
+    }
+}
+
+/// Inverse de [`week_start_day`] : 0 dimanche … 6 samedi.
+#[must_use]
+pub const fn week_start_day_code(day: Weekday) -> i64 {
+    weekday_index(day)
+}
+
+/// Inverse de [`exception_type`] : 1 à 9.
+#[must_use]
+pub const fn exception_type_code(kind: ExceptionType) -> i64 {
+    match kind {
+        ExceptionType::Daily => 1,
+        ExceptionType::YearlyByDay => 2,
+        ExceptionType::YearlyByPosition => 3,
+        ExceptionType::MonthlyByDay => 4,
+        ExceptionType::MonthlyByPosition => 5,
+        ExceptionType::Weekly => 6,
+        ExceptionType::ByDayCount => 7,
+        ExceptionType::ByWeekdayCount => 8,
+        ExceptionType::Period => 9,
+    }
+}
+
+/// Inverse de [`month`] : 0 janvier … 11 décembre.
+#[must_use]
+pub const fn month_code(m: Month) -> i64 {
+    match m {
+        Month::January => 0,
+        Month::February => 1,
+        Month::March => 2,
+        Month::April => 3,
+        Month::May => 4,
+        Month::June => 5,
+        Month::July => 6,
+        Month::August => 7,
+        Month::September => 8,
+        Month::October => 9,
+        Month::November => 10,
+        Month::December => 11,
+    }
+}
+
+/// Inverse de [`month_item`] : 0 jour, 1 jour ouvré, 2 jour de week-end,
+/// 3 dimanche … 9 samedi.
+#[must_use]
+pub const fn month_item_code(item: MonthItem) -> i64 {
+    match item {
+        MonthItem::Day => 0,
+        MonthItem::Weekday => 1,
+        MonthItem::WeekendDay => 2,
+        // Rang 0 à 6, + 3 : aucun débordement possible.
+        MonthItem::On(d) => weekday_index(d).saturating_add(3),
+    }
+}
+
+/// Inverse de [`month_position`] : 0 premier … 3 quatrième, 4 dernier.
+#[must_use]
+pub const fn month_position_code(position: MonthPosition) -> i64 {
+    match position {
+        MonthPosition::First => 0,
+        MonthPosition::Second => 1,
+        MonthPosition::Third => 2,
+        MonthPosition::Fourth => 3,
+        MonthPosition::Last => 4,
+    }
+}
+
+/// Bit `value` si `set`, sinon 0.
+const fn bit(set: bool, value: i64) -> i64 {
+    if set { value } else { 0 }
+}
+
+/// Inverse de [`days_of_week`] : masque de bits, 1 = dimanche, 2 = lundi …
+/// 64 = samedi (0 à 127). Exemple : dimanche, mardi, samedi → 69.
+#[must_use]
+pub const fn days_of_week_mask(days: &Week<bool>) -> i64 {
+    bit(days.sunday, 1)
+        | bit(days.monday, 2)
+        | bit(days.tuesday, 4)
+        | bit(days.wednesday, 8)
+        | bit(days.thursday, 16)
+        | bit(days.friday, 32)
+        | bit(days.saturday, 64)
+}
+
+/// Inverse de [`work_format`] : 1 m, 2 h, 3 j, 4 sem, 5 mois.
+#[must_use]
+pub const fn work_format_code(unit: DurationUnit) -> i64 {
+    match unit {
+        DurationUnit::Minute => 1,
+        DurationUnit::Hour => 2,
+        DurationUnit::Day => 3,
+        DurationUnit::Week => 4,
+        DurationUnit::Month => 5,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
         clippy::unwrap_used,
+        clippy::arithmetic_side_effects,
         reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
     )]
 
     use super::{
-        ConstraintKind, DayType, DurationCode, ExceptionType, constraint_type, day_type, days_of_week,
-        duration_format, exception_type, link_type, month, month_item, month_position, task_type,
-        week_start_day, work_format,
+        ConstraintKind, DayType, DurationCode, ExceptionType, constraint_type, constraint_type_code,
+        day_type, day_type_code, days_of_week, days_of_week_mask, duration_code, duration_format,
+        duration_format_code, exception_type, exception_type_code, lag_format_code, link_type,
+        link_type_code, month, month_code, month_item, month_item_code, month_position, month_position_code,
+        task_type, task_type_code, week_start_day, week_start_day_code, work_format, work_format_code,
     };
     use planrs_core::calendar::{MonthItem, MonthPosition};
     use planrs_core::{DurationUnit, LinkType, Month, TaskType, TimeBasis, Weekday};
+    use planrs_core::{Lag, LagValue, Minutes, SignedPercent};
 
     /// Valeurs voisines de chaque table, hors liste : aucune ne doit passer.
     const OUT: [i64; 6] = [-1, 64, 100, i64::MIN, i64::MAX, 1_000];
@@ -483,5 +722,110 @@ mod tests {
         assert_eq!(work_format(0), None);
         assert_eq!(work_format(6), None);
         assert!(OUT.iter().all(|c| work_format(*c).is_none()));
+    }
+
+    /// Codes parcourus pour la bijection : tout code valide de chaque table
+    /// est dans `-5..=200`, plus des valeurs extrêmes.
+    fn probe_codes() -> impl Iterator<Item = i64> {
+        (-5_i64..=200).chain([i64::MIN, i64::MAX, 1_000])
+    }
+
+    /// `encode(decode(c)) == c` pour tout code valide ; rend le nombre de
+    /// codes valides vus.
+    fn assert_encode_decode<T>(decode: impl Fn(i64) -> Option<T>, encode: impl Fn(T) -> i64) -> usize {
+        let mut valid = 0;
+        for c in probe_codes() {
+            if let Some(v) = decode(c) {
+                assert_eq!(encode(v), c, "code {c}");
+                valid += 1;
+            }
+        }
+        valid
+    }
+
+    #[test]
+    fn inverse_tables_are_bijections() {
+        // encode ∘ decode = id sur les codes valides (et le nombre de codes
+        // valides est celui de la table : aucun code oublié).
+        assert_eq!(assert_encode_decode(link_type, link_type_code), 4);
+        assert_eq!(assert_encode_decode(duration_format, duration_format_code), 26);
+        assert_eq!(assert_encode_decode(constraint_type, constraint_type_code), 8);
+        assert_eq!(assert_encode_decode(task_type, task_type_code), 3);
+        assert_eq!(assert_encode_decode(day_type, day_type_code), 8);
+        assert_eq!(assert_encode_decode(week_start_day, week_start_day_code), 7);
+        assert_eq!(assert_encode_decode(exception_type, exception_type_code), 9);
+        assert_eq!(assert_encode_decode(month, month_code), 12);
+        assert_eq!(assert_encode_decode(month_item, month_item_code), 10);
+        assert_eq!(assert_encode_decode(month_position, month_position_code), 5);
+        assert_eq!(assert_encode_decode(work_format, work_format_code), 5);
+        assert_eq!(assert_encode_decode(days_of_week, |w| days_of_week_mask(&w)), 128);
+        // decode ∘ encode = id sur le domaine : chaque valeur décodée a un
+        // code distinct (injectivité de l'encodage) — vérifié par la
+        // fonction ci-dessus — et toute valeur du domaine est atteinte :
+        // les comptes ci-dessus égalent le cardinal de chaque type.
+    }
+
+    #[test]
+    fn duration_and_lag_codes() {
+        use DurationUnit::{Day, Hour, Minute, Month as Mo, Week};
+        use TimeBasis::{Elapsed, Working};
+        assert_eq!(duration_code(Day, Working, false), 7);
+        assert_eq!(duration_code(Day, Working, true), 39);
+        assert_eq!(duration_code(Minute, Working, false), 3);
+        assert_eq!(duration_code(Mo, Elapsed, true), 44);
+        for unit in [Minute, Hour, Day, Week, Mo] {
+            for basis in [Working, Elapsed] {
+                for estimated in [false, true] {
+                    let v = DurationCode::Time {
+                        unit,
+                        basis,
+                        estimated,
+                    };
+                    assert_eq!(duration_format(duration_format_code(v)), Some(v));
+                }
+            }
+        }
+        // Décalage nul observé : `LinkLag 0`, `LagFormat 7`.
+        assert_eq!(lag_format_code(&Lag::ZERO), 7);
+        let hours = Lag::new(
+            Elapsed,
+            LagValue::Time {
+                minutes: Minutes::new(120),
+                unit: Hour,
+            },
+        )
+        .unwrap();
+        assert_eq!(lag_format_code(&hours), 6);
+        let percent = |basis| {
+            Lag::new(
+                basis,
+                LagValue::Percent {
+                    percent: SignedPercent::new(5_000).unwrap(),
+                },
+            )
+            .unwrap()
+        };
+        assert_eq!(lag_format_code(&percent(Working)), 19);
+        assert_eq!(lag_format_code(&percent(Elapsed)), 20);
+    }
+
+    #[test]
+    fn masks_and_weekdays() {
+        let w = days_of_week(1 | 4 | 64).unwrap();
+        assert_eq!(days_of_week_mask(&w), 69);
+        assert_eq!(days_of_week_mask(&planrs_core::Week::default()), 0);
+        for (code, d) in (1_i64..).zip(Weekday::ALL) {
+            assert_eq!(day_type_code(DayType::Weekday(d)), code);
+            assert_eq!(week_start_day_code(d), code - 1);
+            assert_eq!(month_item_code(MonthItem::On(d)), code + 2);
+        }
+        assert_eq!(day_type_code(DayType::LegacyException), 0);
+        assert_eq!(exception_type_code(ExceptionType::Period), 9);
+        assert_eq!(constraint_type_code(ConstraintKind::FinishNoLaterThan), 7);
+        assert_eq!(month_code(Month::December), 11);
+        assert_eq!(month_position_code(MonthPosition::Last), 4);
+        assert_eq!(task_type_code(TaskType::FixedDuration), 1);
+        assert_eq!(work_format_code(DurationUnit::Week), 4);
+        assert_eq!(link_type_code(LinkType::StartToStart), 3);
     }
 }

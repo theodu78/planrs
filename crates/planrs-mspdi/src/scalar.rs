@@ -1,5 +1,6 @@
 //! Valeurs scalaires de MSPDI : booléens, entiers, dates, heures, durées
-//! ISO 8601 et dixièmes de minute (R-070, R-072, R-073, R-075, R-076).
+//! ISO 8601 et dixièmes de minute (R-070, R-072, R-073, R-075, R-076), en
+//! lecture, et leurs formateurs inverses pour l'écriture (R-089, J3).
 //!
 //! Chaque fonction est pure et totale : une écriture invalide rend `None` ou
 //! une erreur typée, jamais une panique. L'appelant transforme l'échec en
@@ -410,16 +411,228 @@ pub const fn percent_lag_from_link_lag(link_lag: i64) -> Option<i64> {
     link_lag.checked_mul(10)
 }
 
+// ---------------------------------------------------------------------------
+// Écriture (J3, lot W1, R-089) : formateurs inverses des lecteurs ci-dessus.
+//
+// Entiers seulement, aucune panique : les formateurs écrivent dans un tampon
+// `String` fourni par l'appelant (réutilisé d'un champ à l'autre, aucune
+// allocation par champ) ; les dates sont formatées à la main, sans
+// `chrono::format` (trop lent pour 60 000 dates). Chaque formateur `push_*`
+// a sa variante `format_*` qui rend une `String` neuve (tests, usages rares).
+// ---------------------------------------------------------------------------
+
+/// Chiffre décimal `d` (0 à 9) en caractère ASCII ; `'0'` au-delà (jamais
+/// atteint : les appelants passent un reste de division par 10).
+fn digit(d: u32) -> char {
+    char::from_digit(d, 10).unwrap_or('0')
+}
+
+/// Écrit `v` sur exactement deux chiffres (`v` < 100 ; au-delà, les deux
+/// derniers chiffres).
+fn push_2(out: &mut String, v: u32) {
+    out.push(digit(v.checked_div(10).unwrap_or(0).checked_rem(10).unwrap_or(0)));
+    out.push(digit(v.checked_rem(10).unwrap_or(0)));
+}
+
+/// Écrit un entier non signé en décimal, sans zéro de tête.
+fn push_u64(out: &mut String, v: u64) {
+    // 20 chiffres suffisent pour u64::MAX.
+    let mut buf = ['0'; 20];
+    let mut n = v;
+    let mut len: usize = 0;
+    loop {
+        if let Some(slot) = buf.get_mut(len) {
+            *slot = digit(u32::try_from(n.checked_rem(10).unwrap_or(0)).unwrap_or(0));
+        }
+        len = len.saturating_add(1);
+        n = n.checked_div(10).unwrap_or(0);
+        if n == 0 || len >= buf.len() {
+            break;
+        }
+    }
+    for c in buf.iter().take(len).rev() {
+        out.push(*c);
+    }
+}
+
+/// R-089 : entier signé en décimal (`xsd:int`, `xsd:integer`), sans zéro de
+/// tête ni signe `+` : `-28800`, `0`, `9600`. Inverse de [`parse_int`].
+pub fn push_int(out: &mut String, v: i64) {
+    if v < 0 {
+        out.push('-');
+    }
+    push_u64(out, v.unsigned_abs());
+}
+
+/// [`push_int`] dans une `String` neuve.
+#[must_use]
+pub fn format_int(v: i64) -> String {
+    let mut out = String::with_capacity(20);
+    push_int(&mut out, v);
+    out
+}
+
+/// R-089 : booléen écrit `1` ou `0` (forme observée dans le corpus ; inverse
+/// de [`parse_bool`]).
+#[must_use]
+pub const fn format_bool(b: bool) -> &'static str {
+    if b { "1" } else { "0" }
+}
+
+/// R-089 : instant écrit `AAAA-MM-JJTHH:MM:00` (secondes toujours nulles,
+/// heure locale sans fuseau ; inverse de [`parse_datetime`]).
+/// [`Moment::MAX`] (31/12/2149 à 24:00) s'écrit `2150-01-01T00:00:00`, que
+/// la lecture rend à `Moment::MAX`. Exemple : lun 19/10/2026 08:00 →
+/// `2026-10-19T08:00:00`.
+pub fn push_datetime(out: &mut String, m: Moment) {
+    use chrono::{Datelike, Timelike};
+    let dt = m.to_naive();
+    // Année du domaine : 1984 à 2150, toujours quatre chiffres.
+    let year = u32::try_from(dt.year()).unwrap_or(0);
+    push_2(out, year.checked_div(100).unwrap_or(0));
+    push_2(out, year.checked_rem(100).unwrap_or(0));
+    out.push('-');
+    push_2(out, dt.month());
+    out.push('-');
+    push_2(out, dt.day());
+    out.push('T');
+    push_2(out, dt.hour());
+    out.push(':');
+    push_2(out, dt.minute());
+    out.push_str(":00");
+}
+
+/// [`push_datetime`] dans une `String` neuve.
+#[must_use]
+pub fn format_datetime(m: Moment) -> String {
+    let mut out = String::with_capacity(19);
+    push_datetime(&mut out, m);
+    out
+}
+
+/// R-089 : heure d'une plage (`FromTime`, `ToTime`) écrite `HH:MM:00`.
+/// 24:00 (fin de jour) s'écrit `00:00:00` : c'est l'inverse de R-077, qui
+/// lit une fin de plage à 00:00 comme 24:00. Exemples : 17:00 →
+/// `17:00:00` ; 24:00 → `00:00:00`.
+pub fn push_time(out: &mut String, t: TimeOfDay) {
+    let minutes = u32::from(t.minutes()).checked_rem(1_440).unwrap_or(0);
+    push_2(out, minutes.checked_div(60).unwrap_or(0));
+    out.push(':');
+    push_2(out, minutes.checked_rem(60).unwrap_or(0));
+    out.push_str(":00");
+}
+
+/// [`push_time`] dans une `String` neuve.
+#[must_use]
+pub fn format_time(t: TimeOfDay) -> String {
+    let mut out = String::with_capacity(8);
+    push_time(&mut out, t);
+    out
+}
+
+/// R-089 : durée écrite `PT{h}H{m}M0S` (heures et minutes, secondes nulles),
+/// ouvrée comme écoulée (la base est portée par `DurationFormat`) ; une
+/// durée négative s'écrit `-PT…`. Inverse de [`parse_iso_duration`].
+/// Exemples : 510 → `PT8H30M0S` ; 4 800 → `PT80H0M0S` ; 0 → `PT0H0M0S` ;
+/// 87 308 640 → `PT1455144H0M0S` ; −480 → `-PT8H0M0S`.
+pub fn push_iso_duration(out: &mut String, minutes: Minutes) {
+    let v = minutes.get();
+    if v < 0 {
+        out.push('-');
+    }
+    let abs = v.unsigned_abs();
+    out.push_str("PT");
+    push_u64(out, abs.checked_div(60).unwrap_or(0));
+    out.push('H');
+    push_u64(out, abs.checked_rem(60).unwrap_or(0));
+    out.push_str("M0S");
+}
+
+/// [`push_iso_duration`] dans une `String` neuve.
+#[must_use]
+pub fn format_iso_duration(minutes: Minutes) -> String {
+    let mut out = String::with_capacity(16);
+    push_iso_duration(&mut out, minutes);
+    out
+}
+
+/// R-089 : minutes → dixièmes de minute (`LinkLag` temporel, marges
+/// `TotalSlack`/`FreeSlack`), inverse exact de R-072 et R-083 :
+/// minutes × 10. Exemples : 960 → 9 600 ; −2 880 → −28 800. `None` en cas
+/// de débordement (jamais sur le domaine : |minutes| ≤ 87 308 640).
+#[must_use]
+pub const fn minutes_to_tenths(minutes: Minutes) -> Option<i64> {
+    minutes.get().checked_mul(10)
+}
+
+/// R-089 : pourcentage du modèle (1/10 000) → pourcentage entier MSPDI
+/// (`PercentComplete`…), `round_div(v, 100)` (R-001). Le booléen vaut vrai
+/// si un reste a été arrondi (perte, signalée par l'écrivain). Exemples :
+/// 5 000 → (50, faux) ; 5 050 → (51, vrai) ; 10 000 → (100, faux).
+#[must_use]
+pub fn percent_to_whole(percent: i64) -> (i64, bool) {
+    // |v / 100| tient toujours dans un i64 : le repli ne sert jamais.
+    let whole = round_div(i128::from(percent), 100).unwrap_or(0);
+    (whole, percent.checked_rem(100).is_some_and(|r| r != 0))
+}
+
+/// R-089 : décalage en pourcentage du modèle (1/10 000) → `LinkLag`
+/// (pourcentage × 10, hypothèse R-073) : `round_div(p, 10)` (R-001), inverse
+/// de [`percent_lag_from_link_lag`] sur les multiples de 10. Le booléen vaut
+/// vrai si un reste a été arrondi. Exemples : 5 000 (50 %) → (500, faux) ;
+/// 5 005 → (501, vrai) ; −2 500 → (−250, faux).
+#[must_use]
+pub fn link_lag_from_percent_lag(percent: i64) -> (i64, bool) {
+    // |p / 10| tient toujours dans un i64 : le repli ne sert jamais.
+    let lag = round_div(i128::from(percent), 10).unwrap_or(0);
+    (lag, percent.checked_rem(10).is_some_and(|r| r != 0))
+}
+
+/// Caractère interdit dans un texte XML 1.0 : contrôles U+0000 à U+001F
+/// sauf tabulation, saut de ligne et retour chariot, et les non-caractères
+/// U+FFFE, U+FFFF (les demi-codets ne peuvent pas figurer dans un `str`).
+#[must_use]
+pub const fn is_forbidden_xml_char(c: char) -> bool {
+    matches!(c, '\u{0}'..='\u{8}' | '\u{B}' | '\u{C}' | '\u{E}'..='\u{1F}' | '\u{FFFE}' | '\u{FFFF}')
+}
+
+/// R-089 : texte échappé pour le contenu d'un élément : `&` → `&amp;`,
+/// `<` → `&lt;`, `>` → `&gt;`, `\r` → `&#13;` (sans quoi la relecture le
+/// normaliserait en `\n`) ; un caractère interdit en XML 1.0
+/// ([`is_forbidden_xml_char`]) est remplacé par U+FFFD. Rend vrai si au
+/// moins un caractère a été remplacé (perte, déclarée par l'écrivain).
+/// Exemple : `a<b & c\r\n` → `a&lt;b &amp; c&#13;\n`.
+pub fn push_escaped_text(out: &mut String, s: &str) -> bool {
+    let mut replaced = false;
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '\r' => out.push_str("&#13;"),
+            c if is_forbidden_xml_char(c) => {
+                out.push('\u{FFFD}');
+                replaced = true;
+            }
+            c => out.push(c),
+        }
+    }
+    replaced
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
         clippy::unwrap_used,
+        clippy::arithmetic_side_effects,
         reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
     )]
 
     use super::{
-        DateTimeError, IsoDuration, IsoDurationError, parse_bool, parse_datetime, parse_int,
-        parse_iso_duration, parse_time, percent_lag_from_link_lag, tenths_to_minutes,
+        DateTimeError, IsoDuration, IsoDurationError, format_bool, format_datetime, format_int,
+        format_iso_duration, format_time, is_forbidden_xml_char, link_lag_from_percent_lag,
+        minutes_to_tenths, parse_bool, parse_datetime, parse_int, parse_iso_duration, parse_time,
+        percent_lag_from_link_lag, percent_to_whole, push_escaped_text, tenths_to_minutes,
     };
     use planrs_core::{Minutes, Moment, TimeOfDay};
 
@@ -569,5 +782,114 @@ mod tests {
         assert_eq!(percent_lag_from_link_lag(500), Some(5_000));
         assert_eq!(percent_lag_from_link_lag(-250), Some(-2_500));
         assert_eq!(percent_lag_from_link_lag(i64::MAX), None);
+    }
+
+    #[test]
+    fn written_integers_and_booleans() {
+        for v in [0, 1, -1, 9_600, -28_800, i64::MAX, i64::MIN, 1_000_000_007] {
+            assert_eq!(format_int(v), v.to_string());
+            assert_eq!(parse_int(&format_int(v)), Some(v));
+        }
+        assert_eq!(format_bool(true), "1");
+        assert_eq!(format_bool(false), "0");
+        assert_eq!(parse_bool(format_bool(true)), Some(true));
+        assert_eq!(parse_bool(format_bool(false)), Some(false));
+    }
+
+    #[test]
+    fn written_datetimes() {
+        assert_eq!(format_datetime(m("2026-10-19T08:00")), "2026-10-19T08:00:00");
+        assert_eq!(format_datetime(Moment::MIN), "1984-01-01T00:00:00");
+        assert_eq!(format_datetime(Moment::MAX), "2150-01-01T00:00:00");
+        assert_eq!(format_datetime(m("2149-12-31T23:59")), "2149-12-31T23:59:00");
+        // Aller-retour sur tout le domaine, une minute sur 997 (premier) :
+        // toutes les heures et tous les jours sont parcourus.
+        let mut minute = 0_i64;
+        while minute <= Moment::MAX.minutes() {
+            let mo = Moment::from_minutes(minute).unwrap();
+            let p = parse_datetime(&format_datetime(mo)).unwrap();
+            assert_eq!(p.moment, mo);
+            assert!(!p.rounded && !p.zone_ignored);
+            minute += 997;
+        }
+        let p = parse_datetime(&format_datetime(Moment::MAX)).unwrap();
+        assert_eq!(p.moment, Moment::MAX);
+    }
+
+    #[test]
+    fn written_times() {
+        assert_eq!(format_time(TimeOfDay::hm(8, 0).unwrap()), "08:00:00");
+        assert_eq!(format_time(TimeOfDay::hm(17, 30).unwrap()), "17:30:00");
+        assert_eq!(format_time(TimeOfDay::MIDNIGHT), "00:00:00");
+        // 24:00 → 00:00:00 (inverse de R-077, qui lit une fin à 00:00 comme 24:00).
+        assert_eq!(format_time(TimeOfDay::END_OF_DAY), "00:00:00");
+        for minutes in 0..1_440_u16 {
+            let t = TimeOfDay::new(minutes).unwrap();
+            assert_eq!(parse_time(&format_time(t)), Some((t, false)));
+        }
+    }
+
+    #[test]
+    fn written_iso_durations() {
+        assert_eq!(format_iso_duration(Minutes::new(510)), "PT8H30M0S");
+        assert_eq!(format_iso_duration(Minutes::new(4_800)), "PT80H0M0S");
+        assert_eq!(format_iso_duration(Minutes::ZERO), "PT0H0M0S");
+        assert_eq!(format_iso_duration(Minutes::new(87_308_640)), "PT1455144H0M0S");
+        assert_eq!(format_iso_duration(Minutes::new(-480)), "-PT8H0M0S");
+        assert_eq!(format_iso_duration(Minutes::new(-1)), "-PT0H1M0S");
+        // Bornes de i64 : aucune panique ; i64::MIN s'écrit par sa valeur absolue.
+        assert_eq!(
+            format_iso_duration(Minutes::new(i64::MIN)),
+            "-PT153722867280912930H8M0S"
+        );
+        for v in (-100_000_i64..=100_000)
+            .step_by(7)
+            .chain([87_308_640, -87_308_640])
+        {
+            assert_eq!(
+                parse_iso_duration(&format_iso_duration(Minutes::new(v))),
+                iso(v, false)
+            );
+        }
+    }
+
+    #[test]
+    fn written_tenths_and_percentages() {
+        assert_eq!(minutes_to_tenths(Minutes::new(960)), Some(9_600));
+        assert_eq!(minutes_to_tenths(Minutes::new(-2_880)), Some(-28_800));
+        assert_eq!(minutes_to_tenths(Minutes::new(i64::MAX)), None);
+        for v in [-87_308_640_i64, -1, 0, 1, 480, 87_308_640] {
+            let tenths = minutes_to_tenths(Minutes::new(v)).unwrap();
+            assert_eq!(tenths_to_minutes(tenths), (Minutes::new(v), false));
+        }
+        assert_eq!(percent_to_whole(5_000), (50, false));
+        assert_eq!(percent_to_whole(5_050), (51, true));
+        assert_eq!(percent_to_whole(5_049), (50, true));
+        assert_eq!(percent_to_whole(10_000), (100, false));
+        assert_eq!(percent_to_whole(0), (0, false));
+        assert_eq!(link_lag_from_percent_lag(5_000), (500, false));
+        assert_eq!(link_lag_from_percent_lag(5_005), (501, true));
+        assert_eq!(link_lag_from_percent_lag(-2_500), (-250, false));
+        assert_eq!(link_lag_from_percent_lag(-5_005), (-501, true));
+        assert_eq!(link_lag_from_percent_lag(i64::MIN).0, -922_337_203_685_477_581);
+        for p in (-1_000_000_i64..=1_000_000).step_by(10) {
+            let (lag, lossy) = link_lag_from_percent_lag(p);
+            assert!(!lossy);
+            assert_eq!(percent_lag_from_link_lag(lag), Some(p));
+        }
+    }
+
+    #[test]
+    fn escaped_text() {
+        let mut out = String::new();
+        assert!(!push_escaped_text(&mut out, "a<b & c>\r\n\té"));
+        assert_eq!(out, "a&lt;b &amp; c&gt;&#13;\n\té");
+        let mut out = String::new();
+        assert!(push_escaped_text(&mut out, "x\u{0}y\u{1F}z\u{FFFF}"));
+        assert_eq!(out, "x\u{FFFD}y\u{FFFD}z\u{FFFD}");
+        assert!(is_forbidden_xml_char('\u{B}'));
+        assert!(!is_forbidden_xml_char('\t'));
+        assert!(!is_forbidden_xml_char('\u{FFFD}'));
+        assert!(!is_forbidden_xml_char('\u{10FFFF}'));
     }
 }

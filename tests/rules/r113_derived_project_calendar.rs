@@ -11,10 +11,10 @@ use planrs_core::{CalendarUid, LinkType, Minutes, Week, Weekday};
 use planrs_tests::net::{Net, lag_w};
 use planrs_tests::{hours, moment, working};
 
-const BASE: u32 = 10;
-const DERIVED: u32 = 11;
+pub(crate) const BASE: u32 = 10;
+pub(crate) const DERIVED: u32 = 11;
 
-fn uid(v: u32) -> CalendarUid {
+pub(crate) fn uid(v: u32) -> CalendarUid {
     CalendarUid::new(v)
 }
 
@@ -26,7 +26,7 @@ fn weekdays(day: impl Fn() -> DaySetting) -> Week<DaySetting> {
 }
 
 /// Base sur le modèle de A4 (UID 2, O13) : lun-ven 09:00-13:00, 15:00-19:00.
-fn base() -> Calendar {
+pub(crate) fn base() -> Calendar {
     Calendar::new_base(
         uid(BASE),
         "Base".to_owned(),
@@ -36,7 +36,7 @@ fn base() -> Calendar {
 
 /// Dérivé (calendrier de ressource, A4 UID 1) : lun-ven 08:00-12:00,
 /// 13:00-17:00.
-fn derived(base_uid: u32) -> Calendar {
+pub(crate) fn derived(base_uid: u32) -> Calendar {
     let mut c = Calendar::new_derived(uid(DERIVED), "Ressource".to_owned(), uid(base_uid));
     for d in [
         Weekday::Monday,
@@ -55,7 +55,7 @@ fn derived(base_uid: u32) -> Calendar {
 }
 
 /// Projet dont le calendrier est le dérivé, début lun 19/10/2026 08:00.
-fn net() -> Net {
+pub(crate) fn net() -> Net {
     Net::new("2026-10-19T08:00").project(|p| {
         p.calendars.push(base()).unwrap();
         p.calendars.push(derived(BASE)).unwrap();
@@ -184,4 +184,151 @@ fn r113_unusable_base_keeps_the_designated_calendar() {
         .run();
     assert_eq!(run.at("S").early.finish, moment("2026-10-21T17:00"));
     assert_eq!(run.at("S").duration, Minutes::new(1_440));
+}
+
+/// Vérifie que `measure_calendar` donne l'échelle de mesure du moteur pour
+/// chaque tâche planifiée (feuilles ouvrées et récapitulatives) et pour
+/// l'UID 0 : la marge totale (R-048) et la durée d'une récapitulative
+/// (R-054) s'y retrouvent exactement.
+fn assert_matches_engine(p: &planrs_core::Project) {
+    use planrs_core::calendar::{CalendarSet, TimeScale};
+    use planrs_core::schedule::measure_calendar;
+    use planrs_core::{TaskOutcome, TaskRole, TaskSchedule, TimeBasis};
+    let sched = planrs_core::schedule(p);
+    let (set, _) = CalendarSet::compile(p);
+    let check = |task: &planrs_core::Task, s: &TaskSchedule| {
+        let summary = s.role == TaskRole::Summary;
+        if !summary && task.duration.basis() == TimeBasis::Elapsed {
+            return;
+        }
+        let uid = measure_calendar(p, task).expect("calendrier du projet utilisable");
+        let m = TimeScale::Working(set.get(uid).unwrap());
+        let tf = m
+            .between(s.early.start, s.late.start)
+            .unwrap()
+            .min(m.between(s.early.finish, s.late.finish).unwrap());
+        assert_eq!(tf, s.total_slack, "marge de {:?} sur {uid:?}", task.uid());
+        if summary {
+            assert_eq!(m.between(s.start, s.finish).unwrap(), s.duration);
+        }
+    };
+    let mut n = 0;
+    for t in &p.tasks {
+        if let Some(TaskOutcome::Scheduled(s)) = sched.get(t.uid()) {
+            check(t, s);
+            n += 1;
+        }
+    }
+    assert!(n > 0);
+    if let (Some(t), Some(s)) = (&p.summary_task, &sched.project_summary) {
+        check(t, s);
+    }
+}
+
+#[test]
+fn r113_measure_calendar_public_matches_engine() {
+    use planrs_core::schedule::measure_calendar;
+    use planrs_core::{Task, TaskUid};
+    // Projet dérivé : A 4 h, C 1 j ; S {X 2 j ; Y 1 j FS} ; D de calendrier
+    // propre (le dérivé), E de calendrier propre 24 heures (UID 2), F à
+    // durée écoulée.
+    let build = || {
+        net()
+            .task("A", 240)
+            .task("C", 480)
+            .task("S", 0)
+            .task("X", 960)
+            .level("X", 2)
+            .task("Y", 480)
+            .level("Y", 2)
+            .fs("X", "Y")
+            .task("D", 480)
+            .calendar("D", DERIVED)
+            .task("E", 480)
+            .calendar("E", 2)
+            .elapsed("F", 600)
+    };
+    let names = build();
+    let (ua, ud, ue, us) = (names.uid("A"), names.uid("D"), names.uid("E"), names.uid("S"));
+    let mut proj = build().build();
+    proj.summary_task = Some(Task::new(TaskUid::PROJECT_SUMMARY, "P".to_owned(), &proj.options));
+    let task = |u| proj.tasks.get(u).unwrap();
+    assert_eq!(measure_calendar(&proj, task(ua)), Some(uid(BASE)));
+    assert_eq!(measure_calendar(&proj, task(us)), Some(uid(BASE)));
+    assert_eq!(measure_calendar(&proj, task(ud)), Some(uid(DERIVED)));
+    assert_eq!(measure_calendar(&proj, task(ue)), Some(uid(2)));
+    assert_eq!(
+        measure_calendar(&proj, proj.summary_task.as_ref().unwrap()),
+        Some(uid(BASE))
+    );
+    assert_matches_engine(&proj);
+    // Réseau qui distingue les deux calendriers : A 4 h, C 1 j. A lun
+    // 08:00-12:00, au plus tard 13:00-17:00 ; TF(A) = min(base(08:00,
+    // 13:00), base(12:00, 17:00)) = min(240, 180) = 180 ; sur le dérivé,
+    // 240.
+    let small = net().task("A", 240).task("C", 480).build();
+    let t = small.tasks.iter().next().unwrap();
+    assert_eq!(measure_calendar(&small, t), Some(uid(BASE)));
+    assert_eq!(
+        planrs_core::schedule(&small)
+            .scheduled(t.uid())
+            .unwrap()
+            .total_slack,
+        Minutes::new(180)
+    );
+    assert_matches_engine(&small);
+    // UID 0 doté d'un calendrier propre : non lu (R-068), la base mesure.
+    let mut summary_own = proj.clone();
+    if let Some(t) = summary_own.summary_task.as_mut() {
+        t.calendar = Some(uid(2));
+    }
+    assert_eq!(
+        measure_calendar(&summary_own, summary_own.summary_task.as_ref().unwrap()),
+        Some(uid(BASE))
+    );
+    assert_matches_engine(&summary_own);
+    // Calendrier propre inconnu (R-066) : repli sur le calendrier du projet,
+    // donc sa base.
+    let mut unknown_own = proj.clone();
+    unknown_own.tasks.get_mut(ua).unwrap().calendar = Some(uid(99));
+    assert_eq!(
+        measure_calendar(&unknown_own, unknown_own.tasks.get(ua).unwrap()),
+        Some(uid(BASE))
+    );
+    assert_matches_engine(&unknown_own);
+    // Calendrier du projet de base : lui-même.
+    let base_project = Net::new("2026-10-19T08:00")
+        .project(|p| {
+            p.calendars.push(base()).unwrap();
+            p.calendar = uid(BASE);
+        })
+        .task("A", 240)
+        .task("C", 480)
+        .build();
+    let t = base_project.tasks.iter().next().unwrap();
+    assert_eq!(measure_calendar(&base_project, t), Some(uid(BASE)));
+    assert_matches_engine(&base_project);
+    // Base inutilisable : le calendrier désigné mesure.
+    let empty = Calendar::new_base(
+        uid(BASE),
+        "Vide".to_owned(),
+        Week::from_fn(|_| DaySetting::NonWorking),
+    );
+    let unusable_base = Net::new("2026-10-19T08:00")
+        .project(|p| {
+            p.calendars.push(empty).unwrap();
+            p.calendars.push(derived(BASE)).unwrap();
+            p.calendar = uid(DERIVED);
+        })
+        .task("A", 240)
+        .task("C", 480)
+        .build();
+    let t = unusable_base.tasks.iter().next().unwrap();
+    assert_eq!(measure_calendar(&unusable_base, t), Some(uid(DERIVED)));
+    assert_matches_engine(&unusable_base);
+    // Calendrier du projet inutilisable : repli sur le Standard intégré.
+    let mut broken = base_project.clone();
+    broken.calendar = uid(98);
+    let t = broken.tasks.iter().next().unwrap();
+    assert_eq!(measure_calendar(&broken, t), None);
 }

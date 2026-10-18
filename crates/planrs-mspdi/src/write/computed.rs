@@ -5,9 +5,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use planrs_core::calendar::{CalendarSet, CompiledCalendar, TimeScale, standard};
+use planrs_core::schedule::measure_calendar_in;
 use planrs_core::{
-    Arena, CalendarUid, Exclusion, Minutes, Moment, Project, ResourceKind, Schedule, SchedulingMode, Task,
-    TaskOutcome, TaskSchedule, TaskUid, TimeBasis,
+    Arena, Exclusion, Minutes, Moment, Project, ResourceKind, Schedule, SchedulingMode, Task, TaskOutcome,
+    TaskSchedule, TaskUid, TimeBasis,
 };
 
 use super::WriteDiagnostic;
@@ -179,17 +180,19 @@ fn tenths(m: Minutes) -> Option<i64> {
     m.get().checked_mul(10)
 }
 
-/// Échelles de marge (R-048, R-066, R-067) : calendrier de la tâche s'il a
-/// du temps ouvré, sinon celui du projet, sinon le Standard intégré ; temps
-/// civil pour une durée écoulée.
-struct Scales {
+/// Échelles de marge (R-048, R-066, R-067, R-113) : calendrier de mesure
+/// du moteur (`planrs_core::schedule::measure_calendar_in` : calendrier
+/// propre utilisable, sinon calendrier du projet — sa base s'il est dérivé —,
+/// sinon le Standard intégré) ; temps civil pour une feuille à durée
+/// écoulée.
+struct Scales<'p> {
+    project: &'p Project,
     set: CalendarSet,
     fallback: Option<CompiledCalendar>,
-    project: CalendarUid,
 }
 
-impl Scales {
-    fn new(project: &Project) -> Self {
+impl<'p> Scales<'p> {
+    fn new(project: &'p Project) -> Self {
         let (set, _) = CalendarSet::compile(project);
         let usable = set
             .get(project.calendar)
@@ -203,22 +206,23 @@ impl Scales {
                 .and_then(|a| CompiledCalendar::compile(&a, project.calendar).ok())
         };
         Self {
+            project,
             set,
             fallback,
-            project: project.calendar,
         }
     }
 
-    fn of(&self, task: &Task) -> Option<TimeScale<'_>> {
-        if task.duration.basis() == TimeBasis::Elapsed {
+    /// Échelle de mesure de `task` ; `summary` : récapitulative (sa marge se
+    /// mesure sur un calendrier, jamais en temps écoulé, comme le moteur).
+    fn of(&self, task: &Task, summary: bool) -> Option<TimeScale<'_>> {
+        if !summary && task.duration.basis() == TimeBasis::Elapsed {
             return Some(TimeScale::Elapsed);
         }
-        let own = task
-            .calendar
-            .and_then(|c| self.set.get(c).ok())
-            .filter(|c| c.has_working_time());
-        let project = self.fallback.as_ref().or_else(|| self.set.get(self.project).ok());
-        own.or(project).map(TimeScale::Working)
+        let cal = match measure_calendar_in(self.project, &self.set, task) {
+            Some(uid) => self.set.get(uid).ok(),
+            None => self.fallback.as_ref(),
+        };
+        cal.map(TimeScale::Working)
     }
 }
 
@@ -262,7 +266,8 @@ pub(crate) fn from_schedule(project: &Project, schedule: &Schedule) -> Values {
     for t in &project.tasks {
         let values = match schedule.get(t.uid()) {
             Some(TaskOutcome::Scheduled(s)) => {
-                from_task_schedule(s, scales.of(t), s.role == planrs_core::TaskRole::Summary)
+                let summary = s.role == planrs_core::TaskRole::Summary;
+                from_task_schedule(s, scales.of(t, summary), summary)
             }
             Some(TaskOutcome::Excluded {
                 reason: Exclusion::Inactive,
@@ -279,7 +284,7 @@ pub(crate) fn from_schedule(project: &Project, schedule: &Schedule) -> Values {
     if let (Some(summary), Some(s)) = (&project.summary_task, &schedule.project_summary) {
         tasks.insert(
             TaskUid::PROJECT_SUMMARY,
-            from_task_schedule(s, scales.of(summary), true),
+            from_task_schedule(s, scales.of(summary, true), true),
         );
     }
     Values {

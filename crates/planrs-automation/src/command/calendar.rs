@@ -13,13 +13,10 @@ use planrs_core::{
 };
 
 use super::exec::Ctx;
+use super::extras_invalidation::{ASSIGNMENT_SCHEDULE_KEYS, drop_keys};
 use super::{CalendarException, CalendarExceptionKey, CalendarRef};
 use crate::error::{CommandError, CommandErrorKind, codes};
 use crate::outcome::SideEffect;
-
-/// Clé d'`Extras` d'une affectation jetée quand un calendrier qui la
-/// planifie change (R-161) : répartition calculée par MS Project.
-const ASSIGNMENT_SCHEDULE_EXTRAS: &str = "TimephasedData";
 
 /// `param.invalid` sur `field`.
 fn invalid(why: String, field: &str) -> CommandError {
@@ -97,20 +94,22 @@ fn drop_assignment_extras(ctx: &mut Ctx<'_>, cal: CalendarUid) {
                 .resource
                 .and_then(|r| p.resources.get(r))
                 .is_some_and(|r| r.calendar.is_some_and(|c| affected.contains(&c)));
-            (by_task || by_resource) && a.extras.0.iter().any(|e| e.key == ASSIGNMENT_SCHEDULE_EXTRAS)
+            (by_task || by_resource) && !a.extras.is_empty()
         })
         .map(Assignment::uid)
         .collect();
-    let dropped = !targets.is_empty();
+    let mut dropped = Vec::new();
     for uid in targets {
         if let Some(a) = p.assignments.get_mut(uid) {
-            a.extras.0.retain(|e| e.key != ASSIGNMENT_SCHEDULE_EXTRAS);
+            dropped.extend(drop_keys(&mut a.extras, ASSIGNMENT_SCHEDULE_KEYS));
         }
     }
-    if dropped {
+    dropped.sort();
+    dropped.dedup();
+    if !dropped.is_empty() {
         ctx.effects.push(SideEffect::ExtrasDropped {
             subject: Subject::Calendar(cal),
-            keys: vec![ASSIGNMENT_SCHEDULE_EXTRAS.to_owned()],
+            keys: dropped,
         });
     }
 }

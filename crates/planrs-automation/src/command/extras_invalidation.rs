@@ -1,5 +1,6 @@
-//! Invalidation des `Extras` d'une entité modifiée (R-161, partie tâches,
-//! lot L4).
+//! Invalidation des `Extras` d'une entité modifiée (R-161) : table des clés
+//! et jet, partagés par les commandes de tâches, de liens, de contraintes et
+//! de calendriers.
 //!
 //! Les `Extras` gardent tels quels des éléments MSPDI hors modèle. Certains
 //! dépendent des dates calculées par MS Project (répartition dans le temps,
@@ -48,8 +49,9 @@ pub(crate) const TASK_SCHEDULE_KEYS: &[&str] = &[
     "Stop",
 ];
 
-/// Éléments d'affectation MSPDI jetés quand la durée de sa tâche change.
-pub(crate) const ASSIGNMENT_DURATION_KEYS: &[&str] = &["TimephasedData"];
+/// Éléments d'affectation MSPDI jetés quand la durée de sa tâche change ou
+/// qu'un calendrier qui la planifie change (R-165) : répartition.
+pub(crate) const ASSIGNMENT_SCHEDULE_KEYS: &[&str] = &["TimephasedData"];
 
 /// R-161 : clés d'`Extras` de la tâche jetées quand `change` est modifié.
 pub(crate) const fn task_keys(change: TaskChange) -> &'static [&'static str] {
@@ -65,8 +67,9 @@ pub(crate) const fn task_keys(change: TaskChange) -> &'static [&'static str] {
 }
 
 /// Retire de `extras` les entrées MSPDI dont la clé est dans `keys` ; rend
-/// les clés retirées, triées, sans doublon.
-fn drop_keys(extras: &mut planrs_core::Extras, keys: &[&str]) -> Vec<String> {
+/// les clés retirées, triées, sans doublon. Seule implémentation du jet
+/// (tâches, affectations, calendriers).
+pub(super) fn drop_keys(extras: &mut planrs_core::Extras, keys: &[&str]) -> Vec<String> {
     let mut dropped = Vec::new();
     extras.0.retain(|e| {
         let hit = e.origin == ORIGIN && keys.contains(&e.key.as_str());
@@ -114,7 +117,7 @@ impl Ctx<'_> {
             let Some(assignment) = self.project.assignments.get_mut(a) else {
                 continue;
             };
-            let dropped = drop_keys(&mut assignment.extras, ASSIGNMENT_DURATION_KEYS);
+            let dropped = drop_keys(&mut assignment.extras, ASSIGNMENT_SCHEDULE_KEYS);
             if !dropped.is_empty() {
                 self.effects.push(SideEffect::ExtrasDropped {
                     subject: Subject::Assignment(a),
@@ -129,7 +132,7 @@ impl Ctx<'_> {
 mod tests {
     use planrs_mspdi::schema::{Parent, sequence};
 
-    use super::{ASSIGNMENT_DURATION_KEYS, TASK_SCHEDULE_KEYS, TaskChange, task_keys};
+    use super::{ASSIGNMENT_SCHEDULE_KEYS, TASK_SCHEDULE_KEYS, TaskChange, task_keys};
 
     #[test]
     fn r161_table_matches_mspdi_schema() {
@@ -138,7 +141,7 @@ mod tests {
         for key in TASK_SCHEDULE_KEYS {
             assert!(sequence(Parent::Task).slot(key).is_some(), "Task/{key}");
         }
-        for key in ASSIGNMENT_DURATION_KEYS {
+        for key in ASSIGNMENT_SCHEDULE_KEYS {
             assert!(
                 sequence(Parent::Assignment).slot(key).is_some(),
                 "Assignment/{key}"
@@ -169,6 +172,6 @@ mod tests {
                 "Stop"
             ]
         );
-        assert_eq!(ASSIGNMENT_DURATION_KEYS, ["TimephasedData"]);
+        assert_eq!(ASSIGNMENT_SCHEDULE_KEYS, ["TimephasedData"]);
     }
 }

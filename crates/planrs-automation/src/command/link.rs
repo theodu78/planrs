@@ -9,46 +9,9 @@
 use planrs_core::{Lag, Link, LinkType, Project, Subject, Task, TaskUid};
 
 use super::exec::Ctx;
+use super::extras_invalidation::TaskChange;
 use super::{LinkKey, LinkSpec, TaskRef};
 use crate::error::{CommandError, CommandErrorKind, codes};
-use crate::outcome::SideEffect;
-
-/// Clés d'`Extras` d'une tâche jetées quand ses liens ou sa contrainte
-/// changent (R-161) : répartition et nivellement calculés par MS Project,
-/// faux dès que les dates bougent. Triées.
-pub(super) const TASK_SCHEDULE_EXTRAS: [&str; 7] = [
-    "LevelingDelay",
-    "LevelingDelayFormat",
-    "PreLeveledFinish",
-    "PreLeveledStart",
-    "Resume",
-    "Stop",
-    "TimephasedData",
-];
-
-/// R-161 : retire des `Extras` de la tâche `uid` les clés
-/// [`TASK_SCHEDULE_EXTRAS`] et signale celles qui étaient présentes
-/// (`SideEffect::ExtrasDropped`, une fois par tâche et par opération).
-pub(super) fn drop_task_schedule_extras(ctx: &mut Ctx<'_>, uid: TaskUid) {
-    let Some(task) = ctx.project.tasks.get_mut(uid) else {
-        return;
-    };
-    let mut keys: Vec<String> = Vec::new();
-    task.extras.0.retain(|e| {
-        let drop = TASK_SCHEDULE_EXTRAS.contains(&e.key.as_str());
-        if drop && !keys.contains(&e.key) {
-            keys.push(e.key.clone());
-        }
-        !drop
-    });
-    if !keys.is_empty() {
-        keys.sort();
-        ctx.effects.push(SideEffect::ExtrasDropped {
-            subject: Subject::Task(uid),
-            keys,
-        });
-    }
-}
 
 /// Niveau hiérarchique de la tâche à la position `pos` (R-052).
 fn level_at(p: &Project, pos: usize) -> Option<u16> {
@@ -164,7 +127,7 @@ pub(super) fn add(op: &LinkSpec, ctx: &mut Ctx<'_>) -> Result<(), CommandError> 
         kind,
         lag,
     });
-    drop_task_schedule_extras(ctx, succ);
+    ctx.drop_task_extras(succ, TaskChange::Links);
     Ok(())
 }
 
@@ -188,7 +151,7 @@ pub(super) fn update(op: &LinkSpec, ctx: &mut Ctx<'_>) -> Result<(), CommandErro
     if let Some(l) = lag {
         link.lag = l;
     }
-    drop_task_schedule_extras(ctx, succ);
+    ctx.drop_task_extras(succ, TaskChange::Links);
     Ok(())
 }
 
@@ -201,6 +164,6 @@ pub(super) fn remove(op: &LinkKey, ctx: &mut Ctx<'_>) -> Result<(), CommandError
     if task.predecessors.len() == before {
         return Err(not_found(pred, succ));
     }
-    drop_task_schedule_extras(ctx, succ);
+    ctx.drop_task_extras(succ, TaskChange::Links);
     Ok(())
 }

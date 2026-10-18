@@ -7,7 +7,8 @@
 use planrs_core::{Constraint, ConstraintKind, Subject};
 
 use super::exec::Ctx;
-use super::link::{drop_task_schedule_extras, is_summary};
+use super::extras_invalidation::TaskChange;
+use super::link::is_summary;
 use super::{Patch, SetConstraint, SetDeadline};
 use crate::error::{CommandError, CommandErrorKind, codes};
 
@@ -52,7 +53,7 @@ pub(super) fn set_constraint(op: &SetConstraint, ctx: &mut Ctx<'_>) -> Result<()
     })?;
     if task.constraint != constraint {
         task.constraint = constraint;
-        drop_task_schedule_extras(ctx, uid);
+        ctx.drop_task_extras(uid, TaskChange::Constraint);
     }
     Ok(())
 }

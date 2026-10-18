@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`project.open` : ouvre un fichier MSPDI.",
+  "properties": {
+    "path": {
+      "description": "Chemin du fichier MSPDI (`.xml`).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "title": "OpenProjectParams",
+  "type": "object"
+}

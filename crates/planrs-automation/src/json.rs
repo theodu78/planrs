@@ -3,13 +3,231 @@
 //!
 //! Une seule forme de durée en entrée et en sortie :
 //! `{"minutes":2400,"unit":"day","text":"5j"}` ; en entrée, `text` seul ou
-//! `minutes` seul suffit, les deux doivent concorder. Les conversions vers le
-//! modèle (R-150 et la partie « lecture » de R-152/R-158) sont écrites par le
-//! lot L3.
+//! `minutes` seul suffit, les deux doivent concorder (partie « lecture » de
+//! R-152/R-158, lot L3). Une sortie ([`DurationJson::from_duration`]) est
+//! une entrée valide qui redonne la même durée.
+//!
+//! Dates : ISO local sans fuseau (`"2026-11-02T08:00"`, R-075), jours
+//! `"2026-11-11"`, heures `"08:00"` ; leurs schémas sont [`MomentSchema`],
+//! [`DaySchema`] et [`TimeOfDaySchema`].
 
-use planrs_core::{ConstraintKind, DurationUnit, LinkType};
-use schemars::JsonSchema;
+use std::borrow::Cow;
+
+use planrs_core::{
+    ConstraintKind, Duration, DurationError, DurationUnit, Lag, LagValue, LinkType, Minutes, SignedPercent,
+    TimeBasis,
+};
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
+
+use crate::error::{CommandError, CommandErrorKind, codes};
+use crate::text::{TextContext, format_duration, format_lag, parse_duration, parse_lag};
+
+/// Schéma JSON d'un instant (`planrs_core::Moment`) : ISO local à la minute,
+/// sans fuseau (`"2026-11-02T08:00"`, `":00"` final toléré).
+pub struct MomentSchema;
+
+impl JsonSchema for MomentSchema {
+    fn schema_name() -> Cow<'static, str> {
+        "Moment".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
+            "description": "Date et heure locales, sans fuseau : 2026-11-02T08:00."
+        })
+    }
+}
+
+/// Schéma JSON d'un jour (`planrs_core::Day`) : `"2026-11-11"`.
+pub struct DaySchema;
+
+impl JsonSchema for DaySchema {
+    fn schema_name() -> Cow<'static, str> {
+        "Day".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+            "description": "Jour : 2026-11-11."
+        })
+    }
+}
+
+/// Schéma JSON d'une heure du jour (`planrs_core::TimeOfDay`) : `"08:00"`,
+/// de `"00:00"` à `"24:00"`.
+pub struct TimeOfDaySchema;
+
+impl JsonSchema for TimeOfDaySchema {
+    fn schema_name() -> Cow<'static, str> {
+        "TimeOfDay".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "pattern": "^[0-9]{2}:[0-9]{2}$",
+            "description": "Heure : 08:00 (24:00 = fin du jour)."
+        })
+    }
+}
+
+/// Erreur `param.invalid` avec son explication.
+fn invalid(why: &str) -> CommandError {
+    CommandError::new(
+        codes::PARAM_INVALID,
+        CommandErrorKind::InvalidParam(why.to_owned()),
+    )
+}
+
+/// Erreur `param.mismatch`.
+const fn mismatch() -> CommandError {
+    CommandError::new(codes::PARAM_MISMATCH, CommandErrorKind::ParamMismatch)
+}
+
+/// Erreur du modèle sur une durée ou un décalage → `param.invalid`.
+fn from_duration_error(e: &DurationError) -> CommandError {
+    match e {
+        DurationError::Negative => invalid("durée négative"),
+        _ => invalid("durée hors des bornes du modèle"),
+    }
+}
+
+/// Base de temps d'un drapeau `elapsed`.
+const fn basis_of(elapsed: bool) -> TimeBasis {
+    if elapsed {
+        TimeBasis::Elapsed
+    } else {
+        TimeBasis::Working
+    }
+}
+
+/// Vrai si le champ facultatif `given` est absent ou égal à `actual`.
+fn agrees<T: PartialEq + Copy>(given: Option<T>, actual: T) -> bool {
+    given.is_none_or(|g| g == actual)
+}
+
+impl DurationJson {
+    /// Forme de sortie complète d'une durée : minutes, unité, texte (R-141),
+    /// `elapsed` et `estimated`. Relue par [`DurationJson::to_duration`],
+    /// elle redonne exactement `d`.
+    #[must_use]
+    pub fn from_duration(d: &Duration, ctx: &TextContext) -> Self {
+        Self {
+            minutes: Some(d.minutes().get()),
+            unit: Some(d.unit().into()),
+            text: Some(format_duration(d, ctx)),
+            elapsed: Some(d.basis() == TimeBasis::Elapsed),
+            estimated: Some(d.is_estimated()),
+        }
+    }
+
+    /// Durée du modèle (forme des durées, ADR-0012 D6) :
+    /// - `text` seul : lu par [`parse_duration`] (R-140) dans `ctx` ;
+    /// - `minutes` seul : `unit` (à défaut l'unité par défaut du projet),
+    ///   `elapsed` et `estimated` (à défaut faux) ;
+    /// - `text` et d'autres champs : chaque champ fourni doit concorder avec
+    ///   le texte lu (minutes, unité, base, estimation).
+    ///
+    /// # Errors
+    ///
+    /// `text.*` si le texte est illisible ; `param.mismatch` si un champ
+    /// contredit le texte ; `param.invalid` sans `text` ni `minutes`, ou
+    /// pour des minutes négatives ou hors bornes (R-008). Le champ fautif
+    /// est posé par l'appelant.
+    pub fn to_duration(&self, ctx: &TextContext) -> Result<Duration, CommandError> {
+        if let Some(text) = &self.text {
+            let d = parse_duration(text, ctx).map_err(CommandError::text)?;
+            let consistent = agrees(self.minutes, d.minutes().get())
+                && agrees(self.unit, d.unit().into())
+                && agrees(self.elapsed, d.basis() == TimeBasis::Elapsed)
+                && agrees(self.estimated, d.is_estimated());
+            return if consistent { Ok(d) } else { Err(mismatch()) };
+        }
+        let Some(minutes) = self.minutes else {
+            return Err(invalid("« minutes » ou « text » attendu"));
+        };
+        let unit = self.unit.map_or(ctx.default_duration_unit, DurationUnit::from);
+        Duration::new(
+            Minutes::new(minutes),
+            unit,
+            basis_of(self.elapsed.unwrap_or(false)),
+            self.estimated.unwrap_or(false),
+        )
+        .map_err(|e| from_duration_error(&e))
+    }
+}
+
+impl LagJson {
+    /// Forme de sortie complète d'un décalage : minutes et unité, ou
+    /// pourcentage, plus le texte (R-141) et `elapsed`. Relue par
+    /// [`LagJson::to_lag`], elle redonne exactement `l`.
+    #[must_use]
+    pub fn from_lag(l: &Lag, ctx: &TextContext) -> Self {
+        let (minutes, percent, unit) = match l.value {
+            LagValue::Time { minutes, unit } => (Some(minutes.get()), None, Some(unit.into())),
+            LagValue::Percent { percent } => (None, Some(percent.get()), None),
+        };
+        Self {
+            minutes,
+            percent,
+            unit,
+            text: Some(format_lag(l, ctx)),
+            elapsed: Some(l.basis == TimeBasis::Elapsed),
+        }
+    }
+
+    /// Décalage du modèle (R-156, lecture) : `text` seul (« +2j », « 50% »,
+    /// [`parse_lag`]) ; `minutes` (signées) et `unit` (à défaut l'unité par
+    /// défaut du projet) ; ou `percent` en 1/100 de % (5 000 = 50 %). Avec
+    /// `text`, chaque autre champ fourni doit concorder avec le texte lu.
+    ///
+    /// # Errors
+    ///
+    /// `text.*` si le texte est illisible ; `param.mismatch` si un champ
+    /// contredit le texte, ou une unité accompagne un pourcentage ;
+    /// `param.invalid` sans aucune valeur, avec `minutes` et `percent`
+    /// ensemble, ou hors bornes (R-002, R-008).
+    pub fn to_lag(&self, ctx: &TextContext) -> Result<Lag, CommandError> {
+        if let Some(text) = &self.text {
+            let l = parse_lag(text, ctx).map_err(CommandError::text)?;
+            let value_ok = match l.value {
+                LagValue::Time { minutes, unit } => {
+                    self.percent.is_none()
+                        && agrees(self.minutes, minutes.get())
+                        && agrees(self.unit, unit.into())
+                }
+                LagValue::Percent { percent } => {
+                    self.minutes.is_none() && self.unit.is_none() && agrees(self.percent, percent.get())
+                }
+            };
+            let consistent = value_ok && agrees(self.elapsed, l.basis == TimeBasis::Elapsed);
+            return if consistent { Ok(l) } else { Err(mismatch()) };
+        }
+        let basis = basis_of(self.elapsed.unwrap_or(false));
+        let value = match (self.minutes, self.percent) {
+            (Some(_), Some(_)) => return Err(invalid("« minutes » et « percent » exclusifs")),
+            (None, None) => return Err(invalid("« minutes », « percent » ou « text » attendu")),
+            (Some(m), None) => LagValue::Time {
+                minutes: Minutes::new(m),
+                unit: self.unit.map_or(ctx.default_duration_unit, DurationUnit::from),
+            },
+            (None, Some(p)) => {
+                if self.unit.is_some() {
+                    return Err(mismatch());
+                }
+                let percent =
+                    SignedPercent::new(p).map_err(|_| invalid("pourcentage hors des bornes (±10 000 %)"))?;
+                LagValue::Percent { percent }
+            }
+        };
+        Lag::new(basis, value).map_err(|e| from_duration_error(&e))
+    }
+}
 
 /// Durée en JSON.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

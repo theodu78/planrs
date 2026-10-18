@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`task.move`.",
+  "properties": {
+    "to": {
+      "description": "Destination.",
+      "oneOf": [
+        {
+          "const": "end",
+          "description": "En dernière position, niveau 1.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Après le sous-arbre de la tâche, au même niveau.",
+          "properties": {
+            "after": {
+              "description": "Tâche : UID (entier) ou étiquette \"$x\" d'une tâche créée plus tôt dans le même lot.",
+              "oneOf": [
+                {
+                  "maximum": 4294967295,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "required": [
+            "after"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Juste avant la tâche, au même niveau.",
+          "properties": {
+            "before": {
+              "description": "Tâche : UID (entier) ou étiquette \"$x\" d'une tâche créée plus tôt dans le même lot.",
+              "oneOf": [
+                {
+                  "maximum": 4294967295,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "required": [
+            "before"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Premier enfant de la tâche.",
+          "properties": {
+            "first_child_of": {
+              "description": "Tâche : UID (entier) ou étiquette \"$x\" d'une tâche créée plus tôt dans le même lot.",
+              "oneOf": [
+                {
+                  "maximum": 4294967295,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "required": [
+            "first_child_of"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Dernier enfant de la tâche.",
+          "properties": {
+            "last_child_of": {
+              "description": "Tâche : UID (entier) ou étiquette \"$x\" d'une tâche créée plus tôt dans le même lot.",
+              "oneOf": [
+                {
+                  "maximum": 4294967295,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "required": [
+            "last_child_of"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "uid": {
+      "description": "Tâche (avec son sous-arbre).",
+      "oneOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "required": [
+    "uid",
+    "to"
+  ],
+  "title": "TaskMove",
+  "type": "object"
+}

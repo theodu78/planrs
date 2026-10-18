@@ -15,16 +15,23 @@ mod calendar;
 mod constraint;
 pub(crate) mod exec;
 mod link;
+pub mod params;
 mod project;
+mod refs;
 mod task;
 
 use std::borrow::Cow;
 
 use planrs_core::{CalendarUid, Day, Moment, TaskUid, TimeOfDay};
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use self::refs::label_refusal;
+pub use self::refs::{LABEL_PATTERN, define_label, is_valid_label, resolve_task};
+use crate::error::{CommandError, CommandErrorKind, codes};
 pub use crate::json::{ConstraintKindJson, DurationJson, DurationUnitJson, LagJson, LinkTypeJson};
+use crate::json::{DaySchema, MomentSchema, TimeOfDaySchema};
 use crate::text::Language;
 
 /// Lot de commandes : une transaction, un recalcul, une entrée d'historique
@@ -42,6 +49,74 @@ pub struct Batch {
     /// Libellé de l'entrée d'historique.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+}
+
+/// Longueur maximale de l'explication d'une erreur de lecture JSON, en
+/// caractères.
+const MAX_PARSE_DETAIL_CHARS: usize = 500;
+
+/// Erreur de lecture JSON → `param.invalid`, explication de serde bornée.
+fn parse_error(e: &serde_json::Error) -> CommandError {
+    let detail: String = e.to_string().chars().take(MAX_PARSE_DETAIL_CHARS).collect();
+    CommandError::new(codes::PARAM_INVALID, CommandErrorKind::InvalidParam(detail))
+}
+
+/// Lit les paramètres JSON d'une commande du registre.
+///
+/// # Errors
+///
+/// `param.invalid` (champ inconnu, type faux, étiquette mal formée…), avec
+/// l'explication de serde.
+pub fn parse_params<T: DeserializeOwned>(value: serde_json::Value) -> Result<T, CommandError> {
+    serde_json::from_value(value).map_err(|e| parse_error(&e))
+}
+
+impl Batch {
+    /// Version du format comprise par cette version de planrs.
+    pub const FORMAT_VERSION: u32 = 1;
+
+    /// Lit un lot JSON. La version est contrôlée **avant** les opérations :
+    /// un lot d'une version future est refusé comme tel, même si ses
+    /// opérations sont inconnues ici.
+    ///
+    /// # Errors
+    ///
+    /// `batch.unsupported_version` si `format_version` n'est pas 1 ;
+    /// `param.invalid` (champ `format_version`) s'il manque ou n'est pas un
+    /// entier, ou pour tout autre défaut de forme.
+    pub fn from_json(value: serde_json::Value) -> Result<Self, CommandError> {
+        let version = value.get("format_version").and_then(serde_json::Value::as_u64);
+        match version {
+            None => {
+                return Err(CommandError::new(
+                    codes::PARAM_INVALID,
+                    CommandErrorKind::InvalidParam("« format_version » (entier) attendu".to_owned()),
+                )
+                .with_field("format_version"));
+            }
+            Some(v) if v != u64::from(Self::FORMAT_VERSION) => {
+                let shown = u32::try_from(v).unwrap_or(u32::MAX);
+                return Err(CommandError::new(
+                    codes::BATCH_UNSUPPORTED_VERSION,
+                    CommandErrorKind::UnsupportedVersion(shown),
+                )
+                .with_field("format_version"));
+            }
+            Some(_) => {}
+        }
+        parse_params(value)
+    }
+
+    /// Lit un lot depuis son texte JSON (voir [`Batch::from_json`]).
+    ///
+    /// # Errors
+    ///
+    /// Comme [`Batch::from_json`] ; `param.invalid` si le texte n'est pas du
+    /// JSON.
+    pub fn from_json_str(s: &str) -> Result<Self, CommandError> {
+        let value: serde_json::Value = serde_json::from_str(s).map_err(|e| parse_error(&e))?;
+        Self::from_json(value)
+    }
 }
 
 /// Commande d'écriture. Le nom JSON (`"op"`) est l'id du registre.
@@ -99,10 +174,36 @@ pub enum Command {
     CalendarRemoveException(CalendarExceptionKey),
 }
 
-/// Désignation d'une tâche (R-150). JSON : entier → UID ; chaîne `"$x"` →
-/// étiquette. Le refus d'une chaîne sans `$` est écrit par le lot L3.
+impl Command {
+    /// Id du registre de la commande (valeur de `"op"`).
+    #[must_use]
+    pub const fn id(&self) -> &'static str {
+        match self {
+            Self::TaskAdd(_) => "task.add",
+            Self::TaskUpdate(_) => "task.update",
+            Self::TaskDelete(_) => "task.delete",
+            Self::TaskMove(_) => "task.move",
+            Self::TaskIndent(_) => "task.indent",
+            Self::TaskOutdent(_) => "task.outdent",
+            Self::LinkAdd(_) => "link.add",
+            Self::LinkUpdate(_) => "link.update",
+            Self::LinkRemove(_) => "link.remove",
+            Self::TaskSetConstraint(_) => "task.set_constraint",
+            Self::TaskSetDeadline(_) => "task.set_deadline",
+            Self::ProjectSetInfo(_) => "project.set_info",
+            Self::ProjectSetAnchor(_) => "project.set_anchor",
+            Self::ProjectSetStatusDate(_) => "project.set_status_date",
+            Self::CalendarSetException(_) => "calendar.set_exception",
+            Self::CalendarRemoveException(_) => "calendar.remove_exception",
+        }
+    }
+}
+
+/// Désignation d'une tâche (R-150). JSON : entier → UID ; chaîne `"$x"`
+/// (motif [`LABEL_PATTERN`]) → étiquette ; toute autre chaîne est refusée à
+/// la lecture (et par [`resolve_task`] si la valeur est construite en Rust).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(from = "TaskRefRepr", into = "TaskRefRepr")]
+#[serde(try_from = "TaskRefRepr", into = "TaskRefRepr")]
 pub enum TaskRef {
     /// UID.
     Uid(TaskUid),
@@ -118,11 +219,14 @@ enum TaskRefRepr {
     Label(String),
 }
 
-impl From<TaskRefRepr> for TaskRef {
-    fn from(r: TaskRefRepr) -> Self {
+impl TryFrom<TaskRefRepr> for TaskRef {
+    type Error = String;
+
+    fn try_from(r: TaskRefRepr) -> Result<Self, Self::Error> {
         match r {
-            TaskRefRepr::Uid(u) => Self::Uid(TaskUid::new(u)),
-            TaskRefRepr::Label(s) => Self::Label(s),
+            TaskRefRepr::Uid(u) => Ok(Self::Uid(TaskUid::new(u))),
+            TaskRefRepr::Label(s) if is_valid_label(&s) => Ok(Self::Label(s)),
+            TaskRefRepr::Label(s) => Err(label_refusal(&s)),
         }
     }
 }
@@ -144,9 +248,10 @@ impl JsonSchema for TaskRef {
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         json_schema!({
             "oneOf": [
-                { "type": "integer", "minimum": 0, "maximum": 4_294_967_295_u32 },
-                { "type": "string", "pattern": "^\\$[A-Za-z0-9_-]{1,64}$" }
-            ]
+                { "type": "integer", "minimum": 1, "maximum": 4_294_967_295_u32 },
+                { "type": "string", "pattern": LABEL_PATTERN }
+            ],
+            "description": "Tâche : UID (entier) ou étiquette \"$x\" d'une tâche créée plus tôt dans le même lot."
         })
     }
 }
@@ -224,8 +329,9 @@ impl<T: JsonSchema> JsonSchema for Patch<T> {
 pub struct TaskAdd {
     /// Nom.
     pub name: String,
-    /// Étiquette `$x` de la tâche créée, pour la suite du lot.
+    /// Étiquette `$x` de la tâche créée, pour la suite du lot (R-150).
     #[serde(rename = "as", default, skip_serializing_if = "Option::is_none")]
+    #[schemars(pattern(LABEL_PATTERN))]
     pub label: Option<String>,
     /// Placement (défaut : fin).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -241,11 +347,11 @@ pub struct TaskAdd {
     pub notes: Option<String>,
     /// Début saisi (→ contrainte, R-158).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<MomentSchema>")]
     pub start: Option<Moment>,
     /// Fin saisie (→ contrainte, R-158).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<MomentSchema>")]
     pub finish: Option<Moment>,
 }
 
@@ -269,11 +375,11 @@ pub struct TaskUpdate {
     pub notes: Patch<String>,
     /// Début saisi (R-158).
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
-    #[schemars(with = "Patch<String>")]
+    #[schemars(with = "Patch<MomentSchema>")]
     pub start: Patch<Moment>,
     /// Fin saisie (R-158).
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
-    #[schemars(with = "Patch<String>")]
+    #[schemars(with = "Patch<MomentSchema>")]
     pub finish: Patch<Moment>,
     /// Tâche active.
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
@@ -345,7 +451,7 @@ pub struct SetConstraint {
     pub kind: ConstraintKindJson,
     /// Date (obligatoire pour les types datés, interdite sinon).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<MomentSchema>")]
     pub date: Option<Moment>,
 }
 
@@ -357,7 +463,7 @@ pub struct SetDeadline {
     pub uid: TaskRef,
     /// Échéance (`null` : retirée).
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
-    #[schemars(with = "Patch<String>")]
+    #[schemars(with = "Patch<MomentSchema>")]
     pub deadline: Patch<Moment>,
 }
 
@@ -368,7 +474,7 @@ pub struct SetDeadline {
 pub struct SetStatusDate {
     /// Date d'état (`null` : NA).
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
-    #[schemars(with = "Patch<String>")]
+    #[schemars(with = "Patch<MomentSchema>")]
     pub date: Patch<Moment>,
 }
 
@@ -415,10 +521,10 @@ pub enum AnchorSpec {
 #[serde(deny_unknown_fields)]
 struct AnchorRepr {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<MomentSchema>")]
     start: Option<Moment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<MomentSchema>")]
     finish: Option<Moment>,
 }
 
@@ -512,14 +618,14 @@ pub struct CalendarException {
     /// Calendrier.
     pub cal: CalendarRef,
     /// Premier jour.
-    #[schemars(with = "String")]
+    #[schemars(with = "DaySchema")]
     pub from: Day,
     /// Dernier jour (inclus).
-    #[schemars(with = "String")]
+    #[schemars(with = "DaySchema")]
     pub to: Day,
     /// Plages ouvrées `["08:00","12:00"]` ; vide : jours chômés.
     #[serde(default)]
-    #[schemars(with = "Vec<[String; 2]>")]
+    #[schemars(with = "Vec<[TimeOfDaySchema; 2]>")]
     pub ranges: Vec<[TimeOfDay; 2]>,
 }
 
@@ -530,6 +636,6 @@ pub struct CalendarExceptionKey {
     /// Calendrier.
     pub cal: CalendarRef,
     /// Premier jour de l'exception.
-    #[schemars(with = "String")]
+    #[schemars(with = "DaySchema")]
     pub from: Day,
 }

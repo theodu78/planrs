@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Paramètres vides (`project.summary`, `analysis.critical_path`,\n`history.undo`, `history.redo`, `history.list`).",
+  "title": "NoParams",
+  "type": "object"
+}

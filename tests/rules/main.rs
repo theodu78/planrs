@@ -149,6 +149,7 @@ mod r143_dates_text;
 mod r144_csv_format;
 mod r145_csv_import_rows;
 mod r146_csv_export;
+mod r150_refs_and_labels;
 mod r151_uid_allocation;
 mod r160_refuse_new_errors;
 mod r162_recorded_discarded;

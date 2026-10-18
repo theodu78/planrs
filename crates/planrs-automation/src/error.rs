@@ -2,8 +2,8 @@
 //! ADR-0012).
 //!
 //! Chaque erreur porte un code stable (`task.not_found`…), repris tel quel
-//! par le MCP, la CLI et l'interface (clé de traduction `.ftl`). Les messages
-//! FR/EN sont rédigés par le lot L3.
+//! par le MCP, la CLI et l'interface (clé de traduction `.ftl`), et un
+//! message en français ou en anglais ([`CommandError::message`]).
 
 use planrs_core::{Diagnostic, ModelError, Subject, TaskUid};
 use planrs_mspdi::MspdiError;
@@ -172,13 +172,242 @@ impl CommandError {
         self
     }
 
-    /// Message pour l'utilisateur. Squelette du contrat : le code seul,
-    /// messages FR/EN rédigés par le lot L3.
+    /// Même erreur, sur le champ `field` (`duration`, `uid`…).
+    #[must_use]
+    pub fn with_field(mut self, field: &str) -> Self {
+        self.field = Some(field.to_owned());
+        self
+    }
+
+    /// Même erreur, à propos de `subject`.
+    #[must_use]
+    pub fn with_subject(mut self, subject: Subject) -> Self {
+        self.subject = Some(subject);
+        self
+    }
+
+    /// Texte illisible : code `text.*` de l'erreur.
+    #[must_use]
+    pub fn text(e: TextError) -> Self {
+        Self::new(e.code(), CommandErrorKind::Text(e))
+    }
+
+    /// Message pour l'utilisateur, en français ou en anglais, borné à
+    /// [`MAX_MESSAGE_CHARS`] caractères (C-MCP-03). Le code, le champ et
+    /// l'index d'opération restent dans leurs champs ; le message les
+    /// reprend pour un lecteur humain.
     #[must_use]
     pub fn message(&self, lang: Language) -> String {
-        let _ = lang;
-        self.code.to_owned()
+        let mut s = kind_message(&self.kind, lang);
+        let at = match (self.op_index, lang) {
+            (Some(i), Language::Fr) => format!(" (opération {i}"),
+            (Some(i), Language::En) => format!(" (operation {i}"),
+            (None, _) => String::new(),
+        };
+        s.push_str(&at);
+        if let Some(field) = &self.field {
+            s.push_str(if at.is_empty() { " (" } else { ", " });
+            match lang {
+                Language::Fr => s.push_str("champ « "),
+                Language::En => s.push_str("field \u{201c}"),
+            }
+            s.push_str(field);
+            s.push_str(match lang {
+                Language::Fr => " »",
+                Language::En => "\u{201d}",
+            });
+        }
+        if !at.is_empty() || self.field.is_some() {
+            s.push(')');
+        }
+        truncate_chars(s, MAX_MESSAGE_CHARS)
     }
+}
+
+/// Longueur maximale d'un message d'erreur, en caractères (C-MCP-03).
+pub const MAX_MESSAGE_CHARS: usize = 2_000;
+
+/// Diagnostics cités au plus dans un message `batch.would_create_errors`.
+const MAX_LISTED_DIAGNOSTICS: usize = 5;
+
+/// Coupe `s` à `max` caractères, « … » final compris.
+fn truncate_chars(s: String, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s;
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+/// Message d'un détail d'erreur, sans contexte d'opération.
+#[allow(
+    clippy::too_many_lines,
+    reason = "un bras par variante et par langue, rien à factoriser"
+)]
+fn kind_message(kind: &CommandErrorKind, lang: Language) -> String {
+    use CommandErrorKind as K;
+    let fr = lang == Language::Fr;
+    match kind {
+        K::UnknownTask(uid) => {
+            if fr {
+                format!("aucune tâche d'UID {uid}")
+            } else {
+                format!("no task with UID {uid}")
+            }
+        }
+        K::UnknownLabel(l) => {
+            if fr {
+                format!(
+                    "étiquette « {l} » inconnue : elle doit être créée par un task.add antérieur du même lot (\"as\")"
+                )
+            } else {
+                format!(
+                    "unknown label \u{201c}{l}\u{201d}: it must be created by an earlier task.add of the same batch (\"as\")"
+                )
+            }
+        }
+        K::DuplicateLabel(l) => {
+            if fr {
+                format!("étiquette « {l} » déjà définie dans ce lot")
+            } else {
+                format!("label \u{201c}{l}\u{201d} is already defined in this batch")
+            }
+        }
+        K::InvalidParam(why) => {
+            if fr {
+                format!("paramètre invalide : {why}")
+            } else {
+                format!("invalid parameter: {why}")
+            }
+        }
+        K::Text(e) => text_message(e, lang),
+        K::ComputedField => {
+            if fr {
+                "champ calculé d'une récapitulative : il ne se saisit pas".to_owned()
+            } else {
+                "computed field of a summary task: it cannot be entered".to_owned()
+            }
+        }
+        K::WouldCreateErrors(diags) => {
+            let mut s = if fr {
+                format!("lot refusé : il ferait apparaître {} erreur(s)", diags.len())
+            } else {
+                format!("batch refused: it would introduce {} error(s)", diags.len())
+            };
+            for (i, d) in diags.iter().take(MAX_LISTED_DIAGNOSTICS).enumerate() {
+                s.push_str(if i == 0 { " : " } else { " ; " });
+                s.push_str(d.code());
+                s.push_str(" (");
+                s.push_str(&d.to_string());
+                s.push(')');
+            }
+            if diags.len() > MAX_LISTED_DIAGNOSTICS {
+                s.push_str(if fr { " ; …" } else { "; …" });
+            }
+            s
+        }
+        K::DuplicateLink => {
+            if fr {
+                "ce lien existe déjà (utiliser link.update)".to_owned()
+            } else {
+                "this link already exists (use link.update)".to_owned()
+            }
+        }
+        K::SelfLink => {
+            if fr {
+                "une tâche ne peut pas être liée à elle-même".to_owned()
+            } else {
+                "a task cannot be linked to itself".to_owned()
+            }
+        }
+        K::SummaryDescendantLink => {
+            if fr {
+                "lien interdit entre une récapitulative et l'une de ses sous-tâches".to_owned()
+            } else {
+                "a summary task cannot be linked to one of its subtasks".to_owned()
+            }
+        }
+        K::HasChildren { count } => {
+            if fr {
+                format!("récapitulative de {count} sous-tâche(s) : supprimer avec \"cascade\": true")
+            } else {
+                format!("summary task with {count} subtask(s): delete with \"cascade\": true")
+            }
+        }
+        K::OutlineRefused => {
+            if fr {
+                "indentation ou désindentation impossible à cette position".to_owned()
+            } else {
+                "the task cannot be indented or outdented at this position".to_owned()
+            }
+        }
+        K::MoveIntoOwnSubtree => {
+            if fr {
+                "une tâche ne peut pas être déplacée dans son propre sous-arbre".to_owned()
+            } else {
+                "a task cannot be moved into its own subtree".to_owned()
+            }
+        }
+        K::Limit { what, max } => {
+            if fr {
+                format!("limite dépassée : {what} (au plus {max})")
+            } else {
+                format!("limit exceeded: {what} (at most {max})")
+            }
+        }
+        K::UnsupportedVersion(v) => {
+            if fr {
+                format!("format_version {v} non pris en charge (attendu : 1)")
+            } else {
+                format!("format_version {v} is not supported (expected: 1)")
+            }
+        }
+        K::NotYetAvailable { milestone } => {
+            if fr {
+                format!("commande pas encore disponible (jalon J{milestone})")
+            } else {
+                format!("command not available yet (milestone J{milestone})")
+            }
+        }
+        K::ManualTaskUnsupported => {
+            if fr {
+                "les dates d'une tâche planifiée manuellement ne se modifient pas encore".to_owned()
+            } else {
+                "the dates of a manually scheduled task cannot be edited yet".to_owned()
+            }
+        }
+        K::ParamMismatch => {
+            if fr {
+                "paramètres contradictoires (par exemple « text » et « minutes » d'une durée)".to_owned()
+            } else {
+                "contradictory parameters (for example the \"text\" and \"minutes\" of a duration)".to_owned()
+            }
+        }
+    }
+}
+
+/// Message d'un texte illisible (le message français vient de
+/// [`TextError`] ; l'anglais est rédigé ici).
+fn text_message(e: &TextError, lang: Language) -> String {
+    if lang == Language::Fr {
+        return format!("texte illisible : {e}");
+    }
+    let detail = match e {
+        TextError::Empty => "empty value".to_owned(),
+        TextError::BadNumber { at } => format!("number expected or unreadable at character {at}"),
+        TextError::UnknownUnit { unit } => format!("unknown unit \u{201c}{unit}\u{201d}"),
+        TextError::Negative => "a duration cannot be negative".to_owned(),
+        TextError::OutOfRange => "value out of range".to_owned(),
+        TextError::BadLinkType { code } => format!("unknown link type \u{201c}{code}\u{201d}"),
+        TextError::ExternalPredecessor => "external predecessor (other project) not supported".to_owned(),
+        TextError::BadDate => "unreadable or nonexistent date".to_owned(),
+        TextError::TooLong => format!(
+            "text too long (at most {} characters)",
+            crate::text::MAX_INPUT_CHARS
+        ),
+    };
+    format!("unreadable text: {detail}")
 }
 
 /// Annulation ou rétablissement impossible.

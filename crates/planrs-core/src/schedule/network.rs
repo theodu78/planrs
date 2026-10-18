@@ -775,6 +775,14 @@ fn number_nodes(
     Some(nodes)
 }
 
+/// Budget par défaut des arcs dépliés par R-058 (lien FF ou SF vers une
+/// récapitulative, un arc par feuille) : 4 000 000 arcs, soit environ
+/// 160 Mo d'arcs (40 octets chacun), CSR compris. Le budget de performance
+/// (5 000 tâches, 10 000 liens) en reste loin ; sans plafond, un fichier de
+/// 5 Mo (20 000 liens FF vers une récapitulative de 20 000 feuilles)
+/// demanderait 400 millions d'arcs (R-058, règle 10).
+pub const DEFAULT_EXPANDED_ARC_BUDGET: usize = 4_000_000;
+
 /// Contexte de construction des arcs.
 struct ArcBuilder<'p> {
     project: &'p Project,
@@ -782,6 +790,15 @@ struct ArcBuilder<'p> {
     /// Voir [`Network::default_place`].
     default_place: u32,
     arcs: Vec<Arc>,
+    /// Budget des arcs dépliés (R-058), voir [`DEFAULT_EXPANDED_ARC_BUDGET`].
+    expansion_budget: usize,
+    /// Arcs dépliés encore permis.
+    expansion_left: usize,
+    /// Liens FF/SF vers une récapitulative ignorés faute de budget.
+    expansion_ignored: u64,
+    /// Nombre de feuilles cibles du dépliage, par position de
+    /// récapitulative (calculé à la première rencontre).
+    expansion_targets: Vec<Option<usize>>,
 }
 
 impl ArcBuilder<'_> {
@@ -922,20 +939,7 @@ impl ArcBuilder<'_> {
                 //    dépliage sur les feuilles pour FF/SF (R-058).
                 let finish_kind = matches!(link.kind, LinkType::FinishToFinish | LinkType::StartToFinish);
                 if succ.role == Role::Summary && finish_kind {
-                    diags.push(Diagnostic::LinkFinishToSummary {
-                        predecessor: p_uid,
-                        successor: s_uid,
-                    });
-                    let first = s_pos.checked_add(1)?;
-                    for q in first..succ.end {
-                        let leaf = tasks.get(q)?;
-                        if leaf.role != Role::Leaf || (leaf.inactive() && !succ.inactive()) {
-                            continue;
-                        }
-                        if let Some(v) = leaf.entry {
-                            self.arcs.push(arc(v, leaf.inactive()));
-                        }
-                    }
+                    self.expand_to_summary(tasks, s_pos, succ, &arc, (p_uid, s_uid), diags)?;
                 } else {
                     self.arcs.push(arc(succ.entry?, succ.inactive()));
                 }
@@ -947,7 +951,73 @@ impl ArcBuilder<'_> {
                 }
             }
         }
+        if self.expansion_ignored > 0 {
+            diags.push(Diagnostic::LinkExpansionLimit {
+                limit: u64::try_from(self.expansion_budget).unwrap_or(u64::MAX),
+                ignored: self.expansion_ignored,
+            });
+        }
         Some(())
+    }
+
+    /// R-058 : dépliage d'un lien FF ou SF `(prédécesseur, successeur)` vers
+    /// la récapitulative `succ` (position `s_pos`) sur ses feuilles, sous le
+    /// budget global d'arcs dépliés.
+    fn expand_to_summary(
+        &mut self,
+        tasks: &[TaskInfo],
+        s_pos: usize,
+        succ: &TaskInfo,
+        arc: &dyn Fn(NodeIx, bool) -> Arc,
+        (p_uid, s_uid): (TaskUid, TaskUid),
+        diags: &mut Diagnostics,
+    ) -> Option<()> {
+        // Budget global (R-058, règle 10) : un lien qui ne tient plus est
+        // ignoré en entier, ainsi que tous les suivants (jamais de dépliage
+        // partiel).
+        let targets = self.expansion_targets(tasks, s_pos, succ)?;
+        if self.expansion_ignored > 0 || targets > self.expansion_left {
+            self.expansion_ignored = self.expansion_ignored.saturating_add(1);
+            return Some(());
+        }
+        self.expansion_left = self.expansion_left.saturating_sub(targets);
+        diags.push(Diagnostic::LinkFinishToSummary {
+            predecessor: p_uid,
+            successor: s_uid,
+        });
+        let first = s_pos.checked_add(1)?;
+        for q in first..succ.end {
+            let leaf = tasks.get(q)?;
+            if !Self::expansion_target(leaf, succ) {
+                continue;
+            }
+            if let Some(v) = leaf.entry {
+                self.arcs.push(arc(v, leaf.inactive()));
+            }
+        }
+        Some(())
+    }
+
+    /// Feuille `leaf` cible du dépliage d'un lien vers la récapitulative
+    /// `succ` : feuille active, ou inactive sous une récapitulative inactive.
+    fn expansion_target(leaf: &TaskInfo, succ: &TaskInfo) -> bool {
+        leaf.role == Role::Leaf && (!leaf.inactive() || succ.inactive()) && leaf.entry.is_some()
+    }
+
+    /// Nombre d'arcs que déplie un lien vers la récapitulative en position
+    /// `s_pos` (mis en cache : chaque sous-arbre n'est parcouru qu'une fois).
+    fn expansion_targets(&mut self, tasks: &[TaskInfo], s_pos: usize, succ: &TaskInfo) -> Option<usize> {
+        if let Some(Some(n)) = self.expansion_targets.get(s_pos) {
+            return Some(*n);
+        }
+        let first = s_pos.checked_add(1)?;
+        let n = tasks
+            .get(first..succ.end)?
+            .iter()
+            .filter(|leaf| Self::expansion_target(leaf, succ))
+            .count();
+        *self.expansion_targets.get_mut(s_pos)? = Some(n);
+        Some(n)
     }
 }
 
@@ -959,8 +1029,10 @@ struct Csr {
     out_idx: Vec<u32>,
 }
 
-/// Tri par comptage stable des arcs par cible ; index sortant.
-fn csr(node_count: usize, arcs: Vec<Arc>) -> Option<Csr> {
+/// Tri par comptage stable des arcs par cible, en place (permutation
+/// appliquée par cycles : aucune seconde copie des arcs, seulement 4 octets
+/// par arc) ; index sortant.
+fn csr(node_count: usize, mut arcs: Vec<Arc>) -> Option<Csr> {
     let mut in_off = vec![0u32; node_count.checked_add(1)?];
     for a in &arcs {
         let slot = in_off.get_mut(pos(a.to)?.checked_add(1)?)?;
@@ -972,13 +1044,34 @@ fn csr(node_count: usize, arcs: Vec<Arc>) -> Option<Csr> {
         *cur = cur.checked_add(prev)?;
     }
     let mut fill = in_off.clone();
-    let mut sorted: Vec<Option<Arc>> = vec![None; arcs.len()];
-    for a in arcs {
+    // `dest[k]` : position finale de l'arc `k` (ordre d'origine conservé
+    // entre arcs de même cible : tri stable).
+    let mut dest: Vec<u32> = Vec::with_capacity(arcs.len());
+    for a in &arcs {
         let slot = fill.get_mut(pos(a.to)?)?;
-        *sorted.get_mut(pos(*slot)?)? = Some(a);
+        dest.push(*slot);
         *slot = slot.checked_add(1)?;
     }
-    let sorted: Vec<Arc> = sorted.into_iter().collect::<Option<Vec<Arc>>>()?;
+    // Une permutation se range en moins de `n` échanges : au-delà, `dest`
+    // n'en est pas une (invariant violé), on s'arrête au lieu de boucler.
+    let mut swaps_left = arcs.len();
+    for k in 0..arcs.len() {
+        loop {
+            let d = pos(*dest.get(k)?)?;
+            if d == k {
+                break;
+            }
+            // Chaque échange place définitivement l'arc envoyé en `d`.
+            if d >= arcs.len() {
+                return None;
+            }
+            swaps_left = swaps_left.checked_sub(1)?;
+            arcs.swap(k, d);
+            dest.swap(k, d);
+        }
+    }
+    drop(dest);
+    let sorted = arcs;
     let mut out_off = vec![0u32; node_count.checked_add(1)?];
     for a in &sorted {
         let slot = out_off.get_mut(pos(a.from)?.checked_add(1)?)?;
@@ -1010,6 +1103,7 @@ pub(super) fn build<'a>(
     project: &Project,
     sc: Scales<'a>,
     mode: Mode,
+    expanded_arc_budget: usize,
     diags: &mut Diagnostics,
 ) -> Option<Network<'a>> {
     let ctx = BuildCtx {
@@ -1023,6 +1117,10 @@ pub(super) fn build<'a>(
         mode,
         default_place: sc.default_place,
         arcs: Vec::new(),
+        expansion_budget: expanded_arc_budget,
+        expansion_left: expanded_arc_budget,
+        expansion_ignored: 0,
+        expansion_targets: vec![None; tasks.len()],
     };
     builder.hierarchy(&tasks)?;
     builder.links(&tasks, diags)?;

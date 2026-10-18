@@ -71,7 +71,10 @@ pub use model::{
     WorkContour,
 };
 pub use quantity::{Money, Percent, Rate, RateUnit, SignedPercent, Units};
-pub use schedule::{Driver, Exclusion, LateDriver, Schedule, TaskOutcome, TaskRole, TaskSchedule, schedule};
+pub use schedule::{
+    Driver, Exclusion, LateDriver, Limits, Schedule, TaskOutcome, TaskRole, TaskSchedule, schedule,
+    schedule_with,
+};
 pub use time::{Day, DayRange, Moment, Month, TimeOfDay, Week, Weekday};
 
 /// Nom affiché du produit.

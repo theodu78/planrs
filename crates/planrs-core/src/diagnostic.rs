@@ -327,6 +327,16 @@ pub enum Diagnostic {
         /// Successeur (récapitulative).
         successor: TaskUid,
     },
+    /// Liens FF ou SF vers une récapitulative ignorés : leur dépliage sur
+    /// les feuilles (R-058) dépasserait le budget global d'arcs dépliés
+    /// (avertissement, émis une fois ; règle 10).
+    #[serde(rename = "link.expansion_limit")]
+    LinkExpansionLimit {
+        /// Budget d'arcs dépliés.
+        limit: u64,
+        /// Nombre de liens ignorés.
+        ignored: u64,
+    },
     /// Lien SS ou SF depuis une récapitulative, à rebours : son plafond de
     /// début s'applique à toutes ses sous-tâches (avertissement, R-110,
     /// miroir de R-058).
@@ -542,6 +552,7 @@ impl Diagnostic {
             | Self::TaskNullWithData { .. }
             | Self::LinkIgnoredInCycle { .. }
             | Self::LinkFinishToSummary { .. }
+            | Self::LinkExpansionLimit { .. }
             | Self::LinkStartFromSummary { .. }
             | Self::LinkManualNotHonored { .. }
             | Self::TaskCalendarFallback { .. }
@@ -574,6 +585,7 @@ impl Diagnostic {
             }
             Self::ProjectCalendarNotBase { .. }
             | Self::ProjectCalendarFallback { .. }
+            | Self::LinkExpansionLimit { .. }
             | Self::ScheduleInternal { .. } => Subject::Project,
             Self::TaskReservedUid => Subject::Task(TaskUid::PROJECT_SUMMARY),
             Self::TaskOutlineJump { task }
@@ -670,6 +682,7 @@ impl Diagnostic {
             Self::LinkIgnoredInCycle { .. } => "link.ignored_in_cycle",
             Self::LinkSummaryDescendant { .. } => "link.summary_descendant",
             Self::LinkFinishToSummary { .. } => "link.finish_to_summary",
+            Self::LinkExpansionLimit { .. } => "link.expansion_limit",
             Self::LinkStartFromSummary { .. } => "link.start_from_summary",
             Self::LinkInactive { .. } => "link.inactive",
             Self::LinkExcludedEndpoint { .. } => "link.excluded_endpoint",
@@ -827,6 +840,11 @@ impl fmt::Display for Diagnostic {
                 f,
                 "le lien {predecessor} → {successor} (fin à fin ou début à fin) vers une récapitulative \
                  s'applique à chacune de ses sous-tâches"
+            ),
+            Self::LinkExpansionLimit { limit, ignored } => write!(
+                f,
+                "{ignored} lien(s) fin à fin ou début à fin vers une récapitulative ignoré(s) : \
+                 leur report sur les sous-tâches dépasserait {limit} arcs"
             ),
             Self::LinkStartFromSummary {
                 predecessor,
@@ -1155,6 +1173,11 @@ mod tests {
                 task: t,
                 kind: ConstraintKind::MustStartOn,
             },
+            // Relecture finale J3, indice 40.
+            Diagnostic::LinkExpansionLimit {
+                limit: 4_000_000,
+                ignored: 2,
+            },
         ]
     }
 
@@ -1206,6 +1229,7 @@ mod tests {
                 "constraint.not_honored",
                 "task.deadline_missed",
                 "constraint.summary_ignored",
+                "link.expansion_limit",
             ]
         );
         let infos: Vec<&str> = all()
@@ -1304,6 +1328,9 @@ mod tests {
             .to_string(),
             "le lien 1 → 3"
         );
+        // Plafond du dépliage R-058 : sujet le projet.
+        assert_eq!(all()[40].subject(), Subject::Project);
+        assert_eq!(all()[40].code(), "link.expansion_limit");
     }
 
     #[test]

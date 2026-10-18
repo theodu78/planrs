@@ -465,9 +465,10 @@ Le moteur (`planrs_core::schedule`, ADR-0009) calcule un `Schedule` hors du mod�
 
 ## R-058 — Lien FF ou SF vers une récapitulative
 - **Formulation** : déplié en une borne de fin sur chaque feuille active descendante, à tout niveau (conversion R-039, R-040), avec l'avertissement `link.finish_to_summary`. Exemples : X 3 j (lun – mer) FF → S {A 1 j, B 1 j} → A, B mer 08:00 – 17:00 ; X 1 j SF+2 j → S1 {S2 {A 1 j}, B 1 j} → A, B mar 08:00 – 17:00.
-- **Source** : hypothèse (MS Project refuse peut-être ce lien à la saisie).
+- **Budget du dépliage (relecture finale J3, règle 10)** : le nombre total d'arcs dépliés, tous liens confondus, est plafonné (`Limits::expanded_arcs`, par défaut 4 000 000, `DEFAULT_EXPANDED_ARC_BUDGET`, environ 160 Mo d'arcs ; sans plafond, 20 000 liens FF vers une récapitulative de 20 000 feuilles, soit 5 Mo de MSPDI, demandaient 400 millions d'arcs). Les liens sont dépliés dans l'ordre des liens effectifs (successeurs puis ordre MSPDI) ; le premier lien qui ne tient plus et **tous les suivants** sont ignorés en entier (jamais de dépliage partiel), sans `link.finish_to_summary`, avec un seul avertissement `link.expansion_limit { limit, ignored }` (sujet : le projet) ; le calcul continue. Les liens FS/SS vers une récapitulative (porte, R-056) et les plafonds hérités (R-057, R-110) ne déplient rien : un arc par lien, un plafond par agrégat. Exemple : budget 3 ; X1 FF → S {A, B} (2 arcs) déplié ; X2 FF → S (2 de plus) et X3 FF → T {C} (1) ignorés → `link.expansion_limit { limit: 3, ignored: 2 }`, A, B, C lun 08:00.
+- **Source** : hypothèse (MS Project refuse peut-être ce lien à la saisie) ; budget : choix de robustesse de planrs, sans équivalent MS Project.
 - **Statut** : `hypothèse`.
-- **Tests** : `tests/rules/r058_finish_link_into_summary.rs` (`r058_*`).
+- **Tests** : `tests/rules/r058_finish_link_into_summary.rs` (`r058_*`, dont `r058_expansion_budget_ignores_remaining_links`).
 
 ## R-059 — Lien entre une récapitulative et sa descendante
 - **Formulation** : ignoré, dans les deux sens, avec `link.summary_descendant` (erreur). Exemple : S {A 1 j}, lien A FS → S : ignoré, A lun 08:00 – 17:00 ; lien S FS → A : ignoré aussi.

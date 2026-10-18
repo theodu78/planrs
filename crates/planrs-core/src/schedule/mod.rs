@@ -352,6 +352,24 @@ impl Calc<'_, '_> {
     }
 }
 
+/// Plafonds de taille du calcul (règle 10 : un fichier hostile ne doit pas
+/// épuiser la mémoire).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    /// Arcs dépliés par R-058 (lien FF ou SF vers une récapitulative, un
+    /// arc par feuille), tous liens confondus ; au-delà, les liens restants
+    /// sont ignorés avec `link.expansion_limit`.
+    pub expanded_arcs: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            expanded_arcs: network::DEFAULT_EXPANDED_ARC_BUDGET,
+        }
+    }
+}
+
 /// Calcule le planning complet du projet.
 ///
 /// Fonction pure : aucune horloge, aucune entrée/sortie. N'échoue jamais, ne
@@ -359,6 +377,12 @@ impl Calc<'_, '_> {
 /// sont compilés à chaque appel.
 #[must_use]
 pub fn schedule(project: &Project) -> Schedule {
+    schedule_with(project, Limits::default())
+}
+
+/// [`schedule`] avec des plafonds explicites (tests des plafonds, outils).
+#[must_use]
+pub fn schedule_with(project: &Project, limits: Limits) -> Schedule {
     let (mode, anchor) = match project.anchor {
         ScheduleAnchor::FromStart(m) => (Mode::FromStart, m),
         ScheduleAnchor::FromFinish(m) => (Mode::FromFinish, m),
@@ -400,7 +424,7 @@ pub fn schedule(project: &Project) -> Schedule {
     };
     let sc = network::scales(project, &set, project_cal, designated, &mut diags);
     // Étapes 1 à 5.
-    let Some(mut net) = network::build(project, sc, mode, &mut diags) else {
+    let Some(mut net) = network::build(project, sc, mode, limits.expanded_arcs, &mut diags) else {
         return internal_failure(project, start, diags, "construction du réseau");
     };
     let Some(order) = order::order(&mut net, &mut diags) else {

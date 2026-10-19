@@ -144,13 +144,17 @@ pub(super) fn update(op: &LinkSpec, ctx: &mut Ctx<'_>) -> Result<(), CommandErro
         .iter_mut()
         .find(|l| l.predecessor == pred)
         .ok_or_else(|| not_found(pred, succ))?;
+    let before = (link.kind, link.lag);
     if let Some(k) = op.kind {
         link.kind = k.into();
     }
     if let Some(l) = lag {
         link.lag = l;
     }
-    ctx.drop_task_extras(succ, TaskChange::Links);
+    // R-161 : un champ n'est modifié que si sa valeur change.
+    if (link.kind, link.lag) != before {
+        ctx.drop_task_extras(succ, TaskChange::Links);
+    }
     Ok(())
 }
 

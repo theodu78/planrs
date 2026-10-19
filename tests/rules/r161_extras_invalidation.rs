@@ -6,7 +6,7 @@ use planrs_automation::SideEffect;
 use planrs_core::{Assignment, AssignmentUid, ExtraEntry, Project, Subject, TaskUid};
 use planrs_mspdi::write::WriteOptions;
 use planrs_tests::mspdi::new_project;
-use planrs_tests::session::{push_tasks, session};
+use planrs_tests::session::{link, push_tasks, session};
 use planrs_tests::task_edit::{apply, get};
 use serde_json::json;
 
@@ -131,4 +131,39 @@ fn r161_structure_and_dates_drop_leveling_extras() {
     );
     let keys: Vec<_> = get(&s, 1).extras.0.iter().map(|e| e.key.as_str()).collect();
     assert_eq!(keys, ["Hyperlink"]);
+}
+
+#[test]
+fn r161_unchanged_link_or_place_keeps_extras() {
+    // Lien 2 → 1 ; `link.update` sans champ ou avec les mêmes valeurs, et
+    // `task.move` qui remet la tâche à sa place : rien ne change, aucune
+    // clé jetée, aucun effet, MSPDI réécrit avec `LevelingDelay`.
+    for op in [
+        json!({ "op": "link.update", "pred": 2, "succ": 1 }),
+        json!({ "op": "link.update", "pred": 2, "succ": 1, "kind": "fs" }),
+        json!({ "op": "link.update", "pred": 2, "succ": 1, "kind": "fs", "lag": { "minutes": 0 } }),
+        json!({ "op": "task.move", "uid": 1, "to": { "before": 2 } }),
+    ] {
+        let mut p = project();
+        link(&mut p, 2, 1);
+        let mut s = session(p);
+        let o = apply(&mut s, json!([op.clone()]));
+        assert_eq!(get(&s, 1).extras.0.len(), 3, "{op}");
+        assert!(
+            !o.side_effects
+                .iter()
+                .any(|e| matches!(e, SideEffect::ExtrasDropped { .. })),
+            "{op}"
+        );
+        assert!(mspdi(&s).contains("<LevelingDelay>4800</LevelingDelay>"), "{op}");
+    }
+    // Le même lien vraiment changé jette les clés (contrôle).
+    let mut p = project();
+    link(&mut p, 2, 1);
+    let mut s = session(p);
+    apply(
+        &mut s,
+        json!([{ "op": "link.update", "pred": 2, "succ": 1, "kind": "ss" }]),
+    );
+    assert_eq!(get(&s, 1).extras.0.len(), 1);
 }

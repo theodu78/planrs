@@ -435,6 +435,9 @@ pub(super) fn delete(op: &TaskDelete, ctx: &mut Ctx<'_>) -> Result<(), CommandEr
             relinked.push(t.uid());
         }
     }
+    // Successeurs dont les liens changent : Extras jetés après les
+    // affectations, pour l'ordre des effets de R-155.
+    let mut dropped_links = Vec::with_capacity(relinked.len());
     for succ in relinked {
         let Some(t) = ctx.project.tasks.get_mut(succ) else {
             continue;
@@ -458,7 +461,7 @@ pub(super) fn delete(op: &TaskDelete, ctx: &mut Ctx<'_>) -> Result<(), CommandEr
             );
         }
         touch(ctx, succ);
-        ctx.drop_task_extras(succ, TaskChange::Links);
+        dropped_links.push(succ);
     }
     // Affectations des tâches supprimées : une reconstruction de l'arène.
     if ctx.project.assignments.iter().any(|a| deleted.contains(&a.task)) {
@@ -469,6 +472,9 @@ pub(super) fn delete(op: &TaskDelete, ctx: &mut Ctx<'_>) -> Result<(), CommandEr
         for a in gone {
             ctx.effects.push(SideEffect::AssignmentRemoved(a.uid()));
         }
+    }
+    for succ in dropped_links {
+        ctx.drop_task_extras(succ, TaskChange::Links);
     }
     hierarchy_changed(ctx, &before_summaries, &[]);
     if let Some(e) = renumbered(&before_order, &ctx.project.tasks) {
@@ -521,6 +527,12 @@ pub(super) fn move_to(op: &TaskMove, ctx: &mut Ctx<'_>) -> Result<(), CommandErr
     } else {
         slot.index
     };
+    // Bloc remis à sa place, au même niveau : rien ne change, aucun Extras
+    // n'est jeté (R-161 : un champ n'est modifié que si sa valeur change).
+    if index == pos && delta == 0 {
+        touch(ctx, uid);
+        return Ok(());
+    }
     let before_order = order(&ctx.project.tasks);
     let before_summaries = summaries(&ctx.project.tasks);
     // Contrôle des niveaux sur une copie du bloc, avant tout retrait.

@@ -3,7 +3,7 @@
 
 use planrs_automation::error::codes;
 use planrs_automation::{CommandErrorKind, SideEffect};
-use planrs_core::{Assignment, AssignmentUid, TaskId, TaskUid};
+use planrs_core::{Assignment, AssignmentUid, ExtraEntry, Subject, TaskId, TaskUid};
 use planrs_tests::mspdi::new_project;
 use planrs_tests::session::{link, push_tasks, session};
 use planrs_tests::task_edit::{apply, get, push_outline, rows, try_apply};
@@ -117,4 +117,48 @@ fn r155_ids_renumbered() {
     // Supprimer la dernière : aucune renumérotation.
     let o = apply(&mut s, json!([{ "op": "task.delete", "uid": 6 }]));
     assert_eq!(o.side_effects, [SideEffect::TaskDeleted(uid(6))]);
+}
+
+#[test]
+fn r155_effects_order_extras_after_assignments() {
+    // 2 → 4, 4 → 5 ; 5 relue avec `LevelingDelay` ; affectation sur 4.
+    // `delete 4` : TaskDeleted, LinkRemoved, AssignmentRemoved, puis
+    // ExtrasDropped (5), puis IdsRenumbered — l'ordre de la fiche.
+    let mut p = new_project("2026-11-02T08:00");
+    push_tasks(&mut p, &[1, 2, 3, 4, 5], 1);
+    link(&mut p, 2, 4);
+    link(&mut p, 4, 5);
+    p.tasks.get_mut(uid(5)).unwrap().extras.0.push(ExtraEntry {
+        origin: "mspdi".to_owned(),
+        key: "LevelingDelay".to_owned(),
+        payload: "<LevelingDelay>4800</LevelingDelay>".to_owned(),
+    });
+    p.assignments
+        .push(Assignment::new(AssignmentUid::new(1), uid(4), None))
+        .unwrap();
+    let mut s = session(p);
+    let o = apply(&mut s, json!([{ "op": "task.delete", "uid": 4 }]));
+    assert_eq!(
+        o.side_effects,
+        [
+            SideEffect::TaskDeleted(uid(4)),
+            SideEffect::LinkRemoved {
+                pred: uid(2),
+                succ: uid(4)
+            },
+            SideEffect::LinkRemoved {
+                pred: uid(4),
+                succ: uid(5)
+            },
+            SideEffect::AssignmentRemoved(AssignmentUid::new(1)),
+            SideEffect::ExtrasDropped {
+                subject: Subject::Task(uid(5)),
+                keys: vec!["LevelingDelay".to_owned()],
+            },
+            SideEffect::IdsRenumbered {
+                from: TaskId::new(4),
+                count: 1
+            },
+        ]
+    );
 }

@@ -290,6 +290,21 @@ const NANOS_PER_SECOND: i128 = 1_000_000_000;
 ///
 /// [`IsoDurationError`].
 pub fn parse_iso_duration(s: &str) -> Result<IsoDuration, IsoDurationError> {
+    let signed = iso_duration_nanos(s)?;
+    let minutes = round_div(signed, NANOS_PER_MINUTE).ok_or(IsoDurationError::Overflow)?;
+    let rounded = signed.checked_rem(NANOS_PER_MINUTE).is_some_and(|r| r != 0);
+    Ok(IsoDuration { minutes, rounded })
+}
+
+/// Nanosecondes dans une minute, pour l'arrondi d'une somme de durées lues
+/// par [`iso_duration_nanos`].
+pub(crate) const ISO_NANOS_PER_MINUTE: i128 = NANOS_PER_MINUTE;
+
+/// Durée `xsd:duration` en nanosecondes exactes (même syntaxe que
+/// [`parse_iso_duration`], sans arrondi à la minute ; un chiffre au-delà de
+/// la nanoseconde ajoute 1 ns). Sert à sommer des valeurs fractionnaires
+/// (`TimephasedData`, O30) avant un seul arrondi (R-001, R-199).
+pub(crate) fn iso_duration_nanos(s: &str) -> Result<i128, IsoDurationError> {
     let mut c = Cursor::new(s.trim());
     let negative = c.eat(b'-');
     if !negative {
@@ -378,14 +393,11 @@ pub fn parse_iso_duration(s: &str) -> Result<IsoDuration, IsoDurationError> {
     if years_or_months {
         return Err(IsoDurationError::YearsOrMonths);
     }
-    let signed = if negative {
-        total.checked_neg().ok_or(IsoDurationError::Overflow)?
+    if negative {
+        total.checked_neg().ok_or(IsoDurationError::Overflow)
     } else {
-        total
-    };
-    let minutes = round_div(signed, NANOS_PER_MINUTE).ok_or(IsoDurationError::Overflow)?;
-    let rounded = signed.checked_rem(NANOS_PER_MINUTE).is_some_and(|r| r != 0);
-    Ok(IsoDuration { minutes, rounded })
+        Ok(total)
+    }
 }
 
 /// R-072 : `LinkLag` (dixièmes de minute) → minutes, `round_div(lag, 10)`

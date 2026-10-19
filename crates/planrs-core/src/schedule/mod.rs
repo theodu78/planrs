@@ -379,12 +379,18 @@ pub struct Limits {
     /// arc par feuille), tous liens confondus ; au-delà, les liens restants
     /// sont ignorés avec `link.expansion_limit`.
     pub expanded_arcs: usize,
+    /// Segments des calendriers combinés (intersections et unions, R-172)
+    /// gardés par recalcul, tous confondus ; le travail des combinaisons
+    /// (segments lus) est borné à 8 fois cette valeur. Au-delà,
+    /// `calendar.too_many_segments` et repli (R-171, R-173).
+    pub combined_segments: usize,
 }
 
 impl Default for Limits {
     fn default() -> Self {
         Self {
             expanded_arcs: network::DEFAULT_EXPANDED_ARC_BUDGET,
+            combined_segments: placement::DEFAULT_COMBINED_SEGMENTS,
         }
     }
 }
@@ -471,7 +477,7 @@ fn run(project: &Project, limits: Limits, strategy: Strategy) -> Schedule {
     let sc = network::scales(project, &set, project_cal, &mut diags);
     // J5 : affectations résolues (calendriers effectifs, R-171 ; `d_a`,
     // R-170), avant le réseau qui les place (R-173).
-    let resolved = placement::resolve(project, &set, project_cal, &mut diags);
+    let resolved = placement::resolve(project, &set, project_cal, limits.combined_segments, &mut diags);
     // Étapes 1 à 5.
     let Some(mut net) = network::build(
         project,
@@ -533,7 +539,8 @@ fn run(project: &Project, limits: Limits, strategy: Strategy) -> Schedule {
     let mut out = calc.output(&order);
     // J5 (lot L5) : travail, débits, charges et surutilisation (R-184 à
     // R-187).
-    load::apply(project, &net, (&set, project_cal), &mut out);
+    // Intersections reprises de `resolved` (jamais recompilées).
+    load::apply(project, &net, (&set, project_cal, &resolved), &mut out);
     out
 }
 

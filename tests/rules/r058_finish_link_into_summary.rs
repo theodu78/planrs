@@ -76,7 +76,10 @@ fn r058_expansion_budget_ignores_remaining_links() {
         .link("X1", "S", LinkType::FinishToFinish, lag_w(0))
         .link("X2", "S", LinkType::FinishToFinish, lag_w(0))
         .link("X3", "T", LinkType::FinishToFinish, lag_w(0))
-        .run_with(Limits { expanded_arcs: 3 });
+        .run_with(Limits {
+            expanded_arcs: 3,
+            ..Limits::default()
+        });
     let limits: Vec<_> = run
         .schedule
         .diagnostics

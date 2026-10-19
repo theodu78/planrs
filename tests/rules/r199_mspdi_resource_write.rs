@@ -4,8 +4,9 @@
 //! d'affectation écrits).
 
 use planrs_core::{
-    Assignment, AssignmentUid, Duration, DurationUnit, ExtraEntry, Extras, Link, Minutes, OutlineLevel,
-    Project, Resource, ResourceUid, Subject, Task, TaskType, TaskUid, TimeBasis, Work, WorkContour, schedule,
+    Assignment, AssignmentUid, Constraint, Duration, DurationUnit, ExtraEntry, Extras, Link, Minutes,
+    OutlineLevel, Project, Resource, ResourceUid, ScheduleAnchor, Subject, Task, TaskType, TaskUid,
+    TimeBasis, Work, WorkContour, schedule,
 };
 use planrs_mspdi::write::{Computed, WriteCode, WriteOptions, choose_computed, schedule_image, write};
 use planrs_mspdi::{ReadOptions, normalize, read};
@@ -114,6 +115,30 @@ fn r199_assignment_dates_written() {
 }
 
 #[test]
+fn r199_from_finish_assignment_dates_written() {
+    // À rebours depuis ven 23/10/2026 17:00 : T1 1 j ALAP avec R1 8 h, T2
+    // 5 j sans ressource. T1 est planifiée ven 08:00 – 17:00 (dates au plus
+    // tard, R-112) ; l'affectation est écrite sur ces mêmes dates, et non
+    // sur le lundi de ses dates au plus tôt.
+    let mut p = new_project("2026-10-19T08:00");
+    p.anchor = ScheduleAnchor::FromFinish(moment("2026-10-23T17:00"));
+    let mut t1 = task(&p, 1, 480, 1, 480);
+    t1.constraint = Constraint::AsLateAsPossible;
+    p.tasks.push(t1).unwrap();
+    let mut t2 = task(&p, 2, 2_400, 1, 0);
+    t2.constraint = Constraint::AsLateAsPossible;
+    p.tasks.push(t2).unwrap();
+    resource(&mut p, 1);
+    assign(&mut p, 1, 1, 1, 480);
+    let (xml, _) = written_by_engine(&p);
+    let t1 = entity_xml(&xml, "Task", 1);
+    assert!(t1.contains("<Start>2026-10-23T08:00:00</Start>"), "{t1}");
+    let a1 = entity_xml(&xml, "Assignment", 1);
+    assert!(a1.contains("<Start>2026-10-23T08:00:00</Start>"), "{a1}");
+    assert!(a1.contains("<Finish>2026-10-23T17:00:00</Finish>"), "{a1}");
+}
+
+#[test]
 fn r199_fixed_duration_keeps_entered_duration() {
     // Durée fixe : la durée est l'entrée tenue (S41) ; 2 j écrits même si
     // l'union des intervalles (R1 lun-mar, R2 mer-jeu) en fait 4.
@@ -131,6 +156,60 @@ fn r199_fixed_duration_keeps_entered_duration() {
     assert!(t1.contains("<Duration>PT16H0M0S</Duration>"), "{t1}");
     let a2 = entity_xml(&xml, "Assignment", 2);
     assert!(a2.contains("<Finish>2026-10-22T17:00:00</Finish>"), "{a2}");
+}
+
+#[test]
+fn r199_zero_units_keeps_model_duration() {
+    // Unités fixes 2 j : R1 100 % 16 h ; R2 0 % 3 h décalée d'un jour
+    // (`d_a` = durée de la tâche, R-181) ⇒ union lun – mer (3 j). La durée
+    // écrite reste celle du modèle, 2 j : reporter l'union l'allongerait à
+    // chaque recalcul (R-173).
+    let mut p = new_project("2026-10-19T08:00");
+    let t = task(&p, 1, 960, 1, 1_140);
+    p.tasks.push(t).unwrap();
+    resource(&mut p, 1);
+    resource(&mut p, 2);
+    assign(&mut p, 1, 1, 1, 960);
+    let a2 = assign(&mut p, 2, 1, 2, 180);
+    let a = p.assignments.get_mut(a2).unwrap();
+    a.units = planrs_core::Units::ZERO;
+    a.delay = Minutes::new(480);
+    let (xml, _) = written_by_engine(&p);
+    let t1 = entity_xml(&xml, "Task", 1);
+    assert!(t1.contains("<Duration>PT16H0M0S</Duration>"), "{t1}");
+    let a2 = entity_xml(&xml, "Assignment", 2);
+    assert!(a2.contains("<Finish>2026-10-21T17:00:00</Finish>"), "{a2}");
+}
+
+#[test]
+fn r199_assignment_remaining_work_follows_work() {
+    // RemainingWork d'une affectation sans travail réel = Work (MS Project
+    // l'écrit toujours ; aucune commande ne tient le reste du modèle) :
+    // affectation créée (reste 0 dans le modèle) ⇒ PT8H ; reste relu de
+    // 64 h périmé après un rééquilibrage à 32 h ⇒ PT32H ; avec un travail
+    // réel saisi (8 h), le reste saisi (30 h) est gardé.
+    let mut p = new_project("2026-10-19T08:00");
+    for uid in 1..=3 {
+        let t = task(&p, uid, 480, 1, 0);
+        p.tasks.push(t).unwrap();
+    }
+    resource(&mut p, 1);
+    assign(&mut p, 1, 1, 1, 480);
+    let a2 = assign(&mut p, 2, 2, 1, 1_920);
+    p.assignments.get_mut(a2).unwrap().remaining_work = work(3_840);
+    let a3 = assign(&mut p, 3, 3, 1, 1_920);
+    let a = p.assignments.get_mut(a3).unwrap();
+    a.actual_work = work(480);
+    a.remaining_work = work(1_800);
+    let (xml, _) = written_by_engine(&p);
+    let remaining = |uid| {
+        let x = entity_xml(&xml, "Assignment", uid);
+        let start = x.find("<RemainingWork>").unwrap();
+        x.get(start..).unwrap().split('<').nth(1).unwrap().to_owned()
+    };
+    assert_eq!(remaining(1), "RemainingWork>PT8H0M0S");
+    assert_eq!(remaining(2), "RemainingWork>PT32H0M0S");
+    assert_eq!(remaining(3), "RemainingWork>PT30H0M0S");
 }
 
 #[test]
@@ -210,6 +289,8 @@ fn contoured() -> Project {
     let a = assign(&mut p, 1, 1, 1, 480);
     let a = p.assignments.get_mut(a).unwrap();
     a.contour = WorkContour::Contoured;
+    // Reste = travail, comme MS Project l'écrit sans avancement.
+    a.remaining_work = a.work;
     a.extras = Extras(vec![
         row(1, "2026-10-19T08:00:00", "2026-10-19T12:00:00", "PT4H0M0S"),
         row(1, "2026-10-19T13:00:00", "2026-10-19T17:00:00", "PT4H0M0S"),

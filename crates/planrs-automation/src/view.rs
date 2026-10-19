@@ -32,7 +32,7 @@ use planrs_core::resource::{UsageError, usage as core_usage};
 use planrs_core::{
     Assignment, Decimal, Diagnostic, Duration, DurationUnit, HasUid, LagValue, Minutes, Moment, Project,
     Resource, ResourceKind, ResourceUid, Schedule, Severity, Subject, Task, TaskRole, TaskSchedule, TaskUid,
-    TimeBasis, Units, Work,
+    TimeBasis, Units, Work, round_div,
 };
 use serde::Serialize;
 
@@ -63,6 +63,9 @@ pub const DEFAULT_LIST_RESOURCES: usize = 50;
 /// Affectations détaillées par ressource au plus (C-MCP-03, J5) ; le total
 /// reste compté (`assignments_total`).
 pub const MAX_RESOURCE_ASSIGNMENTS: usize = 100;
+/// Ressources détaillées par tâche (`TaskView.resources`) au plus (C-MCP-03,
+/// J5) ; le total est alors donné (`resources_total`).
+pub const MAX_TASK_RESOURCES: usize = 100;
 /// Cellules (périodes × ressources) d'un rapport d'utilisation au plus
 /// (C-MCP-03, J5) : borne de surface, plus serrée que celle du cœur
 /// (1 000 × 1 000, R-188).
@@ -105,8 +108,13 @@ pub struct TaskView {
     pub diagnostics: Vec<String>,
     /// Ressources affectées (J5), dans l'ordre des affectations ; absent du
     /// JSON quand vide (affectation fictive −65 535 exclue).
+    /// Au plus [`MAX_TASK_RESOURCES`] (C-MCP-03).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub resources: Vec<TaskResourceOut>,
+    /// Nombre total de ressources affectées quand `resources` est coupée à
+    /// [`MAX_TASK_RESOURCES`] (C-MCP-03) ; absent sinon.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resources_total: Option<usize>,
     /// Travail calculé par le moteur (R-184), en heures ; absent du JSON
     /// quand nul.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -504,6 +512,19 @@ pub fn quantity_out(u: Units, ctx: &TextContext) -> UnitsJson {
     }
 }
 
+/// Quantité d'une affectation matérielle : son travail en heures (PT3H =
+/// 3, O30, R-185), en 1/10 000 arrondi (R-001) ; l'unité de l'affectation
+/// reste 100 % (R-196). Saturée au plafond des unités.
+#[must_use]
+pub fn material_quantity(w: Work) -> Units {
+    let q = i128::from(w.minutes().get())
+        .checked_mul(10_000)
+        .and_then(|n| round_div(n, 60))
+        .unwrap_or(i64::MAX)
+        .clamp(Units::MIN, Units::MAX);
+    Units::new(q).unwrap_or(Units::ZERO)
+}
+
 /// Travail de sortie, en heures (J5).
 #[must_use]
 pub fn work_out(w: Work, ctx: &TextContext) -> DurationJson {
@@ -610,29 +631,38 @@ impl<'a> ViewCtx<'a> {
             .is_some_and(|v| v.iter().any(|a| a.resource == Some(resource)))
     }
 
-    /// Unités d'une affectation : quantité pour une ressource matérielle,
-    /// pourcentage sinon.
-    fn assignment_units(&self, a: &Assignment) -> UnitsJson {
-        let material = a
-            .resource
+    /// Vrai si l'affectation désigne une ressource matérielle.
+    fn is_material(&self, a: &Assignment) -> bool {
+        a.resource
             .and_then(|r| self.project.resources.get(r))
-            .is_some_and(|r| matches!(r.kind, ResourceKind::Material { .. }));
-        if material {
-            quantity_out(a.units, &self.text)
+            .is_some_and(|r| matches!(r.kind, ResourceKind::Material { .. }))
+    }
+
+    /// Unités d'une affectation : quantité pour une ressource matérielle
+    /// (portée par le travail, O30), pourcentage sinon.
+    fn assignment_units(&self, a: &Assignment) -> UnitsJson {
+        if self.is_material(a) {
+            quantity_out(material_quantity(a.work), &self.text)
         } else {
             units_out(a.units, &self.text)
         }
     }
 
-    /// Ressources affectées à une tâche (affectation fictive exclue).
-    fn task_resources(&self, task: TaskUid) -> Vec<TaskResourceOut> {
+    /// Ressources affectées à une tâche (affectation fictive exclue), au
+    /// plus [`MAX_TASK_RESOURCES`], et leur nombre total s'il est dépassé.
+    fn task_resources(&self, task: TaskUid) -> (Vec<TaskResourceOut>, Option<usize>) {
         let Some(list) = self.by_task.get(&task) else {
-            return Vec::new();
+            return (Vec::new(), None);
         };
-        list.iter()
-            .filter_map(|a| {
-                let r = a.resource?;
-                Some(TaskResourceOut {
+        let mut out = Vec::new();
+        let mut total = 0usize;
+        for a in list {
+            let Some(r) = a.resource else {
+                continue;
+            };
+            total = total.saturating_add(1);
+            if out.len() < MAX_TASK_RESOURCES {
+                out.push(TaskResourceOut {
                     uid: r.get(),
                     name: self
                         .project
@@ -641,9 +671,11 @@ impl<'a> ViewCtx<'a> {
                         .map(|r| r.name.clone())
                         .unwrap_or_default(),
                     units: self.assignment_units(a),
-                })
-            })
-            .collect()
+                });
+            }
+        }
+        let truncated = total > out.len();
+        (out, truncated.then_some(total))
     }
 
     /// Vue d'une affectation : dates et unités effectives du moteur.
@@ -652,10 +684,7 @@ impl<'a> ViewCtx<'a> {
         let placed = self.schedule.assignments.get(&a.uid());
         let delay = (a.delay != Minutes::ZERO)
             .then(|| signed_minutes(a.delay, self.project.options.default_duration_unit, &self.text));
-        let material = a
-            .resource
-            .and_then(|r| self.project.resources.get(r))
-            .is_some_and(|r| matches!(r.kind, ResourceKind::Material { .. }));
+        let material = self.is_material(a);
         AssignmentView {
             uid: a.uid().get(),
             task: a.task.get(),
@@ -667,7 +696,7 @@ impl<'a> ViewCtx<'a> {
             finish: placed.map(|p| iso(p.span.finish)),
             effective_units: placed.map(|p| {
                 if material {
-                    quantity_out(p.effective_units, &self.text)
+                    quantity_out(material_quantity(p.work), &self.text)
                 } else {
                     units_out(p.effective_units, &self.text)
                 }
@@ -681,10 +710,8 @@ impl<'a> ViewCtx<'a> {
     pub fn resource_at(&self, pos: usize, r: &Resource) -> ResourceView {
         let uid = r.uid();
         let load = self.schedule.resources.get(&uid);
-        let id = pos
-            .checked_add(1)
-            .and_then(|n| u32::try_from(n).ok())
-            .unwrap_or(u32::MAX);
+        // ID de MS Project : la ressource UID 0 cachée n'est pas comptée.
+        let id = u32::try_from(planrs_core::resource_id(&self.project.resources, pos)).unwrap_or(u32::MAX);
         let mut assignments = Vec::new();
         let mut total = 0usize;
         for a in self
@@ -770,6 +797,7 @@ impl<'a> ViewCtx<'a> {
             .and_then(|n| u32::try_from(n).ok())
             .unwrap_or(u32::MAX);
         let slack_unit = self.project.options.default_duration_unit;
+        let (resources, resources_total) = self.task_resources(uid);
         TaskView {
             uid: uid.get(),
             id,
@@ -795,7 +823,8 @@ impl<'a> ViewCtx<'a> {
                 })
                 .collect(),
             diagnostics: self.task_diags.get(&uid).cloned().unwrap_or_default(),
-            resources: self.task_resources(uid),
+            resources,
+            resources_total,
             work: scheduled
                 .map(|s| s.work)
                 .filter(|w| *w != Work::ZERO)

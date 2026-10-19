@@ -34,6 +34,8 @@ fn r125_assignments_are_written() {
     a.delay = Minutes::new(420);
     a.work = Work::new(Minutes::new(960)).unwrap();
     a.contour = WorkContour::Bell;
+    // Reste sans avancement = travail : écrit tel quel (dérivé, R-199).
+    a.remaining_work = a.work;
     proj.assignments.push(a).unwrap();
     proj.assignments
         .push(Assignment::new(AssignmentUid::new(2), TaskUid::new(1), None))

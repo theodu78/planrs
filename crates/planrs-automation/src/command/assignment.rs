@@ -21,7 +21,7 @@ use std::collections::BTreeSet;
 use planrs_core::resource::{Edit, EditError, Part, Rebalanced, TaskSide, apply};
 use planrs_core::{
     Assignment, AssignmentUid, Duration, HasUid, Minutes, ModelError, ResourceKind, ResourceUid,
-    SchedulingMode, Subject, TaskType, TaskUid, TimeBasis, Units, Work, round_div,
+    SchedulingMode, Subject, TaskOutcome, TaskType, TaskUid, TimeBasis, Units, Work, round_div,
 };
 
 use super::exec::Ctx;
@@ -306,8 +306,23 @@ fn quantity_work(q: Units, field: &str) -> Result<Work, CommandError> {
     Work::new(Minutes::new(minutes)).map_err(|_| invalid(field, "quantité hors des bornes"))
 }
 
-/// Travail par défaut d'une affectation de récapitulative : durée
-/// enregistrée × unités (R-170, R-179 ; hypothèse).
+/// Durée calculée de la récapitulative `task` dans l'état courant du lot
+/// (R-054, R-064 : temps ouvré de son span, ou durée utilisée d'une
+/// récapitulative manuelle), et non sa durée du modèle : celle-ci vaut 0
+/// pour une récapitulative automatique relue (valeur calculée,
+/// `computed_zero`) et reste celle de la saisie pour une tâche devenue
+/// récapitulative. À défaut (récapitulative non planifiée) : `stored`.
+/// Recalcul complet du clone : réservé à l'affectation d'une
+/// récapitulative sans travail fourni, cas rare.
+fn summary_duration(ctx: &Ctx<'_>, task: TaskUid, stored: Minutes) -> Minutes {
+    match planrs_core::schedule(ctx.project).get(task) {
+        Some(TaskOutcome::Scheduled(s)) => s.duration,
+        _ => stored,
+    }
+}
+
+/// Travail par défaut d'une affectation de récapitulative : durée calculée
+/// × unités (R-170, R-179, R-196 ; hypothèse).
 fn summary_work(duration: Minutes, units: Units) -> Result<Work, CommandError> {
     let minutes = i128::from(duration.get())
         .checked_mul(i128::from(units.get()))
@@ -413,7 +428,7 @@ pub(super) fn add(op: &AssignmentAdd, ctx: &mut Ctx<'_>) -> Result<(), CommandEr
         if b.mode == Mode::Summary {
             a.work = match work {
                 Some(w) => w,
-                None => summary_work(b.side.duration, units)?,
+                None => summary_work(summary_duration(ctx, task, b.side.duration), units)?,
             };
         } else {
             b.edit(&Edit::Add { uid, units }, "units")?;

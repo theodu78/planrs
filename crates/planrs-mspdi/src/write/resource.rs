@@ -1,6 +1,8 @@
 //! Ressources à l'écriture (R-124).
 
-use planrs_core::{ConversionFactors, Decimal, Money, Rate, Resource, ResourceKind, Subject, Units};
+use planrs_core::{
+    Arena, ConversionFactors, Decimal, Money, Rate, Resource, ResourceKind, ResourceUid, Subject, Units,
+};
 
 use super::computed::Values;
 use super::emit::Emitter;
@@ -40,12 +42,32 @@ pub(crate) fn hourly_rate_text(rate: Rate, factors: &ConversionFactors) -> Strin
         .map_or_else(|| "0".to_owned(), format_decimal)
 }
 
-/// Écrit une ressource ; `position` : rang dans l'arène (`ID` = rang + 1) ;
+/// Écrit les ressources du projet, dans l'ordre de l'arène.
+pub(crate) fn write_all(
+    em: &mut Emitter,
+    p: &planrs_core::Project,
+    values: Option<&Values>,
+    profile: OrderProfile,
+) {
+    for (position, r) in p.resources.iter().enumerate() {
+        write(
+            em,
+            r,
+            (&p.resources, position),
+            &p.options.factors,
+            values,
+            profile,
+        );
+    }
+}
+
+/// Écrit une ressource ; `position` : rang dans `resources` (`ID` :
+/// [`planrs_core::resource_id`]) ;
 /// `values` : travail et surutilisation à écrire (R-198, R-122).
 pub(crate) fn write(
     em: &mut Emitter,
     r: &Resource,
-    position: usize,
+    (resources, position): (&Arena<ResourceUid, Resource>, usize),
     factors: &ConversionFactors,
     values: Option<&Values>,
     profile: OrderProfile,
@@ -55,7 +77,9 @@ pub(crate) fn write(
     let numbers: Vec<u8> = r.baselines.keys().map(|n| n.get()).collect();
     let planned = plan(em, "Resource", Parent::Resource, &r.extras, &numbers, profile);
     let top = unscoped(&planned);
-    let id = u64::try_from(position).unwrap_or(u64::MAX).saturating_add(1);
+    // ID 0 pour la ressource UID 0 cachée (O34), puis 1, 2… : les ID de
+    // MS Project sont gardés.
+    let id = planrs_core::resource_id(resources, position);
     let text = |em: &mut Emitter, name: &'static str, value: &str| {
         em.text(name, value, max_len(Parent::Resource, name));
     };

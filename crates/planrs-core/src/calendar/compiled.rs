@@ -191,8 +191,19 @@ pub struct CompiledCalendar {
     /// segment qui contient le jour `b × 64` (fonction des segments, donc
     /// sans effet sur l'égalité).
     blocks: Vec<u32>,
+    /// Empreinte des segments et du nombre de motifs (fonction des
+    /// segments, donc sans effet sur l'égalité), calculée à l'assemblage :
+    /// voir [`CompiledCalendar::shape_fingerprint`].
+    fingerprint: u64,
     /// `W(Moment::MAX)`.
     total: i64,
+}
+
+/// Mélange déterministe d'un mot dans une empreinte (multiplication par une
+/// constante impaire puis rotation, même résultat sur toutes les
+/// plateformes).
+const fn mix(h: u64, v: u64) -> u64 {
+    (h ^ v).wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(29)
 }
 
 /// Motifs en cours d'internement.
@@ -460,12 +471,27 @@ impl CompiledCalendar {
             cum = cum.checked_add(work)?;
         }
         let blocks = block_index(&segments)?;
+        let mut fingerprint = mix(
+            u64::try_from(patterns.days.len()).ok()?,
+            u64::try_from(patterns.weeks.len()).ok()?,
+        );
+        for seg in &segments {
+            let rule = match seg.rule {
+                SegmentRule::Weekly(i) => u64::from(i) << 1,
+                SegmentRule::Daily(i) => (u64::from(i) << 1) | 1,
+            };
+            // Bits recopiés (complément à deux), déterministe.
+            let first = u64::from_le_bytes(i64::from(seg.first_day).to_le_bytes());
+            let cum = u64::from_le_bytes(seg.cum_start.to_le_bytes());
+            fingerprint = mix(mix(mix(fingerprint, first), rule), cum);
+        }
         Some(Self {
             uid,
             day_patterns: patterns.days,
             week_patterns: patterns.weeks,
             segments,
             blocks,
+            fingerprint,
             total: cum,
         })
     }
@@ -486,6 +512,24 @@ impl CompiledCalendar {
             && self.segments == other.segments
             && self.week_patterns == other.week_patterns
             && self.day_patterns == other.day_patterns
+    }
+
+    /// Nombre de segments de la forme compilée (coût d'une combinaison,
+    /// R-172 : linéaire en segments des deux calendriers ; budget du
+    /// recalcul, `Limits::combined_segments`).
+    #[must_use]
+    pub fn segment_count(&self) -> usize {
+        self.segments.len()
+    }
+
+    /// Empreinte de la forme compilée, UID mis à part : égale pour deux
+    /// calendriers de même forme ([`Self::same_working_time`]), elle range
+    /// les candidats avant la comparaison complète (placement, une échelle
+    /// par forme). Déterministe, calculée à l'assemblage : (total, nombre
+    /// de segments, mélange des segments et du nombre de motifs).
+    #[must_use]
+    pub const fn shape_fingerprint(&self) -> (i64, usize, u64) {
+        (self.total, self.segments.len(), self.fingerprint)
     }
 
     /// Vrai si le calendrier a au moins une minute ouvrée sur le domaine.
@@ -1386,5 +1430,10 @@ mod tests {
         assert!(b.same_working_time(&d));
         assert!(!b.same_working_time(&l));
         assert!(b.intersect(&d).unwrap().same_working_time(&b));
+        // Même forme ⇒ même empreinte ; formes différentes : empreintes
+        // différentes ici (condition non garantie en général).
+        assert_eq!(b.shape_fingerprint(), d.shape_fingerprint());
+        assert_ne!(b.shape_fingerprint(), l.shape_fingerprint());
+        assert!(l.segment_count() > b.segment_count());
     }
 }

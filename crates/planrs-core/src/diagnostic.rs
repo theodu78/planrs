@@ -550,6 +550,18 @@ pub enum Diagnostic {
         /// Plafond de segments.
         limit: u32,
     },
+    /// Feuille à trop de parts pour la mesure exacte de l'union de leurs
+    /// intervalles : durée calculée = plus grand `d_a` (avertissement,
+    /// R-173, règle 10).
+    #[serde(rename = "assignment.too_many_parts")]
+    AssignmentTooManyParts {
+        /// Tâche.
+        task: TaskUid,
+        /// Parts (affectations de travail qui la placent).
+        parts: u32,
+        /// Plafond.
+        limit: u32,
+    },
     /// Invariant interne du calcul violé : jamais attendu, anomalie à
     /// signaler (erreur).
     #[serde(rename = "schedule.internal")]
@@ -638,7 +650,8 @@ impl Diagnostic {
             | Self::AssignmentZeroUnits { .. }
             | Self::AssignmentCalendarEmpty { .. }
             | Self::TaskFixedWorkEffortDriven { .. }
-            | Self::CalendarTooManySegments { .. } => Severity::Warning,
+            | Self::CalendarTooManySegments { .. }
+            | Self::AssignmentTooManyParts { .. } => Severity::Warning,
             Self::LinkInactive { .. }
             | Self::LinkExcludedEndpoint { .. }
             | Self::TaskManualUndated { .. }
@@ -677,6 +690,7 @@ impl Diagnostic {
             | Self::TaskManualDatesInverted { task }
             | Self::TaskCalendarFallback { task, .. }
             | Self::TaskUnschedulable { task, .. }
+            | Self::AssignmentTooManyParts { task, .. }
             | Self::ConstraintOverride { task, .. }
             | Self::ConstraintNotHonored { task, .. }
             | Self::ConstraintSummaryIgnored { task, .. }
@@ -796,6 +810,7 @@ impl Diagnostic {
             Self::AssignmentCalendarEmpty { .. } => "assignment.calendar_empty",
             Self::TaskFixedWorkEffortDriven { .. } => "task.fixed_work_effort_driven",
             Self::CalendarTooManySegments { .. } => "calendar.too_many_segments",
+            Self::AssignmentTooManyParts { .. } => "assignment.too_many_parts",
             Self::ScheduleInternal { .. } => "schedule.internal",
         }
     }
@@ -1071,6 +1086,10 @@ impl fmt::Display for Diagnostic {
             } => write!(
                 f,
                 "la combinaison des calendriers {calendar} et {other} dépasse {limit} segments"
+            ),
+            Self::AssignmentTooManyParts { task, parts, limit } => write!(
+                f,
+                "la tâche {task} a {parts} affectations de travail (plus de {limit}) : sa durée est celle de la plus longue"
             ),
             Self::ScheduleInternal { detail } => {
                 write!(
@@ -1562,6 +1581,21 @@ mod tests {
             .to_string(),
             "calendrier 8 inconnu, référencé par la ressource 2"
         );
+    }
+
+    #[test]
+    fn contract_too_many_parts() {
+        // Relecture finale J5 (R-173, règle 10).
+        let t = TaskUid::new(3);
+        let d = Diagnostic::AssignmentTooManyParts {
+            task: t,
+            parts: 1_001,
+            limit: 1_000,
+        };
+        assert_eq!(d.code(), "assignment.too_many_parts");
+        assert_eq!(d.severity(), Severity::Warning);
+        assert_eq!(d.subject(), Subject::Task(t));
+        assert!(d.to_string().contains("1001"), "{d}");
     }
 
     #[test]

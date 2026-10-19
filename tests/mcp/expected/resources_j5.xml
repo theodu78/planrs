@@ -918,7 +918,7 @@
 			<ActualWork>PT0H0M0S</ActualWork>
 			<Delay>0</Delay>
 			<Finish>2026-11-06T17:00:00</Finish>
-			<RemainingWork>PT0H0M0S</RemainingWork>
+			<RemainingWork>PT40H0M0S</RemainingWork>
 			<Start>2026-11-02T08:00:00</Start>
 			<Units>1</Units>
 			<Work>PT40H0M0S</Work>
@@ -931,7 +931,7 @@
 			<ActualWork>PT0H0M0S</ActualWork>
 			<Delay>0</Delay>
 			<Finish>2026-11-25T17:00:00</Finish>
-			<RemainingWork>PT0H0M0S</RemainingWork>
+			<RemainingWork>PT24H0M0S</RemainingWork>
 			<Start>2026-11-23T08:00:00</Start>
 			<Units>1</Units>
 			<Work>PT24H0M0S</Work>
@@ -944,7 +944,7 @@
 			<ActualWork>PT0H0M0S</ActualWork>
 			<Delay>0</Delay>
 			<Finish>2026-11-27T17:00:00</Finish>
-			<RemainingWork>PT0H0M0S</RemainingWork>
+			<RemainingWork>PT24H0M0S</RemainingWork>
 			<Start>2026-11-25T08:00:00</Start>
 			<Units>1</Units>
 			<Work>PT24H0M0S</Work>
@@ -957,7 +957,7 @@
 			<ActualWork>PT0H0M0S</ActualWork>
 			<Delay>0</Delay>
 			<Finish>2026-11-26T17:00:00</Finish>
-			<RemainingWork>PT0H0M0S</RemainingWork>
+			<RemainingWork>PT16H0M0S</RemainingWork>
 			<Start>2026-11-23T08:00:00</Start>
 			<Units>0.5</Units>
 			<Work>PT16H0M0S</Work>
@@ -970,7 +970,7 @@
 			<ActualWork>PT0H0M0S</ActualWork>
 			<Delay>0</Delay>
 			<Finish>2026-12-11T17:00:00</Finish>
-			<RemainingWork>PT0H0M0S</RemainingWork>
+			<RemainingWork>PT32H0M0S</RemainingWork>
 			<Start>2026-12-02T08:00:00</Start>
 			<Units>0.5</Units>
 			<Work>PT32H0M0S</Work>
@@ -983,7 +983,7 @@
 			<ActualWork>PT0H0M0S</ActualWork>
 			<Delay>0</Delay>
 			<Finish>2026-11-11T17:00:00</Finish>
-			<RemainingWork>PT0H0M0S</RemainingWork>
+			<RemainingWork>PT12H0M0S</RemainingWork>
 			<Start>2026-11-09T08:00:00</Start>
 			<Units>1</Units>
 			<Work>PT12H0M0S</Work>
@@ -996,7 +996,7 @@
 			<ActualWork>PT0H0M0S</ActualWork>
 			<Delay>0</Delay>
 			<Finish>2026-11-20T17:00:00</Finish>
-			<RemainingWork>PT0H0M0S</RemainingWork>
+			<RemainingWork>PT80H0M0S</RemainingWork>
 			<Start>2026-11-09T08:00:00</Start>
 			<Units>1</Units>
 			<Work>PT80H0M0S</Work>
@@ -1009,7 +1009,7 @@
 			<ActualWork>PT0H0M0S</ActualWork>
 			<Delay>0</Delay>
 			<Finish>2026-11-11T17:00:00</Finish>
-			<RemainingWork>PT0H0M0S</RemainingWork>
+			<RemainingWork>PT24H0M0S</RemainingWork>
 			<Start>2026-11-09T08:00:00</Start>
 			<Units>1</Units>
 			<Work>PT24H0M0S</Work>

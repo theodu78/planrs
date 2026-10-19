@@ -308,6 +308,224 @@ pub fn assigned_network(seed: u64) -> Project {
     p
 }
 
+/// Jour non ouvré d'UID de calendrier `cal`, `offset` jours après le
+/// 2026-01-01 ; faux si le jour est déjà pris.
+fn add_leave(p: &mut Project, cal: CalendarUid, offset: i64, name: &str) -> bool {
+    let first = "2026-01-01".parse::<Day>().map_or(0, Day::index);
+    let Some(c) = p.calendars.get_mut(cal) else {
+        return false;
+    };
+    let Ok(day) = Day::new(first + i32::try_from(offset).unwrap_or(0)) else {
+        return false;
+    };
+    let Ok(period) = DayRange::new(day, day) else {
+        return false;
+    };
+    c.add_exception(CalendarException {
+        name: name.to_owned(),
+        period,
+        setting: DaySetting::NonWorking,
+        recurrence: Recurrence::Period,
+        occurrences: None,
+    })
+    .is_ok()
+}
+
+/// Grand réseau affecté dont chaque ressource a ses congés (relecture
+/// finale J5, cas `5000_assigned_leaves`) : le réseau de [`large_network`],
+/// 1 000 ressources de travail, chacune sur un calendrier propre dérivé du
+/// Standard avec 10 jours de congé tirés sur 2026-2027 (aucune échelle de
+/// ressource n'a la forme d'une autre) ; deux affectations par tâche (10 000
+/// au total), travail = durée de la tâche, une sur dix décalée d'un jour ;
+/// 10 % des feuilles sur un des 10 calendriers de tâche dérivés du
+/// Standard, chacun avec 5 jours chômés propres (intersections tâche ∩
+/// ressource). Les feuilles sont placées par parts sur deux échelles
+/// différentes (R-173 : unions et mesure de l'union).
+///
+/// # Panics
+///
+/// Jamais pour une graine quelconque (les valeurs sont toutes valides).
+#[must_use]
+pub fn assigned_leaves_network(seed: u64) -> Project {
+    let mut p = large_network(seed);
+    let mut r = Rng::new(seed ^ 0x5eed);
+    for k in 1..=10u32 {
+        let cal = CalendarUid::new(5_000 + k);
+        if let Err(e) = p
+            .calendars
+            .push(Calendar::new_derived(cal, format!("T{k}"), CalendarUid::new(1)))
+        {
+            panic!("calendrier généré invalide : {e}");
+        }
+        let mut added = 0;
+        while added < 5 {
+            if add_leave(&mut p, cal, r.range(0, 729), &format!("Chômé {added}")) {
+                added += 1;
+            }
+        }
+    }
+    for k in 1..=1_000u32 {
+        let cal = CalendarUid::new(10_000 + k);
+        if let Err(e) = p
+            .calendars
+            .push(Calendar::new_derived(cal, format!("R{k}"), CalendarUid::new(1)))
+        {
+            panic!("calendrier généré invalide : {e}");
+        }
+        let mut added = 0;
+        while added < 10 {
+            if add_leave(&mut p, cal, r.range(0, 729), &format!("Congé {added}")) {
+                added += 1;
+            }
+        }
+        let mut res = Resource::new(ResourceUid::new(k), format!("R{k}"));
+        res.calendar = Some(cal);
+        if let Err(e) = p.resources.push(res) {
+            panic!("ressource générée invalide : {e}");
+        }
+    }
+    let tasks: Vec<_> = p.tasks.iter().map(|t| (t.uid(), t.duration.minutes())).collect();
+    let mut next = 1u32;
+    for (i, (task, d)) in tasks.into_iter().enumerate() {
+        if r.chance(10)
+            && let Some(t) = p.tasks.get_mut(task)
+        {
+            t.calendar = Some(CalendarUid::new(5_001 + u32::try_from(r.index(10)).unwrap_or(0)));
+        }
+        let i = u32::try_from(i).unwrap_or(0);
+        for res in [i % 1_000 + 1, (i * 7 + 3) % 1_000 + 1] {
+            let mut a = Assignment::new(AssignmentUid::new(next), task, Some(ResourceUid::new(res)));
+            a.units = Units::FULL;
+            a.work = Work::new(d).unwrap_or(Work::ZERO);
+            if next.is_multiple_of(10) {
+                a.delay = Minutes::new(480);
+            }
+            if let Err(e) = p.assignments.push(a) {
+                panic!("affectation générée invalide : {e}");
+            }
+            next += 1;
+        }
+    }
+    p
+}
+
+/// Projet hostile (relecture finale J5, adversaire F2) : 10 calendriers de
+/// tâche et 100 calendriers de ressource dérivés du Standard, chacun chômé
+/// un jour sur deux sur tout le domaine (environ 60 000 segments compilés)
+/// et un jour propre ; 1 000 tâches d'un jour couvrent les 1 000 paires
+/// (tâche, ressource). Sans budget des calendriers combinés, environ 4 Go
+/// de segments.
+///
+/// # Panics
+///
+/// Jamais (valeurs valides).
+#[must_use]
+pub fn hostile_combined_calendars() -> Project {
+    let start: Moment = "2026-10-19T08:00".parse().unwrap_or(Moment::MIN);
+    let mut p = Project::new(ProjectInit {
+        name: "Calendriers hostiles".to_owned(),
+        anchor: ScheduleAnchor::FromStart(start),
+        current_date: start,
+        calendar_names: BuiltinCalendarNames::default(),
+    });
+    let (Ok(first), Ok(last)) = (Day::new(0), Day::new(60_630)) else {
+        return p;
+    };
+    let Ok(domain) = DayRange::new(first, last) else {
+        return p;
+    };
+    for k in 0..110u32 {
+        let cal = CalendarUid::new(100 + k);
+        let mut c = Calendar::new_derived(cal, format!("C{k}"), CalendarUid::new(1));
+        let alternate = CalendarException {
+            name: "Un jour sur deux".to_owned(),
+            period: domain,
+            setting: DaySetting::NonWorking,
+            recurrence: Recurrence::Daily { every: 2 },
+            occurrences: None,
+        };
+        if let Err(e) = c.add_exception(alternate) {
+            panic!("exception générée invalide : {e}");
+        }
+        if let Err(e) = p.calendars.push(c) {
+            panic!("calendrier généré invalide : {e}");
+        }
+        let _ = add_leave(&mut p, cal, 300 + 2 * i64::from(k) + 1, "Propre");
+    }
+    for k in 0..100u32 {
+        let mut r = Resource::new(ResourceUid::new(k + 1), format!("R{k}"));
+        r.calendar = Some(CalendarUid::new(110 + k));
+        if let Err(e) = p.resources.push(r) {
+            panic!("ressource générée invalide : {e}");
+        }
+    }
+    let options = p.options;
+    for i in 0..1_000u32 {
+        let mut t = Task::new(TaskUid::new(i + 1), format!("T{i}"), &options);
+        t.duration = Duration::new(Minutes::new(480), DurationUnit::Day, TimeBasis::Working, false)
+            .unwrap_or_else(|e| panic!("durée générée invalide : {e}"));
+        t.calendar = Some(CalendarUid::new(100 + i % 10));
+        if let Err(e) = p.tasks.push(t) {
+            panic!("tâche générée invalide : {e}");
+        }
+        let mut a = Assignment::new(
+            AssignmentUid::new(i + 1),
+            TaskUid::new(i + 1),
+            Some(ResourceUid::new(i / 10 + 1)),
+        );
+        a.work = Work::new(Minutes::new(480)).unwrap_or(Work::ZERO);
+        if let Err(e) = p.assignments.push(a) {
+            panic!("affectation générée invalide : {e}");
+        }
+    }
+    p
+}
+
+/// Projet hostile (relecture finale J5, adversaire F1) : une feuille d'un
+/// jour, une ressource, `n` affectations de cette ressource à la tâche,
+/// 8 h chacune, la k-ième décalée de k minutes (toutes des parts
+/// distinctes).
+///
+/// # Panics
+///
+/// Jamais (valeurs valides).
+#[must_use]
+pub fn hostile_parts(n: u32) -> Project {
+    let start: Moment = "2026-10-19T08:00".parse().unwrap_or(Moment::MIN);
+    let mut p = Project::new(ProjectInit {
+        name: "Parts hostiles".to_owned(),
+        anchor: ScheduleAnchor::FromStart(start),
+        current_date: start,
+        calendar_names: BuiltinCalendarNames::default(),
+    });
+    let options = p.options;
+    let mut t = Task::new(TaskUid::new(1), "A".to_owned(), &options);
+    t.duration = Duration::new(Minutes::new(480), DurationUnit::Day, TimeBasis::Working, false)
+        .unwrap_or_else(|e| panic!("durée générée invalide : {e}"));
+    if let Err(e) = p.tasks.push(t) {
+        panic!("tâche générée invalide : {e}");
+    }
+    if let Err(e) = p
+        .resources
+        .push(Resource::new(ResourceUid::new(1), "R".to_owned()))
+    {
+        panic!("ressource générée invalide : {e}");
+    }
+    for k in 0..n {
+        let mut a = Assignment::new(
+            AssignmentUid::new(k + 1),
+            TaskUid::new(1),
+            Some(ResourceUid::new(1)),
+        );
+        a.work = Work::new(Minutes::new(480)).unwrap_or(Work::ZERO);
+        a.delay = Minutes::new(i64::from(k));
+        if let Err(e) = p.assignments.push(a) {
+            panic!("affectation générée invalide : {e}");
+        }
+    }
+    p
+}
+
 /// Grand réseau planifié à rebours (spécification J3 § 9.2, cas
 /// `5000_from_finish`) : le réseau de [`large_network`], ancré sur sa fin
 /// calculée depuis le début, toutes ses tâches ALAP (défaut à rebours,

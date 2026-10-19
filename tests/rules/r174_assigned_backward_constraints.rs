@@ -5,11 +5,14 @@
 //! début (SNET, SNLT, MSO) : sur le début au plus tôt ; ALAP épinglée comme
 //! R-092. Étend R-090 à R-111. Hypothèse.
 
-use planrs_core::{Constraint, Minutes};
+use planrs_core::resource::{Granularity, usage};
+use planrs_core::{Constraint, Minutes, ResourceUid};
 use planrs_tests::moment;
 use planrs_tests::net::{Net, Run};
 
 use crate::r171_assignment_effective_calendar::{assign, assign_full, placed, resource};
+use crate::r184_work_rollups::work;
+use crate::r186_overallocation::over;
 
 /// Feuille « A » de R-173 : R1 1 j, R2 1 j décalée de 2 j ; `extra`
 /// complète le réseau.
@@ -84,4 +87,53 @@ fn r174_alap_assigned() {
     assert_eq!(a.early, a.late);
     assert_eq!(placed(&run, 2).span.start, moment("2026-10-23T08:00"));
     assert!(run.schedule.diagnostics.is_empty(), "{:?}", run.codes());
+}
+
+#[test]
+fn r174_from_finish_assignments_on_planned_dates() {
+    // À rebours depuis ven 23/10/2026 17:00 (S) : C 5 j avec R1 40 h, A 1 j
+    // avec R1 8 h, toutes deux ALAP (R-108). A a 4 j de marge : planifiée
+    // sur ses dates au plus tard, ven 08:00 – 17:00 (R-112), au plus tôt
+    // lun 19/10. Son affectation est rangée sur les dates planifiées, et R1
+    // est surutilisée le vendredi (C + A = 200 %), pas le lundi.
+    let build = || {
+        let net = Net::new("2026-10-19T08:00")
+            .from_finish("2026-10-23T17:00")
+            .task("C", 2_400)
+            .task("A", 480);
+        assign(assign(resource(net, 1, None), 1, "C", 1, 2_400), 2, "A", 1, 480)
+    };
+    let run = build().run();
+    let a = run.at("A");
+    assert_eq!(a.start, moment("2026-10-23T08:00"));
+    assert_eq!(a.early.start, moment("2026-10-19T08:00"));
+    let pa = placed(&run, 2);
+    assert_eq!(pa.span.start, a.start);
+    assert_eq!(pa.span.finish, a.finish);
+    assert_eq!(pa.late.unwrap().start, a.late.start);
+    let r = &run.schedule.resources[&ResourceUid::new(1)];
+    assert_eq!(
+        r.overloads,
+        vec![
+            over("2026-10-23T08:00", "2026-10-23T12:00", 20_000),
+            over("2026-10-23T13:00", "2026-10-23T17:00", 20_000),
+        ]
+    );
+    // Utilisation par jour (R-188) : 8 h du lundi au jeudi, 16 h le
+    // vendredi, seul jour surutilisé.
+    let p = build().build();
+    let days = usage(
+        &p,
+        &run.schedule,
+        moment("2026-10-19T00:00"),
+        moment("2026-10-24T00:00"),
+        Granularity::Day,
+        &[ResourceUid::new(1)],
+    )
+    .unwrap();
+    assert_eq!(
+        days.rows[0].work,
+        vec![work(480), work(480), work(480), work(480), work(960)]
+    );
+    assert_eq!(days.rows[0].overallocated, vec![false, false, false, false, true]);
 }

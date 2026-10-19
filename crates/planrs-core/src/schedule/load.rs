@@ -26,6 +26,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use super::network::{Network, Role};
+use super::placement::Resolved;
 use super::{
     AssignmentRole, EffectiveCalendar, MAX_OVERLOADS, Overload, ResourceLoad, Schedule, TaskOutcome,
 };
@@ -61,13 +62,17 @@ pub(crate) fn project_place<'s>(
 }
 
 /// Échelles effectives des affectations (R-171), par [`EffectiveCalendar`] :
-/// calendriers compilés du projet, intersections recompilées et mises en
-/// cache par paire.
+/// calendriers compilés du projet, intersections reprises du placement
+/// (recalcul du moteur, aucune recompilation : la mémoire n'est pas
+/// doublée) ou recompilées et mises en cache par paire (utilisation par
+/// période, à la demande).
 pub(crate) struct Scales<'s> {
     /// Calendriers compilés du projet.
     set: &'s CalendarSet,
     /// Calendrier de placement du projet ([`project_place`]).
     place: &'s CompiledCalendar,
+    /// Intersections gardées par le placement du même recalcul.
+    resolved: Option<&'s Resolved>,
     /// Intersections compilées.
     owned: Vec<CompiledCalendar>,
     /// Intersection par paire (tâche, ressource) ; `None` : vide ou en échec.
@@ -80,6 +85,18 @@ impl<'s> Scales<'s> {
         Self {
             set,
             place,
+            resolved: None,
+            owned: Vec::new(),
+            pairs: BTreeMap::new(),
+        }
+    }
+
+    /// Échelles du recalcul : intersections du placement (`resolved`).
+    const fn of_resolved(set: &'s CalendarSet, place: &'s CompiledCalendar, resolved: &'s Resolved) -> Self {
+        Self {
+            set,
+            place,
+            resolved: Some(resolved),
             owned: Vec::new(),
             pairs: BTreeMap::new(),
         }
@@ -90,7 +107,7 @@ impl<'s> Scales<'s> {
         let EffectiveCalendar::Intersection { task, resource } = cal else {
             return;
         };
-        if task == resource || self.pairs.contains_key(&(task, resource)) {
+        if task == resource || self.resolved.is_some() || self.pairs.contains_key(&(task, resource)) {
             return;
         }
         let slot = match (self.set.get(task), self.set.get(resource)) {
@@ -118,6 +135,9 @@ impl<'s> Scales<'s> {
             EffectiveCalendar::Task(c) | EffectiveCalendar::Resource(c) => usable(c),
             EffectiveCalendar::Intersection { task, resource } if task == resource => usable(task),
             EffectiveCalendar::Intersection { task, resource } => {
+                if let Some(r) = self.resolved {
+                    return r.intersection(task, resource).map(TimeScale::Working);
+                }
                 let i = (*self.pairs.get(&(task, resource))?)?;
                 self.owned.get(i).map(TimeScale::Working)
             }
@@ -166,13 +186,13 @@ fn rate(work: Work, m: Minutes) -> Option<Units> {
 pub(super) fn apply(
     project: &Project,
     net: &Network<'_>,
-    (set, place): (&CalendarSet, &CompiledCalendar),
+    (set, place, resolved): (&CalendarSet, &CompiledCalendar, &Resolved),
     out: &mut Schedule,
 ) {
-    let mut scales = Scales::new(set, place);
-    for a in out.assignments.values() {
-        scales.prepare(a.calendar);
-    }
+    // Une intersection d'une affectation rangée a été gardée par le
+    // placement (sinon son calendrier effectif est celui de la tâche,
+    // R-171) : rien à recompiler.
+    let scales = Scales::of_resolved(set, place, resolved);
     effective_rates(project, &scales, out);
     let (own, by_resource) = model_work(project, net);
     task_work(net, own, out);

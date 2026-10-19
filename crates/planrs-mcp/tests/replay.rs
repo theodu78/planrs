@@ -207,6 +207,34 @@ async fn replay_resources_j5_memory() {
         ),
         (&json!("32h"), &json!("50%"))
     );
+    // Béton (matériel, UID 3) quantité 12 sur Dalle (UID 7) : la quantité
+    // rendue est celle saisie (portée par le travail, 12 h, O30), relisible
+    // comme `quantity`, dans les vues des tâches et des ressources.
+    let last = |tool: &str| s.calls.iter().rposition(|c| c.tool == tool).unwrap();
+    let listed = ok(last("list_resources"));
+    let beton = listed["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["uid"] == json!(3))
+        .unwrap();
+    let twelve = json!({ "text": "12", "value": 120_000 });
+    assert_eq!(beton["assignments"][0]["units"], twelve, "{beton}");
+    assert_eq!(beton["assignments"][0]["effective_units"], twelve, "{beton}");
+    let tasks = ok(last("list_tasks"));
+    let dalle = tasks["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["uid"] == json!(7))
+        .unwrap();
+    let on_dalle = dalle["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["uid"] == json!(3))
+        .unwrap();
+    assert_eq!(on_dalle["units"], twelve, "{dalle}");
     // Surutilisation du Maçon (UID 1).
     let over = at(
         "assign_resource",
@@ -332,6 +360,79 @@ async fn replay_claude_run_1() {
             &json!(1)
         )
     );
+}
+
+/// Essai réel n° 2 avec Claude du 2026-10-19 (`docs/features/mcp.md` § 6,
+/// ressources J5) : journal de `claude -p` versionné, chemins ramenés à
+/// `$TMP`, rejoué tel quel. Seize appels, aucune erreur ; trois
+/// `apply_batch` en `dry_run` comparés avant d'appliquer ; six artisans,
+/// surutilisation détectée (Maçon, Carreleur) puis résolue par des liens,
+/// aucune surcharge à la fin ; fin du projet mer 27/01/2027 17:00.
+#[tokio::test]
+async fn replay_claude_run_2() {
+    let s = replay_memory("claude_run_2", Some("renovation-maison.xml")).await;
+    if replay::blessing() {
+        return;
+    }
+    let tools: Vec<&str> = s.calls.iter().map(|c| c.tool.as_str()).collect();
+    assert_eq!(
+        tools,
+        [
+            "new_project",
+            "apply_batch",
+            "apply_batch",
+            "list_resources",
+            "resource_usage",
+            "list_tasks",
+            "critical_path",
+            "apply_batch",
+            "apply_batch",
+            "apply_batch",
+            "apply_batch",
+            "critical_path",
+            "resource_usage",
+            "list_resources",
+            "save_project",
+            "render_gantt"
+        ]
+    );
+    assert!(
+        s.calls
+            .iter()
+            .all(|c| error_code(c.expected.as_ref().unwrap()).is_none())
+    );
+    let ok = |i: usize| ok_at(&s, i);
+    // Surutilisation détectée : Maçon (UID 1) et Carreleur (UID 5).
+    let over: Vec<&Value> = ok(3)["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| &r["uid"])
+        .collect();
+    assert_eq!(over, [&json!(1), &json!(5)]);
+    // Trois essais en `dry_run`, rien d'appliqué ; le premier fait
+    // apparaître une surcharge du Plaquiste (UID 4).
+    for i in 7..=9 {
+        assert_eq!(s.calls[i].params["dry_run"], json!(true));
+        assert_eq!(ok(i)["committed"], json!(false));
+    }
+    assert_eq!(
+        ok(7)["diff"]["overallocated"],
+        json!({ "new": [4], "resolved": [1, 5] })
+    );
+    // Lot validé : surcharges résolues, aucune nouvelle.
+    assert_eq!(ok(10)["committed"], json!(true));
+    assert_eq!(
+        ok(10)["diff"]["overallocated"],
+        json!({ "new": [], "resolved": [1, 5] })
+    );
+    // Fin du projet et chemin critique après la résolution.
+    assert_eq!(ok(11)["project_finish"], json!("2027-01-27T17:00"));
+    assert_eq!(ok(11)["total"], json!(22));
+    // Six artisans, aucune surcharge restante.
+    let all = ok(13)["resources"].as_array().unwrap();
+    assert_eq!(all.len(), 6);
+    assert!(all.iter().all(|r| r["overallocated"] == json!(false)));
 }
 
 /// Vérification 2 : MSPDI enregistré relu, 30 tâches, `normalize` égal à

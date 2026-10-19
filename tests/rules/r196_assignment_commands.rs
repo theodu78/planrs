@@ -370,7 +370,8 @@ fn r196_update_units_work_delay() {
 #[test]
 fn r196_summary_and_manual_tasks() {
     // Récapitulative (R-179) : affectée sans rééquilibrage, travail = durée
-    // enregistrée × unités ; tâche manuelle : durée tenue (hypothèse),
+    // calculée × unités (Lot couvre A, lun – mar : 2 j, et non le 1 j saisi
+    // avant l'indentation) ; tâche manuelle : durée tenue (hypothèse),
     // travail = D × U.
     let mut s = with_tasks(&[("Lot", "1j"), ("A", "2j")]);
     apply(&mut s, json!([{ "op": "task.indent", "uid": 2 }]));
@@ -394,7 +395,8 @@ fn r196_summary_and_manual_tasks() {
             { "op": "assignment.add", "task": 2, "resource": 2 }
         ]),
     );
-    assert_eq!(units_work(&s, 1, 1), (5_000, stored / 2));
+    assert_eq!(stored, 480);
+    assert_eq!(units_work(&s, 1, 1), (5_000, 480));
     assert_eq!(duration(&s, 1), stored);
     // Manuelle pilotée : 2 j gardés, 16 h chacune.
     assert_eq!(duration(&s, 2), 960);
@@ -402,4 +404,41 @@ fn r196_summary_and_manual_tasks() {
         (units_work(&s, 2, 1), units_work(&s, 2, 2)),
         ((10_000, 960), (10_000, 960))
     );
+}
+
+#[test]
+fn r196_summary_read_from_file_uses_computed_duration() {
+    // Récapitulative automatique relue d'un fichier : sa durée du modèle est
+    // nulle (valeur calculée) ; l'affectation sans travail fourni prend la
+    // durée calculée, 3 j (A 1 j puis B 2 j) × 100 % = 24 h, et non 0.
+    let mut s = with_tasks(&[("Lot", "1j"), ("A", "1j"), ("B", "2j")]);
+    apply(
+        &mut s,
+        json!([
+            { "op": "task.indent", "uid": 2 },
+            { "op": "task.indent", "uid": 3 },
+            { "op": "link.add", "pred": 2, "succ": 3 }
+        ]),
+    );
+    let xml = s.save_bytes(&planrs_mspdi::write::WriteOptions::default()).xml;
+    let origin = planrs_automation::DocOrigin {
+        name: "p.xml".to_owned(),
+        path: None,
+    };
+    let (mut r, _) = planrs_automation::Session::open_bytes(
+        &xml,
+        origin,
+        moment("2026-10-19T08:00"),
+        planrs_automation::text::Language::Fr,
+    )
+    .unwrap();
+    assert_eq!(duration(&r, 1), 0);
+    apply(
+        &mut r,
+        json!([
+            { "op": "resource.add", "name": "R1" },
+            { "op": "assignment.add", "task": 1, "resource": 1 }
+        ]),
+    );
+    assert_eq!(units_work(&r, 1, 1), (10_000, 1_440));
 }

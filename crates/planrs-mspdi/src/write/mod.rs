@@ -30,6 +30,7 @@ use planrs_core::{Extras, Percent, Project, Subject, round_div};
 use crate::extras::{self, Anchor, ExtraKey, ORIGIN};
 pub use crate::schema::Profile as OrderProfile;
 use crate::schema::{Class, Parent, sequence};
+pub(crate) use assignment::remaining_work as assignment_remaining_work;
 pub(crate) use computed::leveling_delay as leveling_payload_int;
 pub use computed::{Computed, ScheduleGap, choose_computed, schedule_gaps, schedule_image};
 use emit::Emitter;

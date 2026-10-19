@@ -30,7 +30,6 @@ use crate::action::Action;
 use crate::geom::{self, MainLayout};
 use crate::i18n::TextId;
 use crate::keymap::{self, Binding};
-use crate::rows::RowModel;
 use crate::selection::SelectMode;
 use crate::structure::StructureOp;
 use crate::timescale::TimeAxis;

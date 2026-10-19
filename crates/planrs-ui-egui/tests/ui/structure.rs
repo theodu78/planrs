@@ -212,7 +212,12 @@ fn ui_delete_confirmation_stale_is_dropped() {
     press(&mut harness, "task.delete");
     assert!(harness.state().pending_delete().is_some());
     harness.state_mut().dispatch(Action::CloseDocument);
+    // Document modifié (lot L13) : la fermeture passe par « Ne pas enregistrer ».
+    harness
+        .state_mut()
+        .dispatch(Action::Confirm(planrs_ui_egui::action::ConfirmChoice::Discard));
     harness.run();
+    assert!(harness.state().document.is_none());
     assert!(harness.state().pending_delete().is_none());
     assert!(harness.query_by_label(&fr(TextId::ConfirmDeleteTitle)).is_none());
 }

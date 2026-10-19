@@ -143,7 +143,6 @@ pub fn binding_action(binding: Binding) -> Option<Action> {
         Binding::Command("history.redo") => Some(Action::Redo),
         Binding::Command("project.new") => Some(Action::NewProject),
         Binding::Command("project.save") => Some(Action::Save),
-    ),
         Binding::Command("task.add") => Some(Action::Structure(StructureOp::InsertBefore)),
         Binding::Command("task.delete") => Some(Action::Structure(StructureOp::Delete)),
         Binding::Command("task.indent") => Some(Action::Structure(StructureOp::Indent)),

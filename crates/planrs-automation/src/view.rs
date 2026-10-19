@@ -363,14 +363,11 @@ impl<'a> ViewCtx<'a> {
         &self.text
     }
 
-    /// Vrai si la tâche à la position `pos` a une sous-tâche (R-052).
+    /// Vrai si la tâche à la position `pos` a une sous-tâche : la tâche non
+    /// vide suivante est plus profonde, lignes vides ignorées (R-052).
     #[must_use]
     pub fn is_summary_at(&self, pos: usize) -> bool {
-        let level = |p: usize| self.project.tasks.at(p).map(|t| t.outline_level.get());
-        match (level(pos), pos.checked_add(1).and_then(level)) {
-            (Some(l), Some(next)) => next > l,
-            _ => false,
-        }
+        crate::command::outline::is_summary_at(&self.project.tasks, pos)
     }
 
     /// Vue de la tâche `uid`, si elle existe (lignes vides comprises).

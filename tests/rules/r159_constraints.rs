@@ -5,6 +5,7 @@
 //! changée jette les clés de nivellement de la tâche.
 
 use planrs_automation::error::codes;
+use planrs_automation::view::ViewCtx;
 use planrs_automation::{ApplyMode, ApplyOutcome, Batch, CommandError, Session, SideEffect};
 use planrs_core::{Constraint, ExtraEntry, OutlineLevel, Project, Subject, TaskUid};
 use planrs_tests::moment;
@@ -117,6 +118,32 @@ fn r159_summary_kinds() {
             }
         }
     }
+}
+
+#[test]
+fn r159_summary_kinds_null_row_ignored() {
+    // 1 S (n1) [2 vide, n1] 3 A (n2) : la ligne vide ne compte pas (R-052),
+    // S reste récapitulative. MSO refusé (`kind`), lien S → A refusé en
+    // `link.summary_descendant`, vue `summary: true`, filtre cohérent.
+    let mut p = new_project("2026-11-02T08:00");
+    push_tasks(&mut p, &[1, 2, 3], 1);
+    p.tasks.get_mut(TaskUid::new(2)).unwrap().is_null = true;
+    p.tasks.get_mut(TaskUid::new(3)).unwrap().outline_level = OutlineLevel::new(2).unwrap();
+    let mut s = session(p);
+    let err = run(
+        &mut s,
+        r#"{"op":"task.set_constraint","uid":1,"kind":"mso","date":"2026-11-20T17:00"}"#,
+    )
+    .unwrap_err();
+    assert_eq!(
+        (err.code, err.field.as_deref()),
+        (codes::PARAM_INVALID, Some("kind"))
+    );
+    let err = run(&mut s, r#"{"op":"link.add","pred":1,"succ":3}"#).unwrap_err();
+    assert_eq!(err.code, codes::LINK_SUMMARY_DESCENDANT);
+    let ctx = ViewCtx::new(&s);
+    assert!(ctx.task(TaskUid::new(1)).unwrap().summary);
+    assert!(!ctx.task(TaskUid::new(3)).unwrap().summary);
 }
 
 #[test]

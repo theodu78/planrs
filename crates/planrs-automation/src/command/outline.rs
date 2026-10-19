@@ -44,6 +44,22 @@ pub(super) fn block_end(tasks: &Tasks, pos: usize) -> usize {
     end
 }
 
+/// Vrai si la tâche à la position `pos` est une récapitulative (R-052) :
+/// non vide, et la tâche non vide suivante est d'un niveau supérieur. Les
+/// lignes vides intercalées ne comptent pas, comme dans le moteur et
+/// [`summaries`]. S'arrête à la première tâche non vide qui suit.
+pub(crate) fn is_summary_at(tasks: &Tasks, pos: usize) -> bool {
+    let Some(task) = tasks.at(pos).filter(|t| !t.is_null) else {
+        return false;
+    };
+    let level = task.outline_level.get();
+    tasks
+        .iter()
+        .skip(pos.saturating_add(1))
+        .find(|t| !t.is_null)
+        .is_some_and(|next| next.outline_level.get() > level)
+}
+
 /// Position de la tâche non vide qui précède `pos`.
 pub(super) fn prev_non_null(tasks: &Tasks, pos: usize) -> Option<usize> {
     (0..pos).rev().find(|&q| tasks.at(q).is_some_and(|t| !t.is_null))
@@ -130,7 +146,7 @@ mod tests {
 
     use planrs_core::{OutlineLevel, ProjectOptions, Task, TaskId, TaskUid};
 
-    use super::{Tasks, block_end, order, prev_non_null, renumbered, summaries};
+    use super::{Tasks, block_end, is_summary_at, order, prev_non_null, renumbered, summaries};
     use crate::outcome::SideEffect;
 
     /// Tâches `(uid, niveau, vide)`.
@@ -164,6 +180,18 @@ mod tests {
         assert_eq!(block_end(&t, 5), 6);
         assert_eq!(prev_non_null(&t, 4), Some(3));
         assert_eq!(prev_non_null(&t, 0), None);
+        assert_eq!(summaries(&t).into_iter().collect::<Vec<_>>(), [TaskUid::new(1)]);
+        let flags: Vec<bool> = (0..6).map(|q| is_summary_at(&t, q)).collect();
+        assert_eq!(flags, [true, false, false, false, false, false]);
+    }
+
+    #[test]
+    fn summary_skips_null_row_of_any_level() {
+        // S(1) [vide 1] A(2) : S reste récapitulative (R-052).
+        let t = tasks(&[(1, 1, false), (2, 1, true), (3, 2, false)]);
+        assert!(is_summary_at(&t, 0));
+        assert!(!is_summary_at(&t, 1));
+        assert!(!is_summary_at(&t, 2));
         assert_eq!(summaries(&t).into_iter().collect::<Vec<_>>(), [TaskUid::new(1)]);
     }
 

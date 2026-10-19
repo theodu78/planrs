@@ -128,12 +128,30 @@ static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 /// écrasé), écriture complète, `fsync`, renommage sur `p`, puis `fsync` du
 /// dossier (au mieux). Un lecteur voit l'ancien contenu ou le nouveau,
 /// jamais un mélange ; en cas d'échec, `p` est intact et le temporaire
-/// retiré. Les droits d'un fichier existant sont repris (au mieux).
+/// retiré. Les droits d'un fichier existant sont repris (au mieux). Si `p`
+/// est un lien symbolique, c'est sa cible qui est remplacée (temporaire
+/// dans le dossier de la cible) : le lien reste un lien.
 ///
 /// # Errors
 ///
-/// [`FileError::Write`] (dossier absent, droits, disque plein…).
+/// [`FileError::Write`] (dossier absent, droits, disque plein, lien
+/// symbolique sans cible…).
 pub fn write_atomic(p: &Path, bytes: &[u8]) -> Result<(), FileError> {
+    let target = link_target(p).map_err(|e| FileError::write(p, &e))?;
+    write_atomic_at(target.as_deref().unwrap_or(p), bytes)
+}
+
+/// Cible d'un lien symbolique (`None` si `p` n'en est pas un, ou n'existe
+/// pas encore). Un lien sans cible est une erreur : le remplacer par un
+/// fichier ordinaire laisserait croire que la cible est à jour.
+fn link_target(p: &Path) -> io::Result<Option<PathBuf>> {
+    match fs::symlink_metadata(p) {
+        Ok(meta) if meta.file_type().is_symlink() => fs::canonicalize(p).map(Some),
+        _ => Ok(None),
+    }
+}
+
+fn write_atomic_at(p: &Path, bytes: &[u8]) -> Result<(), FileError> {
     let Some(name) = p.file_name() else {
         return Err(FileError::write(p, &io::Error::other("nom de fichier attendu")));
     };

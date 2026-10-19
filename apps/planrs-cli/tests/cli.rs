@@ -382,6 +382,19 @@ fn cli_explain_hidden_exit_2() {
     assert_eq!(code(&run(&["inconnue"])), 2);
     assert_eq!(code(&run(&["summary"])), 2);
     assert_eq!(code(&run(&["mcp", "--http", ":8080"])), 2);
+    // `--limit` hors de 1..500 : usage (2), même sur un plan absent (le
+    // contrôle passe avant la lecture) ; bornes acceptées.
+    for bad in ["0", "501"] {
+        assert_eq!(code(&run(&["tasks", "absent.xml", "--limit", bad])), 2, "{bad}");
+        assert_eq!(code(&run(&["tasks", s(&house), "--limit", bad])), 2, "{bad}");
+    }
+    for ok in ["1", "500"] {
+        assert_eq!(
+            code(&run(&["--now", NOW, "tasks", s(&house), "--limit", ok])),
+            0,
+            "{ok}"
+        );
+    }
 }
 
 #[test]

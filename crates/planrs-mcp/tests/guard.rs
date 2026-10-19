@@ -157,3 +157,41 @@ fn mcp_guard_dead_app_ignored() {
     std::mem::forget(rv);
     server(Some(dir.0.clone())).open_initial(&house).unwrap();
 }
+
+#[test]
+fn mcp_guard_relative_path_under_root() {
+    // `--root R` et dossier courant ≠ R : `{"path":"a.xml"}` vise R/a.xml,
+    // tenu par l'application ; la garde le voit (ouverture, écriture,
+    // export, `--open`).
+    let dir = TempDir::new("root");
+    let root = dir.0.join("plans");
+    std::fs::create_dir_all(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    let held = root.join("a.xml");
+    std::fs::copy(house_path(), &held).unwrap();
+    assert_ne!(std::env::current_dir().unwrap(), root);
+    let (_listener, _rv) = live_app(&dir.0, &held);
+    let s = server(Some(dir.0.clone())).with_root(root.clone());
+    let r = s
+        .dispatch("open_project", args(&json!({ "path": "a.xml" })))
+        .unwrap();
+    assert_eq!(code(&r).as_deref(), Some("file.open_in_app"));
+    s.dispatch(
+        "new_project",
+        args(&json!({ "name": "P", "start": "2026-11-02T08:00" })),
+    )
+    .unwrap();
+    for tool in ["save_project", "export_mspdi"] {
+        let r = s.dispatch(tool, args(&json!({ "path": "a.xml" }))).unwrap();
+        assert_eq!(code(&r).as_deref(), Some("file.open_in_app"), "{tool}");
+    }
+    assert_eq!(
+        std::fs::read(&held).unwrap(),
+        std::fs::read(house_path()).unwrap()
+    );
+    let s = server(Some(dir.0.clone())).with_root(root);
+    match s.open_initial(Path::new("a.xml")) {
+        Err(McpServeError::Io(m)) => assert!(m.contains("file.open_in_app"), "{m}"),
+        other => panic!("refus attendu : {other:?}"),
+    }
+}

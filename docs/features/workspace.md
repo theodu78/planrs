@@ -4,7 +4,7 @@
 
 ## 1. `Workspace::call(id, params)`
 
-Routeur unique : un id du registre (`REGISTRY`), des paramètres JSON, une valeur JSON ou une `ToolError { code, message, op_index, field, subject, diagnostics }`. Au plus une session ouverte ; « maintenant » et la langue sont injectés à la construction ; `with_root(dir)` confine tous les chemins (MCP HTTP).
+Routeur unique : un id du registre (`REGISTRY`), des paramètres JSON, une valeur JSON ou une `ToolError { code, message, op_index, field, subject, diagnostics }`. Au plus une session ouverte ; « maintenant » et la langue sont injectés à la construction ; `with_root(dir)` confine tous les chemins (MCP HTTP) ; `resolve_path(p)` rend le chemin effectif qu'un outil de fichier visera (garde ADR-0002 des surfaces).
 
 | Id | Paramètres | Résultat |
 |---|---|---|
@@ -19,7 +19,7 @@ Routeur unique : un id du registre (`REGISTRY`), des paramètres JSON, une valeu
 | `history.undo`, `history.redo` | — | `OutcomeView` |
 | `history.list` | — | `HistoryView` |
 | écritures (`task.add`…) | schéma de la commande + `dry_run`, `detail` | `OutcomeView` ; lot d'une commande |
-| `batch.apply` | `ops`, `lang`, `label`, `format_version` + `dry_run`, `detail` | `OutcomeView` |
+| `batch.apply` | `ops`, `lang`, `label`, `format_version` (absent : 1 ; contrôlé avant `ops`, autre entier → `batch.unsupported_version`) + `dry_run`, `detail` | `OutcomeView` |
 
 - Commande réservée (J5, J6) : `command.not_yet_available` ; id inconnu ou paramètres mal formés : `param.invalid` ; sans session : `session.none` (message qui cite `open_project`, `new_project`, `import_csv`).
 - Une écriture réussie hors `dry_run` crée une entrée d'historique (C-MCP-04, vérifié en L8) ; `dry_run` laisse la session intacte.
@@ -45,7 +45,7 @@ Routeur unique : un id du registre (`REGISTRY`), des paramètres JSON, une valeu
 ## 4. Fichiers (`files`, hors wasm)
 
 - `read_path(p, max)` : lecture arrêtée à `max + 1` octets (`file.too_large`), un dossier est refusé (`file.read`). Bornes : 256 Mio en MSPDI, 64 Mio en CSV.
-- `write_atomic(p, bytes)` : temporaire `.<nom>.planrs-tmp-<pid>-<n>` du même dossier (création exclusive), écriture, `fsync`, renommage, `fsync` du dossier au mieux ; droits d'un fichier existant repris ; le temporaire est retiré en cas d'échec.
+- `write_atomic(p, bytes)` : temporaire `.<nom>.planrs-tmp-<pid>-<n>` du même dossier (création exclusive), écriture, `fsync`, renommage, `fsync` du dossier au mieux ; droits d'un fichier existant repris ; le temporaire est retiré en cas d'échec. Si `p` est un lien symbolique (CLI, MCP stdio : sans `--root`, le chemin n'est pas canonicalisé), c'est sa cible qui est remplacée, temporaire dans le dossier de la cible, et le lien reste un lien ; un lien sans cible → `file.write` (test `files_write_atomic_follows_symlink`).
 - `confine(root, p)` : chemins canoniques (liens résolus) ; relatif lu depuis la racine ; fichier à créer accepté si son dossier existe dans la racine et que son nom est simple ; sinon `file.outside_root`.
 
 ## 5. Journal (`journal`)

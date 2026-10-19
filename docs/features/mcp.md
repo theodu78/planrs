@@ -21,7 +21,7 @@ Générés depuis `planrs_automation::REGISTRY` (`tools.rs`, sans macro `#[tool]
 | Historique | `undo`, `redo`, `history` |
 
 - Réservés (J5, J6), non listés mais appelables : `explain_date`, `what_if`, `resource_usage`, `baseline_variance`, `add_resource`, `assign_resource`, `update_assignment`, `update_progress`, `set_baseline` → `command.not_yet_available` en erreur structurée.
-- `render_gantt` : contenu texte = résumé (« N tâches, M critiques, fin … », plus les lignes non affichées) puis le SVG ; contenu structuré = rapport du rendu sans le SVG (`shown`, `hidden`, `truncated_days`, `truncated_bytes`, `bytes`).
+- `render_gantt` : contenu texte = résumé (« N tâches, M critiques, fin … », plus les lignes non affichées), puis le SVG, puis le rapport en JSON (comme le recommande la spécification MCP : un client sans `structuredContent` voit aussi `truncated_days` et `truncated_bytes`) ; contenu structuré = rapport du rendu sans le SVG (`shown`, `hidden`, `truncated_days`, `truncated_bytes`, `bytes`).
 - Les autres outils : contenu structuré = la vue JSON, contenu texte = le même JSON (clients sans `structuredContent`).
 
 ## 3. Contrats de surface et tests
@@ -34,7 +34,7 @@ Générés depuis `planrs_automation::REGISTRY` (`tools.rs`, sans macro `#[tool]
 | C-MCP-07 | noms d'outils conformes à `^[a-zA-Z0-9_-]{1,64}$`, uniques | `tools_names_valid_and_unique`, `mcp_list_tools_from_registry` |
 | C-MCP-08 | codes de sortie de la CLI | `docs/features/cli.md` § 3 |
 
-Garde ADR-0002 (`file.open_in_app`) : `open_project`, `save_project`, `export_mspdi` et `--open` refusent un fichier tenu par une application planrs vivante (rendez-vous du canal de contrôle, `docs/features/control.md`) ; `--headless` la lève. Tests : `tests/guard.rs`.
+Garde ADR-0002 (`file.open_in_app`) : `open_project`, `save_project`, `export_mspdi` et `--open` refusent un fichier tenu par une application planrs vivante (rendez-vous du canal de contrôle, `docs/features/control.md`) ; `--headless` la lève. La garde vise le chemin effectif (`Workspace::resolve_path`) : avec `--root`, un chemin relatif part de la racine, comme pour l'outil, pas du dossier courant du processus. Tests : `tests/guard.rs` (dont `mcp_guard_relative_path_under_root`).
 
 ## 4. Journal de rejeu (`--journal`)
 
@@ -58,14 +58,21 @@ Deux lignes `planrs_automation::journal::Entry` par appel, de même `seq` (1 au 
 
 ## 6. Essai réel avec Claude (une fois, local, hors CI)
 
-À faire par le propriétaire (ou sur sa validation explicite, sur le Mac ou serveurdvp) ; pas encore fait au 2026-10-19.
+Fait le 2026-10-19 sur serveurdvp, sur validation du propriétaire. Procédure suivie :
 
-1. `cargo build --release -p planrs-cli`, puis `claude mcp add planrs -- <chemin>/planrs mcp --journal run.jsonl` (ajouter `--now 2026-10-19T08:00 --lang fr` pour un rejeu stable).
-2. Consigne figée, envoyée telle quelle dans une conversation neuve :
+1. `cargo build --release -p planrs-cli`, puis `claude -p` dans une conversation neuve avec `--strict-mcp-config` et une configuration MCP qui ne déclare que planrs (seul outil disponible pour l'agent) : `planrs --now 2026-10-19T08:00 --lang fr mcp --headless --journal run.jsonl`.
+2. Consigne figée, envoyée telle quelle :
 
    > Construis le planning de rénovation d'une maison en 30 tâches avec phases, jalons et dépendances, puis montre-moi le chemin critique.
 
-3. Relire `run.jsonl` (aucune date inventée par l'agent dans les paramètres hors des dates d'ancrage et de contrainte, aucune erreur inattendue), remplacer les chemins absolus par `$TMP`, le versionner sous `tests/mcp/scenarios/claude_run_1.jsonl`, régénérer ses résultats par `PLANRS_BLESS=1`, et ajouter le test `replay_claude_run_1` (une ligne : le harnais prend le nom du scénario ; s'il enregistre un fichier, l'attendu MSPDI suit la même convention).
+3. Journal relu, chemins absolus remplacés par `$TMP`, versionné sous `tests/mcp/scenarios/claude_run_1.jsonl`, résultats régénérés par `PLANRS_BLESS=1` (diff relu : aucun octet ne change hors des valeurs de chemin), MSPDI enregistré versionné sous `tests/mcp/expected/claude_run_1.xml` (identique octet pour octet au fichier de l'essai).
+
+Résultat :
+
+- 6 appels, 0 erreur : `new_project` (« Rénovation maison », début lun 02/11/2026 08:00), un seul `apply_batch` atomique de 75 opérations (35 `task.add`, 40 `link.add`, étiquettes `$x`, placements `last_child_of`), `critical_path`, `project_summary`, `save_project`, `render_gantt` (semaine, 35 lignes, rien de coupé).
+- Planning obtenu : 35 tâches dont 5 phases (récapitulatives) et 4 jalons, 40 liens, fin mer 10/03/2027 17:00 (93 jours ouvrés), 21 tâches critiques ; une entrée d'historique.
+- Règle 3 tenue : la seule date fournie par l'agent est le début du projet ; toutes les dates, durées calculées et marges de sa réponse finale viennent des résultats du moteur. L'agent a signalé de lui-même les limites du modèle (aucun jour chômé posé, durées estimées, pas de ressources).
+- Rejeu en CI : `replay_claude_run_1` (`crates/planrs-mcp/tests/replay.rs`, job `mcp`) rejoue le journal en mémoire, compare chaque résultat et le journal produit au scénario, et le MSPDI enregistré à l'attendu (`normalize`).
 
 ## 7. Limites
 

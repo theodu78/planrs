@@ -97,28 +97,95 @@ async fn replay_with_journal(scenario: &Scenario, tmp: &TempDir) -> (Vec<Value>,
     (got, produced, elapsed)
 }
 
-/// Vérifications 1 et 5, plus le journal produit égal au scénario.
-#[tokio::test]
-async fn replay_build_30_memory() {
+/// Rejeu en mémoire du scénario `name` : résultats égaux aux attendus,
+/// journal produit égal au scénario, budget de durée ; si `saved` (nom du
+/// fichier enregistré sous `$TMP`), MSPDI `normalize` égal à l'attendu
+/// relu. `PLANRS_BLESS=1` régénère les attendus au lieu de comparer.
+async fn replay_memory(name: &str, saved: Option<&str>) -> Scenario {
     let root = root();
-    let scenario = Scenario::load(&root, SCENARIO);
+    let scenario = Scenario::load(&root, name);
     let tmp = TempDir::new("memory");
     let (got, produced, elapsed) = replay_with_journal(&scenario, &tmp).await;
+    let saved = saved.map(|f| tmp.path().join(f));
     if replay::blessing() {
-        replay::bless(
-            &root,
-            &scenario,
-            &produced,
-            tmp.path(),
-            Some(&tmp.path().join("build_30.xml")),
-        );
-        return;
+        replay::bless(&root, &scenario, &produced, tmp.path(), saved.as_deref());
+        return scenario;
     }
     replay::assert_results(&scenario, &got);
     replay::assert_journal(&scenario, &produced, tmp.path());
     assert!(
         elapsed < BUDGET,
-        "rejeu de {SCENARIO} en {elapsed:?}, budget {BUDGET:?}"
+        "rejeu de {name} en {elapsed:?}, budget {BUDGET:?}"
+    );
+    if let Some(saved) = saved {
+        let read = |p: &Path| {
+            let bytes = std::fs::read(p).unwrap_or_else(|e| panic!("{} : {e}", p.display()));
+            planrs_mspdi::read(&bytes, &planrs_mspdi::ReadOptions::new(now()))
+                .unwrap_or_else(|e| panic!("{} : {e}", p.display()))
+                .project
+        };
+        let w = planrs_mspdi::write::WriteOptions::default();
+        assert_eq!(
+            planrs_mspdi::normalize(&read(&saved), &w),
+            planrs_mspdi::normalize(&read(&replay::expected_xml_path(&root, name)), &w),
+            "{name} : MSPDI enregistré différent de l'attendu"
+        );
+    }
+    scenario
+}
+
+/// Vérifications 1 et 5, plus le journal produit égal au scénario.
+#[tokio::test]
+async fn replay_build_30_memory() {
+    replay_memory(SCENARIO, Some("build_30.xml")).await;
+}
+
+/// Essai réel avec Claude du 2026-10-19 (`docs/features/mcp.md` § 6) :
+/// journal de `claude -p` versionné, chemins ramenés à `$TMP`, rejoué tel
+/// quel. Six appels, aucune erreur ; un lot atomique de 75 opérations.
+#[tokio::test]
+async fn replay_claude_run_1() {
+    let scenario = replay_memory("claude_run_1", Some("renovation-maison.xml")).await;
+    if replay::blessing() {
+        return;
+    }
+    let tools: Vec<&str> = scenario.calls.iter().map(|c| c.tool.as_str()).collect();
+    assert_eq!(
+        tools,
+        [
+            "new_project",
+            "apply_batch",
+            "critical_path",
+            "project_summary",
+            "save_project",
+            "render_gantt"
+        ]
+    );
+    assert!(
+        scenario
+            .calls
+            .iter()
+            .all(|c| error_code(c.expected.as_ref().unwrap()).is_none())
+    );
+    assert_eq!(scenario.calls[1].params["ops"].as_array().unwrap().len(), 75);
+    let summary = &scenario.calls[3].expected.as_ref().unwrap()["ok"];
+    assert_eq!(
+        (
+            &summary["tasks"],
+            &summary["summaries"],
+            &summary["milestones"],
+            &summary["links"],
+            &summary["finish"],
+            &summary["history_len"],
+        ),
+        (
+            &json!(35),
+            &json!(5),
+            &json!(4),
+            &json!(40),
+            &json!("2027-03-10T17:00"),
+            &json!(1)
+        )
     );
 }
 

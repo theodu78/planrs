@@ -10,6 +10,7 @@ use planrs_core::{Lag, Link, LinkType, Project, Subject, Task, TaskUid};
 
 use super::exec::Ctx;
 use super::extras_invalidation::TaskChange;
+use super::outline;
 use super::{LinkKey, LinkSpec, TaskRef};
 use crate::error::{CommandError, CommandErrorKind, codes};
 
@@ -18,21 +19,18 @@ fn level_at(p: &Project, pos: usize) -> Option<u16> {
     p.tasks.at(pos).map(|t| t.outline_level.get())
 }
 
-/// Vrai si la tâche `uid` a au moins une sous-tâche : la suivante dans
-/// l'ordre d'affichage est d'un niveau plus profond (R-052).
+/// Vrai si la tâche `uid` a au moins une sous-tâche : la tâche non vide
+/// suivante dans l'ordre d'affichage est d'un niveau plus profond (R-052).
 pub(super) fn is_summary(p: &Project, uid: TaskUid) -> bool {
-    let Some(pos) = p.tasks.position(uid) else {
-        return false;
-    };
-    match (level_at(p, pos), pos.checked_add(1).and_then(|n| level_at(p, n))) {
-        (Some(level), Some(next)) => next > level,
-        _ => false,
-    }
+    p.tasks
+        .position(uid)
+        .is_some_and(|pos| outline::is_summary_at(&p.tasks, pos))
 }
 
 /// Vrai si l'une des deux tâches est une descendante de l'autre (R-059) :
-/// toutes les tâches de la plus haute (exclue) à la plus basse (incluse)
-/// sont plus profondes que la plus haute. Parcours borné par la distance.
+/// toutes les tâches non vides de la plus haute (exclue) à la plus basse
+/// (incluse) sont plus profondes que la plus haute ; les lignes vides ne
+/// comptent pas (R-052). Parcours borné par la distance.
 fn related_by_outline(p: &Project, a: TaskUid, b: TaskUid) -> bool {
     let (Some(pa), Some(pb)) = (p.tasks.position(a), p.tasks.position(b)) else {
         return false;
@@ -45,6 +43,7 @@ fn related_by_outline(p: &Project, a: TaskUid, b: TaskUid) -> bool {
         .iter()
         .skip(top.saturating_add(1))
         .take(bottom.saturating_sub(top))
+        .filter(|t| !t.is_null)
         .all(|t| t.outline_level.get() > top_level)
 }
 
@@ -145,13 +144,17 @@ pub(super) fn update(op: &LinkSpec, ctx: &mut Ctx<'_>) -> Result<(), CommandErro
         .iter_mut()
         .find(|l| l.predecessor == pred)
         .ok_or_else(|| not_found(pred, succ))?;
+    let before = (link.kind, link.lag);
     if let Some(k) = op.kind {
         link.kind = k.into();
     }
     if let Some(l) = lag {
         link.lag = l;
     }
-    ctx.drop_task_extras(succ, TaskChange::Links);
+    // R-161 : un champ n'est modifié que si sa valeur change.
+    if (link.kind, link.lag) != before {
+        ctx.drop_task_extras(succ, TaskChange::Links);
+    }
     Ok(())
 }
 

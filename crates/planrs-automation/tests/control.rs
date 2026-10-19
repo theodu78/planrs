@@ -155,6 +155,12 @@ fn control_stale_rendezvous_removed() {
 
 #[cfg(unix)]
 #[test]
+fn control_busy_app_kept_live() {
+    unix::busy_app_kept_live();
+}
+
+#[cfg(unix)]
+#[test]
 fn control_hello_wrong_token_refused() {
     unix::hello_wrong_token_refused();
 }
@@ -426,6 +432,25 @@ mod unix {
         std::mem::forget(publish_in(&dir, &other).unwrap());
         assert!(find_live_for_in(&dir, &file).is_none());
         assert_eq!(json_files(&dir), ["3-0.json"]);
+    }
+
+    pub(super) fn busy_app_kept_live() {
+        // Application vivante qui sert déjà ses 8 connexions : la sonde est
+        // fermée sans réponse, mais le rendez-vous reste et l'application
+        // est tenue pour vivante (la garde ADR-0002 tient).
+        let tmp = TempDir::new("busy");
+        let dir = tmp.path().join("control");
+        let file = project_file(tmp.path(), "plan.xml");
+        let (handle, _token) = listener(&dir);
+        let _guard = publish_in(&dir, &handle.rendezvous(canonical_project(&file))).unwrap();
+        let idle: Vec<Client> = (0..8).map(|_| Client::connect(handle.endpoint())).collect();
+        // La neuvième est fermée sans réponse : le plafond est atteint.
+        let mut ninth = Client::connect(handle.endpoint());
+        assert!(ninth.is_closed());
+        assert!(probe(&handle.rendezvous(None)).is_err());
+        assert!(find_live_for_in(&dir, &file).is_some());
+        assert_eq!(json_files(&dir).len(), 1);
+        drop(idle);
     }
 
     pub(super) fn hello_wrong_token_refused() {

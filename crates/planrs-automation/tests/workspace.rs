@@ -41,6 +41,49 @@ impl Drop for TempDir {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn files_write_atomic_follows_symlink() {
+    // plan.xml -> sync/plan.xml : la cible est remplacée, le lien reste un
+    // lien ; aucun temporaire laissé ; lien sans cible refusé.
+    let dir = TempDir::new("symlink");
+    let sync = dir.path().join("sync");
+    std::fs::create_dir_all(&sync).unwrap();
+    let target = sync.join("plan.xml");
+    std::fs::write(&target, b"ancien").unwrap();
+    let link = dir.path().join("plan.xml");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    write_atomic(&link, b"nouveau").unwrap();
+    assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read(&target).unwrap(), b"nouveau");
+    let names = |d: &std::path::Path| {
+        let mut v: Vec<_> = std::fs::read_dir(d)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(names(&sync), vec![std::ffi::OsString::from("plan.xml")]);
+    assert_eq!(
+        names(dir.path()),
+        vec![
+            std::ffi::OsString::from("plan.xml"),
+            std::ffi::OsString::from("sync")
+        ]
+    );
+    let dangling = dir.path().join("orphelin.xml");
+    std::os::unix::fs::symlink(sync.join("absent.xml"), &dangling).unwrap();
+    let err = write_atomic(&dangling, b"x").unwrap_err();
+    assert_eq!(err.code(), codes::FILE_WRITE);
+    assert!(
+        std::fs::symlink_metadata(&dangling)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
 #[test]
 fn files_write_atomic_replaces() {
     let dir = TempDir::new("atomic");
@@ -667,4 +710,32 @@ fn workspace_import_csv_roundtrip() {
         again.call("task.list", json!({})).unwrap()["tasks"],
         list["tasks"]
     );
+}
+
+#[test]
+fn workspace_batch_version_checked_before_ops() {
+    // ADR-0012 L3 (4) : un lot d'un format futur est refusé comme tel, même
+    // si ses opérations sont inconnues de cette version.
+    let mut ws = fresh(Language::Fr);
+    let err = ws
+        .call(
+            "batch.apply",
+            json!({ "format_version": 2, "ops": [{ "op": "resource.add", "name": "R" }] }),
+        )
+        .unwrap_err();
+    assert_eq!(err.code, codes::BATCH_UNSUPPORTED_VERSION);
+    assert_eq!(err.field.as_deref(), Some("format_version"));
+    // Version 1 ou absente : l'opération inconnue est un défaut de forme.
+    for batch in [
+        json!({ "format_version": 1, "ops": [{ "op": "resource.add", "name": "R" }] }),
+        json!({ "ops": [{ "op": "resource.add", "name": "R" }] }),
+    ] {
+        let err = ws.call("batch.apply", batch).unwrap_err();
+        assert_eq!(err.code, codes::PARAM_INVALID);
+    }
+    // Version non entière : `param.invalid`.
+    let err = ws
+        .call("batch.apply", json!({ "format_version": "2", "ops": [] }))
+        .unwrap_err();
+    assert_eq!(err.code, codes::PARAM_INVALID);
 }

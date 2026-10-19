@@ -217,13 +217,17 @@ impl PlanrsServer {
              leur UID stable (jamais par leur ID de ligne) ; toute date, durée ou marge vient du moteur, ne \
              jamais en calculer ni en estimer une soi-même ; les outils d'écriture acceptent dry_run:true pour \
              voir le diff du planning sans rien modifier ; dans apply_batch, nommer une tâche créée par \
-             \"as\":\"$x\" et la désigner par \"$x\" dans les opérations suivantes. Commencer par new_project, \
-             open_project ou import_csv.",
+             \"as\":\"$x\" et la désigner par \"$x\" dans les opérations suivantes (de même pour une \
+             ressource créée par add_resource) ; travail, surutilisation et utilisation des ressources viennent \
+             aussi du moteur (list_resources, resource_usage). Commencer par new_project, open_project ou \
+             import_csv.",
             "planrs: an MS Project-compatible scheduling engine. Rules: tasks are designated by their stable \
              UID (never by their row ID); every date, duration and slack comes from the engine, never compute \
              or estimate one yourself; write tools accept dry_run:true to preview the schedule diff without \
              changing anything; in apply_batch, name a created task with \"as\":\"$x\" and refer to it as \
-             \"$x\" in later operations. Start with new_project, open_project or import_csv.",
+             \"$x\" in later operations (likewise for a resource created by add_resource); resource work, \
+             overallocation and usage also come from the engine (list_resources, resource_usage). Start with \
+             new_project, open_project or import_csv.",
         )
     }
 }

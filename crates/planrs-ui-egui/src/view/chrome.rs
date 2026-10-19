@@ -11,6 +11,7 @@ use crate::action::Action;
 use crate::app::{MAX_MESSAGES, UserMessage};
 use crate::format::format_date;
 use crate::i18n::{Arg, Language, TextId};
+use crate::keymap::{Binding, shortcut_for, shortcut_text};
 use crate::state::{LanguagePref, ThemePref};
 use crate::theme::Palette;
 use crate::timescale::TimeScaleZoom;
@@ -31,7 +32,7 @@ const THEME_CHOICES: [(ThemePref, TextId); 3] = [
     (ThemePref::Dark, TextId::ThemeDark),
 ];
 
-/// Barre de menus (Fichier, Affichage).
+/// Barre de menus (Fichier, Édition, Affichage).
 pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let texts = fc.texts;
     let has_doc = fc.doc.is_some();
@@ -52,6 +53,7 @@ pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
                     fc.actions.push(Action::CloseDocument);
                 }
             });
+            ui.menu_button(texts.get(TextId::MenuEdit), |ui| edit_menu(ui, fc));
             ui.menu_button(texts.get(TextId::MenuView), |ui| {
                 ui.menu_button(texts.get(TextId::MenuZoom), |ui| {
                     ui.add_enabled_ui(has_doc, |ui| {
@@ -79,6 +81,28 @@ pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
             });
         });
     });
+}
+
+/// Menu Édition : Annuler, Rétablir, actifs seulement s'il y a un lot à
+/// annuler ou à rétablir ; raccourci de [`crate::keymap::KEYMAP`] affiché.
+fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    let texts = fc.texts;
+    let history = fc.doc.map(|doc| doc.session.history());
+    let can_undo = history.as_ref().is_some_and(|h| !h.entries.is_empty());
+    let can_redo = history.as_ref().is_some_and(|h| !h.redo.is_empty());
+    let items = [
+        (TextId::MenuUndo, "history.undo", can_undo, Action::Undo),
+        (TextId::MenuRedo, "history.redo", can_redo, Action::Redo),
+    ];
+    for (label, id, enabled, action) in items {
+        let mut button = egui::Button::new(texts.get(label));
+        if let Some(shortcut) = shortcut_for(Binding::Command(id)) {
+            button = button.shortcut_text(shortcut_text(ui.ctx(), shortcut));
+        }
+        if ui.add_enabled(enabled, button).clicked() {
+            fc.actions.push(action);
+        }
+    }
 }
 
 /// Barre d'outils : exemple, ouvrir, zoom, ajuster, thème, langue. Toujours

@@ -421,3 +421,17 @@ fn ui_observer_sees_open_edit_undo_close() {
         [None, Some((1, 0)), Some((1, 1)), Some((1, 2)), None]
     );
 }
+
+/// Menu Édition : Annuler puis Rétablir (raccourci affiché dans le libellé).
+#[test]
+fn ui_edit_menu_undo_redo() {
+    let mut harness = harness();
+    demo_with_one_edit(&mut harness);
+    for (item, expected) in [(TextId::MenuUndo, (0, 1)), (TextId::MenuRedo, (1, 0))] {
+        harness.get_by_label(&fr(TextId::MenuEdit)).click();
+        harness.run();
+        harness.get_by_label_contains(&fr(item)).click();
+        harness.run();
+        assert_eq!(history_len(harness.state()), expected, "{item:?}");
+    }
+}

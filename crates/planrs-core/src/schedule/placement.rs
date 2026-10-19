@@ -37,7 +37,7 @@
 use std::collections::BTreeMap;
 
 use super::constraint::Mode;
-use super::network::{Fail, PROJECT, Role, TaskInfo, ix, pos};
+use super::network::{ELAPSED, Fail, PROJECT, Role, TaskInfo, ix, pos};
 use super::{AssignmentRole, AssignmentSchedule, Calc, EffectiveCalendar};
 use crate::calendar::{CalendarSet, CompiledCalendar, Span, TimeScale};
 use crate::diagnostic::{Diagnostic, Diagnostics};
@@ -45,7 +45,9 @@ use crate::duration::{Duration, Minutes, TimeBasis, Work};
 use crate::error::CalendarError;
 use crate::fixed::round_div;
 use crate::ids::{AssignmentUid, CalendarUid, ResourceUid, TaskUid};
-use crate::model::{ConstraintKind, LevelingDelay, Project, ResourceKind, SchedulingMode, Task, TaskType};
+use crate::model::{
+    ConstraintKind, LevelingDelay, Project, ResourceKind, SchedulingMode, Task, TaskType, WorkContour,
+};
 use crate::quantity::Units;
 use crate::time::Moment;
 
@@ -68,6 +70,8 @@ enum CalRef {
     Set(CalendarUid),
     /// Échelle du calendrier du projet, `PROJECT` (R-175).
     Project,
+    /// Temps écoulé, `ELAPSED` (tâche à durée écoulée, R-182).
+    Elapsed,
     /// Calendrier combiné possédé par [`Resolved`] (intersection ou union).
     Owned(usize),
 }
@@ -98,6 +102,8 @@ struct Resolution {
     delay: Minutes,
     /// Retard de nivellement de l'affectation (R-178).
     leveling: Option<LevelingDelay>,
+    /// Profil de travail (R-180).
+    contour: WorkContour,
     /// Travail.
     work: Work,
     /// Unités.
@@ -155,6 +161,7 @@ impl Resolver<'_> {
         match r {
             CalRef::Set(uid) => self.set.get(uid).ok(),
             CalRef::Project => Some(self.project_place),
+            CalRef::Elapsed => None,
             CalRef::Owned(i) => self.owned.get(i),
         }
     }
@@ -340,7 +347,10 @@ pub(super) fn resolve(
                 None => EffectiveCalendar::Project(project_place.uid()),
             }
         };
-        let (cal, calendar) = if work_resource {
+        let (cal, calendar) = if work_resource && task_calendar == EffectiveCalendar::Elapsed {
+            // R-182 : durée écoulée, calendriers ignorés.
+            (CalRef::Elapsed, EffectiveCalendar::Elapsed)
+        } else if work_resource {
             r.effective(task, resource.and_then(|res| res.calendar), a.uid(), diags)
         } else {
             (CalRef::Project, task_calendar)
@@ -357,6 +367,7 @@ pub(super) fn resolve(
             duration: assignment_duration(task, a.work, a.units),
             delay: a.delay.max(Minutes::ZERO),
             leveling: a.leveling_delay.filter(|l| l.minutes > Minutes::ZERO),
+            contour: a.contour,
             work: a.work,
             units: a.units,
         });
@@ -427,6 +438,9 @@ struct Output {
     /// Indice dans `Parts::items`, pour une affectation qui place sa
     /// feuille.
     part: Option<usize>,
+    /// Échelle effective d'une affectation de travail d'une récapitulative
+    /// (R-179) ou d'une tâche manuelle (R-183).
+    scale: Option<u32>,
 }
 
 /// Parts des feuilles (CSR par position de tâche) et affectations à ranger.
@@ -478,14 +492,14 @@ impl Parts {
     }
 }
 
-/// Feuille qui se place par ses affectations : active, automatique, à durée
-/// ouvrée (R-173 ; manuelle R-183, durée écoulée R-182 : lot L4b).
+/// Feuille qui se place par ses affectations : active, automatique (R-173 ;
+/// durée écoulée sur le temps civil, R-182 ; manuelle : dates saisies,
+/// R-183).
 fn placed_by_parts(info: &TaskInfo, task: &Task) -> bool {
     info.role == Role::Leaf
         && !info.inactive()
         && !info.manual_undated
         && matches!(task.mode, SchedulingMode::Auto)
-        && task.duration.basis() == TimeBasis::Working
 }
 
 /// Étape 2 : parts des feuilles et échelles effectives, ajoutées à `scales`.
@@ -510,6 +524,7 @@ pub(super) fn attach<'a>(
             CalRef::Set(uid) => set.get(uid).ok()?,
             CalRef::Owned(i) => resolved.owned.get(i)?,
             CalRef::Project => return Some(PROJECT),
+            CalRef::Elapsed => return Some(ELAPSED),
         };
         let known = scales
             .iter()
@@ -537,10 +552,15 @@ pub(super) fn attach<'a>(
         let by_parts = placed_by_parts(info, task);
         while let Some(res) = resolved.items.get(k).filter(|i| i.task_pos == p) {
             k = k.checked_add(1)?;
-            if info.role == Role::Null || info.inactive() {
+            // R-183 : tâche inactive, aucune affectation rangée.
+            if info.role == Role::Null || info.inactive() || info.manual_undated {
                 continue;
             }
+            if res.work_resource {
+                notices(res, diags);
+            }
             let mut part = None;
+            let mut scale = None;
             if by_parts && res.work_resource {
                 match res.duration {
                     Ok(d) => {
@@ -558,8 +578,20 @@ pub(super) fn attach<'a>(
                         out.fail.insert(p, code);
                     }
                 }
+            } else if res.work_resource {
+                // R-179, R-183 : échelle effective, pour placer l'affectation
+                // d'une récapitulative ou mesurer celle d'une manuelle.
+                scale = Some(scale_of(res.cal, scales)?);
+                let summary = info.role == Role::Summary && matches!(task.mode, SchedulingMode::Auto);
+                if summary && res.duration.is_err() {
+                    diags.push(Diagnostic::AssignmentDurationOutOfDomain { assignment: res.uid });
+                }
             }
-            out.outputs.push(Output { res: *res, part });
+            out.outputs.push(Output {
+                res: *res,
+                part,
+                scale,
+            });
         }
         if let Some(&rep) = resolved.unions.get(&p).filter(|_| by_parts) {
             out.rep.insert(p, scale_of(rep, scales)?);
@@ -812,16 +844,19 @@ impl<'n, 'a> Calc<'n, 'a> {
         let late = state.late;
         let node = net.node(v)?;
         let res = &o.res;
-        let role = if info.role == Role::Summary {
-            AssignmentRole::Summary
-        } else if !matches!(task.mode, SchedulingMode::Auto) {
+        // R-183 : une tâche manuelle (feuille ou récapitulative) range ses
+        // affectations sur ses dates saisies.
+        let role = if !matches!(task.mode, SchedulingMode::Auto) {
             AssignmentRole::Manual
+        } else if info.role == Role::Summary {
+            AssignmentRole::Summary
         } else if res.work_resource {
             AssignmentRole::Work
         } else {
             AssignmentRole::Neutral
         };
         let parts = net.parts.of(o.res.task_pos);
+        let mut effective_units = res.units;
         let (span, late, duration, calendar) = match o.part.and_then(|i| net.parts.items.get(i)) {
             // Une seule part sans délai : la feuille est la part (P34).
             Some(part) if parts.len() == 1 && part.undelayed() => (early, late, part.d, res.calendar),
@@ -831,20 +866,48 @@ impl<'n, 'a> Calc<'n, 'a> {
                 part.d,
                 res.calendar,
             ),
-            None => {
-                let calendar = match role {
-                    AssignmentRole::Work if task.duration.basis() == TimeBasis::Elapsed => {
-                        EffectiveCalendar::Elapsed
+            None => match (role, o.scale, res.duration) {
+                // R-179 : affectation de travail d'une récapitulative : départ
+                // au début de la récapitulative, délais compris, `d_a` sur son
+                // calendrier effectif, jamais tronquée.
+                (AssignmentRole::Summary, Some(scale), Ok(d)) => {
+                    let part = Part {
+                        assignment: res.uid,
+                        scale,
+                        delay: res.delay,
+                        level: level_of(res.leveling),
+                        d,
+                    };
+                    (
+                        Placer::part_span(&net.scales, &part, early.start).ok()?,
+                        late.and_then(|l| Placer::part_span(&net.scales, &part, l.start).ok()),
+                        d,
+                        res.calendar,
+                    )
+                }
+                // R-183 : affectation de travail d'une tâche manuelle : le
+                // span de la tâche, débit = travail ÷ temps ouvré du span.
+                (AssignmentRole::Manual, Some(scale), _) => {
+                    let measured = net
+                        .scale(scale)
+                        .and_then(|s| s.between(early.start, early.finish).ok())
+                        .filter(|m| m.get() > 0);
+                    if let Some(m) = measured {
+                        effective_units = rate(res.work, m).unwrap_or(res.units);
                     }
-                    AssignmentRole::Work | AssignmentRole::Summary => res.calendar,
-                    AssignmentRole::Neutral | AssignmentRole::Manual => res.task_calendar,
-                };
-                let duration = match role {
-                    AssignmentRole::Summary => res.duration.unwrap_or(node.duration),
-                    _ => node.duration,
-                };
-                (early, late, duration, calendar)
-            }
+                    (early, late, measured.unwrap_or(node.duration), res.calendar)
+                }
+                _ => {
+                    let calendar = match role {
+                        AssignmentRole::Work if task.duration.basis() == TimeBasis::Elapsed => {
+                            EffectiveCalendar::Elapsed
+                        }
+                        AssignmentRole::Work | AssignmentRole::Summary => res.calendar,
+                        AssignmentRole::Neutral | AssignmentRole::Manual => res.task_calendar,
+                    };
+                    (early, late, node.duration, calendar)
+                }
+            },
         };
         Some(AssignmentSchedule {
             task: res.task,
@@ -854,9 +917,31 @@ impl<'n, 'a> Calc<'n, 'a> {
             late,
             duration,
             work: res.work,
-            effective_units: res.units,
+            effective_units,
             calendar,
         })
+    }
+}
+
+/// Débit d'une affectation : `round_div(W × 10 000, m)` (R-183, R-186) ;
+/// `None` hors du domaine des unités.
+fn rate(work: Work, m: Minutes) -> Option<Units> {
+    let num = i128::from(work.minutes().get()).checked_mul(10_000)?;
+    let u = round_div(num, i128::from(m.get()))?;
+    Units::new(u).ok()
+}
+
+/// Diagnostics d'une affectation de travail d'une tâche active : unités
+/// nulles (R-181), profil non uniforme placé comme uniforme (R-180).
+fn notices(res: &Resolution, diags: &mut Diagnostics) {
+    if res.units == Units::ZERO {
+        diags.push(Diagnostic::AssignmentZeroUnits { assignment: res.uid });
+    }
+    if res.contour != WorkContour::Flat {
+        diags.push(Diagnostic::AssignmentContourUnsupported {
+            assignment: res.uid,
+            contour: res.contour,
+        });
     }
 }
 

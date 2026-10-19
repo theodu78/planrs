@@ -58,14 +58,21 @@ Deux lignes `planrs_automation::journal::Entry` par appel, de même `seq` (1 au 
 
 ## 6. Essai réel avec Claude (une fois, local, hors CI)
 
-À faire par le propriétaire (ou sur sa validation explicite, sur le Mac ou serveurdvp) ; pas encore fait au 2026-10-19.
+Fait le 2026-10-19 sur serveurdvp, sur validation du propriétaire. Procédure suivie :
 
-1. `cargo build --release -p planrs-cli`, puis `claude mcp add planrs -- <chemin>/planrs mcp --journal run.jsonl` (ajouter `--now 2026-10-19T08:00 --lang fr` pour un rejeu stable).
-2. Consigne figée, envoyée telle quelle dans une conversation neuve :
+1. `cargo build --release -p planrs-cli`, puis `claude -p` dans une conversation neuve avec `--strict-mcp-config` et une configuration MCP qui ne déclare que planrs (seul outil disponible pour l'agent) : `planrs --now 2026-10-19T08:00 --lang fr mcp --headless --journal run.jsonl`.
+2. Consigne figée, envoyée telle quelle :
 
    > Construis le planning de rénovation d'une maison en 30 tâches avec phases, jalons et dépendances, puis montre-moi le chemin critique.
 
-3. Relire `run.jsonl` (aucune date inventée par l'agent dans les paramètres hors des dates d'ancrage et de contrainte, aucune erreur inattendue), remplacer les chemins absolus par `$TMP`, le versionner sous `tests/mcp/scenarios/claude_run_1.jsonl`, régénérer ses résultats par `PLANRS_BLESS=1`, et ajouter le test `replay_claude_run_1` (une ligne : le harnais prend le nom du scénario ; s'il enregistre un fichier, l'attendu MSPDI suit la même convention).
+3. Journal relu, chemins absolus remplacés par `$TMP`, versionné sous `tests/mcp/scenarios/claude_run_1.jsonl`, résultats régénérés par `PLANRS_BLESS=1` (diff relu : aucun octet ne change hors des valeurs de chemin), MSPDI enregistré versionné sous `tests/mcp/expected/claude_run_1.xml` (identique octet pour octet au fichier de l'essai).
+
+Résultat :
+
+- 6 appels, 0 erreur : `new_project` (« Rénovation maison », début lun 02/11/2026 08:00), un seul `apply_batch` atomique de 75 opérations (35 `task.add`, 40 `link.add`, étiquettes `$x`, placements `last_child_of`), `critical_path`, `project_summary`, `save_project`, `render_gantt` (semaine, 35 lignes, rien de coupé).
+- Planning obtenu : 35 tâches dont 5 phases (récapitulatives) et 4 jalons, 40 liens, fin mer 10/03/2027 17:00 (93 jours ouvrés), 21 tâches critiques ; une entrée d'historique.
+- Règle 3 tenue : la seule date fournie par l'agent est le début du projet ; toutes les dates, durées calculées et marges de sa réponse finale viennent des résultats du moteur. L'agent a signalé de lui-même les limites du modèle (aucun jour chômé posé, durées estimées, pas de ressources).
+- Rejeu en CI : `replay_claude_run_1` (`crates/planrs-mcp/tests/replay.rs`, job `mcp`) rejoue le journal en mémoire, compare chaque résultat et le journal produit au scénario, et le MSPDI enregistré à l'attendu (`normalize`).
 
 ## 7. Limites
 

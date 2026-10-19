@@ -2389,8 +2389,22 @@ fn p34(oracle: &Project, seed: u64) {
         next += 1;
     }
     let got = schedule(&p);
+    // Dates seulement : affectations, charges, travail (R-184) et
+    // surutilisation (R-186) retirés.
     let mut stripped = got.clone();
     stripped.assignments.clear();
+    stripped.resources.clear();
+    stripped
+        .diagnostics
+        .retain(|d| !matches!(d, planrs_core::Diagnostic::ResourceOverallocated { .. }));
+    for o in stripped.tasks.values_mut() {
+        if let TaskOutcome::Scheduled(ts) = o {
+            ts.work = Work::ZERO;
+        }
+    }
+    if let Some(ps) = stripped.project_summary.as_mut() {
+        ps.work = Work::ZERO;
+    }
     assert_eq!(stripped, base, "P34, graine {seed}");
     for (task, auid) in assigned {
         let s = got.scheduled(task).unwrap();

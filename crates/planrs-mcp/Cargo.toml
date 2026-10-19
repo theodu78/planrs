@@ -15,10 +15,35 @@ rmcp.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+# Feature `http` (lot L17).
+hyper = { workspace = true, optional = true }
+hyper-util = { workspace = true, optional = true }
+http-body-util = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+
+[features]
+# Transport MCP « streamable HTTP » (`planrs mcp --http`, lot L17).
+http = [
+    "rmcp/transport-streamable-http-server",
+    "dep:hyper",
+    "dep:hyper-util",
+    "dep:http-body-util",
+    "dep:bytes",
+    "tokio/net",
+]
 
 [dev-dependencies]
 # Client rmcp en mémoire (`tokio::io::duplex`) pour les tests du serveur.
 rmcp = { workspace = true, features = ["client"] }
+# Client HTTP/1.1 minimal des tests `http.rs` (feature `http`).
+hyper = { workspace = true, features = ["client"] }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
+bytes = { workspace = true }
+
+[[test]]
+name = "http"
+required-features = ["http"]
 
 [lints]
 workspace = true

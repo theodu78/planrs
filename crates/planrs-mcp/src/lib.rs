@@ -8,10 +8,13 @@
 //! (`file.open_in_app`, ADR-0002).
 //!
 //! Transport stdio (tokio à fil unique), lignes d'entrée bornées
-//! (C-MCP-06), journal de rejeu `--journal` facultatif. Détail :
+//! (C-MCP-06), journal de rejeu `--journal` facultatif. Transport HTTP
+//! (« streamable HTTP ») derrière la feature `http` (lot L17). Détail :
 //! `docs/features/mcp.md` (L18) et ADR-0012.
 
 mod bounded;
+#[cfg(feature = "http")]
+mod http;
 mod journal_file;
 mod server;
 mod tools;
@@ -25,6 +28,8 @@ use planrs_core::Moment;
 use rmcp::service::ServerInitializeError;
 use tokio::io::{AsyncRead, AsyncWrite};
 
+#[cfg(feature = "http")]
+pub use http::{HttpOptions, HttpServer, MCP_PATH, MIN_TOKEN_BYTES, parse_addr, serve_http};
 pub use server::PlanrsServer;
 
 /// Options du serveur.
@@ -65,6 +70,11 @@ pub enum McpServeError {
     /// Entrée/sortie (runtime, journal, fichier `--open`).
     #[error("entrée/sortie : {0}")]
     Io(String),
+    /// Options de lancement invalides (MCP HTTP : adresse, `--root` absent,
+    /// adresse non locale sans `--allow-remote` ou sans jeton) : la CLI sort
+    /// avec le code 2.
+    #[error("usage : {0}")]
+    Usage(String),
     /// Transport fermé sur une ligne trop longue (C-MCP-06).
     #[error("ligne d'entrée trop longue")]
     LineTooLong,

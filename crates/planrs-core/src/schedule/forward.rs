@@ -115,7 +115,7 @@ impl Calc<'_, '_> {
     /// `link.manual_not_honored` (R-063) et aucune conversion n'est faite.
     fn bounds(&mut self, v: NodeIx, fixed: Option<Span>) -> Result<Bounds, Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
-        let (place, duration, kind) = (node.place, node.duration, node.kind);
+        let (place, kind) = (node.place, node.kind);
         let mut b = Bounds {
             start: self.start,
             driver: Driver::ProjectStart,
@@ -194,9 +194,10 @@ impl Calc<'_, '_> {
                     self.manual_bound(arc.link, cand, f, *scale)?;
                     continue;
                 }
-                // R-039, R-040 : borne de fin convertie en borne de début.
+                // R-039, R-040 : borne de fin convertie en borne de début
+                // (feuille affectée : min des débuts de ses parts, R-174).
                 (Candidate::Finish(x), None) if kind == NodeKind::Leaf => {
-                    scale.backward_span(x, duration)?.start
+                    self.placer(v)?.backward_span(x)?.start
                 }
                 (Candidate::Start(x) | Candidate::Finish(x), None) => x,
             };
@@ -295,7 +296,7 @@ impl Calc<'_, '_> {
     /// l'affichage, R-062).
     fn leaf(&mut self, v: NodeIx) -> Result<(), Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
-        let (place, duration, constraint) = (node.place, node.duration, node.constraint);
+        let (place, constraint) = (node.place, node.constraint);
         let fixed = match node.fixed {
             Some(r) => Some(r?),
             None => None,
@@ -328,7 +329,8 @@ impl Calc<'_, '_> {
                 self.overrides(v, scale, p, c.kind, true)?;
                 (p, Driver::Constraint { kind: c.kind })
             } else {
-                let natural = scale.forward_span(b.start, duration)?;
+                // R-173 : feuille affectée placée par ses parts.
+                let natural = self.placer(v)?.forward_span(b.start)?;
                 self.constrain(v, scale, natural, b.driver)?
             }
         };

@@ -371,14 +371,8 @@ impl Calc<'_, '_> {
         has_succ: bool,
     ) -> Result<(Span, LateDriver), Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
-        let (uid, place, duration, constraint, deadline, fixed) = (
-            node.uid,
-            node.place,
-            node.duration,
-            node.constraint,
-            node.deadline,
-            node.fixed,
-        );
+        let (uid, place, constraint, deadline, fixed) =
+            (node.uid, node.place, node.constraint, node.deadline, node.fixed);
         let from_finish = self.mode == Mode::FromFinish;
         // R-097, R-098 : une feuille épinglée (MSO, MFO, option active) a
         // ses dates au plus tard sur l'ancrage, sans plafond : une borne
@@ -434,7 +428,7 @@ impl Calc<'_, '_> {
         {
             lf.apply(e.finish, LateDriver::MultipleCriticalPaths);
         }
-        let (caps, unreliable) = self.leaf_caps(v, early, scale, duration)?;
+        let (caps, unreliable) = self.leaf_caps(v, early)?;
         if unreliable && let Some(s) = self.state_mut(v) {
             s.late_degraded = true;
         }
@@ -454,7 +448,8 @@ impl Calc<'_, '_> {
         if let Some(d) = deadline {
             lf.apply(d, LateDriver::Deadline);
         }
-        let natural = scale.backward_span(lf.finish, duration)?;
+        // R-174 : feuille affectée, min des débuts de ses parts.
+        let natural = self.placer(v)?.backward_span(lf.finish)?;
         // R-109 : à rebours, option active, SNET et FNET serrent la passe
         // principale : si le placement sous les plafonds commence (finit)
         // avant l'ancrage, la feuille est placée sur l'ancrage et chaque
@@ -482,20 +477,15 @@ impl Calc<'_, '_> {
     /// devient `P.forward_span(P.latest_start(y, d), d).finish` (dernier début
     /// plaçable, R-047). Rend aussi le drapeau « successeur ou plafond
     /// hérité peu sûr » (R-069).
-    fn leaf_caps(
-        &mut self,
-        v: NodeIx,
-        early: Option<Span>,
-        scale: TimeScale<'_>,
-        duration: crate::duration::Minutes,
-    ) -> Result<(Vec<Cap>, bool), Fail> {
+    fn leaf_caps(&mut self, v: NodeIx, early: Option<Span>) -> Result<(Vec<Cap>, bool), Fail> {
+        let placer = self.placer(v)?;
         // Plafond de début `y` : la tâche doit commencer au plus tard en `y`
         // en brut ; `y` peut tomber hors du temps ouvré de P(t) (décalage
         // écoulé, successeur sur un autre calendrier, K(S)) : dernier début
         // plaçable avant la conversion (R-047).
         let start_cap = |y: Moment| -> Result<Moment, Fail> {
-            let x = scale.latest_start(y, duration)?;
-            Ok(scale.forward_span(x, duration)?.finish)
+            let x = placer.latest_start(y)?;
+            Ok(placer.forward_span(x)?.finish)
         };
         let parent = self
             .net
@@ -563,7 +553,8 @@ impl Calc<'_, '_> {
             return;
         }
         let Some(node) = self.net.node(v) else { return };
-        let (task, duration, parent) = (node.uid, node.duration, node.parent_rollup);
+        let (task, parent) = (node.uid, node.parent_rollup);
+        let Ok(placer) = self.placer(v) else { return };
         let exceeds = |cap: Moment| scale.between(cap, a.finish).is_ok_and(|m| m.get() > 0);
         let mut violated: Vec<OverriddenBound> = Vec::new();
         if exceeds(self.finish) {
@@ -576,7 +567,7 @@ impl Calc<'_, '_> {
                 violated.push(OverriddenBound::SummaryCap { summary });
             }
             if let Some((k, summary)) = ps.cap_start
-                && scale.latest_start(k, duration).is_ok_and(|x| a.start > x)
+                && placer.latest_start(k).is_ok_and(|x| a.start > x)
             {
                 violated.push(OverriddenBound::SummaryCap { summary });
             }

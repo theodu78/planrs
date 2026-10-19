@@ -2,9 +2,11 @@
 //! calendrier de base (S41, S42). Quand `Project::calendar` désigne un
 //! calendrier dérivé (calendrier de ressource), sa base mesure la durée des
 //! récapitulatives (R-054), les marges (R-048, R-049) et les décalages
-//! (R-041) des tâches sans calendrier propre ; le calendrier désigné les
-//! place (substitut des calendriers de ressource, J5). Observé : O13 (A4,
-//! 20 cas reproduits). Hypothèse pour le placement et les décalages.
+//! (R-041) des tâches sans calendrier propre. Amendée en J5 (R-171, R-175) :
+//! le calendrier désigné ne place plus que les tâches affectées à ses
+//! ressources (comme les feuilles de A4) ; une tâche sans affectation de
+//! travail se place sur la base. Observé : O13 (A4, 20 cas reproduits).
+//! Hypothèse pour les décalages.
 
 use planrs_core::calendar::{Calendar, DayRule, DaySetting};
 use planrs_core::{CalendarUid, LinkType, Minutes, Week, Weekday};
@@ -63,13 +65,28 @@ pub(crate) fn net() -> Net {
     })
 }
 
+/// Affecte les tâches `(nom, durée)` (travail = la durée, 100 %) à la
+/// ressource UID 1 du calendrier dérivé, créée ici (comme les ressources
+/// UID 1 à 4 de A4).
+pub(crate) fn staffed(net: Net, tasks: &[(&str, i64)]) -> Net {
+    use crate::r171_assignment_effective_calendar::{assign, resource};
+    let mut net = resource(net, 1, Some(DERIVED));
+    for (k, (name, minutes)) in tasks.iter().enumerate() {
+        net = assign(net, 1 + u32::try_from(k).unwrap(), name, 1, *minutes);
+    }
+    net
+}
+
 #[test]
-fn r113_leaves_placed_on_the_designated_calendar() {
-    // A 2 j : placée sur le dérivé, lun 08:00 – mar 17:00 (la base la
-    // placerait de lun 09:00 à mar 19:00).
-    let run = net().task("A", 960).run();
+fn r113_assigned_leaves_placed_on_the_resource_calendar() {
+    // A 2 j affectée à une ressource du dérivé : placée sur le dérivé, lun
+    // 08:00 – mar 17:00 ; B 2 j sans affectation : sur la base, lun 09:00 –
+    // mar 19:00 (R-175).
+    let run = staffed(net().task("A", 960).task("B", 960), &[("A", 960)]).run();
     assert_eq!(run.at("A").early.start, moment("2026-10-19T08:00"));
     assert_eq!(run.at("A").early.finish, moment("2026-10-20T17:00"));
+    assert_eq!(run.at("B").early.start, moment("2026-10-19T09:00"));
+    assert_eq!(run.at("B").early.finish, moment("2026-10-20T19:00"));
 }
 
 #[test]
@@ -77,14 +94,17 @@ fn r113_summary_duration_measured_on_the_base() {
     // S {A 2 j ; B 1 j FS} : A lun – mar, B mer 08:00 – 17:00 ; durée de S
     // sur la base = 8 h + 8 h + 6 h (mer 09:00-13:00, 15:00-17:00) = 1 320,
     // 120 de moins que sur le dérivé (O13 : A4 UID 1, 9 480 contre 9 600).
-    let run = net()
-        .task("S", 0)
-        .task("A", 960)
-        .level("A", 2)
-        .task("B", 480)
-        .level("B", 2)
-        .fs("A", "B")
-        .run();
+    let run = staffed(
+        net()
+            .task("S", 0)
+            .task("A", 960)
+            .level("A", 2)
+            .task("B", 480)
+            .level("B", 2)
+            .fs("A", "B"),
+        &[("A", 960), ("B", 480)],
+    )
+    .run();
     assert_eq!(run.at("S").early.start, moment("2026-10-19T08:00"));
     assert_eq!(run.at("S").early.finish, moment("2026-10-21T17:00"));
     assert_eq!(run.at("S").duration, Minutes::new(1_320));
@@ -96,12 +116,11 @@ fn r113_free_slack_measured_on_the_base() {
     // FS(A) = base.between(lun 17:00, mar 08:00) = 120 (lun 17:00-19:00),
     // borné par TF(A) = 480 : 120, comme A4 UID 14, 20, 21 (FreeSlack
     // 1 200 dixièmes). Marge totale inchangée (deux fins à 17:00).
-    let run = net()
-        .task("A", 480)
-        .task("B", 480)
-        .task("C", 1_440)
-        .fs("A", "B")
-        .run();
+    let run = staffed(
+        net().task("A", 480).task("B", 480).task("C", 1_440).fs("A", "B"),
+        &[("A", 480), ("B", 480), ("C", 1_440)],
+    )
+    .run();
     assert_eq!(run.at("B").early.start, moment("2026-10-20T08:00"));
     assert_eq!(run.at("A").total_slack, Minutes::new(480));
     assert_eq!(run.at("A").free_slack, Minutes::new(120));
@@ -115,11 +134,14 @@ fn r113_lag_counted_on_the_base() {
     // dérivé → mar 08:00 – 17:00 (sur le dérivé, le décalage donnerait
     // mar 10:00). R-041 : sans calendrier propre du successeur, le décalage
     // se compte sur le calendrier du projet, qui est la base.
-    let run = net()
-        .task("A", 480)
-        .task("B", 480)
-        .link("A", "B", LinkType::FinishToStart, lag_w(120))
-        .run();
+    let run = staffed(
+        net()
+            .task("A", 480)
+            .task("B", 480)
+            .link("A", "B", LinkType::FinishToStart, lag_w(120)),
+        &[("A", 480), ("B", 480)],
+    )
+    .run();
     assert_eq!(run.at("B").early.start, moment("2026-10-20T08:00"));
     assert_eq!(run.at("B").early.finish, moment("2026-10-20T17:00"));
 }
@@ -262,11 +284,11 @@ fn r113_measure_calendar_public_matches_engine() {
         Some(uid(BASE))
     );
     assert_matches_engine(&proj);
-    // Réseau qui distingue les deux calendriers : A 4 h, C 1 j. A lun
-    // 08:00-12:00, au plus tard 13:00-17:00 ; TF(A) = min(base(08:00,
-    // 13:00), base(12:00, 17:00)) = min(240, 180) = 180 ; sur le dérivé,
-    // 240.
-    let small = net().task("A", 240).task("C", 480).build();
+    // Réseau qui distingue les deux calendriers : A 4 h, C 1 j, affectées
+    // à une ressource du dérivé. A lun 08:00-12:00, au plus tard
+    // 13:00-17:00 ; TF(A) = min(base(08:00, 13:00), base(12:00, 17:00)) =
+    // min(240, 180) = 180 ; sur le dérivé, 240.
+    let small = staffed(net().task("A", 240).task("C", 480), &[("A", 240), ("C", 480)]).build();
     let t = small.tasks.iter().next().unwrap();
     assert_eq!(measure_calendar(&small, t), Some(uid(BASE)));
     assert_eq!(

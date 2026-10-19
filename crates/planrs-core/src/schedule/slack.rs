@@ -11,6 +11,7 @@
 
 use super::constraint::{ConstraintRule, Mode, Side};
 use super::network::{Fail, LinkArc, NodeIx, NodeKind, pos};
+use super::placement::Placer;
 use super::{Calc, NodeState, Pass, transfer};
 use crate::calendar::{Span, TimeScale};
 use crate::diagnostic::Diagnostic;
@@ -319,8 +320,8 @@ impl Calc<'_, '_> {
         late: Span,
     ) -> Option<(Minutes, Minutes, bool)> {
         let node = self.net.node(v)?;
-        let m = *self.net.scale(self.net.measure(node.place))?;
-        let place = *self.net.scale(node.place)?;
+        let m = *self.net.scale(node.measure)?;
+        let place = self.placer(v).ok()?;
         let tf = m
             .between(early.start, late.start)
             .ok()?
@@ -346,11 +347,7 @@ impl Calc<'_, '_> {
                 }
                 *unreliable |= e.unreliable;
                 if let Some(b) = e.bound {
-                    let b = if converts {
-                        place.latest_start(b, node.duration).ok()?
-                    } else {
-                        b
-                    };
+                    let b = if converts { place.latest_start(b).ok()? } else { b };
                     *fs = (*fs).min(m.between(early.start, b).ok()?);
                 }
             }
@@ -382,12 +379,9 @@ impl Calc<'_, '_> {
         // lien SS/SF reste sur l'échelle de placement.
         let m = *self
             .net
-            .scale(self.net.measure(node.place))
+            .scale(node.measure)
             .ok_or(Fail::Internal("échelle hors bornes"))?;
-        let place = *self
-            .net
-            .scale(node.place)
-            .ok_or(Fail::Internal("échelle hors bornes"))?;
+        let place = self.placer(v)?;
         let tf = m
             .between(early.start, late.start)?
             .min(m.between(early.finish, late.finish)?);
@@ -508,7 +502,7 @@ impl Calc<'_, '_> {
         v: NodeIx,
         a: u32,
         m: TimeScale<'_>,
-        place: TimeScale<'_>,
+        place: Placer<'_, '_>,
         own: Span,
         skip_start_kind: bool,
     ) -> Result<Option<Minutes>, Fail> {
@@ -554,7 +548,7 @@ impl Calc<'_, '_> {
             LinkType::StartToStart | LinkType::StartToFinish => {
                 let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
                 let bound = if node.kind == NodeKind::Leaf || node.fixed.is_some() {
-                    place.latest_start(bound, node.duration)?
+                    place.latest_start(bound)?
                 } else {
                     bound
                 };

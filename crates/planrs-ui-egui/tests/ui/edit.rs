@@ -3,6 +3,11 @@
 //! Tab (cellule suivante), un défilement ; Échap annule. Chaque saisie
 //! devient un lot du registre (`Action::Exec`), annulable exactement.
 
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "tests : valeurs bornées par les stratégies et les fixtures"
+)]
+
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, pos2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable as _;
@@ -110,7 +115,7 @@ fn index_of(app: &App, n: u32) -> usize {
 /// Planning de la tâche `uid`.
 fn schedule_of(app: &App, uid: TaskUid) -> planrs_core::TaskSchedule {
     match app.document.as_ref().unwrap().schedule().tasks.get(&uid) {
-        Some(TaskOutcome::Scheduled(s)) => s.clone(),
+        Some(TaskOutcome::Scheduled(s)) => *s,
         other => panic!("{other:?}"),
     }
 }

@@ -515,8 +515,8 @@ mod tests {
             .session
     }
 
-    fn uid(n: u32) -> Option<TaskUid> {
-        Some(TaskUid::new(n))
+    fn uid(n: u32) -> TaskUid {
+        TaskUid::new(n)
     }
 
     fn typed(task: Option<TaskUid>, column: Column, text: &str) -> EditState {
@@ -529,17 +529,17 @@ mod tests {
 
     #[test]
     fn edit_unchanged_text_sends_nothing() {
-        let state = EditState::open(uid(3), Column::Duration, "10 jours".to_owned());
+        let state = EditState::open(Some(uid(3)), Column::Duration, "10 jours".to_owned());
         let batch = commit_edit(&state, &session(), TextLanguage::Fr).unwrap();
-        assert!(batch.ops.is_empty());
+        assert_eq!(batch.ops, Vec::<Command>::new());
         // Ligne vide laissée vide : rien non plus.
-        assert!(ops(&typed(None, Column::Name, "  ")).is_empty());
+        assert_eq!(ops(&typed(None, Column::Name, "  ")), Vec::<Command>::new());
     }
 
     #[test]
     fn edit_invalid_duration_is_text_error() {
         let err = commit_edit(
-            &typed(uid(3), Column::Duration, "abc"),
+            &typed(Some(uid(3)), Column::Duration, "abc"),
             &session(),
             TextLanguage::Fr,
         )
@@ -549,7 +549,7 @@ mod tests {
             "{err:?}"
         );
         let err = commit_edit(
-            &typed(uid(3), Column::Start, "31/02/2027"),
+            &typed(Some(uid(3)), Column::Start, "31/02/2027"),
             &session(),
             TextLanguage::Fr,
         )
@@ -561,7 +561,8 @@ mod tests {
     fn edit_not_editable_columns_refused() {
         for column in [Column::Id, Column::TotalSlack, Column::Critical] {
             assert!(!editable(column));
-            let err = commit_edit(&typed(uid(3), column, "1"), &session(), TextLanguage::Fr).unwrap_err();
+            let err =
+                commit_edit(&typed(Some(uid(3)), column, "1"), &session(), TextLanguage::Fr).unwrap_err();
             assert_eq!(err, EditError::NotEditable);
         }
     }
@@ -569,7 +570,7 @@ mod tests {
     /// Le lot porte la langue de l'interface : « 3d » est lu en anglais.
     #[test]
     fn edit_batch_carries_ui_language() {
-        let state = typed(uid(3), Column::Duration, "3d");
+        let state = typed(Some(uid(3)), Column::Duration, "3d");
         let batch = commit_edit(&state, &session(), TextLanguage::En).unwrap();
         assert_eq!(batch.lang, Some(TextLanguage::En));
         let mut s = session();
@@ -590,7 +591,7 @@ mod tests {
     /// 6, ajoute 8 en DD.
     #[test]
     fn edit_predecessors_diff() {
-        let got = ops(&typed(uid(9), Column::Predecessors, "6;8DD+1j"));
+        let got = ops(&typed(Some(uid(9)), Column::Predecessors, "6;8DD+1j"));
         assert_eq!(got.len(), 2, "{got:?}");
         assert_eq!(
             got[0],
@@ -606,22 +607,22 @@ mod tests {
         assert_eq!(*kind, Some(LinkTypeJson::from(LinkType::StartToStart)));
         assert_eq!(lag.as_ref().and_then(|l| l.minutes), Some(480));
         // Même liste avec un type changé : `link.update`.
-        let got = ops(&typed(uid(9), Column::Predecessors, "7FF;6"));
+        let got = ops(&typed(Some(uid(9)), Column::Predecessors, "7FF;6"));
         assert!(matches!(&got[..], [Command::LinkUpdate(_)]), "{got:?}");
         // Liste vide : tout retirer.
-        let got = ops(&typed(uid(9), Column::Predecessors, ""));
+        let got = ops(&typed(Some(uid(9)), Column::Predecessors, ""));
         assert_eq!(got.len(), 2);
         assert!(got.iter().all(|op| matches!(op, Command::LinkRemove(_))));
         // ID inconnu.
         let err = commit_edit(
-            &typed(uid(9), Column::Predecessors, "7;900"),
+            &typed(Some(uid(9)), Column::Predecessors, "7;900"),
             &session(),
             TextLanguage::Fr,
         )
         .unwrap_err();
         assert_eq!(err, EditError::UnknownId(900));
         let err = commit_edit(
-            &typed(uid(9), Column::Predecessors, "7XY"),
+            &typed(Some(uid(9)), Column::Predecessors, "7XY"),
             &session(),
             TextLanguage::Fr,
         )

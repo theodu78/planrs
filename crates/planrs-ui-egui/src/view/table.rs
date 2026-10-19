@@ -235,7 +235,7 @@ pub fn paint_body(
             continue;
         }
         let selected = match row {
-            Some(row) => fc.selection == Some(row.uid),
+            Some(row) => fc.selected.contains(row.uid),
             None => edit.blank && fc.selection.is_none(),
         };
         if selected {

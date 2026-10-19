@@ -7,7 +7,9 @@
 use planrs_automation::Batch;
 use planrs_core::TaskUid;
 
+use crate::selection::SelectMode;
 use crate::state::{LanguagePref, ThemePref};
+use crate::structure::StructureOp;
 use crate::timescale::TimeScaleZoom;
 
 /// Intention de l'utilisateur, appliquée en fin d'image. Pas `Copy` :
@@ -70,6 +72,19 @@ pub enum Action {
     SaveAs,
     /// Réponse au bandeau « Enregistrer les modifications ? ».
     Confirm(ConfirmChoice),
+    /// Clic de sélection avec modificateur (Ctrl/Cmd : ajout ou retrait ;
+    /// Maj : plage), lot L14.
+    SelectWith {
+        /// Tâche cliquée.
+        uid: TaskUid,
+        /// Mode du clic.
+        mode: SelectMode,
+    },
+    /// Commande de structure sur la sélection (Inser, Suppr, indentation,
+    /// liens), lot L14.
+    Structure(StructureOp),
+    /// Réponse à la confirmation d'une suppression de récapitulative.
+    ConfirmDelete(bool),
 }
 
 /// Réponse au bandeau de confirmation d'un document modifié (fermer, ouvrir

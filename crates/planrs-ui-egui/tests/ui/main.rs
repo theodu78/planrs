@@ -3,7 +3,8 @@
 //! ouverture annulée, bandeau d'erreur, sélection et défilement synchronisé ;
 //! session d'édition, annuler/rétablir et raccourcis (`session.rs`) ;
 //! édition des cellules et ligne vide de fin (`edit.rs`) ;
-//! Nouveau, Enregistrer, document modifié (`files.rs`).
+//! Nouveau, Enregistrer, document modifié (`files.rs`) ; commandes de
+//! structure sur la sélection (`structure.rs`).
 //!
 //! Cible unique `ui` (un seul binaire lié à wgpu, ADR-0011, décision 12).
 //! Les libellés cherchés sont construits par `Texts` (jamais en dur : le
@@ -27,6 +28,7 @@ mod edit;
 mod files;
 mod session;
 mod snapshots;
+mod structure;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;

@@ -277,6 +277,17 @@ text_ids! {
     MenuEdit => "menu-edit",
     MenuUndo => "menu-undo",
     MenuRedo => "menu-redo",
+    // Structure (lot L14)
+    StructureInsert => "structure-insert",
+    StructureDelete => "structure-delete",
+    StructureIndent => "structure-indent",
+    StructureOutdent => "structure-outdent",
+    StructureLink => "structure-link",
+    StructureUnlink => "structure-unlink",
+    ConfirmDeleteTitle => "confirm-delete-title",
+    ConfirmDeleteText => "confirm-delete-text",
+    ConfirmDeleteYes => "confirm-delete-yes",
+    ConfirmDeleteNo => "confirm-delete-no",
     // Refus de commande (une clé par code d'erreur stable du moteur).
     CommandErrorTitle => "command-error-title",
     ErrorUnknown => "error-unknown",

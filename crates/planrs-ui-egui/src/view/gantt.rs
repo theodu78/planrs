@@ -428,9 +428,9 @@ fn background_shapes(
             }
         }
     }
-    if let (Some(rows), Some(selected)) = (fc.rows, fc.selection) {
+    if let Some(rows) = fc.rows.filter(|_| !fc.selected.is_empty()) {
         for i in range.clone() {
-            if rows.row(i).is_some_and(|r| r.uid == selected) {
+            if rows.row(i).is_some_and(|r| fc.selected.contains(r.uid)) {
                 let top = origin.y + index_to_f32(i) * row_h;
                 let rect = Rect::from_min_max(pos2(clip.left(), top), pos2(clip.right(), top + row_h));
                 if rect.is_finite() {
@@ -743,6 +743,7 @@ mod tests {
         let palette = Palette::LIGHT;
         let metrics = Metrics::default();
         let selection = rows.row(2).map(|r| r.uid);
+        let selected = crate::selection::Selection::single(selection);
         let ctx = egui::Context::default();
         for zoom in TimeScaleZoom::ALL {
             let state = UiState {
@@ -761,6 +762,7 @@ mod tests {
                     metrics: &metrics,
                     diagnostics: &crate::view::DiagnosticsView::default(),
                     selection,
+                    selected: &selected,
                     actions: &mut actions,
                     stats: &mut stats,
                 };

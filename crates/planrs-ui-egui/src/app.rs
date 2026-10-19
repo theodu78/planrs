@@ -40,7 +40,9 @@ use crate::io::{
     FileService, NoFileService, OpenEvent, SaveEvent, SaveRequest, SaveTarget, suggested_file_name,
 };
 use crate::rows::RowModel;
+use crate::selection::Selection;
 use crate::state::{StateLoadError, TABLE_WIDTH_MAX, TABLE_WIDTH_MIN, ThemePref, UiState};
+use crate::structure::PendingDelete;
 use crate::theme::Palette;
 use crate::timescale::{
     MAX_RANGE_DAYS, TimeAxis, TimeScaleZoom, ViewSpan, default_range, fit_zoom, zoom_anchor,
@@ -239,8 +241,14 @@ pub struct App {
     pub state: UiState,
     /// Document ouvert.
     pub document: Option<OpenDocument>,
-    /// Tâche sélectionnée (transitoire).
+    /// Tâche sélectionnée (transitoire) : la tâche active de
+    /// [`App::selected`].
     pub selection: Option<TaskUid>,
+    /// Tâches sélectionnées (lot L14), resynchronisées sur
+    /// [`App::selection`] quand elles divergent.
+    pub(crate) selected: Selection,
+    /// Suppression de récapitulative en attente de confirmation (lot L14).
+    pub(crate) pending_delete: Option<PendingDelete>,
     /// Relevé de la dernière image.
     pub last_frame: FrameStats,
     /// Environnement injecté.
@@ -301,6 +309,8 @@ impl App {
             state,
             document: None,
             selection: None,
+            selected: Selection::default(),
+            pending_delete: None,
             last_frame: FrameStats::default(),
             env,
             texts,
@@ -455,8 +465,25 @@ impl App {
         {
             self.selection = None;
         }
+        self.selected.retain(|uid| document.project().tasks.contains(uid));
+        self.sync_selection();
         self.clamp_gantt_scroll();
         self.notify_observer();
+    }
+
+    /// Tâches sélectionnées (lot L14).
+    #[must_use]
+    pub const fn selected(&self) -> &Selection {
+        &self.selected
+    }
+
+    /// Ramène [`App::selected`] à la seule [`App::selection`] si la tâche
+    /// active a changé par ailleurs (clic simple, tâche supprimée, nouveau
+    /// document).
+    pub(crate) fn sync_selection(&mut self) {
+        if self.selected.focus() != self.selection {
+            self.selected = Selection::single(self.selection);
+        }
     }
 
     /// Titre de la fenêtre : nom du document précédé de « * » s'il est
@@ -1046,6 +1073,15 @@ impl App {
             Action::Exec(batch) => drop(self.execute(&batch, EditOrigin::User)),
             Action::Undo => drop(self.undo()),
             Action::Redo => drop(self.redo()),
+            Action::SelectWith { uid, mode } => {
+                self.sync_selection();
+                if let Some(rows) = &self.rows {
+                    self.selected.click(uid, mode, rows);
+                    self.selection = self.selected.focus();
+                }
+            }
+            Action::Structure(op) => self.run_structure(op),
+            Action::ConfirmDelete(confirmed) => self.answer_delete(confirmed),
         }
     }
 
@@ -1094,6 +1130,8 @@ impl App {
         self.apply_language();
         let palette = Palette::for_theme(ctx.theme());
         let metrics = Metrics::default();
+        self.sync_selection();
+        self.drop_stale_delete();
         let mut actions = std::mem::take(&mut self.actions);
         // Raccourcis avant le dessin : la touche consommée n'atteint aucun
         // widget.
@@ -1118,6 +1156,7 @@ impl App {
                 metrics: &metrics,
                 diagnostics: &self.diagnostics,
                 selection: self.selection,
+                selected: &self.selected,
                 actions: &mut actions,
                 stats: &mut stats,
             };
@@ -1139,6 +1178,9 @@ impl App {
                     view::chrome::welcome(ui, &mut fc);
                 });
             }
+            if let Some(pending) = &self.pending_delete {
+                crate::structure::confirm_modal(&ctx, &self.texts, pending, fc.actions);
+            }
         }
         self.last_frame = stats;
         // Les actions sont appliquées après le dessin : une image de plus
@@ -1147,6 +1189,7 @@ impl App {
         for action in actions {
             self.apply(action, &ctx);
         }
+        self.sync_selection();
         // Ajustement du zoom après une ouverture, dès que la largeur du
         // Gantt est connue : là aussi, une image de plus au bon zoom.
         let fitted = self.fit_if_needed();

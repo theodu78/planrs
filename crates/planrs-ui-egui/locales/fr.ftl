@@ -217,6 +217,23 @@ menu-edit = Édition
 menu-undo = Annuler
 menu-redo = Rétablir
 
+## Structure (menu contextuel, confirmation de suppression)
+
+structure-insert = Insérer une tâche
+structure-delete = Supprimer la tâche
+structure-indent = Abaisser
+structure-outdent = Hausser
+structure-link = Lier les tâches
+structure-unlink = Supprimer les liaisons
+confirm-delete-title = Supprimer une tâche récapitulative
+confirm-delete-text =
+    { $count ->
+        [one] La tâche sera supprimée.
+       *[other] La récapitulative et ses sous-tâches seront supprimées ({ $count } tâches).
+    }
+confirm-delete-yes = Supprimer
+confirm-delete-no = Annuler
+
 ## Refus de commande (une clé par code d'erreur du moteur, `error-<code>`)
 
 command-error-title = Modification refusée

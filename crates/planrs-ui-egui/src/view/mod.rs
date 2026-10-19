@@ -13,6 +13,7 @@ use crate::app::OpenDocument;
 use crate::edit::TableEdit;
 use crate::i18n::Texts;
 use crate::rows::RowModel;
+use crate::selection::Selection;
 use crate::state::UiState;
 use crate::theme::Palette;
 
@@ -182,6 +183,8 @@ pub struct FrameCtx<'a> {
     pub diagnostics: &'a DiagnosticsView,
     /// Tâche sélectionnée.
     pub selection: Option<TaskUid>,
+    /// Tâches sélectionnées (lot L14) ; `selection` en est la tâche active.
+    pub selected: &'a Selection,
     /// File des actions de l'image.
     pub actions: &'a mut Vec<Action>,
     /// Relevé de l'image.

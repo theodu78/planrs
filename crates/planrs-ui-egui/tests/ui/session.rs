@@ -238,6 +238,10 @@ fn check_keymap_entry(i: usize) {
                 planrs_ui_egui::io::SaveTarget::Dialog { .. }
             ));
         }
+        // Structure (lot L14) : vérifiées par `structure.rs`.
+        Binding::Command(id) if crate::structure::COMMANDS.contains(&id) => {
+            crate::structure::check_keymap_entry(id);
+        }
         other => panic!("entrée {i} sans vérification : {other:?}"),
     }
 }
@@ -267,6 +271,12 @@ keymap_entry_tests! {
     ui_keymap_each_shortcut_dispatches_4 => 4,
     ui_keymap_each_shortcut_dispatches_5 => 5,
     ui_keymap_each_shortcut_dispatches_6 => 6,
+    ui_keymap_each_shortcut_dispatches_7 => 7,
+    ui_keymap_each_shortcut_dispatches_8 => 8,
+    ui_keymap_each_shortcut_dispatches_9 => 9,
+    ui_keymap_each_shortcut_dispatches_10 => 10,
+    ui_keymap_each_shortcut_dispatches_11 => 11,
+    ui_keymap_each_shortcut_dispatches_12 => 12,
 }
 
 /// Lot refusé : UID absent.

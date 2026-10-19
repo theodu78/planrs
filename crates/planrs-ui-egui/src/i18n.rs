@@ -259,6 +259,74 @@ text_ids! {
     FileFilterMspdi => "file-filter-mspdi",
     DialogOpenTitle => "dialog-open-title",
     StateLoadWarning => "state-load-warning",
+    // Menu Édition.
+    MenuEdit => "menu-edit",
+    MenuUndo => "menu-undo",
+    MenuRedo => "menu-redo",
+    // Refus de commande (une clé par code d'erreur stable du moteur).
+    CommandErrorTitle => "command-error-title",
+    ErrorUnknown => "error-unknown",
+    ErrorBatchDuplicateLabel => "error-batch-duplicate_label",
+    ErrorBatchUnknownLabel => "error-batch-unknown_label",
+    ErrorBatchUnsupportedVersion => "error-batch-unsupported_version",
+    ErrorBatchWouldCreateErrors => "error-batch-would_create_errors",
+    ErrorCalendarExceptionNotFound => "error-calendar-exception_not_found",
+    ErrorCalendarExceptionOverlap => "error-calendar-exception_overlap",
+    ErrorCalendarNotFound => "error-calendar-not_found",
+    ErrorCommandNotYetAvailable => "error-command-not_yet_available",
+    ErrorFileInvalid => "error-file-invalid",
+    ErrorFileOpenInApp => "error-file-open_in_app",
+    ErrorFileOutsideRoot => "error-file-outside_root",
+    ErrorFileRead => "error-file-read",
+    ErrorFileTooLarge => "error-file-too_large",
+    ErrorFileWrite => "error-file-write",
+    ErrorHistoryEmpty => "error-history-empty",
+    ErrorHistoryInconsistent => "error-history-inconsistent",
+    ErrorLimitExceeded => "error-limit-exceeded",
+    ErrorLinkDuplicate => "error-link-duplicate",
+    ErrorLinkNotFound => "error-link-not_found",
+    ErrorLinkSelf => "error-link-self",
+    ErrorLinkSummaryDescendant => "error-link-summary_descendant",
+    ErrorParamInvalid => "error-param-invalid",
+    ErrorParamMismatch => "error-param-mismatch",
+    ErrorSessionNone => "error-session-none",
+    ErrorSessionPoisoned => "error-session-poisoned",
+    ErrorTaskComputedField => "error-task-computed_field",
+    ErrorTaskHasChildren => "error-task-has_children",
+    ErrorTaskManualUnsupported => "error-task-manual_unsupported",
+    ErrorTaskMoveIntoSubtree => "error-task-move_into_subtree",
+    ErrorTaskNotFound => "error-task-not_found",
+    ErrorTaskOutlineRefused => "error-task-outline_refused",
+    ErrorTextBadDate => "error-text-bad_date",
+    ErrorTextBadLinkType => "error-text-bad_link_type",
+    ErrorTextBadNumber => "error-text-bad_number",
+    ErrorTextEmpty => "error-text-empty",
+    ErrorTextExternalPredecessor => "error-text-external_predecessor",
+    ErrorTextNegative => "error-text-negative",
+    ErrorTextOutOfRange => "error-text-out_of_range",
+    ErrorTextTooLong => "error-text-too_long",
+    ErrorTextUnknownUnit => "error-text-unknown_unit",
+}
+
+/// Clé fluent du refus de code `code` : `error-<code>`, points changés en
+/// tirets (`task.not_found` → `error-task-not_found`).
+#[must_use]
+pub fn error_key(code: &str) -> String {
+    format!("error-{}", code.replace('.', "-"))
+}
+
+/// Message traduit d'un refus de commande, par son code stable
+/// (`planrs_automation::error::codes`, `text.*`) ;
+/// [`TextId::ErrorUnknown`] pour un code sans clé (jamais attendu : un test
+/// vérifie que chaque code du moteur a la sienne).
+#[must_use]
+pub fn error_text_id(code: &str) -> TextId {
+    let key = error_key(code);
+    TextId::ALL
+        .iter()
+        .copied()
+        .find(|id| id.key() == key)
+        .unwrap_or(TextId::ErrorUnknown)
 }
 
 /// Noms longs des mois, janvier d'abord.

@@ -89,14 +89,14 @@ impl RowModel {
     /// inactive ; ligne vide : seul l'ID).
     #[must_use]
     pub fn build(doc: &OpenDocument, labels: &FormatLabels) -> Self {
-        let project = &doc.project;
+        let project = doc.project();
         let count = project.tasks.len();
         let mut rows = Vec::with_capacity(count);
         let mut texts = Vec::with_capacity(count.saturating_mul(Column::COUNT));
         let mut index = BTreeMap::new();
         for (position, task) in project.tasks.iter().enumerate() {
             let uid = task.uid();
-            let outcome = doc.schedule.tasks.get(&uid);
+            let outcome = doc.schedule().tasks.get(&uid);
             let row = make_row(project, task, position, outcome);
             push_texts(&mut texts, project, task, &row, outcome, labels);
             index.insert(uid, position);
@@ -344,18 +344,12 @@ mod tests {
 
     fn demo() -> OpenDocument {
         let loaded = crate::document::load(crate::DEMO_MSPDI, "2026-10-17T08:00".parse().unwrap()).unwrap();
-        OpenDocument {
-            project: loaded.project,
-            schedule: loaded.schedule,
-            import_diagnostics: loaded.import_diagnostics,
-            range: loaded.range,
-            origin: DocOrigin {
-                name: "demo".to_owned(),
-                path: None,
-                demo: true,
-            },
-            generation: 1,
-        }
+        let origin = DocOrigin {
+            name: "demo".to_owned(),
+            path: None,
+            demo: true,
+        };
+        OpenDocument::new(loaded, origin, 1)
     }
 
     /// Ligne d'ID `id` (indice `id − 1`).
@@ -411,15 +405,15 @@ mod tests {
         assert_eq!(last.kind, RowKind::Milestone);
         assert_eq!(
             last.bar,
-            Some((doc.schedule.project_finish, doc.schedule.project_finish))
+            Some((doc.schedule().project_finish, doc.schedule().project_finish))
         );
         // Barres issues du planning, ID = position + 1, index inverse cohérent.
-        for (i, task) in doc.project.tasks.iter().enumerate() {
+        for (i, task) in doc.project().tasks.iter().enumerate() {
             let row = model.row(i).unwrap();
             assert_eq!(row.uid, task.uid());
             assert_eq!(usize::try_from(row.id).unwrap(), i + 1);
             assert_eq!(model.index_of(task.uid()), Some(i));
-            let Some(planrs_core::TaskOutcome::Scheduled(s)) = doc.schedule.tasks.get(&task.uid()) else {
+            let Some(planrs_core::TaskOutcome::Scheduled(s)) = doc.schedule().tasks.get(&task.uid()) else {
                 panic!("tâche non planifiée : {}", task.name);
             };
             assert_eq!(row.bar, Some((s.start, s.finish)));
@@ -465,7 +459,7 @@ mod tests {
         let doc = demo();
         let model = RowModel::build(&doc, Texts::new(Language::Fr).format_labels());
         let links = model.links();
-        let total: usize = doc.project.tasks.iter().map(|t| t.predecessors.len()).sum();
+        let total: usize = doc.project().tasks.iter().map(|t| t.predecessors.len()).sum();
         assert_eq!(links.len(), total);
         assert_eq!(links.len(), 46);
         assert!(

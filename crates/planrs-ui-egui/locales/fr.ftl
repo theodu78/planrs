@@ -190,3 +190,54 @@ demo-file-name = Exemple : construction d'une maison
 file-filter-mspdi = Fichier MSPDI (XML)
 dialog-open-title = Ouvrir un fichier MSPDI
 state-load-warning = Préférences d'affichage ignorées : { $detail }
+
+## Menu Édition
+
+menu-edit = Édition
+menu-undo = Annuler
+menu-redo = Rétablir
+
+## Refus de commande (une clé par code d'erreur du moteur, `error-<code>`)
+
+command-error-title = Modification refusée
+error-unknown = Erreur : { $detail }
+error-batch-duplicate_label = Étiquette en double : { $detail }
+error-batch-unknown_label = Étiquette inconnue : { $detail }
+error-batch-unsupported_version = Version de format non prise en charge : { $detail }
+error-batch-would_create_errors = Modification qui créerait des erreurs : { $detail }
+error-calendar-exception_not_found = Exception de calendrier introuvable : { $detail }
+error-calendar-exception_overlap = Exceptions de calendrier qui se chevauchent : { $detail }
+error-calendar-not_found = Calendrier introuvable : { $detail }
+error-command-not_yet_available = Commande pas encore disponible : { $detail }
+error-file-invalid = Fichier illisible : { $detail }
+error-file-open_in_app = Fichier ouvert dans l'application : { $detail }
+error-file-outside_root = Chemin non autorisé : { $detail }
+error-file-read = Lecture impossible : { $detail }
+error-file-too_large = Fichier trop volumineux : { $detail }
+error-file-write = Écriture impossible : { $detail }
+error-history-empty = Rien à annuler ni à rétablir : { $detail }
+error-history-inconsistent = Historique incohérent : { $detail }
+error-limit-exceeded = Limite dépassée : { $detail }
+error-link-duplicate = Lien déjà présent : { $detail }
+error-link-not_found = Lien introuvable : { $detail }
+error-link-self = Lien d'une tâche vers elle-même : { $detail }
+error-link-summary_descendant = Lien entre une récapitulative et sa sous-tâche : { $detail }
+error-param-invalid = Valeur refusée : { $detail }
+error-param-mismatch = Valeurs contradictoires : { $detail }
+error-session-none = Aucun document : { $detail }
+error-session-poisoned = Session indisponible : { $detail }
+error-task-computed_field = Champ calculé : { $detail }
+error-task-has_children = Récapitulative avec sous-tâches : { $detail }
+error-task-manual_unsupported = Tâche planifiée manuellement : { $detail }
+error-task-move_into_subtree = Déplacement impossible : { $detail }
+error-task-not_found = Tâche introuvable : { $detail }
+error-task-outline_refused = Hiérarchie refusée : { $detail }
+error-text-bad_date = Date illisible : { $detail }
+error-text-bad_link_type = Type de lien inconnu : { $detail }
+error-text-bad_number = Nombre illisible : { $detail }
+error-text-empty = Saisie vide : { $detail }
+error-text-external_predecessor = Prédécesseur externe : { $detail }
+error-text-negative = Valeur négative : { $detail }
+error-text-out_of_range = Valeur hors limites : { $detail }
+error-text-too_long = Saisie trop longue : { $detail }
+error-text-unknown_unit = Unité inconnue : { $detail }

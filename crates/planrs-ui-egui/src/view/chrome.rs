@@ -246,7 +246,7 @@ pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
                 .rows
                 .map(crate::rows::RowModel::len)
                 .filter(|&len| len > 0)
-                .unwrap_or_else(|| doc.project.tasks.len());
+                .unwrap_or_else(|| doc.project().tasks.len());
             let count = i64::try_from(count).unwrap_or(i64::MAX);
             ui.label(texts.get_args(TextId::StatusTasks, &[("count", Arg::Count(count))]));
             ui.separator();
@@ -256,11 +256,11 @@ pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
                 &[
                     (
                         "start",
-                        Arg::Str(format_date(doc.schedule.project_start, labels).into()),
+                        Arg::Str(format_date(doc.schedule().project_start, labels).into()),
                     ),
                     (
                         "finish",
-                        Arg::Str(format_date(doc.schedule.project_finish, labels).into()),
+                        Arg::Str(format_date(doc.schedule().project_finish, labels).into()),
                     ),
                 ],
             ));
@@ -321,6 +321,20 @@ fn message_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
     let texts = fc.texts;
     let palette = fc.palette;
     let has_error = messages.iter().any(|message| message.severity == Severity::Error);
+    // Titre de chaque message (« Impossible d'ouvrir le fichier »,
+    // « Modification refusée »), une fois par suite de messages de même
+    // titre.
+    let titled: Vec<(Option<String>, &UserMessage)> = messages
+        .iter()
+        .scan(None, |previous: &mut Option<TextId>, message| {
+            let title = message
+                .title
+                .filter(|title| *previous != Some(*title))
+                .map(|title| texts.get(title));
+            *previous = message.title;
+            Some((title, message))
+        })
+        .collect();
     let (fill, accent) = banner_colors(has_error, palette, ui.visuals());
     let fg = palette.text_strong;
     let frame = egui::Frame::side_top_panel(ui.style()).fill(fill);
@@ -337,15 +351,10 @@ fn message_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
             ui.horizontal(|ui| {
                 ui.add_space(6.0);
                 ui.vertical(|ui| {
-                    if has_error {
-                        ui.label(
-                            egui::RichText::new(texts.get(TextId::OpenErrorTitle))
-                                .strong()
-                                .size(15.0)
-                                .color(fg),
-                        );
-                    }
-                    for message in messages {
+                    for (title, message) in titled {
+                        if let Some(title) = title {
+                            ui.label(egui::RichText::new(title).strong().size(15.0).color(fg));
+                        }
                         ui.label(egui::RichText::new(message.text.as_str()).color(fg));
                     }
                 });
@@ -373,6 +382,7 @@ mod tests {
     fn message(n: usize) -> UserMessage {
         UserMessage {
             severity: Severity::Warning,
+            title: None,
             text: n.to_string(),
         }
     }

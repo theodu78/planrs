@@ -1,22 +1,25 @@
-//! Octets MSPDI → document prêt à afficher (lecture + calcul), sans egui.
+//! Octets MSPDI → session d'édition prête à afficher (lecture + calcul),
+//! sans egui.
 //!
-//! Le planning est calculé une seule fois, à l'ouverture : les fondations sont
-//! en lecture seule. Toute date affichée vient de `planrs_core::schedule`
+//! Le document est une [`Session`] de `planrs_automation` (ADR-0012 D11) :
+//! toute édition passe par un lot de commandes du registre, recalculé par
+//! le moteur. Toute date affichée vient de `planrs_core::schedule`
 //! (règle 3).
 
-use planrs_core::{Moment, Project, Schedule};
-use planrs_mspdi::{ImportDiagnostic, MspdiError, ReadOptions};
+use planrs_automation::text::Language as TextLanguage;
+use planrs_automation::{DocOrigin as SessionOrigin, Session};
+use planrs_core::Moment;
+use planrs_mspdi::{ImportDiagnostic, MspdiError};
 
 use crate::timescale::{ViewSpan, default_range};
 
 /// Résultat de [`load`] : devient un `OpenDocument` quand l'application lui
-/// attribue une origine et une génération.
+/// attribue une origine et un numéro d'ouverture.
 #[derive(Clone, Debug)]
 pub struct LoadedDocument {
-    /// Modèle lu (entrées seules).
-    pub project: Project,
-    /// Planning calculé à l'ouverture.
-    pub schedule: Schedule,
+    /// Session d'édition : modèle lu, planning calculé à l'ouverture,
+    /// historique vide.
+    pub session: Session,
     /// Diagnostics d'import (ceux du calcul sont dans `schedule`).
     pub import_diagnostics: Vec<ImportDiagnostic>,
     /// Plage de jours affichée par l'échelle de temps.
@@ -37,23 +40,31 @@ pub enum OpenError {
     Mspdi(#[from] MspdiError),
 }
 
-/// Lit un document MSPDI et calcule son planning.
+/// Lit un document MSPDI et ouvre sa session (planning calculé).
 ///
 /// `now` est la date courante injectée (`ReadOptions::current_date`) : aucune
-/// horloge n'est lue ici.
+/// horloge n'est lue ici. L'origine de la session est posée par
+/// l'application à l'installation ; sa langue (français) ne sert pas à
+/// l'interface, qui passe toujours la sienne (messages d'erreur, lecture des
+/// saisies).
 ///
 /// # Errors
 ///
 /// [`OpenError::Mspdi`] si le lecteur MSPDI refuse le document ; tout le
 /// reste devient un diagnostic.
 pub fn load(bytes: &[u8], now: Moment) -> Result<LoadedDocument, OpenError> {
-    let document = planrs_mspdi::read(bytes, &ReadOptions::new(now))?;
-    let schedule = planrs_core::schedule(&document.project);
-    let range = default_range(&document.project, &schedule);
+    let origin = SessionOrigin {
+        name: String::new(),
+        path: None,
+    };
+    let (session, import_diagnostics) =
+        Session::open_bytes(bytes, origin, now, TextLanguage::Fr).map_err(|error| match error {
+            planrs_automation::OpenError::Mspdi(error) => OpenError::Mspdi(error),
+        })?;
+    let range = default_range(session.project(), session.schedule());
     Ok(LoadedDocument {
-        project: document.project,
-        schedule,
-        import_diagnostics: document.diagnostics,
+        session,
+        import_diagnostics,
         range: range.span,
         range_truncated: range.truncated,
     })
@@ -77,19 +88,18 @@ mod tests {
     #[test]
     fn document_load_demo() {
         let doc = load(crate::DEMO_MSPDI, now()).unwrap();
-        assert_eq!(doc.project.tasks.len(), 49);
+        let (project, schedule) = (doc.session.project(), doc.session.schedule());
+        assert_eq!(project.tasks.len(), 49);
         assert!(doc.import_diagnostics.is_empty(), "{:?}", doc.import_diagnostics);
-        assert!(
-            doc.schedule.diagnostics.is_empty(),
-            "{:?}",
-            doc.schedule.diagnostics
-        );
-        assert_eq!(doc.schedule.project_finish, "2027-05-17T17:00".parse().unwrap());
-        let links: usize = doc.project.tasks.iter().map(|t| t.predecessors.len()).sum();
+        assert!(schedule.diagnostics.is_empty(), "{:?}", schedule.diagnostics);
+        assert_eq!(schedule.project_finish, "2027-05-17T17:00".parse().unwrap());
+        let links: usize = project.tasks.iter().map(|t| t.predecessors.len()).sum();
         assert_eq!(links, 46);
-        assert!(doc.range.start <= doc.schedule.project_start.day());
-        assert!(doc.range.end > doc.schedule.project_finish.day());
+        assert!(doc.range.start <= schedule.project_start.day());
+        assert!(doc.range.end > schedule.project_finish.day());
         assert!(!doc.range_truncated);
+        assert!(!doc.session.is_dirty());
+        assert_eq!(doc.session.generation(), 0);
     }
 
     #[test]

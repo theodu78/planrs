@@ -17,7 +17,6 @@ use super::{FrameCtx, OVERSCAN, ViewTransient, gantt, table, timescale};
 use crate::action::Action;
 use crate::geom::{self, MainLayout};
 use crate::i18n::TextId;
-use crate::rows::RowModel;
 use crate::timescale::TimeAxis;
 
 /// Largeur minimale du curseur de la barre horizontale, en points.
@@ -119,7 +118,8 @@ fn paint_rows(
     axis: &TimeAxis,
 ) -> f32 {
     let row_h = fc.metrics.row_h;
-    let len = fc.rows.map_or(0, RowModel::len);
+    // Une ligne de plus que de tâches : la ligne vide de fin (création).
+    let len = fc.rows.map_or(0, |rows| rows.len().saturating_add(1));
     let content_h = geom::index_to_f32(len) * row_h;
     let content_h = if content_h.is_finite() {
         content_h.max(0.0)
@@ -148,6 +148,7 @@ fn paint_rows(
     body_ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
     let table_clip = layout.table_clip;
     let gantt_clip = layout.gantt_clip;
+    let edit = &mut view.edit;
     let out = area.show_viewport(&mut body_ui, |ui, viewport| {
         let origin = ui.max_rect().min;
         ui.set_min_size(vec2(ui.available_width().max(0.0), content_h));
@@ -159,7 +160,7 @@ fn paint_rows(
             ui.make_persistent_id("planrs-body-bg"),
             Sense::click_and_drag(),
         );
-        table::paint_body(ui, fc, origin, range.clone(), table_clip);
+        table::paint_body(ui, fc, edit, origin, range.clone(), table_clip);
         gantt::paint_body(ui, fc, axis, origin, range, gantt_clip);
 
         let mut dx = 0.0;

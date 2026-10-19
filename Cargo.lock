@@ -3375,6 +3375,7 @@ dependencies = [
  "planrs-core",
  "planrs-mspdi",
  "pollster 1.0.1",
+ "proptest",
  "rfd",
  "serde",
  "serde_json",

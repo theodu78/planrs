@@ -23,6 +23,7 @@ use planrs_mspdi::ImportDiagnostic;
 
 use crate::action::Action;
 use crate::document::{self, LoadedDocument, OpenError};
+use crate::edit::TableEdit;
 use crate::geom;
 use crate::i18n::{Arg, Language, TextId, Texts, error_text_id};
 use crate::io::{FileService, NoFileService, OpenEvent};
@@ -526,6 +527,7 @@ impl App {
             needs_fit,
             last_gantt_width: self.view.last_gantt_width,
             last_gantt_left: self.view.last_gantt_left,
+            edit: TableEdit::default(),
         }
     }
 

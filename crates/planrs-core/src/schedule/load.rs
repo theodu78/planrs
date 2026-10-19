@@ -174,9 +174,10 @@ pub(super) fn apply(
         scales.prepare(a.calendar);
     }
     effective_rates(project, &scales, out);
-    task_work(project, net, out);
+    let (own, by_resource) = model_work(project, net);
+    task_work(net, own, out);
     let mut diags = Vec::new();
-    out.resources = resource_loads(project, net, &scales, out, &mut diags);
+    out.resources = resource_loads(project, &by_resource, &scales, out, &mut diags);
     if !diags.is_empty() {
         out.diagnostics.extend(diags);
         out.diagnostics.sort();
@@ -189,16 +190,22 @@ pub(super) fn apply(
 /// temps ouvré du span sur l'échelle effective ; unités gardées si ce temps
 /// est nul. Les tâches manuelles l'ont déjà (R-183).
 fn effective_rates(project: &Project, scales: &Scales<'_>, out: &mut Schedule) {
+    let any_fixed_duration = project
+        .tasks
+        .iter()
+        .any(|t| t.task_type == TaskType::FixedDuration);
     for a in out.assignments.values_mut() {
         if !matches!(a.role, AssignmentRole::Work | AssignmentRole::Summary)
+            || (!any_fixed_duration && a.effective_units != Units::ZERO)
             || !work_resource(project, a.resource)
         {
             continue;
         }
-        let fixed_duration = project
-            .tasks
-            .get(a.task)
-            .is_some_and(|t| t.task_type == TaskType::FixedDuration);
+        let fixed_duration = any_fixed_duration
+            && project
+                .tasks
+                .get(a.task)
+                .is_some_and(|t| t.task_type == TaskType::FixedDuration);
         if !fixed_duration && a.effective_units != Units::ZERO {
             continue;
         }
@@ -212,26 +219,54 @@ fn effective_rates(project: &Project, scales: &Scales<'_>, out: &mut Schedule) {
     }
 }
 
-/// R-184 : travail des tâches. Feuille : Σ W de ses affectations de
-/// ressources de travail ; récapitulative : Σ de ses enfants + ses propres
-/// affectations de travail ; UID 0 : Σ des tâches de premier niveau. Lu
-/// sur les affectations du modèle des tâches actives (une tâche planifiée
-/// dégradée garde son travail).
-fn task_work(project: &Project, net: &Network<'_>, out: &mut Schedule) {
-    let n = net.tasks.len();
-    let mut total: Vec<i128> = vec![0; n];
-    for a in &project.assignments {
-        if !work_resource(project, a.resource) {
+/// Travail propre de chaque tâche active (par position : Σ W de ses
+/// affectations à des ressources de travail) et travail de chaque
+/// ressource (Σ W de ses affectations des tâches actives), lus sur les
+/// affectations du modèle : une tâche planifiée dégradée garde son travail.
+fn model_work(project: &Project, net: &Network<'_>) -> (Vec<i128>, BTreeMap<ResourceUid, i128>) {
+    let mut own: Vec<i128> = vec![0; net.tasks.len()];
+    let mut by_resource: BTreeMap<ResourceUid, i128> = BTreeMap::new();
+    // Jointure par UID de tâche (deux listes triées) plutôt qu'une recherche
+    // de position par affectation.
+    let mut positions: Vec<(crate::ids::TaskUid, usize)> =
+        net.tasks.iter().enumerate().map(|(p, i)| (i.uid, p)).collect();
+    positions.sort_unstable();
+    let mut items: Vec<(crate::ids::TaskUid, ResourceUid, i128)> = project
+        .assignments
+        .iter()
+        .filter_map(|a| Some((a.task, a.resource?, i128::from(a.work.minutes().get()))))
+        .collect();
+    items.sort_unstable_by_key(|e| e.0);
+    let mut pos = positions.into_iter().peekable();
+    let mut kinds: BTreeMap<ResourceUid, bool> = BTreeMap::new();
+    for (task, r, w) in items {
+        while pos.next_if(|e| e.0 < task).is_some() {}
+        let Some(&(uid, p)) = pos.peek() else { break };
+        if uid != task
+            || !net
+                .tasks
+                .get(p)
+                .is_some_and(|i| i.role != Role::Null && !i.inactive())
+        {
             continue;
         }
-        let Some(slot) = project.tasks.position(a.task).and_then(|p| total.get_mut(p)) else {
-            continue;
-        };
-        *slot = slot.saturating_add(i128::from(a.work.minutes().get()));
+        let slot = by_resource.entry(r).or_insert(0);
+        *slot = slot.saturating_add(w);
+        let is_work = *kinds.entry(r).or_insert_with(|| work_resource(project, Some(r)));
+        if is_work && let Some(t) = own.get_mut(p) {
+            *t = t.saturating_add(w);
+        }
     }
+    (own, by_resource)
+}
+
+/// R-184 : travail des tâches. Feuille : son travail propre ;
+/// récapitulative : Σ de ses enfants + ses propres affectations de travail ;
+/// UID 0 : Σ des tâches de premier niveau.
+fn task_work(net: &Network<'_>, mut total: Vec<i128>, out: &mut Schedule) {
     // Enfants après leur parent (ordre des ID) : remontée en sens inverse.
     let mut top: i128 = 0;
-    for p in (0..n).rev() {
+    for p in (0..net.tasks.len()).rev() {
         let Some(info) = net.tasks.get(p) else { continue };
         let own = total.get(p).copied().unwrap_or(0);
         match info.parent {
@@ -243,8 +278,24 @@ fn task_work(project: &Project, net: &Network<'_>, out: &mut Schedule) {
             None if info.role != Role::Null => top = top.saturating_add(own),
             None => {}
         }
-        if let Some(TaskOutcome::Scheduled(ts)) = out.tasks.get_mut(&info.uid) {
-            ts.work = clamp_work(own);
+    }
+    // Jointure par UID (les deux côtés triés) plutôt qu'une recherche par
+    // tâche.
+    let mut by_uid: Vec<(crate::ids::TaskUid, i128)> = net
+        .tasks
+        .iter()
+        .zip(total)
+        .filter(|(_, w)| *w != 0)
+        .map(|(i, w)| (i.uid, w))
+        .collect();
+    by_uid.sort_unstable_by_key(|e| e.0);
+    let mut it = by_uid.into_iter().peekable();
+    for (uid, outcome) in &mut out.tasks {
+        while it.next_if(|e| e.0 < *uid).is_some() {}
+        if let Some((_, w)) = it.next_if(|e| e.0 == *uid)
+            && let TaskOutcome::Scheduled(ts) = outcome
+        {
+            ts.work = clamp_work(w);
         }
     }
     if let Some(ps) = out.project_summary.as_mut() {
@@ -264,25 +315,11 @@ fn in_scope(r: &Resource) -> bool {
 /// seulement.
 fn resource_loads(
     project: &Project,
-    net: &Network<'_>,
+    work: &BTreeMap<ResourceUid, i128>,
     scales: &Scales<'_>,
     out: &Schedule,
     diags: &mut Vec<Diagnostic>,
 ) -> BTreeMap<ResourceUid, ResourceLoad> {
-    // Travail par ressource, sur le modèle (tâches actives).
-    let mut work: BTreeMap<ResourceUid, i128> = BTreeMap::new();
-    for a in &project.assignments {
-        let Some(r) = a.resource else { continue };
-        let active = project
-            .tasks
-            .position(a.task)
-            .and_then(|p| net.tasks.get(p))
-            .is_some_and(|i| i.role != Role::Null && !i.inactive());
-        if active {
-            let w = work.entry(r).or_insert(0);
-            *w = w.saturating_add(i128::from(a.work.minutes().get()));
-        }
-    }
     // Affectations placées par ressource, dans l'ordre des UID.
     let mut placed: BTreeMap<ResourceUid, Vec<Item>> = BTreeMap::new();
     let mut keys: BTreeMap<EffectiveCalendar, usize> = BTreeMap::new();
@@ -381,6 +418,10 @@ struct Acc {
     /// Premier intervalle surutilisé trouvé sans énumération (budget
     /// épuisé), pour le diagnostic.
     hint: Option<Overload>,
+    /// Tampon des plages énumérées (réutilisé).
+    ranges: Vec<(Moment, Moment)>,
+    /// Tampon des variations de charge (réutilisé).
+    deltas: Vec<(Moment, i128)>,
 }
 
 impl Acc {
@@ -463,14 +504,19 @@ fn elementary(
             return;
         };
         if sum > cap && acc.wants_intervals() {
-            let mut ranges = Vec::new();
-            if working_ranges(scale, (lo, hi), budget, &mut ranges) {
+            let mut ranges = std::mem::take(&mut acc.ranges);
+            ranges.clear();
+            let complete = working_ranges(scale, (lo, hi), budget, &mut ranges);
+            if complete {
                 if !ranges.is_empty() {
                     acc.peak = acc.peak.max(sum);
                 }
-                for (a, b) in ranges {
+                for &(a, b) in &ranges {
                     acc.push(a, b, sum);
                 }
+            }
+            acc.ranges = ranges;
+            if complete {
                 return;
             }
             acc.exhausted = true;
@@ -497,21 +543,30 @@ fn elementary(
     if !needed || acc.exhausted {
         return;
     }
-    let mut deltas: Vec<(Moment, i128)> = Vec::new();
+    let mut deltas = std::mem::take(&mut acc.deltas);
+    let mut ranges = std::mem::take(&mut acc.ranges);
+    deltas.clear();
+    let mut complete = true;
     for (&k, &(sum, _)) in active {
         let Some(scale) = scales.get(k).copied() else {
             continue;
         };
-        let mut ranges = Vec::new();
+        ranges.clear();
         if !working_ranges(scale, (lo, hi), budget, &mut ranges) {
-            acc.exhausted = true;
-            acc.truncated = true;
-            return;
+            complete = false;
+            break;
         }
-        for (a, b) in ranges {
+        for &(a, b) in &ranges {
             deltas.push((a, sum));
             deltas.push((b, sum.saturating_neg()));
         }
+    }
+    acc.ranges = ranges;
+    if !complete {
+        acc.exhausted = true;
+        acc.truncated = true;
+        acc.deltas = deltas;
+        return;
     }
     deltas.sort_unstable();
     let mut load: i128 = 0;
@@ -533,6 +588,7 @@ fn elementary(
             }
         }
     }
+    acc.deltas = deltas;
 }
 
 /// Plages ouvrées de `scale` dans `[lo, hi)`, dans l'ordre (temps écoulé :
@@ -558,37 +614,45 @@ pub(crate) fn working_ranges(
             return false;
         };
         *budget = left;
-        // Prochaine minute ouvrée : saute les jours chômés.
-        let Ok(first) = cal.next_working_moment(cursor) else {
+        let day = cursor.day();
+        let Ok(ranges) = cal.day_ranges(day) else { break };
+        let Ok(midnight) = Moment::at(day, TimeOfDay::MIDNIGHT) else {
             break;
         };
-        if first >= hi {
-            break;
-        }
-        let day = first.day();
-        let Ok(ranges) = cal.day_ranges(day) else { break };
+        let mut found = false;
         for range in ranges {
-            let (Ok(from), Ok(to)) = (Moment::at(day, range.from()), Moment::at(day, range.to())) else {
+            let at = |t: TimeOfDay| midnight.checked_add(Minutes::new(i64::from(t.minutes())));
+            let (Ok(from), Ok(to)) = (at(range.from()), at(range.to())) else {
                 continue;
             };
-            let (from, to) = (from.max(lo), to.min(hi));
-            if to <= first || from >= to {
+            let (from, to) = (from.max(cursor), to.min(hi));
+            if from >= to {
                 continue;
             }
             let Some(left) = budget.checked_sub(1) else {
                 return false;
             };
             *budget = left;
+            found = true;
             out.push((from, to));
         }
         let next = day
             .checked_add_days(1)
             .ok()
             .and_then(|d| Moment::at(d, TimeOfDay::MIDNIGHT).ok());
-        match next {
-            Some(n) if n > cursor => cursor = n,
-            _ => break,
+        let next = match next {
+            // Jour sans plage restante : saut à la prochaine minute ouvrée.
+            Some(n) if !found => match cal.next_working_moment(n) {
+                Ok(u) => u,
+                Err(_) => break,
+            },
+            Some(n) => n,
+            None => break,
+        };
+        if next <= cursor {
+            break;
         }
+        cursor = next;
     }
     true
 }

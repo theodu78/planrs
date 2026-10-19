@@ -65,6 +65,9 @@ jobs:
       - name: Interdits hors clippy (règle 10)
         run: cargo xtask panics
 
+      - name: Chaque règle R-xxx a ses tests (règle 4)
+        run: cargo xtask rules
+
       - name: planrs-core en WebAssembly
         run: cargo check -p planrs-core --target wasm32-unknown-unknown
 

@@ -10,12 +10,19 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use egui::text::{LayoutJob, TextFormat, TextWrapping};
-use egui::{Color32, FontId, Galley, Painter, Pos2, Rect, Sense, Stroke, pos2, vec2};
+use egui::text::{CCursor, CCursorRange, LayoutJob, TextFormat, TextWrapping};
+use egui::{
+    Color32, Event, FontId, Galley, Id, Key, Modifiers, Order, Painter, Pos2, Rect, Response, Sense, Stroke,
+    UiBuilder, pos2, vec2,
+};
+use planrs_core::TaskUid;
 
 use super::FrameCtx;
 use crate::action::Action;
 use crate::column::{CellAlign, Column};
+use crate::edit::{
+    EditState, TableEdit, commit_edit, editable, initial_text, neighbour_column, text_language,
+};
 use crate::geom::index_to_f32;
 use crate::i18n::{Arg, TextId};
 use crate::rows::{Row, RowKind, RowModel};
@@ -177,10 +184,20 @@ fn paint_cells(
 /// Fond alterné léger, ligne sélectionnée surlignée, texte en couleur
 /// normale (rouge seulement dans la colonne « Critique »), nom indenté par
 /// niveau, récapitulative en texte appuyé, ligne vide sans texte. Chaque
-/// ligne est une zone cliquable (`Action::Select`) qui porte le libellé
-/// d'accessibilité `row-label`. Écrit `FrameStats::table_rows` (et lui seul :
-/// le Gantt écrit `gantt_rows`).
-pub fn paint_body(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, origin: Pos2, range: Range<usize>, clip: Rect) {
+/// ligne est une zone cliquable (`Action::Select`, colonne courante posée
+/// dans `edit`) qui porte le libellé d'accessibilité `row-label`. La ligne
+/// d'indice `rows.len()` est la ligne vide de fin (création d'une tâche,
+/// libellé `blank-row-label`). Saisie des cellules : voir [`edit_cells`].
+/// Écrit `FrameStats::table_rows` (et lui seul : le Gantt écrit
+/// `gantt_rows`).
+pub fn paint_body(
+    ui: &mut egui::Ui,
+    fc: &mut FrameCtx<'_>,
+    edit: &mut TableEdit,
+    origin: Pos2,
+    range: Range<usize>,
+    clip: Rect,
+) {
     let clip = clip.intersect(ui.clip_rect());
     if !clip.is_finite() || !clip.is_positive() || !origin.x.is_finite() || !origin.y.is_finite() {
         return;
@@ -200,16 +217,27 @@ pub fn paint_body(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, origin: Pos2, range:
         fc.stats.shapes = fc.stats.shapes.saturating_add(shapes);
         return;
     };
+    if fc.selection.is_some() {
+        edit.blank = false;
+    }
+    open_from_keys(ui, fc, rows, edit);
     fc.stats.table_rows = range.clone();
     let left = clip.left();
-    for i in range {
-        let Some(row) = rows.row(i) else { continue };
+    let blank = rows.len();
+    for i in range.clone() {
         let top = origin.y + index_to_f32(i) * row_h;
         let row_rect = Rect::from_min_size(pos2(left, top), vec2(clip.width(), row_h));
         if !row_rect.is_finite() {
             continue;
         }
-        let selected = fc.selection == Some(row.uid);
+        let row = rows.row(i);
+        if row.is_none() && i != blank {
+            continue;
+        }
+        let selected = match row {
+            Some(row) => fc.selection == Some(row.uid),
+            None => edit.blank && fc.selection.is_none(),
+        };
         if selected {
             painter.rect_filled(row_rect, 0.0, palette.selection);
             shapes = shapes.saturating_add(1);
@@ -224,7 +252,9 @@ pub fn paint_body(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, origin: Pos2, range:
         );
         shapes = shapes.saturating_add(1);
 
-        if row.kind != RowKind::Null {
+        if let Some(row) = row
+            && row.kind != RowKind::Null
+        {
             shapes = shapes.saturating_add(paint_cells(&painter, fc, rows, i, row_rect, &font));
         }
 
@@ -236,22 +266,20 @@ pub fn paint_body(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, origin: Pos2, range:
                 Sense::click(),
             );
             let texts = fc.texts;
-            let id = row.id;
-            let name = rows.text(i, Column::Name);
             response.widget_info(|| {
-                egui::WidgetInfo::selected(
-                    egui::Role::Row,
-                    true,
-                    selected,
-                    texts.get_args(
+                let label = match row {
+                    Some(row) => texts.get_args(
                         TextId::RowLabel,
-                        &[("id", Arg::Count(i64::from(id))), ("name", Arg::Str(name.into()))],
+                        &[
+                            ("id", Arg::Count(i64::from(row.id))),
+                            ("name", Arg::Str(rows.text(i, Column::Name).into())),
+                        ],
                     ),
-                )
+                    None => texts.get(TextId::BlankRowLabel),
+                };
+                egui::WidgetInfo::selected(egui::Role::Row, true, selected, label)
             });
-            if response.clicked() {
-                fc.actions.push(Action::Select(Some(row.uid)));
-            }
+            row_clicked(fc, rows, edit, &response, i, left);
         }
     }
 
@@ -266,6 +294,339 @@ pub fn paint_body(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, origin: Pos2, range:
         shapes = shapes.saturating_add(1);
     }
     fc.stats.shapes = fc.stats.shapes.saturating_add(shapes);
+    edit_cells(ui, fc, rows, edit, origin, &range, clip);
+}
+
+/// Colonne visible sous l'abscisse écran `x`, la table commençant à `left`.
+fn column_at(fc: &FrameCtx<'_>, left: f32, x: f32) -> Option<Column> {
+    let mut l = left;
+    for state in fc.state.visible_columns() {
+        let w = f32::from(state.width);
+        if x >= l && x < l + w {
+            return Some(state.column);
+        }
+        l += w;
+    }
+    None
+}
+
+/// Bord gauche et largeur de la colonne visible `column`.
+fn column_span(fc: &FrameCtx<'_>, left: f32, column: Column) -> Option<(f32, f32)> {
+    let mut l = left;
+    for state in fc.state.visible_columns() {
+        let w = f32::from(state.width);
+        if state.column == column {
+            return Some((l, w));
+        }
+        l += w;
+    }
+    None
+}
+
+/// Clic sur la ligne `i` (ou sur la ligne vide) : sélection, colonne
+/// courante sous le pointeur ; double-clic : ouverture de la saisie.
+fn row_clicked(
+    fc: &mut FrameCtx<'_>,
+    rows: &RowModel,
+    edit: &mut TableEdit,
+    response: &Response,
+    i: usize,
+    left: f32,
+) {
+    if !response.clicked() {
+        return;
+    }
+    let uid = rows.row(i).map(|row| row.uid);
+    fc.actions.push(Action::Select(uid));
+    edit.blank = uid.is_none();
+    if let Some(column) = response
+        .interact_pointer_pos()
+        .and_then(|p| column_at(fc, left, p.x))
+    {
+        edit.column = column;
+    }
+    // Double-clic (ou triple : deux clics suivant de près un premier).
+    if (response.double_clicked() || response.triple_clicked()) && edit.editing.is_none() {
+        open_editor(fc, rows, edit, uid, i);
+    }
+}
+
+/// Ouvre la saisie de la cellule (`uid`, colonne courante) avec son texte
+/// initial (F2, double-clic) ; rien sur une colonne calculée.
+fn open_editor(fc: &FrameCtx<'_>, rows: &RowModel, edit: &mut TableEdit, uid: Option<TaskUid>, i: usize) {
+    let column = edit.column;
+    let Some(doc) = fc.doc else { return };
+    if !editable(column) {
+        return;
+    }
+    let text = initial_text(doc, rows, i, column, fc.texts.language());
+    edit.start(EditState::open(uid, column, text));
+}
+
+/// Ligne courante pour la saisie : tâche sélectionnée, ou ligne vide.
+fn current_row(fc: &FrameCtx<'_>, rows: &RowModel, edit: &TableEdit) -> Option<(Option<TaskUid>, usize)> {
+    match fc.selection {
+        Some(uid) => rows.index_of(uid).map(|i| (Some(uid), i)),
+        None if edit.blank => Some((None, rows.len())),
+        None => None,
+    }
+}
+
+/// F2 ou frappe d'un caractère (hors champ de texte, menu ouvert ou
+/// modificateur Ctrl/Cmd) : ouvre la saisie de la cellule courante. Le
+/// caractère frappé remplace la valeur.
+fn open_from_keys(ui: &egui::Ui, fc: &FrameCtx<'_>, rows: &RowModel, edit: &mut TableEdit) {
+    let ctx = ui.ctx();
+    if edit.editing.is_some() || ctx.egui_wants_keyboard_input() || ctx.any_popup_open() {
+        return;
+    }
+    let Some((uid, i)) = current_row(fc, rows, edit) else {
+        return;
+    };
+    let column = edit.column;
+    if !editable(column) || !fc.state.visible_columns().any(|state| state.column == column) {
+        return;
+    }
+    if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::F2)) {
+        open_editor(fc, rows, edit, uid, i);
+        return;
+    }
+    let typed = ctx.input_mut(|input| {
+        let mut typed = String::new();
+        if input.modifiers.command || input.modifiers.ctrl || input.modifiers.mac_cmd {
+            return typed;
+        }
+        input.events.retain(|event| match event {
+            Event::Text(text) if !text.is_empty() && !text.chars().any(char::is_control) => {
+                typed.push_str(text);
+                false
+            }
+            _ => true,
+        });
+        typed
+    });
+    if !typed.is_empty() {
+        edit.start(EditState::typed(uid, column, &typed));
+    }
+}
+
+/// Identifiant de la zone de saisie (une seule saisie à la fois).
+fn editor_id() -> Id {
+    Id::unique("planrs-cell-editor")
+}
+
+/// Fin d'une saisie demandée par l'utilisateur.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Finish {
+    /// Échap : saisie abandonnée.
+    Cancel,
+    /// Validation, puis déplacement de la cellule courante.
+    Commit(Move),
+}
+
+/// Déplacement après validation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Move {
+    /// Entrée, flèche bas : ligne suivante.
+    Down,
+    /// Flèche haut : ligne précédente.
+    Up,
+    /// Tab : colonne éditable suivante.
+    Next,
+    /// Maj+Tab : colonne éditable précédente.
+    Previous,
+    /// Défilement, perte du focus : la cellule reste.
+    Stay,
+}
+
+/// Touches de fin de saisie, consommées avant la zone de saisie (qui ne
+/// les voit donc pas). Les plus précises d'abord (Maj+Tab avant Tab).
+fn finish_keys(ui: &egui::Ui) -> Option<Finish> {
+    ui.input_mut(|input| {
+        if input.consume_key(Modifiers::NONE, Key::Escape) {
+            Some(Finish::Cancel)
+        } else if input.consume_key(Modifiers::SHIFT, Key::Tab) {
+            Some(Finish::Commit(Move::Previous))
+        } else if input.consume_key(Modifiers::NONE, Key::Tab) {
+            Some(Finish::Commit(Move::Next))
+        } else if input.consume_key(Modifiers::NONE, Key::Enter)
+            || input.consume_key(Modifiers::NONE, Key::ArrowDown)
+        {
+            Some(Finish::Commit(Move::Down))
+        } else if input.consume_key(Modifiers::NONE, Key::ArrowUp) {
+            Some(Finish::Commit(Move::Up))
+        } else {
+            None
+        }
+    })
+}
+
+/// Saisie de la cellule ouverte : zone de saisie posée sur la cellule,
+/// message d'erreur dessous, fin de saisie. Entrée valide et descend, Tab
+/// valide et passe à la cellule suivante, Échap abandonne ; un défilement
+/// ou la perte du focus valident sur place. Une saisie refusée
+/// ([`commit_edit`]) reste ouverte avec son message ; acceptée, son lot est
+/// poussé dans `Action::Exec` (refus du registre : bandeau).
+fn edit_cells(
+    ui: &mut egui::Ui,
+    fc: &mut FrameCtx<'_>,
+    rows: &RowModel,
+    edit: &mut TableEdit,
+    origin: Pos2,
+    range: &Range<usize>,
+    clip: Rect,
+) {
+    let Some(state) = edit.editing.as_ref() else {
+        return;
+    };
+    let index = match state.uid {
+        Some(uid) => rows.index_of(uid),
+        None => Some(rows.len()),
+    };
+    let span = column_span(fc, clip.left(), state.column);
+    let (Some(index), Some((cell_left, cell_w))) = (index, span) else {
+        // Tâche disparue ou colonne masquée : saisie abandonnée.
+        close_editor(ui, edit);
+        return;
+    };
+    let mut finish = finish_keys(ui);
+    let scrolled = ui.input(|i| {
+        i.smooth_scroll_delta.y.abs() > 0.0
+            || i.events
+                .iter()
+                .any(|e| matches!(e, Event::MouseWheel { delta, .. } if delta.y.abs() > 0.0))
+    });
+    if finish.is_none() && scrolled {
+        finish = Some(Finish::Commit(Move::Stay));
+    }
+    if range.contains(&index) {
+        let top = origin.y + index_to_f32(index) * fc.metrics.row_h;
+        let rect = Rect::from_min_size(pos2(cell_left, top), vec2(cell_w, fc.metrics.row_h));
+        let lost = show_editor(ui, fc, edit, rect, clip);
+        if finish.is_none() && lost {
+            finish = Some(Finish::Commit(Move::Stay));
+        }
+    }
+    match finish {
+        None => {}
+        Some(Finish::Cancel) => close_editor(ui, edit),
+        Some(Finish::Commit(motion)) => commit(ui, fc, rows, edit, motion),
+    }
+}
+
+/// Dessine la zone de saisie dans `rect` (et l'erreur dessous) ; rend vrai
+/// si elle vient de perdre le focus.
+fn show_editor(ui: &mut egui::Ui, fc: &FrameCtx<'_>, edit: &mut TableEdit, rect: Rect, clip: Rect) -> bool {
+    let TableEdit {
+        editing,
+        focus_pending,
+        ..
+    } = edit;
+    let Some(state) = editing.as_mut() else {
+        return false;
+    };
+    if !rect.is_finite() || !rect.is_positive() {
+        return false;
+    }
+    let mut child = ui.new_child(UiBuilder::new().max_rect(rect));
+    child.set_clip_rect(clip.intersect(ui.clip_rect()));
+    let label = fc.texts.get_args(
+        TextId::CellEditLabel,
+        &[("column", Arg::Str(fc.texts.get(state.column.title()).into()))],
+    );
+    let response = child.add_sized(
+        rect.size(),
+        egui::TextEdit::singleline(&mut state.buffer)
+            .id(editor_id())
+            .lock_focus(true)
+            .font(egui::TextStyle::Body)
+            .margin(egui::Margin::symmetric(3, 2)),
+    );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, label.clone()));
+    if *focus_pending {
+        response.request_focus();
+        // Curseur en fin de texte (F2 comme la frappe d'un caractère).
+        if let Some(mut text_state) = egui::text_edit::TextEditState::load(ui.ctx(), editor_id()) {
+            let end = CCursor::new(state.buffer.chars().count());
+            text_state.cursor.set_char_range(Some(CCursorRange::one(end)));
+            text_state.store(ui.ctx(), editor_id());
+        }
+        *focus_pending = false;
+    }
+    if response.changed() {
+        state.error = None;
+    }
+    if let Some(error) = &state.error {
+        let message = error.message(fc.texts);
+        let color = fc.palette.critical;
+        egui::Area::new(Id::unique("planrs-cell-error"))
+            .order(Order::Foreground)
+            .fixed_pos(pos2(rect.left(), rect.bottom()))
+            .interactable(false)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.label(egui::RichText::new(message).color(color));
+                });
+            });
+    }
+    response.lost_focus()
+}
+
+/// Ferme la saisie et rend le focus (les raccourcis redeviennent actifs).
+fn close_editor(ui: &egui::Ui, edit: &mut TableEdit) {
+    edit.editing = None;
+    edit.focus_pending = false;
+    ui.memory_mut(|memory| memory.surrender_focus(editor_id()));
+}
+
+/// Valide la saisie : refus → message sous la cellule, saisie gardée ;
+/// accord → lot poussé (s'il n'est pas vide), saisie fermée, cellule
+/// courante déplacée.
+fn commit(ui: &egui::Ui, fc: &mut FrameCtx<'_>, rows: &RowModel, edit: &mut TableEdit, motion: Move) {
+    let Some(doc) = fc.doc else {
+        close_editor(ui, edit);
+        return;
+    };
+    let Some(state) = edit.editing.as_mut() else {
+        return;
+    };
+    let result = commit_edit(state, &doc.session, text_language(fc.texts.language()));
+    let batch = match result {
+        Ok(batch) => batch,
+        Err(error) => {
+            state.error = Some(error);
+            edit.focus_pending = true;
+            return;
+        }
+    };
+    let uid = state.uid;
+    close_editor(ui, edit);
+    if !batch.ops.is_empty() {
+        fc.actions.push(Action::Exec(batch));
+    }
+    match motion {
+        Move::Stay => {}
+        Move::Down | Move::Up => {
+            let index = uid.and_then(|uid| rows.index_of(uid));
+            let target = match (motion, index) {
+                // Ligne vide : la tâche créée la précède, la ligne vide reste
+                // la ligne courante (saisie de tâches à la suite).
+                (Move::Down, None) => None,
+                (Move::Down, Some(i)) => i.checked_add(1),
+                (_, None) => rows.len().checked_sub(1),
+                (_, Some(i)) => Some(i.saturating_sub(1)),
+            };
+            let next = target.and_then(|i| rows.row(i)).map(|row| row.uid);
+            edit.blank = next.is_none();
+            fc.actions.push(Action::Select(next));
+        }
+        Move::Next | Move::Previous => {
+            let visible: Vec<Column> = fc.state.visible_columns().map(|state| state.column).collect();
+            if let Some(column) = neighbour_column(&visible, edit.column, motion == Move::Next) {
+                edit.column = column;
+            }
+        }
+    }
 }
 
 #[cfg(test)]

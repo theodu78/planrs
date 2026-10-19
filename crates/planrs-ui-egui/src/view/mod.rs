@@ -10,6 +10,7 @@ use planrs_core::{Severity, TaskUid};
 
 use crate::action::Action;
 use crate::app::OpenDocument;
+use crate::edit::TableEdit;
 use crate::i18n::Texts;
 use crate::rows::RowModel;
 use crate::state::UiState;
@@ -84,6 +85,8 @@ pub struct ViewTransient {
     /// pour les tests ; le réducteur ne travaille qu'en abscisses relatives
     /// au Gantt).
     pub last_gantt_left: f32,
+    /// Cellule courante de la table et saisie en cours (lot L12).
+    pub edit: TableEdit,
 }
 
 /// Relevé d'une image (tests de synchronisation et de performance).

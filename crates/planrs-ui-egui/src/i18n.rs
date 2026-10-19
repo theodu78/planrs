@@ -306,6 +306,11 @@ text_ids! {
     ErrorTextOutOfRange => "error-text-out_of_range",
     ErrorTextTooLong => "error-text-too_long",
     ErrorTextUnknownUnit => "error-text-unknown_unit",
+    // Édition des cellules (lot L12).
+    BlankRowLabel => "blank-row-label",
+    CellEditLabel => "cell-edit-label",
+    EditErrorUnknownId => "edit-error-unknown-id",
+    EditErrorNotEditable => "edit-error-not-editable",
 }
 
 /// Clé fluent du refus de code `code` : `error-<code>`, points changés en
@@ -635,6 +640,7 @@ mod tests {
             ("detail", Arg::Str("détail".into())),
             ("id", Arg::Str("3".into())),
             ("name", Arg::Str("Plans".into())),
+            ("column", Arg::Str("Durée".into())),
         ]
     }
 

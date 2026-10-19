@@ -14,6 +14,7 @@ pub mod action;
 pub mod app;
 pub mod column;
 pub mod document;
+pub mod edit;
 pub mod format;
 pub mod geom;
 pub mod i18n;

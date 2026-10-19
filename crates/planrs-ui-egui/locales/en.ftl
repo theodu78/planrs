@@ -242,3 +242,10 @@ error-text-negative = Negative value: { $detail }
 error-text-out_of_range = Value out of range: { $detail }
 error-text-too_long = Entry too long: { $detail }
 error-text-unknown_unit = Unknown unit: { $detail }
+
+## Cell editing (lot L12)
+
+blank-row-label = Blank row (new task)
+cell-edit-label = Edit: { $column }
+edit-error-unknown-id = No task with ID { $id }
+edit-error-not-editable = Computed column, read-only

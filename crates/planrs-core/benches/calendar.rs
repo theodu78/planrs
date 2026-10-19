@@ -6,6 +6,10 @@
 //! générateur est déterministe (congruence linéaire à graine fixe) : aucune
 //! dépendance d'aléa.
 //!
+//! Second scénario (R-172) : `intersect_two_derived`, intersection de deux
+//! dérivés de ce Standard (un congé de deux semaines chacun et un jour
+//! propre), comme le calendrier effectif d'une affectation (R-171).
+//!
 //! Cibles informatives : compilation < 50 µs ; conversion < 300 ns en
 //! moyenne. Non bloquant et non exécuté en CI (seulement compilé par
 //! `cargo clippy --all-targets`) : `cargo bench -p planrs-core`.
@@ -21,9 +25,10 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use planrs_core::calendar::{
-    Calendar, CalendarException, CompiledCalendar, DaySetting, Recurrence, standard,
+    Calendar, CalendarException, CompiledCalendar, DayHours, DayRule, DaySetting, Recurrence, TimeRange,
+    standard,
 };
-use planrs_core::{Arena, CalendarUid, Day, DayRange, Minutes, Moment};
+use planrs_core::{Arena, CalendarUid, Day, DayRange, Minutes, Moment, TimeOfDay, Weekday};
 
 /// Nombre de conversions par itération.
 const CALLS: usize = 10_000;
@@ -86,6 +91,45 @@ fn inputs() -> Vec<(Moment, Minutes, Moment)> {
         .collect()
 }
 
+/// Les calendriers de [`calendars`] plus deux dérivés (UID 2 et 3) : congé
+/// de deux semaines chacun, vendredi chômé pour l'un, samedi ouvré pour
+/// l'autre (motif du lundi).
+fn two_derived() -> Arena<CalendarUid, Calendar> {
+    let base = calendars().get(CalendarUid::new(1)).unwrap().clone();
+    let derived = |uid: u32, from: &str, to: &str, wd: Weekday, rule: DayRule| {
+        let mut c = Calendar::new_derived(
+            CalendarUid::new(uid),
+            format!("Ressource {uid}"),
+            CalendarUid::new(1),
+        );
+        c.set_day(wd, rule).unwrap();
+        c.add_exception(CalendarException {
+            name: "Congé".to_owned(),
+            period: DayRange::new(from.parse().unwrap(), to.parse().unwrap()).unwrap(),
+            setting: DaySetting::NonWorking,
+            recurrence: Recurrence::Period,
+            occurrences: None,
+        })
+        .unwrap();
+        c
+    };
+    let range =
+        |a: u16, b: u16| TimeRange::new(TimeOfDay::hm(a, 0).unwrap(), TimeOfDay::hm(b, 0).unwrap()).unwrap();
+    let monday = DayRule::Working(DayHours::new(vec![range(8, 12), range(13, 17)]).unwrap());
+    Arena::try_from(vec![
+        base,
+        derived(
+            2,
+            "2026-08-03",
+            "2026-08-14",
+            Weekday::Friday,
+            DayRule::NonWorking,
+        ),
+        derived(3, "2027-07-19", "2027-07-30", Weekday::Saturday, monday),
+    ])
+    .unwrap()
+}
+
 fn bench(c: &mut Criterion) {
     let cals = calendars();
     let uid = CalendarUid::new(1);
@@ -107,6 +151,15 @@ fn bench(c: &mut Criterion) {
                 black_box(compiled.working_between(black_box(*a), black_box(*bb)).ok());
             }
         });
+    });
+    let derived = two_derived();
+    let a = CompiledCalendar::compile(&derived, CalendarUid::new(2)).unwrap();
+    let b = CompiledCalendar::compile(&derived, CalendarUid::new(3)).unwrap();
+    c.bench_function("intersect_two_derived", |bch| {
+        bch.iter(|| black_box(&a).intersect(black_box(&b)).unwrap());
+    });
+    c.bench_function("union_two_derived", |bch| {
+        bch.iter(|| black_box(&a).union(black_box(&b)).unwrap());
     });
 }
 

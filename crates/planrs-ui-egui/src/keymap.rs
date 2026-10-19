@@ -38,6 +38,10 @@ pub enum UiBinding {
     /// Enregistre sous un autre nom (`project.save` avec un chemin choisi
     /// dans la boîte de dialogue).
     SaveAs,
+    /// Quitte l'application (desktop), par le bandeau de confirmation si le
+    /// document est modifié. Sur macOS, Cmd+Q n'arrive ici que parce que
+    /// l'application retire le menu par défaut de winit (`apps/planrs`).
+    Quit,
 }
 
 /// Liaison d'un raccourci.
@@ -84,6 +88,11 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
         KeyContext::Global,
         Shortcut::new(Modifiers::COMMAND, Key::O),
         Binding::Ui(UiBinding::OpenFile),
+    ),
+    (
+        KeyContext::Global,
+        Shortcut::new(Modifiers::COMMAND, Key::Q),
+        Binding::Ui(UiBinding::Quit),
     ),
     (
         KeyContext::Global,
@@ -152,6 +161,7 @@ pub fn binding_action(binding: Binding) -> Option<Action> {
         Binding::Command(_) => None,
         Binding::Ui(UiBinding::OpenFile) => Some(Action::OpenDialog),
         Binding::Ui(UiBinding::SaveAs) => Some(Action::SaveAs),
+        Binding::Ui(UiBinding::Quit) => Some(Action::Quit),
     }
 }
 

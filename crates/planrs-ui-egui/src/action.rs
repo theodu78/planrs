@@ -70,6 +70,9 @@ pub enum Action {
     Save,
     /// Enregistre sous un autre nom (boîte de dialogue ou téléchargement).
     SaveAs,
+    /// Quitte l'application (desktop : Ctrl/Cmd+Q, menu Fichier), après
+    /// confirmation si le document est modifié ; sans effet sur le web.
+    Quit,
     /// Réponse au bandeau « Enregistrer les modifications ? ».
     Confirm(ConfirmChoice),
     /// Clic de sélection avec modificateur (Ctrl/Cmd : ajout ou retrait ;

@@ -62,6 +62,11 @@ bytes = "1.12.1"
 getrandom = "0.3.4"
 egui = "0.37.0"
 eframe = "0.37.0"
+# macOS seulement (apps/planrs) : `EventLoopBuilderExtMacOS::with_default_menu`
+# retire le menu applicatif par défaut de winit, dont « Quitter » (Cmd+Q)
+# appelle `terminate:` sans `CloseRequested`. Même version que celle tirée
+# par eframe ; aucune crate nouvelle.
+winit = { version = "0.30.13", default-features = false }
 # Interface (planrs-ui-egui et applications seulement, ADR-0011). rfd sans
 # `gtk3` ni `wayland` : son portail XDG charge libdbus par dlopen (aucun paquet
 # système à la compilation) et attend ses futurs avec pollster (tiré par

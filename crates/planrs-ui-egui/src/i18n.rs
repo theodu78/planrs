@@ -252,6 +252,7 @@ text_ids! {
     MenuNew => "menu-new",
     MenuSave => "menu-save",
     MenuSaveAs => "menu-save-as",
+    MenuQuit => "menu-quit",
     NewProjectName => "new-project-name",
     DialogSaveTitle => "dialog-save-title",
     SaveInProgress => "save-in-progress",

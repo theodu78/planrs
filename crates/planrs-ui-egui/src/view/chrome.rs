@@ -71,8 +71,9 @@ pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
 }
 
 /// Menu Fichier : Nouveau, exemple, Ouvrir, Enregistrer, Enregistrer
-/// sous, Fermer ; raccourcis de [`crate::keymap::KEYMAP`] affichés.
-/// Enregistrer et Fermer demandent un document.
+/// sous, Fermer, Quitter (desktop) ; raccourcis de
+/// [`crate::keymap::KEYMAP`] affichés. Enregistrer et Fermer demandent un
+/// document.
 fn file_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let has_doc = fc.doc.is_some();
     let new = Binding::Command("project.new");
@@ -87,6 +88,12 @@ fn file_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     menu_item(ui, fc, TextId::MenuSaveAs, Some(save_as), has_doc, Action::SaveAs);
     ui.separator();
     menu_item(ui, fc, TextId::MenuClose, None, has_doc, Action::CloseDocument);
+    // Quitter : le navigateur ne laisse pas une page fermer son onglet.
+    if !cfg!(target_arch = "wasm32") {
+        ui.separator();
+        let quit = Binding::Ui(UiBinding::Quit);
+        menu_item(ui, fc, TextId::MenuQuit, Some(quit), true, Action::Quit);
+    }
 }
 
 /// Entrée de menu : libellé traduit, raccourci éventuel de la liaison,

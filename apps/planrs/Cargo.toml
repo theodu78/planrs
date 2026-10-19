@@ -26,5 +26,10 @@ eframe = { workspace = true, features = ["persistence"] }
 # `clock` : « maintenant » est lu ici seulement, puis injecté (Env::now).
 chrono = { workspace = true, features = ["clock"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Menu applicatif par défaut retiré (Cmd+Q passe par le garde de fermeture,
+# docs/features/ui.md § 1.14).
+winit.workspace = true
+
 [lints]
 workspace = true

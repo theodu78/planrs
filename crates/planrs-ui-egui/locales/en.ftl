@@ -181,6 +181,7 @@ open-error-mspdi = Unreadable MSPDI file: { $detail }
 
 menu-new = New
 menu-save = Save
+menu-quit = Quit
 menu-save-as = Save As…
 new-project-name = Project1
 dialog-save-title = Save the project (MSPDI)

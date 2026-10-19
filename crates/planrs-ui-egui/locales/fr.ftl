@@ -181,6 +181,7 @@ open-error-mspdi = Fichier MSPDI illisible : { $detail }
 menu-new = Nouveau
 menu-save = Enregistrer
 menu-save-as = Enregistrer sous…
+menu-quit = Quitter
 new-project-name = Projet1
 dialog-save-title = Enregistrer le projet (MSPDI)
 save-in-progress = Un enregistrement est déjà en cours.

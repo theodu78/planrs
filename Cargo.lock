@@ -3358,6 +3358,7 @@ dependencies = [
  "planrs-automation",
  "planrs-core",
  "planrs-ui-egui",
+ "winit",
 ]
 
 [[package]]

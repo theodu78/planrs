@@ -723,6 +723,24 @@ impl App {
         }
     }
 
+    /// Quitter demandé par l'application (Ctrl/Cmd+Q, menu Fichier), et non
+    /// par la fenêtre : même garde que [`App::guard_close`]. Pendant un
+    /// enregistrement, la fermeture suit son succès ; document modifié :
+    /// bandeau ; sinon la fenêtre se ferme. Sans effet sur le web (une page
+    /// ne ferme pas son onglet).
+    fn request_quit(&mut self, ctx: &egui::Context) {
+        if cfg!(target_arch = "wasm32") {
+            return;
+        }
+        if let Some(job) = &mut self.saving {
+            if job.then.is_none() {
+                job.then = Some(Pending::Quit);
+            }
+        } else {
+            self.request(Pending::Quit, ctx);
+        }
+    }
+
     /// Ouvre le projet d'exemple embarqué (synchrone).
     pub fn open_demo(&mut self) {
         let origin = DocOrigin {
@@ -1026,6 +1044,7 @@ impl App {
             Action::NewProject => self.request(Pending::NewProject, ctx),
             Action::Save => self.start_save(false, None, ctx),
             Action::SaveAs => self.start_save(true, None, ctx),
+            Action::Quit => self.request_quit(ctx),
             Action::Confirm(choice) => self.answer(choice, ctx),
             Action::Select(selection) => self.selection = selection,
             Action::SetLanguage(language) => {

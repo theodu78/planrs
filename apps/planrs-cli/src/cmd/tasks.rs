@@ -39,8 +39,9 @@ pub struct TasksArgs {
     /// Tâches qui commencent ce jour ou avant (`AAAA-MM-JJ`).
     #[arg(long, value_name = "AAAA-MM-JJ", value_parser = parse_day)]
     pub to: Option<Day>,
-    /// Une seule page de N tâches au plus (1 à 500).
-    #[arg(long, value_name = "N")]
+    /// Une seule page de N tâches au plus (1 à 500). Hors plage : erreur
+    /// d'usage (code 2), avant toute lecture du plan.
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..=500))]
     pub limit: Option<u32>,
     /// Sortie JSON (vue `ListView` du MCP).
     #[arg(long)]

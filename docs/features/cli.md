@@ -15,7 +15,7 @@
 | `planrs explain <plan> --task N` (cachée) | — | « disponible en J6 », code 2, fichier non lu |
 
 - Dates d'option : jours `AAAA-MM-JJ` (`--from`, `--to`) ; une valeur mal formée est une erreur d'usage (2).
-- `tasks` sans `--limit` lit toutes les pages (500 par page) et rend une seule `ListView` sans `next_cursor` ; avec `--limit N` (1 à 500), une seule page telle que le MCP la rend (`next_cursor` s'il en reste).
+- `tasks` sans `--limit` lit toutes les pages (500 par page) et rend une seule `ListView` sans `next_cursor` ; avec `--limit N` (1 à 500), une seule page telle que le MCP la rend (`next_cursor` s'il en reste) ; `N` hors plage est une erreur d'usage (code 2) contrôlée par clap avant la lecture du plan (test `cli_explain_hidden_exit_2`).
 - `apply` : le fichier de lot a le format versionné unique (`{"format_version":1,"lang":"fr","ops":[{"op":"task.add",…}]}`, ADR-0012 D6), lu au plus 64 Mio. `--dry-run` n'écrit rien, même avec `-o` (un `"dry_run": true` dans le fichier aussi). `-o` écrit le résultat ailleurs et laisse `<plan>` intact ; sans `-o`, `<plan>` est remplacé de façon atomique (`files::write_atomic` : temporaire du même dossier, `fsync`, renommage). Un lot refusé ne touche aucun fichier.
 - `render` : 200 lignes au plus (borne de `render.gantt`), thème clair, libellés dans la langue de la CLI ; une troncature (plage, taille) est signalée sur la sortie d'erreur.
 - `import-csv` : séparateur et langue des en-têtes détectés (R-144 à R-146), projet planifié depuis « maintenant » (hypothèse de `project.import_csv`).

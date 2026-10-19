@@ -13,6 +13,8 @@ name = "planrs"
 path = "src/main.rs"
 
 [dependencies]
+# `clock` : « maintenant » est lu ici seulement (`now.rs`), puis injecté.
+chrono = { workspace = true, features = ["clock"] }
 planrs-core.workspace = true
 planrs-automation.workspace = true
 planrs-mcp.workspace = true

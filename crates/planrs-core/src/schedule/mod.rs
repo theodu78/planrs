@@ -29,8 +29,10 @@
 mod backward;
 mod constraint;
 mod forward;
+mod load;
 mod network;
 mod order;
+mod placement;
 mod rollup;
 mod slack;
 mod transfer;
@@ -39,7 +41,10 @@ mod types;
 use std::collections::BTreeMap;
 
 pub use crate::diagnostic::Pass;
-pub use types::{Driver, Exclusion, LateDriver, Schedule, TaskOutcome, TaskRole, TaskSchedule};
+pub use types::{
+    AssignmentRole, AssignmentSchedule, Driver, EffectiveCalendar, Exclusion, LateDriver, MAX_OVERLOADS,
+    Overload, ResourceLoad, Schedule, TaskOutcome, TaskRole, TaskSchedule,
+};
 
 use crate::arena::Arena;
 use crate::calendar::{CalendarKind, CalendarSet, CompiledCalendar, Span, builtin};
@@ -605,6 +610,8 @@ fn internal_failure(project: &Project, start: Moment, mut diags: Diagnostics, de
         tasks,
         order: Vec::new(),
         diagnostics: diags.finish(),
+        assignments: BTreeMap::new(),
+        resources: BTreeMap::new(),
     }
 }
 

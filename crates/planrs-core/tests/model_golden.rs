@@ -91,3 +91,30 @@ fn golden_project_is_valid() {
     let p: Project = serde_json::from_str(GOLDEN).unwrap();
     assert_eq!(p.validate().finish(), []);
 }
+
+/// Contrat J5 (lot L0) : les champs nouveaux (`leveling_delay` des tâches et
+/// des affectations) sont absents du JSON quand ils sont vides ; la
+/// référence V1 se relit et se réécrit à l'identique, et un retard posé
+/// fait l'aller-retour.
+#[test]
+fn project_v1_golden_unchanged() {
+    assert!(!GOLDEN.contains("leveling_delay"));
+    let mut p: Project = serde_json::from_str(GOLDEN).unwrap();
+    assert!(p.tasks.iter().all(|t| t.leveling_delay.is_none()));
+    assert!(p.assignments.iter().all(|a| a.leveling_delay.is_none()));
+    assert_eq!(serde_json::to_string_pretty(&p).unwrap(), GOLDEN.trim_end());
+
+    let delay = planrs_core::LevelingDelay::new(Minutes::new(4_320), DurationUnit::Day, true).unwrap();
+    let task = p.tasks.iter().next().unwrap().uid();
+    p.tasks.get_mut(task).unwrap().leveling_delay = Some(delay);
+    let assignment = p.assignments.iter().next().unwrap().uid();
+    p.assignments.get_mut(assignment).unwrap().leveling_delay = Some(delay);
+    let json = serde_json::to_string(&p).unwrap();
+    assert_eq!(
+        json.matches(r#""leveling_delay":{"minutes":4320,"unit":"day","elapsed":true}"#)
+            .count(),
+        2
+    );
+    let back: Project = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, p);
+}

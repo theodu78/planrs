@@ -20,7 +20,8 @@ use serde::{Deserialize, Serialize};
 use crate::duration::Minutes;
 use crate::error::CalendarError;
 use crate::ids::{AssignmentUid, CalendarUid, ResourceUid, TaskUid};
-use crate::model::{ConstraintKind, LinkType};
+use crate::model::{ConstraintKind, LinkType, WorkContour};
+use crate::quantity::Units;
 use crate::time::Moment;
 
 /// Gravité d'un diagnostic.
@@ -478,6 +479,77 @@ pub enum Diagnostic {
         /// Fin planifiée.
         finish: Moment,
     },
+    /// Ressource surutilisée : un intervalle travaillé dépasse sa capacité
+    /// (avertissement, R-186) ; un diagnostic par ressource, sur son premier
+    /// intervalle.
+    #[serde(rename = "resource.overallocated")]
+    ResourceOverallocated {
+        /// Ressource.
+        resource: ResourceUid,
+        /// Début du premier intervalle de surutilisation.
+        from: Moment,
+        /// Fin de cet intervalle.
+        to: Moment,
+        /// Pic d'unités effectives sur l'intervalle (1/10 000).
+        peak: Units,
+    },
+    /// Disponibilités datées (`AvailabilityPeriods`) ignorées : capacité
+    /// constante `max_units` (info, R-187).
+    #[serde(rename = "resource.availability_ignored")]
+    ResourceAvailabilityIgnored {
+        /// Ressource.
+        resource: ResourceUid,
+    },
+    /// Profil de travail non uniforme, placé comme uniforme (info, R-180).
+    #[serde(rename = "assignment.contour_unsupported")]
+    AssignmentContourUnsupported {
+        /// Affectation.
+        assignment: AssignmentUid,
+        /// Profil enregistré.
+        contour: WorkContour,
+    },
+    /// Affectation à unités nulles : durée de la tâche gardée
+    /// (avertissement, R-181).
+    #[serde(rename = "assignment.zero_units")]
+    AssignmentZeroUnits {
+        /// Affectation.
+        assignment: AssignmentUid,
+    },
+    /// Durée d'affectation `d_a` hors du domaine (erreur, R-170, R-181).
+    #[serde(rename = "assignment.duration_out_of_domain")]
+    AssignmentDurationOutOfDomain {
+        /// Affectation.
+        assignment: AssignmentUid,
+    },
+    /// Calendrier effectif sans temps ouvré (intersection vide) : repli
+    /// sur le calendrier de la tâche (avertissement, R-171).
+    #[serde(rename = "assignment.calendar_empty")]
+    AssignmentCalendarEmpty {
+        /// Affectation.
+        assignment: AssignmentUid,
+        /// Calendrier de la tâche.
+        task_calendar: CalendarUid,
+        /// Calendrier de la ressource.
+        resource_calendar: CalendarUid,
+    },
+    /// Tâche à travail fixe non pilotée par l'effort, lue telle quelle
+    /// (avertissement à l'import, R-193).
+    #[serde(rename = "task.fixed_work_effort_driven")]
+    TaskFixedWorkEffortDriven {
+        /// Tâche.
+        task: TaskUid,
+    },
+    /// Intersection ou union de deux calendriers trop morcelée : plafond de
+    /// segments atteint (avertissement, R-172).
+    #[serde(rename = "calendar.too_many_segments")]
+    CalendarTooManySegments {
+        /// Premier calendrier.
+        calendar: CalendarUid,
+        /// Second calendrier.
+        other: CalendarUid,
+        /// Plafond de segments.
+        limit: u32,
+    },
     /// Invariant interne du calcul violé : jamais attendu, anomalie à
     /// signaler (erreur).
     #[serde(rename = "schedule.internal")]
@@ -515,6 +587,7 @@ impl Diagnostic {
             | CalendarError::OutOfDomain { .. }
             | CalendarError::ElapsedOutOfDomain { .. }
             | CalendarError::NegativeSpan
+            | CalendarError::TooManySegments { .. }
             | CalendarError::Model(_) => None,
         }
     }
@@ -544,6 +617,7 @@ impl Diagnostic {
             | Self::ProjectCalendarFallback { .. }
             | Self::TaskUnschedulable { .. }
             | Self::LinkUnschedulable { .. }
+            | Self::AssignmentDurationOutOfDomain { .. }
             | Self::ScheduleInternal { .. } => Severity::Error,
             Self::CalendarExceptionsOverlap { .. }
             | Self::CalendarWorkWeeksOverlap { .. }
@@ -559,11 +633,18 @@ impl Diagnostic {
             | Self::ConstraintOverride { .. }
             | Self::ConstraintNotHonored { .. }
             | Self::ConstraintSummaryIgnored { .. }
-            | Self::TaskDeadlineMissed { .. } => Severity::Warning,
+            | Self::TaskDeadlineMissed { .. }
+            | Self::ResourceOverallocated { .. }
+            | Self::AssignmentZeroUnits { .. }
+            | Self::AssignmentCalendarEmpty { .. }
+            | Self::TaskFixedWorkEffortDriven { .. }
+            | Self::CalendarTooManySegments { .. } => Severity::Warning,
             Self::LinkInactive { .. }
             | Self::LinkExcludedEndpoint { .. }
             | Self::TaskManualUndated { .. }
-            | Self::ConstraintManualIgnored { .. } => Severity::Info,
+            | Self::ConstraintManualIgnored { .. }
+            | Self::ResourceAvailabilityIgnored { .. }
+            | Self::AssignmentContourUnsupported { .. } => Severity::Info,
         }
     }
 
@@ -579,7 +660,8 @@ impl Diagnostic {
             | Self::CalendarExceptionsOverlap { calendar, .. }
             | Self::CalendarWorkWeeksOverlap { calendar, .. }
             | Self::CalendarRecurrenceUnsupported { calendar, .. }
-            | Self::ConversionOutOfDomain { calendar, .. } => Subject::Calendar(*calendar),
+            | Self::ConversionOutOfDomain { calendar, .. }
+            | Self::CalendarTooManySegments { calendar, .. } => Subject::Calendar(*calendar),
             Self::CalendarInheritanceCycle { chain } => {
                 chain.first().map_or(Subject::Project, |c| Subject::Calendar(*c))
             }
@@ -599,7 +681,8 @@ impl Diagnostic {
             | Self::ConstraintNotHonored { task, .. }
             | Self::ConstraintSummaryIgnored { task, .. }
             | Self::ConstraintManualIgnored { task, .. }
-            | Self::TaskDeadlineMissed { task, .. } => Subject::Task(*task),
+            | Self::TaskDeadlineMissed { task, .. }
+            | Self::TaskFixedWorkEffortDriven { task } => Subject::Task(*task),
             Self::LinkCycle { tasks } => tasks.iter().min().map_or(Subject::Project, |t| Subject::Task(*t)),
             Self::LinkSelf { task } => Subject::Link {
                 predecessor: *task,
@@ -650,7 +733,14 @@ impl Diagnostic {
                 successor: *successor,
             },
             Self::AssignmentUnknownTask { assignment, .. }
-            | Self::AssignmentUnknownResource { assignment, .. } => Subject::Assignment(*assignment),
+            | Self::AssignmentUnknownResource { assignment, .. }
+            | Self::AssignmentContourUnsupported { assignment, .. }
+            | Self::AssignmentZeroUnits { assignment }
+            | Self::AssignmentDurationOutOfDomain { assignment }
+            | Self::AssignmentCalendarEmpty { assignment, .. } => Subject::Assignment(*assignment),
+            Self::ResourceOverallocated { resource, .. } | Self::ResourceAvailabilityIgnored { resource } => {
+                Subject::Resource(*resource)
+            }
         }
     }
 
@@ -698,6 +788,14 @@ impl Diagnostic {
             Self::ConstraintSummaryIgnored { .. } => "constraint.summary_ignored",
             Self::ConstraintManualIgnored { .. } => "constraint.manual_ignored",
             Self::TaskDeadlineMissed { .. } => "task.deadline_missed",
+            Self::ResourceOverallocated { .. } => "resource.overallocated",
+            Self::ResourceAvailabilityIgnored { .. } => "resource.availability_ignored",
+            Self::AssignmentContourUnsupported { .. } => "assignment.contour_unsupported",
+            Self::AssignmentZeroUnits { .. } => "assignment.zero_units",
+            Self::AssignmentDurationOutOfDomain { .. } => "assignment.duration_out_of_domain",
+            Self::AssignmentCalendarEmpty { .. } => "assignment.calendar_empty",
+            Self::TaskFixedWorkEffortDriven { .. } => "task.fixed_work_effort_driven",
+            Self::CalendarTooManySegments { .. } => "calendar.too_many_segments",
             Self::ScheduleInternal { .. } => "schedule.internal",
         }
     }
@@ -929,6 +1027,51 @@ impl fmt::Display for Diagnostic {
                 f,
                 "la tâche {task} finit le {finish}, après son échéance du {deadline}"
             ),
+            Self::ResourceOverallocated {
+                resource,
+                from,
+                to,
+                peak,
+            } => write!(
+                f,
+                "la ressource {resource} est surutilisée du {from} au {to} (pic {} %)",
+                fixed_percent(*peak)
+            ),
+            Self::ResourceAvailabilityIgnored { resource } => write!(
+                f,
+                "les disponibilités datées de la ressource {resource} sont ignorées : capacité constante"
+            ),
+            Self::AssignmentContourUnsupported { assignment, contour } => write!(
+                f,
+                "le profil {contour:?} de l'affectation {assignment} est placé comme uniforme"
+            ),
+            Self::AssignmentZeroUnits { assignment } => write!(
+                f,
+                "l'affectation {assignment} a des unités nulles : la durée de la tâche est gardée"
+            ),
+            Self::AssignmentDurationOutOfDomain { assignment } => {
+                write!(f, "la durée de l'affectation {assignment} sort du domaine")
+            }
+            Self::AssignmentCalendarEmpty {
+                assignment,
+                task_calendar,
+                resource_calendar,
+            } => write!(
+                f,
+                "les calendriers {task_calendar} (tâche) et {resource_calendar} (ressource) de l'affectation {assignment} n'ont aucun temps ouvré commun"
+            ),
+            Self::TaskFixedWorkEffortDriven { task } => write!(
+                f,
+                "la tâche {task} est à travail fixe sans être pilotée par l'effort"
+            ),
+            Self::CalendarTooManySegments {
+                calendar,
+                other,
+                limit,
+            } => write!(
+                f,
+                "la combinaison des calendriers {calendar} et {other} dépasse {limit} segments"
+            ),
             Self::ScheduleInternal { detail } => {
                 write!(
                     f,
@@ -937,6 +1080,12 @@ impl fmt::Display for Diagnostic {
             }
         }
     }
+}
+
+/// Unités (1/10 000) en pourcentage entier arrondi vers zéro, pour les
+/// messages.
+const fn fixed_percent(u: Units) -> i64 {
+    u.get() / 100
 }
 
 /// Nom français d'un type de contrainte, pour les messages.
@@ -1412,6 +1561,104 @@ mod tests {
             }
             .to_string(),
             "calendrier 8 inconnu, référencé par la ressource 2"
+        );
+    }
+
+    #[test]
+    fn contract_j5_diagnostics() {
+        let c = CalendarUid::new(5);
+        let r = ResourceUid::new(4);
+        let a = AssignmentUid::new(9);
+        let t = TaskUid::new(3);
+        let at = |s: &str| s.parse::<Moment>().unwrap();
+        let cases = [
+            (
+                Diagnostic::ResourceOverallocated {
+                    resource: r,
+                    from: at("2026-10-23T18:00"),
+                    to: at("2026-10-23T20:00"),
+                    peak: crate::quantity::Units::new(20_000).unwrap(),
+                },
+                "resource.overallocated",
+                Severity::Warning,
+                Subject::Resource(r),
+            ),
+            (
+                Diagnostic::ResourceAvailabilityIgnored { resource: r },
+                "resource.availability_ignored",
+                Severity::Info,
+                Subject::Resource(r),
+            ),
+            (
+                Diagnostic::AssignmentContourUnsupported {
+                    assignment: a,
+                    contour: crate::model::WorkContour::Bell,
+                },
+                "assignment.contour_unsupported",
+                Severity::Info,
+                Subject::Assignment(a),
+            ),
+            (
+                Diagnostic::AssignmentZeroUnits { assignment: a },
+                "assignment.zero_units",
+                Severity::Warning,
+                Subject::Assignment(a),
+            ),
+            (
+                Diagnostic::AssignmentDurationOutOfDomain { assignment: a },
+                "assignment.duration_out_of_domain",
+                Severity::Error,
+                Subject::Assignment(a),
+            ),
+            (
+                Diagnostic::AssignmentCalendarEmpty {
+                    assignment: a,
+                    task_calendar: c,
+                    resource_calendar: CalendarUid::new(6),
+                },
+                "assignment.calendar_empty",
+                Severity::Warning,
+                Subject::Assignment(a),
+            ),
+            (
+                Diagnostic::TaskFixedWorkEffortDriven { task: t },
+                "task.fixed_work_effort_driven",
+                Severity::Warning,
+                Subject::Task(t),
+            ),
+            (
+                Diagnostic::CalendarTooManySegments {
+                    calendar: c,
+                    other: CalendarUid::new(6),
+                    limit: 100_000,
+                },
+                "calendar.too_many_segments",
+                Severity::Warning,
+                Subject::Calendar(c),
+            ),
+        ];
+        for (d, code, severity, subject) in cases {
+            assert_eq!(d.code(), code);
+            assert_tag(&d, code);
+            assert_eq!(d.severity(), severity, "{code}");
+            assert_eq!(d.subject(), subject, "{code}");
+            let json = serde_json::to_string(&d).unwrap();
+            assert_eq!(serde_json::from_str::<Diagnostic>(&json).unwrap(), d);
+            assert_ne!(d.to_string(), "");
+        }
+        assert_eq!(
+            Diagnostic::ResourceOverallocated {
+                resource: r,
+                from: at("2026-10-23T18:00"),
+                to: at("2026-10-23T20:00"),
+                peak: crate::quantity::Units::new(20_000).unwrap(),
+            }
+            .to_string(),
+            "la ressource 4 est surutilisée du 2026-10-23T18:00 au 2026-10-23T20:00 (pic 200 %)"
+        );
+        assert_eq!(
+            Diagnostic::from_calendar_error(&crate::error::CalendarError::TooManySegments { limit: 1 }),
+            None
         );
     }
 }

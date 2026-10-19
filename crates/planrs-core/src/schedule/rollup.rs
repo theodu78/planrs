@@ -15,7 +15,7 @@ use super::network::{NodeIx, NodeKind, PROJECT, Role, Status, TaskInfo, pos};
 use super::{Calc, Driver, Exclusion, LateDriver, Schedule, TaskOutcome, TaskRole, TaskSchedule};
 use crate::calendar::Span;
 use crate::diagnostic::Diagnostic;
-use crate::duration::Minutes;
+use crate::duration::{Minutes, Work};
 use crate::fixed::round_div;
 use crate::ids::TaskUid;
 use crate::model::Task;
@@ -61,6 +61,8 @@ impl Calc<'_, '_> {
             tasks,
             order: sorted,
             diagnostics: self.diags.finish(),
+            assignments: BTreeMap::new(),
+            resources: BTreeMap::new(),
         }
     }
 
@@ -134,6 +136,7 @@ impl Calc<'_, '_> {
             driver: Driver::Rollup,
             late_driver: LateDriver::Rollup,
             degraded,
+            work: Work::ZERO,
         })
     }
 
@@ -272,6 +275,7 @@ impl Calc<'_, '_> {
             driver: state.driver,
             late_driver,
             degraded,
+            work: Work::ZERO,
         })
     }
 

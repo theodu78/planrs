@@ -15,6 +15,7 @@
 mod assignment;
 mod baseline;
 mod extras;
+mod leveling;
 mod link;
 mod options;
 mod resource;
@@ -28,6 +29,7 @@ use serde::{Deserialize, Serialize};
 pub use assignment::{Assignment, WorkContour};
 pub use baseline::{AssignmentBaseline, ResourceBaseline, TaskBaseline};
 pub use extras::{ExtraEntry, Extras};
+pub use leveling::LevelingDelay;
 pub use link::{Link, LinkType};
 pub use options::ProjectOptions;
 pub use resource::{Resource, ResourceKind};

@@ -22,6 +22,8 @@
     clippy::panic,
     clippy::indexing_slicing,
     clippy::missing_panics_doc,
+    clippy::arithmetic_side_effects,
+    clippy::string_slice,
     reason = "harnais de test partagé : un échec doit s'arrêter net, chaque cible n'en utilise qu'une partie"
 )]
 
@@ -167,7 +169,12 @@ pub fn normalized(result: &Value, tmp: &Path) -> Value {
 
 /// Compare les résultats obtenus aux attendus, appel par appel.
 pub fn assert_results(scenario: &Scenario, got: &[Value]) {
-    assert_eq!(got.len(), scenario.calls.len(), "{} : nombre d'appels", scenario.name);
+    assert_eq!(
+        got.len(),
+        scenario.calls.len(),
+        "{} : nombre d'appels",
+        scenario.name
+    );
     for (i, (call, got)) in scenario.calls.iter().zip(got).enumerate() {
         let Some(expected) = &call.expected else {
             panic!(

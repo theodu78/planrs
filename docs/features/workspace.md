@@ -45,7 +45,7 @@ Routeur unique : un id du registre (`REGISTRY`), des paramètres JSON, une valeu
 ## 4. Fichiers (`files`, hors wasm)
 
 - `read_path(p, max)` : lecture arrêtée à `max + 1` octets (`file.too_large`), un dossier est refusé (`file.read`). Bornes : 256 Mio en MSPDI, 64 Mio en CSV.
-- `write_atomic(p, bytes)` : temporaire `.<nom>.planrs-tmp-<pid>-<n>` du même dossier (création exclusive), écriture, `fsync`, renommage, `fsync` du dossier au mieux ; droits d'un fichier existant repris ; le temporaire est retiré en cas d'échec.
+- `write_atomic(p, bytes)` : temporaire `.<nom>.planrs-tmp-<pid>-<n>` du même dossier (création exclusive), écriture, `fsync`, renommage, `fsync` du dossier au mieux ; droits d'un fichier existant repris ; le temporaire est retiré en cas d'échec. Si `p` est un lien symbolique (CLI, MCP stdio : sans `--root`, le chemin n'est pas canonicalisé), c'est sa cible qui est remplacée, temporaire dans le dossier de la cible, et le lien reste un lien ; un lien sans cible → `file.write` (test `files_write_atomic_follows_symlink`).
 - `confine(root, p)` : chemins canoniques (liens résolus) ; relatif lu depuis la racine ; fichier à créer accepté si son dossier existe dans la racine et que son nom est simple ; sinon `file.outside_root`.
 
 ## 5. Journal (`journal`)

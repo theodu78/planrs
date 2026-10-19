@@ -41,6 +41,49 @@ impl Drop for TempDir {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn files_write_atomic_follows_symlink() {
+    // plan.xml -> sync/plan.xml : la cible est remplacée, le lien reste un
+    // lien ; aucun temporaire laissé ; lien sans cible refusé.
+    let dir = TempDir::new("symlink");
+    let sync = dir.path().join("sync");
+    std::fs::create_dir_all(&sync).unwrap();
+    let target = sync.join("plan.xml");
+    std::fs::write(&target, b"ancien").unwrap();
+    let link = dir.path().join("plan.xml");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    write_atomic(&link, b"nouveau").unwrap();
+    assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read(&target).unwrap(), b"nouveau");
+    let names = |d: &std::path::Path| {
+        let mut v: Vec<_> = std::fs::read_dir(d)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(names(&sync), vec![std::ffi::OsString::from("plan.xml")]);
+    assert_eq!(
+        names(dir.path()),
+        vec![
+            std::ffi::OsString::from("plan.xml"),
+            std::ffi::OsString::from("sync")
+        ]
+    );
+    let dangling = dir.path().join("orphelin.xml");
+    std::os::unix::fs::symlink(sync.join("absent.xml"), &dangling).unwrap();
+    let err = write_atomic(&dangling, b"x").unwrap_err();
+    assert_eq!(err.code(), codes::FILE_WRITE);
+    assert!(
+        std::fs::symlink_metadata(&dangling)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
 #[test]
 fn files_write_atomic_replaces() {
     let dir = TempDir::new("atomic");

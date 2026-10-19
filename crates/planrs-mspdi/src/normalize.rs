@@ -85,6 +85,8 @@ pub fn normalize(project: &Project, options: &WriteOptions) -> Project {
             if a.delay.is_negative() {
                 a.delay = planrs_core::Minutes::ZERO;
             }
+            // R-199 : reste dérivé d'une affectation sans travail réel.
+            a.remaining_work = crate::write::assignment_remaining_work(a);
             leveling(&mut a.leveling_delay, &mut a.extras, ASSIGNMENT_DELAY_ELAPSED);
             let numbers: Vec<u8> = a.baselines.keys().map(|n| n.get()).collect();
             a.extras = extras_image(&a.extras, Parent::Assignment, &numbers, options.profile, &|_| {

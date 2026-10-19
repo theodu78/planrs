@@ -182,6 +182,37 @@ fn r199_zero_units_keeps_model_duration() {
 }
 
 #[test]
+fn r199_assignment_remaining_work_follows_work() {
+    // RemainingWork d'une affectation sans travail réel = Work (MS Project
+    // l'écrit toujours ; aucune commande ne tient le reste du modèle) :
+    // affectation créée (reste 0 dans le modèle) ⇒ PT8H ; reste relu de
+    // 64 h périmé après un rééquilibrage à 32 h ⇒ PT32H ; avec un travail
+    // réel saisi (8 h), le reste saisi (30 h) est gardé.
+    let mut p = new_project("2026-10-19T08:00");
+    for uid in 1..=3 {
+        let t = task(&p, uid, 480, 1, 0);
+        p.tasks.push(t).unwrap();
+    }
+    resource(&mut p, 1);
+    assign(&mut p, 1, 1, 1, 480);
+    let a2 = assign(&mut p, 2, 2, 1, 1_920);
+    p.assignments.get_mut(a2).unwrap().remaining_work = work(3_840);
+    let a3 = assign(&mut p, 3, 3, 1, 1_920);
+    let a = p.assignments.get_mut(a3).unwrap();
+    a.actual_work = work(480);
+    a.remaining_work = work(1_800);
+    let (xml, _) = written_by_engine(&p);
+    let remaining = |uid| {
+        let x = entity_xml(&xml, "Assignment", uid);
+        let start = x.find("<RemainingWork>").unwrap();
+        x.get(start..).unwrap().split('<').nth(1).unwrap().to_owned()
+    };
+    assert_eq!(remaining(1), "RemainingWork>PT8H0M0S");
+    assert_eq!(remaining(2), "RemainingWork>PT32H0M0S");
+    assert_eq!(remaining(3), "RemainingWork>PT30H0M0S");
+}
+
+#[test]
 fn r199_resource_overallocated_written() {
     // T1 et T2 en parallèle, 1 j chacune ; R1 à 100 % sur les deux
     // (surutilisée, 16 h), R2 sur T1 seulement (8 h). `PeakUnits` jamais
@@ -258,6 +289,8 @@ fn contoured() -> Project {
     let a = assign(&mut p, 1, 1, 1, 480);
     let a = p.assignments.get_mut(a).unwrap();
     a.contour = WorkContour::Contoured;
+    // Reste = travail, comme MS Project l'écrit sans avancement.
+    a.remaining_work = a.work;
     a.extras = Extras(vec![
         row(1, "2026-10-19T08:00:00", "2026-10-19T12:00:00", "PT4H0M0S"),
         row(1, "2026-10-19T13:00:00", "2026-10-19T17:00:00", "PT4H0M0S"),

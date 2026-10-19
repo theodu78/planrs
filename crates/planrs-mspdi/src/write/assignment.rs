@@ -1,6 +1,6 @@
 //! Affectations à l'écriture (R-125, R-199).
 
-use planrs_core::{Assignment, Subject};
+use planrs_core::{Assignment, Subject, Work};
 
 use super::computed::Values;
 use super::emit::Emitter;
@@ -12,6 +12,20 @@ use crate::schema::Parent;
 
 /// `ResourceUID` d'une affectation sans ressource (R-125, R-079).
 const NO_RESOURCE: &str = "-65535";
+
+/// Travail restant écrit d'une affectation (R-199, comme R-127 pour une
+/// tâche) : sans travail réel, celui que MS Project écrit toujours, reste =
+/// travail − réel = travail (le modèle n'est tenu à jour par aucune
+/// commande : 0 pour une affectation créée, périmé après un rééquilibrage) ;
+/// avec un travail réel saisi (avancement, J6), la valeur saisie telle
+/// quelle.
+pub(crate) fn remaining_work(a: &Assignment) -> Work {
+    if a.actual_work == Work::ZERO {
+        a.work
+    } else {
+        a.remaining_work
+    }
+}
 
 /// Écrit une affectation ; `values` : `Start`/`Finish` à écrire (R-198,
 /// R-199, R-122), absents sinon ; `TimephasedData` propres jetées si le
@@ -53,7 +67,7 @@ pub(crate) fn write(em: &mut Emitter, a: &Assignment, values: Option<&Values>, p
             "ActualWork" => em.leaf(name, &format_iso_duration(a.actual_work.minutes().get())),
             // R-125 : retard en dixièmes de minute (O20).
             "Delay" => em.leaf(name, &a.delay.get().saturating_mul(10).to_string()),
-            "RemainingWork" => em.leaf(name, &format_iso_duration(a.remaining_work.minutes().get())),
+            "RemainingWork" => em.leaf(name, &format_iso_duration(remaining_work(a).minutes().get())),
             "Units" => em.leaf(name, &units_text(a.units)),
             "Work" => em.leaf(name, &format_iso_duration(a.work.minutes().get())),
             "WorkContour" => em.leaf(name, &codes::work_contour_code(a.contour).to_string()),

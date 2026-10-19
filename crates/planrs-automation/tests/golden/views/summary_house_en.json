@@ -1,0 +1,20 @@
+{
+  "critical": 37,
+  "dirty": false,
+  "duration": {
+    "minutes": 65760,
+    "text": "137d",
+    "unit": "day"
+  },
+  "errors": 0,
+  "finish": "2027-05-17T17:00",
+  "history_len": 0,
+  "links": 46,
+  "milestones": 3,
+  "name": "Construction d'une maison",
+  "path": null,
+  "start": "2026-11-02T08:00",
+  "summaries": 10,
+  "tasks": 49,
+  "warnings": 0
+}

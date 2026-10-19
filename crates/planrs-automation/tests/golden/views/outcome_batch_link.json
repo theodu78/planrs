@@ -1,0 +1,88 @@
+{
+  "committed": true,
+  "created": [
+    {
+      "constraint": null,
+      "critical": true,
+      "deadline": null,
+      "diagnostics": [],
+      "duration": {
+        "elapsed": false,
+        "estimated": false,
+        "minutes": 4800,
+        "text": "10j",
+        "unit": "day"
+      },
+      "finish": "2026-11-20T17:00",
+      "free_slack": {
+        "minutes": 0,
+        "text": "0j",
+        "unit": "day"
+      },
+      "id": 2,
+      "level": 1,
+      "milestone": false,
+      "name": "Murs",
+      "predecessors": [
+        {
+          "kind": "fs",
+          "pred": 1
+        }
+      ],
+      "start": "2026-11-09T08:00",
+      "summary": false,
+      "total_slack": {
+        "minutes": 0,
+        "text": "0j",
+        "unit": "day"
+      },
+      "uid": 2
+    }
+  ],
+  "created_uids": [
+    2
+  ],
+  "diff": {
+    "changed": [
+      {
+        "critical_after": true,
+        "critical_before": false,
+        "finish_after": "2026-11-20T17:00",
+        "finish_before": null,
+        "finish_delta_min": 0,
+        "id_after": 2,
+        "id_before": null,
+        "start_after": "2026-11-09T08:00",
+        "start_before": null,
+        "total_slack_after": {
+          "minutes": 0,
+          "text": "0j",
+          "unit": "day"
+        },
+        "total_slack_before": null,
+        "uid": 2
+      }
+    ],
+    "changed_total": 1,
+    "critical_entered": [
+      2
+    ],
+    "critical_left": [],
+    "finish_after": "2026-11-20T17:00",
+    "finish_before": "2026-11-06T17:00",
+    "finish_delta": {
+      "minutes": 4800,
+      "text": "10j",
+      "unit": "day"
+    },
+    "start_after": "2026-11-02T08:00",
+    "start_before": "2026-11-02T08:00",
+    "truncated": false
+  },
+  "history_len": 2,
+  "labels": {
+    "$murs": 2
+  },
+  "side_effects": [],
+  "warnings": []
+}

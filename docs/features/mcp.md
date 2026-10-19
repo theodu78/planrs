@@ -57,6 +57,7 @@ Deux lignes `planrs_automation::journal::Entry` par appel, de même `seq` (1 au 
   6. `replay_build_30_http` (`crates/planrs-mcp/tests/replay_http.rs`, feature `http`) : même rejeu en HTTP sur `127.0.0.1:0`, `--root` = dossier du rejeu, mêmes résultats et même journal.
 - **Régénération** : `PLANRS_BLESS=1 cargo test -p planrs-mcp --test replay replay_build_30_memory` réécrit le scénario (requêtes gardées, résultats recalculés) et `tests/mcp/expected/build_30.xml` ; relire le diff avant de versionner (le rejeu fige le comportement du moteur, il ne le vérifie pas contre MS Project).
 - **CI** : job `mcp` (`.github/workflows/ci.yml`) ; les mêmes tests tournent aussi dans `checks`, macOS et Windows (`cargo test --workspace`).
+- **J5** : le scénario `resources_j5.jsonl` (ressources, affectations, types de tâche, surutilisation) suit le même harnais, en mémoire, en stdio et en HTTP (`replay_resources_j5_*`) ; contenu et vérifications dans [`resources.md`](resources.md) § 4.
 
 ## 6. Essai réel avec Claude (une fois, local, hors CI)
 

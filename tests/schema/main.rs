@@ -196,7 +196,9 @@ fn documents() -> Vec<Written> {
             name: format!("graine {seed}"),
             strict: text(write(&p, Computed::Schedule(&s), &strict).xml),
             observed: text(write(&p, Computed::Schedule(&s), &WriteOptions::default()).xml),
-            payloads: Vec::new(),
+            // Extras hérités verbatim (R-198 : `LevelingDelayFormat` hors
+            // pj15 d'un projet enregistré avant J5) : admis comme au corpus.
+            payloads: payloads(&p),
         });
     }
     let dir = planrs_tests::tests_path("corpus/files");

@@ -203,11 +203,11 @@ fn app_with(summaries: usize, leaves: usize, max_links: usize) -> App {
     let document = app.document.as_ref().unwrap_or_else(|| {
         panic!("réseau généré refusé : {:?}", app.messages());
     });
-    assert_eq!(document.project.tasks.len(), summaries * (leaves + 1));
+    assert_eq!(document.project().tasks.len(), summaries * (leaves + 1));
     assert!(
-        document.schedule.diagnostics.is_empty(),
+        document.schedule().diagnostics.is_empty(),
         "{:?}",
-        document.schedule.diagnostics.first()
+        document.schedule().diagnostics.first()
     );
     app
 }
@@ -299,7 +299,7 @@ fn frame_budget_5000_tasks() {
         .document
         .as_ref()
         .unwrap()
-        .project
+        .project()
         .tasks
         .iter()
         .map(|t| t.predecessors.len())

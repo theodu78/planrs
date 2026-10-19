@@ -11,6 +11,7 @@ use crate::action::Action;
 use crate::app::{MAX_MESSAGES, UserMessage};
 use crate::format::format_date;
 use crate::i18n::{Arg, Language, TextId};
+use crate::keymap::{Binding, shortcut_for, shortcut_text};
 use crate::state::{LanguagePref, ThemePref};
 use crate::theme::Palette;
 use crate::timescale::TimeScaleZoom;
@@ -31,7 +32,7 @@ const THEME_CHOICES: [(ThemePref, TextId); 3] = [
     (ThemePref::Dark, TextId::ThemeDark),
 ];
 
-/// Barre de menus (Fichier, Affichage).
+/// Barre de menus (Fichier, Édition, Affichage).
 pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let texts = fc.texts;
     let has_doc = fc.doc.is_some();
@@ -52,6 +53,7 @@ pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
                     fc.actions.push(Action::CloseDocument);
                 }
             });
+            ui.menu_button(texts.get(TextId::MenuEdit), |ui| edit_menu(ui, fc));
             ui.menu_button(texts.get(TextId::MenuView), |ui| {
                 ui.menu_button(texts.get(TextId::MenuZoom), |ui| {
                     ui.add_enabled_ui(has_doc, |ui| {
@@ -79,6 +81,28 @@ pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
             });
         });
     });
+}
+
+/// Menu Édition : Annuler, Rétablir, actifs seulement s'il y a un lot à
+/// annuler ou à rétablir ; raccourci de [`crate::keymap::KEYMAP`] affiché.
+fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    let texts = fc.texts;
+    let history = fc.doc.map(|doc| doc.session.history());
+    let can_undo = history.as_ref().is_some_and(|h| !h.entries.is_empty());
+    let can_redo = history.as_ref().is_some_and(|h| !h.redo.is_empty());
+    let items = [
+        (TextId::MenuUndo, "history.undo", can_undo, Action::Undo),
+        (TextId::MenuRedo, "history.redo", can_redo, Action::Redo),
+    ];
+    for (label, id, enabled, action) in items {
+        let mut button = egui::Button::new(texts.get(label));
+        if let Some(shortcut) = shortcut_for(Binding::Command(id)) {
+            button = button.shortcut_text(shortcut_text(ui.ctx(), shortcut));
+        }
+        if ui.add_enabled(enabled, button).clicked() {
+            fc.actions.push(action);
+        }
+    }
 }
 
 /// Barre d'outils : exemple, ouvrir, zoom, ajuster, thème, langue. Toujours
@@ -246,7 +270,7 @@ pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
                 .rows
                 .map(crate::rows::RowModel::len)
                 .filter(|&len| len > 0)
-                .unwrap_or_else(|| doc.project.tasks.len());
+                .unwrap_or_else(|| doc.project().tasks.len());
             let count = i64::try_from(count).unwrap_or(i64::MAX);
             ui.label(texts.get_args(TextId::StatusTasks, &[("count", Arg::Count(count))]));
             ui.separator();
@@ -256,11 +280,11 @@ pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
                 &[
                     (
                         "start",
-                        Arg::Str(format_date(doc.schedule.project_start, labels).into()),
+                        Arg::Str(format_date(doc.schedule().project_start, labels).into()),
                     ),
                     (
                         "finish",
-                        Arg::Str(format_date(doc.schedule.project_finish, labels).into()),
+                        Arg::Str(format_date(doc.schedule().project_finish, labels).into()),
                     ),
                 ],
             ));
@@ -321,6 +345,20 @@ fn message_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
     let texts = fc.texts;
     let palette = fc.palette;
     let has_error = messages.iter().any(|message| message.severity == Severity::Error);
+    // Titre de chaque message (« Impossible d'ouvrir le fichier »,
+    // « Modification refusée »), une fois par suite de messages de même
+    // titre.
+    let titled: Vec<(Option<String>, &UserMessage)> = messages
+        .iter()
+        .scan(None, |previous: &mut Option<TextId>, message| {
+            let title = message
+                .title
+                .filter(|title| *previous != Some(*title))
+                .map(|title| texts.get(title));
+            *previous = message.title;
+            Some((title, message))
+        })
+        .collect();
     let (fill, accent) = banner_colors(has_error, palette, ui.visuals());
     let fg = palette.text_strong;
     let frame = egui::Frame::side_top_panel(ui.style()).fill(fill);
@@ -337,15 +375,10 @@ fn message_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
             ui.horizontal(|ui| {
                 ui.add_space(6.0);
                 ui.vertical(|ui| {
-                    if has_error {
-                        ui.label(
-                            egui::RichText::new(texts.get(TextId::OpenErrorTitle))
-                                .strong()
-                                .size(15.0)
-                                .color(fg),
-                        );
-                    }
-                    for message in messages {
+                    for (title, message) in titled {
+                        if let Some(title) = title {
+                            ui.label(egui::RichText::new(title).strong().size(15.0).color(fg));
+                        }
                         ui.label(egui::RichText::new(message.text.as_str()).color(fg));
                     }
                 });
@@ -373,6 +406,7 @@ mod tests {
     fn message(n: usize) -> UserMessage {
         UserMessage {
             severity: Severity::Warning,
+            title: None,
             text: n.to_string(),
         }
     }

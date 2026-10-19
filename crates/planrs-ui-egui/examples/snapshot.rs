@@ -236,7 +236,7 @@ fn prepare(harness: &mut Harness<'static, App>, args: &Args) -> Result<(), Strin
             // pixels), deux jours de marge à gauche.
             let target = harness.state().document.as_ref().map(|doc| {
                 let axis = TimeAxis::new(doc.range, TimeScaleZoom::Day, 0.0);
-                axis.x(doc.project.effective_status_date()) - 2.0 * axis.px_per_day()
+                axis.x(doc.project().effective_status_date()) - 2.0 * axis.px_per_day()
             });
             if let Some(target) = target.filter(|t| t.is_finite()) {
                 let delta = target.max(0.0) - harness.state().view().gantt_scroll_x;
@@ -285,7 +285,7 @@ fn run(args: &Args) -> Result<(), String> {
         .save(&args.output)
         .map_err(|error| format!("{} : {error}", args.output.display()))?;
     let app = harness.state();
-    let tasks = app.document.as_ref().map_or(0, |doc| doc.project.tasks.len());
+    let tasks = app.document.as_ref().map_or(0, |doc| doc.project().tasks.len());
     println!(
         "{} : vue {}, {}×{} px, {tasks} tâches, zoom {:?}, lignes {:?}",
         args.output.display(),

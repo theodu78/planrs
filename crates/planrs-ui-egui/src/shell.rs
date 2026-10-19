@@ -40,6 +40,11 @@ impl PlanrsApp {
     pub const fn app(&self) -> &App {
         &self.app
     }
+
+    /// Application pure enveloppée, modifiable (observateur du document).
+    pub const fn app_mut(&mut self) -> &mut App {
+        &mut self.app
+    }
 }
 
 /// Retire des entrées brutes tout événement de pointeur, de molette, de zoom

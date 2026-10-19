@@ -144,7 +144,7 @@ impl DiagnosticsView {
             .iter()
             .map(|diagnostic| (diagnostic.severity, displayable(&diagnostic.to_string())))
             .chain(
-                doc.schedule
+                doc.schedule()
                     .diagnostics
                     .iter()
                     .map(|diagnostic| (diagnostic.severity(), displayable(&diagnostic.to_string()))),

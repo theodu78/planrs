@@ -1,8 +1,9 @@
 //! Import des ressources (R-088, R-124) : type, capacité, taux, coût par
-//! utilisation, calendrier, drapeaux, lignes de base ; le reste en `Extras`
-//! (R-087).
+//! utilisation, calendrier, drapeaux, lignes de base ; travail et
+//! surutilisation enregistrés dans `RecordedSchedule` (R-198) ; le reste en
+//! `Extras` (R-087).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use planrs_core::{
     Arena, CalendarUid, ConversionFactors, Decimal, Extras, Money, Rate, RateUnit, Resource, ResourceKind,
@@ -15,6 +16,7 @@ use crate::diag::{ImportCode, Sink};
 use crate::extras;
 use crate::fields::Fields;
 use crate::project::{code, guid};
+use crate::recorded::RecordedResource;
 use crate::scalar::parse_decimal;
 use crate::schema::Parent;
 use crate::xml::Element;
@@ -22,10 +24,12 @@ use crate::xml::Element;
 /// Chemin d'une ressource.
 const RESOURCE: &str = "Resources/Resource";
 
-/// Importe les ressources dans l'ordre du document.
+/// Importe les ressources dans l'ordre du document ; valeurs enregistrées
+/// dans `recorded` (R-198).
 pub(crate) fn import(
     elements: &[Element<'_>],
     factors: &ConversionFactors,
+    recorded: &mut BTreeMap<ResourceUid, RecordedResource>,
     sink: &mut Sink<'_>,
 ) -> Arena<ResourceUid, Resource> {
     let mut out = Arena::new();
@@ -47,6 +51,13 @@ pub(crate) fn import(
         }
         f.set_subject(Some(Subject::Resource(uid)));
         let mut r = resource(uid, &f, factors, sink);
+        recorded.insert(
+            uid,
+            RecordedResource {
+                work: baseline::work(&f, "Work", sink),
+                overallocated: f.bool("OverAllocated", sink),
+            },
+        );
         let baselines = baseline::resource(&element.children, f.subject(), sink);
         r.baselines = baselines.map;
         let mut kept = extras::collect(&element.children, Parent::Resource, None);

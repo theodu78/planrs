@@ -2,9 +2,10 @@
 
 use planrs_core::{Assignment, Subject};
 
+use super::computed::Values;
 use super::emit::Emitter;
 use super::resource::units_text;
-use super::{OrderProfile, baseline, entity, plan, unscoped};
+use super::{OrderProfile, baseline, entity, leveling, plan, unscoped};
 use crate::codes;
 use crate::scalar::format_iso_duration;
 use crate::schema::Parent;
@@ -12,12 +13,15 @@ use crate::schema::Parent;
 /// `ResourceUID` d'une affectation sans ressource (R-125, R-079).
 const NO_RESOURCE: &str = "-65535";
 
-/// Écrit une affectation. `Start`/`Finish` (calculés) ne sont pas écrits.
-pub(crate) fn write(em: &mut Emitter, a: &Assignment, profile: OrderProfile) {
+/// Écrit une affectation ; `values` : `Start`/`Finish` à écrire (R-198,
+/// R-122), absents sinon.
+pub(crate) fn write(em: &mut Emitter, a: &Assignment, values: Option<&Values>, profile: OrderProfile) {
+    let computed = values.and_then(|v| v.assignments.get(&a.uid()));
     em.subject = Some(Subject::Assignment(a.uid()));
     let numbers: Vec<u8> = a.baselines.keys().map(|n| n.get()).collect();
     let planned = plan(em, "Assignment", Parent::Assignment, &a.extras, &numbers, profile);
-    let top = unscoped(&planned);
+    let mut top = unscoped(&planned);
+    leveling::drop_legacy(&mut top, a.leveling_delay);
     entity(
         em,
         "Assignment",
@@ -41,6 +45,9 @@ pub(crate) fn write(em: &mut Emitter, a: &Assignment, profile: OrderProfile) {
             "Work" => em.leaf(name, &format_iso_duration(a.work.minutes().get())),
             "WorkContour" => em.leaf(name, &codes::work_contour_code(a.contour).to_string()),
             "Baseline" => baseline::assignment(em, &a.baselines, &planned, profile),
+            "Start" => em.opt_date(name, computed.and_then(|v| v.start)),
+            "Finish" => em.opt_date(name, computed.and_then(|v| v.finish)),
+            "LevelingDelay" | "LevelingDelayFormat" => leveling::write(em, name, a.leveling_delay),
             _ => {}
         },
     );

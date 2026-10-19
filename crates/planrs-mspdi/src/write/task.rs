@@ -9,7 +9,7 @@ use planrs_core::{
 use super::computed::{TaskValues, Values};
 use super::emit::Emitter;
 use super::{
-    NO_EXTRAS, OrderProfile, Planned, WriteCode, baseline, entity, max_len, percent, plan, unscoped,
+    NO_EXTRAS, OrderProfile, Planned, WriteCode, baseline, entity, leveling, max_len, percent, plan, unscoped,
 };
 use crate::codes;
 use crate::scalar::{format_bool, format_datetime, format_iso_duration};
@@ -173,7 +173,8 @@ fn write(em: &mut Emitter, row: &Row<'_>, profile: OrderProfile) {
     };
     let numbers: Vec<u8> = t.baselines.keys().map(|n| n.get()).collect();
     let planned = plan(em, "Task", Parent::Task, &t.extras, &numbers, profile);
-    let top = unscoped(&planned);
+    let mut top = unscoped(&planned);
+    leveling::drop_legacy(&mut top, t.leveling_delay);
     entity(em, "Task", Parent::Task, profile, &top, |em, name| {
         field(em, name, row, manual, &planned, profile);
     });
@@ -273,6 +274,7 @@ fn field(
         "ConstraintDate" => em.opt_date(name, constraint_date(t.constraint)),
         "Deadline" => em.opt_date(name, t.deadline),
         "IgnoreResourceCalendar" => em.leaf(name, format_bool(t.ignore_resource_calendar)),
+        "LevelingDelay" | "LevelingDelayFormat" => leveling::write(em, name, t.leveling_delay),
         "Notes" => em.text(name, &t.notes, max_len(Parent::Task, name)),
         "PredecessorLink" => {
             for link in &t.predecessors {

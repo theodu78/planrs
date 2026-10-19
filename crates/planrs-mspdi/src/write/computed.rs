@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use planrs_core::calendar::{CalendarSet, CompiledCalendar, TimeScale, standard};
 use planrs_core::schedule::measure_calendar_in;
 use planrs_core::{
-    Arena, Exclusion, Minutes, Moment, Project, ResourceKind, Schedule, SchedulingMode, Task, TaskOutcome,
-    TaskSchedule, TaskUid, TimeBasis,
+    Arena, AssignmentUid, Exclusion, Minutes, Moment, Project, ResourceKind, ResourceUid, Schedule,
+    SchedulingMode, Task, TaskOutcome, TaskSchedule, TaskUid, TimeBasis, Work,
 };
 
 use super::WriteDiagnostic;
@@ -37,7 +37,8 @@ pub enum ScheduleGap {
     /// Ressource de travail dotée d'un calendrier affectée à une feuille
     /// automatique active qui ne l'ignore pas : J5.
     ResourceCalendars,
-    /// Retard de nivellement non nul (`LevelingDelay` conservé) : J5.
+    /// Retard de nivellement non nul (modèle, R-198, ou `LevelingDelay`
+    /// conservé en `Extras` par une version antérieure) : J5.
     LevelingDelay,
 }
 
@@ -92,14 +93,20 @@ pub fn schedule_gaps(project: &Project) -> Vec<ScheduleGap> {
                 && leveling_delay(&e.payload).is_some_and(|v| v != 0)
         })
     };
-    if tasks().any(|t| delayed(&t.extras)) || project.assignments.iter().any(|a| delayed(&a.extras)) {
+    let modeled = |d: Option<planrs_core::LevelingDelay>| d.is_some_and(|d| d.minutes.get() != 0);
+    if tasks().any(|t| modeled(t.leveling_delay) || delayed(&t.extras))
+        || project
+            .assignments
+            .iter()
+            .any(|a| modeled(a.leveling_delay) || delayed(&a.extras))
+    {
         gaps.insert(ScheduleGap::LevelingDelay);
     }
     gaps.into_iter().collect()
 }
 
 /// Valeur entière d'une charge `<LevelingDelay>n</LevelingDelay>`.
-fn leveling_delay(payload: &str) -> Option<i64> {
+pub(crate) fn leveling_delay(payload: &str) -> Option<i64> {
     let start = payload.find('>')?.checked_add(1)?;
     let end = payload.rfind("</")?;
     parse_int(payload.get(start..end)?)
@@ -167,10 +174,28 @@ pub(crate) struct TaskValues {
     pub(crate) duration: Option<i64>,
 }
 
+/// Valeurs calculées d'une affectation, prêtes à écrire (R-198).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct AssignmentValues {
+    pub(crate) start: Option<Moment>,
+    pub(crate) finish: Option<Moment>,
+}
+
+/// Valeurs calculées d'une ressource, prêtes à écrire (R-198).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ResourceValues {
+    pub(crate) work: Option<Work>,
+    pub(crate) overallocated: Option<bool>,
+}
+
 /// Valeurs calculées de tout le projet.
 #[derive(Debug, Default)]
 pub(crate) struct Values {
     pub(crate) tasks: BTreeMap<TaskUid, TaskValues>,
+    /// Affectations : relues seulement (le moteur les donnera, R-199).
+    pub(crate) assignments: BTreeMap<AssignmentUid, AssignmentValues>,
+    /// Ressources : relues seulement (le moteur les donnera, R-199).
+    pub(crate) resources: BTreeMap<ResourceUid, ResourceValues>,
     pub(crate) project_start: Option<Moment>,
     pub(crate) project_finish: Option<Moment>,
 }
@@ -291,6 +316,7 @@ pub(crate) fn from_schedule(project: &Project, schedule: &Schedule) -> Values {
         tasks,
         project_start: Some(schedule.project_start),
         project_finish: Some(schedule.project_finish),
+        ..Values::default()
     }
 }
 
@@ -301,8 +327,36 @@ pub(crate) fn from_recorded(recorded: &RecordedSchedule) -> Values {
         .iter()
         .map(|(uid, r)| (*uid, recorded_values(r)))
         .collect();
+    let assignments = recorded
+        .assignments
+        .iter()
+        .map(|(uid, r)| {
+            (
+                *uid,
+                AssignmentValues {
+                    start: r.start,
+                    finish: r.finish,
+                },
+            )
+        })
+        .collect();
+    let resources = recorded
+        .resources
+        .iter()
+        .map(|(uid, r)| {
+            (
+                *uid,
+                ResourceValues {
+                    work: r.work,
+                    overallocated: r.overallocated,
+                },
+            )
+        })
+        .collect();
     Values {
         tasks,
+        assignments,
+        resources,
         project_start: recorded.project_start,
         project_finish: recorded.project_finish,
     }

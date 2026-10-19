@@ -35,9 +35,10 @@ fn r079_base_and_derived() {
 }
 
 #[test]
-fn r079_negative_base_derives_from_project_calendar() {
+fn r079_negative_base_fixture_inherits() {
     // Calendrier 5 : `IsBaseCalendar 0`, `BaseCalendarUID −65533` → dérivé
-    // du calendrier du projet (1, de base) ; il hérite de Noël.
+    // du calendrier de base d'UID minimal (1, ici aussi celui du projet) ;
+    // il hérite de Noël.
     let doc = fixture();
     assert!(matches!(kind(&doc, 5), CalendarKind::Derived { base, .. } if base == CalendarUid::new(1)));
     let cals = &doc.project.calendars;
@@ -50,6 +51,36 @@ fn r079_negative_base_derives_from_project_calendar() {
                 && d.element == "Calendars/Calendar/BaseCalendarUID"
                 && d.value.as_deref() == Some("-65533"))
     );
+}
+
+#[test]
+fn r079_negative_base_uses_min_uid_base() {
+    // Amendement J5 (O29, A6 calendrier 11 « IDEA ») : bases 1 (lun-ven) et
+    // 9 (lun-sam, calendrier du projet) ; le dérivé 11 à base −65533 hérite
+    // du calendrier de base d'UID minimal (1), pas de celui du projet. Une
+    // base absente garde le calendrier du projet.
+    let monday_to_saturday = (2..=7)
+        .map(|d| format!("<WeekDay><DayType>{d}</DayType><DayWorking>1</DayWorking></WeekDay>"))
+        .collect::<Vec<_>>()
+        .concat();
+    let monday_to_friday = (2..=6)
+        .map(|d| format!("<WeekDay><DayType>{d}</DayType><DayWorking>1</DayWorking></WeekDay>"))
+        .collect::<Vec<_>>()
+        .concat();
+    let xml = format!(
+        "<Project><StartDate>2026-10-19T08:00:00</StartDate><CalendarUID>9</CalendarUID><Calendars>\
+         <Calendar><UID>1</UID><IsBaseCalendar>1</IsBaseCalendar><BaseCalendarUID>-1</BaseCalendarUID><WeekDays>{monday_to_friday}</WeekDays></Calendar>\
+         <Calendar><UID>9</UID><IsBaseCalendar>1</IsBaseCalendar><BaseCalendarUID>-1</BaseCalendarUID><WeekDays>{monday_to_saturday}</WeekDays></Calendar>\
+         <Calendar><UID>11</UID><IsBaseCalendar>0</IsBaseCalendar><BaseCalendarUID>-65533</BaseCalendarUID></Calendar>\
+         <Calendar><UID>12</UID><IsBaseCalendar>0</IsBaseCalendar></Calendar>\
+         </Calendars></Project>"
+    );
+    let doc = read(xml.as_bytes(), &ReadOptions::new(moment("2026-01-01T00:00"))).unwrap();
+    assert!(matches!(kind(&doc, 11), CalendarKind::Derived { base, .. } if base == CalendarUid::new(1)));
+    // Samedi 24/10/2026 : chômé sur le dérivé (base 1), ouvré sur le 9.
+    assert_eq!(day_minutes(&doc.project.calendars, 11, "2026-10-24"), 0);
+    assert_eq!(day_minutes(&doc.project.calendars, 9, "2026-10-24"), 480);
+    assert!(matches!(kind(&doc, 12), CalendarKind::Derived { base, .. } if base == CalendarUid::new(9)));
 }
 
 #[test]

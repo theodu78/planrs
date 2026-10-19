@@ -4,10 +4,10 @@
 
 use std::collections::BTreeMap;
 
-use planrs_core::{Minutes, Moment, TaskUid};
+use planrs_core::{AssignmentUid, Minutes, Moment, ResourceUid, TaskUid, Work};
 
 /// Dixièmes de minute, tels que MSPDI les écrit (`TotalSlack`, `FreeSlack`,
-/// `LevelingDelay`). Exemple : 9 600 = 960 minutes.
+/// `StartSlack`, `FinishSlack`). Exemple : 9 600 = 960 minutes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Tenths(pub i64);
 
@@ -20,6 +20,10 @@ pub struct RecordedSchedule {
     pub project_finish: Option<Moment>,
     /// Une entrée par tâche lue, UID 0 compris.
     pub tasks: BTreeMap<TaskUid, RecordedTask>,
+    /// Une entrée par affectation lue (R-198).
+    pub assignments: BTreeMap<AssignmentUid, RecordedAssignment>,
+    /// Une entrée par ressource lue, UID 0 compris (R-198).
+    pub resources: BTreeMap<ResourceUid, RecordedResource>,
 }
 
 /// Valeurs enregistrées d'une tâche ; chaque champ est absent s'il manque
@@ -53,8 +57,28 @@ pub struct RecordedTask {
     pub summary: Option<bool>,
     /// `Duration` enregistrée (récapitulatives : valeur calculée).
     pub duration: Option<Minutes>,
-    /// `LevelingDelay`, en dixièmes (J5, cause de divergence).
-    pub leveling_delay: Option<Tenths>,
     /// Nombre d'affectations de la tâche (section `Assignments`, `TaskUID`).
     pub assignments: u32,
+}
+
+/// Valeurs enregistrées d'une affectation (R-198) ; chaque champ est absent
+/// s'il manque ou s'il est illisible (diagnostic).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RecordedAssignment {
+    /// `Start`.
+    pub start: Option<Moment>,
+    /// `Finish`.
+    pub finish: Option<Moment>,
+    /// `Work` (aussi lu dans le modèle, `Assignment::work`).
+    pub work: Option<Work>,
+}
+
+/// Valeurs enregistrées d'une ressource (R-198) ; chaque champ est absent
+/// s'il manque ou s'il est illisible (diagnostic).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RecordedResource {
+    /// `Work` : travail total de la ressource.
+    pub work: Option<Work>,
+    /// `OverAllocated` (O31 : drapeau de MS Project, pas un oracle du pic).
+    pub overallocated: Option<bool>,
 }

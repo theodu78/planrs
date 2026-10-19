@@ -17,16 +17,19 @@ use planrs_core::calendar::{
     Calendar, CalendarException, CalendarKind, DayHours, DayRule, Recurrence, TimeRange,
 };
 use planrs_core::{
-    Duration, ExtraEntry, Extras, LagValue, OutlineLevel, Percent, Project, Rate, Resource, SchedulingMode,
-    SignedPercent, Task, TimeOfDay, Weekday, round_div,
+    Duration, ExtraEntry, Extras, LagValue, LevelingDelay, OutlineLevel, Percent, Project, Rate, Resource,
+    SchedulingMode, SignedPercent, Task, TaskType, TimeOfDay, Weekday, round_div,
 };
 
+use crate::assignment::ASSIGNMENT_DELAY_ELAPSED;
 use crate::extras::{self, Anchor, ExtraKey, ORIGIN};
 use crate::resource::rate_amount;
 use crate::scalar::parse_decimal;
 use crate::schema::{Class, Parent, Profile, sequence};
-use crate::task::computed_zero;
-use crate::write::{OrderProfile, WriteOptions, escape_text, hourly_rate_text, remaining, sanitize_text};
+use crate::task::{TASK_DELAY_ELAPSED, computed_zero, delay_value};
+use crate::write::{
+    OrderProfile, WriteOptions, escape_text, hourly_rate_text, leveling_payload_int, remaining, sanitize_text,
+};
 
 /// R-133 : image de `project` par l'écriture (profil de `options`) suivie
 /// de la lecture.
@@ -82,6 +85,7 @@ pub fn normalize(project: &Project, options: &WriteOptions) -> Project {
             if a.delay.is_negative() {
                 a.delay = planrs_core::Minutes::ZERO;
             }
+            leveling(&mut a.leveling_delay, &mut a.extras, ASSIGNMENT_DELAY_ELAPSED);
             let numbers: Vec<u8> = a.baselines.keys().map(|n| n.get()).collect();
             a.extras = extras_image(&a.extras, Parent::Assignment, &numbers, options.profile, &|_| {
                 false
@@ -202,8 +206,51 @@ fn task(t: &mut Task, summary: bool, options: &WriteOptions) {
             link.lag.value = LagValue::Percent { percent: v };
         }
     }
+    // R-193 : une feuille à travail fixe est relue pilotée par l'effort.
+    if !summary && !t.is_null && t.task_type == TaskType::FixedWork {
+        t.effort_driven = true;
+    }
+    leveling(&mut t.leveling_delay, &mut t.extras, TASK_DELAY_ELAPSED);
     let numbers: Vec<u8> = t.baselines.keys().map(|n| n.get()).collect();
     t.extras = extras_image(&t.extras, Parent::Task, &numbers, options.profile, &|_| false);
+}
+
+/// R-198 : retard de nivellement relu. Celui du modèle est écrit seulement
+/// s'il est non nul après l'arrondi et dans le domaine des durées. Un
+/// `Extras` hérité (`LevelingDelay`, `LevelingDelayFormat`, enregistré
+/// avant J5) est jeté si le modèle a un retard, sinon réécrit puis relu
+/// dans le modèle : il quitte les `Extras` dans les deux cas.
+fn leveling(delay: &mut Option<LevelingDelay>, extras: &mut Extras, default_elapsed: bool) {
+    *delay = delay.and_then(|d| {
+        let tenths = d.minutes.get().checked_mul(10)?;
+        delay_value(
+            tenths,
+            Some(crate::codes::leveling_delay_format_code(d.unit, d.elapsed)),
+            default_elapsed,
+        )
+    });
+    let legacy = |e: &ExtraEntry, name: &str| {
+        e.origin == ORIGIN
+            && ExtraKey::parse(&e.key)
+                .is_some_and(|k| k.scope.is_none() && k.anchor == Anchor::None && k.name == name)
+            && extras::valid_payload(name, &e.payload)
+    };
+    let first = |name: &str| {
+        extras
+            .0
+            .iter()
+            .find(|e| legacy(e, name))
+            .map(|e| leveling_payload_int(&e.payload))
+    };
+    let (value, format) = (first("LevelingDelay"), first("LevelingDelayFormat"));
+    if delay.is_none() {
+        *delay = value
+            .flatten()
+            .and_then(|tenths| delay_value(tenths, format.flatten(), default_elapsed));
+    }
+    extras
+        .0
+        .retain(|e| !(legacy(e, "LevelingDelay") || legacy(e, "LevelingDelayFormat")));
 }
 
 /// Plages d'un jour ouvré sans `WorkingTimes` à la lecture (R-078).

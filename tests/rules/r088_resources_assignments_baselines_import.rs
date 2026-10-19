@@ -119,15 +119,21 @@ fn r088_task_work_and_baselines_are_read() {
 
 #[test]
 fn r088_computed_values_are_dropped_and_counted() {
-    // X : `PeakUnits`, `Work`, `Cost` de la ressource 1 ; `Cost`, `Start`
-    // de l'affectation 1 ; `BCWS` des lignes de base ; répartitions de type
-    // 1 de l'affectation 1 (profil uniforme).
+    // X : `PeakUnits`, `Cost` de la ressource 1 ; `Cost` de l'affectation
+    // 1 ; `BCWS` des lignes de base ; répartitions de type 1 de
+    // l'affectation 1 (profil uniforme). Amendement J5 (R-198) : `Work` de
+    // la ressource et `Start` de l'affectation sont relus (classe C), plus
+    // écartés.
     let doc = fixture();
     let d = |name: &str| doc.source.dropped_computed.get(name).copied();
     assert_eq!(d("PeakUnits"), Some(1));
-    assert_eq!(d("Work"), Some(1));
+    assert_eq!(d("Work"), None);
     assert_eq!(d("Cost"), Some(2));
-    assert_eq!(d("Start"), Some(1));
+    assert_eq!(d("Start"), None);
+    let r1 = doc.recorded.resources[&planrs_core::ResourceUid::new(1)];
+    assert_eq!(r1.work.unwrap().minutes(), Minutes::new(12_000));
+    let a1 = doc.recorded.assignments[&planrs_core::AssignmentUid::new(1)];
+    assert_eq!(a1.start, Some(moment("2026-10-19T15:00")));
     assert_eq!(d("BCWS"), Some(2));
     assert_eq!(d("TimephasedData"), Some(2));
 }

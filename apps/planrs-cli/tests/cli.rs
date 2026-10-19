@@ -470,3 +470,120 @@ fn cli_mcp_http_options_checked() {
     let missing = dir.join("absent");
     assert_eq!(code(&run(&["mcp", "--http", ":0", "--root", s(&missing)])), 3);
 }
+
+/// Plan à ressources (J5) enregistré dans `dir` : Maçon (ID 1) sur A et,
+/// à 150 %, sur B en parallèle (surutilisé la première semaine),
+/// Électricien (ID 2) sur C.
+fn resource_plan(dir: &TempDir) -> PathBuf {
+    let path = dir.join("chantier.xml");
+    let mut ws = Workspace::new(now(), Language::Fr);
+    ws.call(
+        "project.new",
+        json!({ "name": "Chantier", "start": "2026-10-19T08:00" }),
+    )
+    .unwrap();
+    ws.call(
+        "batch.apply",
+        json!({ "ops": [
+            { "op": "resource.add", "name": "Maçon", "as": "$m" },
+            { "op": "resource.add", "name": "Électricien", "as": "$e" },
+            { "op": "task.add", "name": "A", "as": "$a", "duration": { "text": "5j" } },
+            { "op": "task.add", "name": "B", "as": "$b", "duration": { "text": "5j" } },
+            { "op": "task.add", "name": "C", "as": "$c", "duration": { "text": "5j" } },
+            { "op": "assignment.add", "task": "$a", "resource": "$m" },
+            { "op": "assignment.add", "task": "$b", "resource": "$m", "units": { "text": "150%" } },
+            { "op": "assignment.add", "task": "$c", "resource": "$e" }
+        ] }),
+    )
+    .unwrap();
+    ws.call("project.save", json!({ "path": s(&path) })).unwrap();
+    path
+}
+
+#[test]
+fn cli_resources_json() {
+    let dir = TempDir::new("resources");
+    let plan = resource_plan(&dir);
+    let o = run(&["--now", NOW, "resources", s(&plan), "--json"]);
+    assert_eq!(code(&o), 0, "{}", String::from_utf8_lossy(&o.stderr));
+    let cli = stdout_json(&o);
+    let mut ws = workspace_with(&plan, Language::Fr);
+    let view = ws.call("resource.list", json!({ "limit": 500 })).unwrap();
+    assert_eq!(cli["resources"], view["resources"]);
+    assert_eq!(cli["total"], json!(2));
+    assert_eq!(cli["resources"][0]["name"], json!("Maçon"));
+    assert_eq!(cli["resources"][0]["overallocated"], json!(true));
+    // Filtre : la seule ressource surutilisée.
+    let o = run(&["--now", NOW, "resources", s(&plan), "--json", "--overallocated"]);
+    assert_eq!(code(&o), 0);
+    assert_eq!(stdout_json(&o)["total"], json!(1));
+    // Texte : en-tête, deux lignes, pied ; « ! » devant le Maçon.
+    let o = run(&["--now", NOW, "resources", s(&plan)]);
+    assert_eq!(code(&o), 0);
+    let text = String::from_utf8(o.stdout).unwrap();
+    assert_eq!(text.lines().count(), 4, "{text}");
+    assert!(text.lines().any(|l| l.starts_with("!1") && l.contains("Maçon")), "{text}");
+    // `tasks --resource ID` : tâches du Maçon (ID 1 → son UID).
+    let o = run(&["--now", NOW, "tasks", s(&plan), "--json", "--resource", "1"]);
+    assert_eq!(code(&o), 0, "{}", String::from_utf8_lossy(&o.stderr));
+    let uid = view["resources"][0]["uid"].clone();
+    let mcp = ws
+        .call("task.list", json!({ "resource": uid, "limit": 500 }))
+        .unwrap();
+    assert_eq!(stdout_json(&o)["tasks"], mcp["tasks"]);
+    assert_eq!(mcp["total"], json!(2));
+    // ID inconnu : refus (code 1), erreur structurée en `--json`.
+    let o = run(&["--now", NOW, "tasks", s(&plan), "--json", "--resource", "9"]);
+    assert_eq!(code(&o), 1);
+    assert_eq!(stdout_json(&o)["error"]["code"], json!("resource.not_found"));
+}
+
+#[test]
+fn cli_usage_by_week() {
+    let dir = TempDir::new("usage");
+    let plan = resource_plan(&dir);
+    let o = run(&[
+        "--now", NOW, "usage", s(&plan), "--json", "--by", "week", "--resource", "1",
+    ]);
+    assert_eq!(code(&o), 0, "{}", String::from_utf8_lossy(&o.stderr));
+    let cli = stdout_json(&o);
+    let mut ws = workspace_with(&plan, Language::Fr);
+    let uid = ws.call("resource.list", json!({})).unwrap()["resources"][0]["uid"].clone();
+    let view = ws
+        .call(
+            "analysis.resource_usage",
+            json!({ "by": "week", "resources": [uid] }),
+        )
+        .unwrap();
+    assert_eq!(cli, view);
+    assert_eq!(cli["by"], json!("week"));
+    // 40 h + 60 h la semaine du lundi 19/10, surutilisée.
+    assert_eq!(cli["rows"][0]["work"][0]["minutes"], json!(6_000));
+    assert_eq!(cli["rows"][0]["overallocated"][0], json!(true));
+    // Plage explicite, toutes les ressources, par jour.
+    let o = run(&[
+        "--now",
+        NOW,
+        "usage",
+        s(&plan),
+        "--json",
+        "--by",
+        "day",
+        "--from",
+        "2026-10-19",
+        "--to",
+        "2026-10-21",
+    ]);
+    assert_eq!(code(&o), 0, "{}", String::from_utf8_lossy(&o.stderr));
+    let days = stdout_json(&o);
+    assert_eq!(days["periods"], json!(["2026-10-19T00:00", "2026-10-20T00:00"]));
+    assert_eq!(days["rows"].as_array().unwrap().len(), 2);
+    // Texte : nom puis une ligne par période, « ! » surutilisée.
+    let o = run(&["--now", NOW, "usage", s(&plan), "--resource", "1"]);
+    assert_eq!(code(&o), 0);
+    let text = String::from_utf8(o.stdout).unwrap();
+    assert!(text.starts_with("Maçon\n! 2026-10-19T00:00"), "{text}");
+    // Granularité inconnue : erreur d'usage (code 2).
+    let o = run(&["--now", NOW, "usage", s(&plan), "--by", "year"]);
+    assert_eq!(code(&o), 2);
+}

@@ -124,10 +124,14 @@ fn registry_reserved_not_listed() {
         "analysis.resource_usage",
         "analysis.what_if",
         "assignment.add",
+        "assignment.remove",
         "assignment.update",
         "baseline.set",
         "progress.update",
         "resource.add",
+        "resource.delete",
+        "resource.list",
+        "resource.update",
     ]
     .into_iter()
     .collect();

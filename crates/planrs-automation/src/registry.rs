@@ -3,7 +3,9 @@
 //! l'interface.
 //!
 //! Entrées J4 (disponibles, listées) et entrées réservées aux jalons J5-J6
-//! (non listées, refusées `command.not_yet_available`). Le schéma de chaque
+//! (non listées, refusées `command.not_yet_available`). Les huit entrées
+//! J5 portent déjà le schéma de leur contrat (lot L0) ; le lot L8 les
+//! active. Le schéma de chaque
 //! entrée est celui de ses paramètres (JSON Schema 2020-12, sous-schémas en
 //! ligne, sans `$ref`) ; les surfaces y ajoutent `dry_run` ou `detail`.
 //! Schémas de référence : `tests/golden/schemas/<id>.json`.
@@ -13,10 +15,11 @@ use schemars::{JsonSchema, Schema, json_schema};
 
 use crate::command::params::{
     ApplyBatchParams, ExportMspdiParams, ImportCsvParams, NewProjectParams, NoParams, OpenProjectParams,
-    RenderGanttParams, SaveProjectParams, TaskGetParams, TaskListParams,
+    RenderGanttParams, ResourceListParams, SaveProjectParams, TaskGetParams, TaskListParams, UsageParams,
 };
 use crate::command::{
-    AnchorSpec, CalendarException, CalendarExceptionKey, LinkKey, LinkSpec, ProjectInfoPatch, SetConstraint,
+    AnchorSpec, AssignmentAdd, AssignmentKey, AssignmentUpdate, CalendarException, CalendarExceptionKey,
+    LinkKey, LinkSpec, ProjectInfoPatch, ResourceAdd, ResourceDelete, ResourceUpdate, SetConstraint,
     SetDeadline, SetStatusDate, TaskAdd, TaskDelete, TaskMove, TaskOne, TaskUpdate,
 };
 use crate::text::Language;
@@ -152,6 +155,21 @@ const fn reserved(
     }
 }
 
+/// Entrée réservée (non listée) dont le schéma est déjà fixé par le
+/// contrat (J5, lot L0) : activée par le lot L8.
+const fn reserved_typed(
+    id: &'static str,
+    mcp_name: &'static str,
+    kind: Kind,
+    schema: fn() -> Schema,
+    summary_fr: &'static str,
+    summary_en: &'static str,
+) -> CommandSpec {
+    let mut spec = reserved(id, mcp_name, kind, 5, summary_fr, summary_en);
+    spec.schema = schema;
+    spec
+}
+
 /// Registre, trié par id (vérifié par test).
 pub static REGISTRY: &[CommandSpec] = &[
     reserved(
@@ -178,13 +196,13 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Explique la date d'une tâche.",
         "Explain a task date.",
     ),
-    reserved(
+    reserved_typed(
         "analysis.resource_usage",
         "resource_usage",
         Kind::Analysis,
-        5,
-        "Charge des ressources.",
-        "Resource usage.",
+        schema_of::<UsageParams>,
+        "Utilisation des ressources : travail par période et surutilisation, calculés par le moteur.",
+        "Resource usage: work per period and overallocation, computed by the engine.",
     ),
     reserved(
         "analysis.what_if",
@@ -194,21 +212,29 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Simule un lot sans l'appliquer.",
         "Simulate a batch without applying it.",
     ),
-    reserved(
+    reserved_typed(
         "assignment.add",
         "assign_resource",
         Kind::Write,
-        5,
-        "Affecte une ressource à une tâche.",
-        "Assign a resource to a task.",
+        schema_of::<AssignmentAdd>,
+        "Affecte une ressource à une tâche (unités, travail ou quantité, retard).",
+        "Assign a resource to a task (units, work or quantity, delay).",
     ),
-    reserved(
+    reserved_typed(
+        "assignment.remove",
+        "unassign_resource",
+        Kind::Write,
+        schema_of::<AssignmentKey>,
+        "Retire une ressource d'une tâche.",
+        "Remove a resource from a task.",
+    ),
+    reserved_typed(
         "assignment.update",
         "update_assignment",
         Kind::Write,
-        5,
-        "Modifie une affectation.",
-        "Update an assignment.",
+        schema_of::<AssignmentUpdate>,
+        "Modifie une affectation (unités, travail, quantité, retard).",
+        "Update an assignment (units, work, quantity, delay).",
     ),
     reserved(
         "baseline.set",
@@ -378,13 +404,37 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Diagramme de Gantt en SVG, avec plage, échelle et filtre.",
         "Gantt chart as SVG, with range, zoom and filter.",
     ),
-    reserved(
+    reserved_typed(
         "resource.add",
         "add_resource",
         Kind::Write,
-        5,
-        "Ajoute une ressource.",
-        "Add a resource.",
+        schema_of::<ResourceAdd>,
+        "Ajoute une ressource (travail, matérielle ou coût ; calendrier propre par défaut).",
+        "Add a resource (work, material or cost; own calendar by default).",
+    ),
+    reserved_typed(
+        "resource.delete",
+        "delete_resource",
+        Kind::Write,
+        schema_of::<ResourceDelete>,
+        "Supprime une ressource (cascade obligatoire si elle est affectée).",
+        "Delete a resource (cascade required if it is assigned).",
+    ),
+    reserved_typed(
+        "resource.list",
+        "list_resources",
+        Kind::Read,
+        schema_of::<ResourceListParams>,
+        "Liste des ressources, avec travail et surutilisation, paginée.",
+        "List resources, with work and overallocation, paginated.",
+    ),
+    reserved_typed(
+        "resource.update",
+        "update_resource",
+        Kind::Write,
+        schema_of::<ResourceUpdate>,
+        "Modifie une ressource (nom, capacité, calendrier, initiales, groupe…).",
+        "Update a resource (name, capacity, calendar, initials, group…).",
     ),
     now(
         "task.add",

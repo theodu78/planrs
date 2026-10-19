@@ -302,6 +302,14 @@ pub enum CalendarError {
         /// Calendrier.
         calendar: CalendarUid,
     },
+    /// Intersection ou union de deux calendriers compilés trop morcelée :
+    /// plafond de segments atteint (R-172, ADR-0013 D2).
+    #[serde(rename = "calendar.too_many_segments")]
+    #[error("calendrier combiné trop morcelé (au plus {limit} segments)")]
+    TooManySegments {
+        /// Plafond de segments.
+        limit: u32,
+    },
     /// Erreur du modèle stocké (le code est celui de l'erreur portée ;
     /// variante non étiquetée, donc placée en dernier pour serde).
     #[serde(untagged)]
@@ -333,6 +341,7 @@ impl CalendarError {
             Self::ElapsedOutOfDomain { .. } => "calendar.elapsed_out_of_domain",
             Self::NegativeSpan => "calendar.negative_span",
             Self::Inconsistent { .. } => "calendar.inconsistent",
+            Self::TooManySegments { .. } => "calendar.too_many_segments",
             Self::Model(e) => e.code(),
         }
     }
@@ -668,6 +677,7 @@ pub(crate) mod tests {
             CalendarError::NegativeSpan,
             CalendarError::Model(CalendarModelError::TooManyRanges { count: 6 }),
             CalendarError::Inconsistent { calendar: c },
+            CalendarError::TooManySegments { limit: 100_000 },
         ] {
             assert_tag(&e, e.code());
             assert_ne!(e.to_string(), "");

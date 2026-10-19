@@ -406,6 +406,38 @@ impl CompiledCalendar {
         Minutes::new(self.total)
     }
 
+    /// Intersection : minutes ouvrées à la fois dans `self` et dans `other`
+    /// (calendrier effectif d'une affectation, R-171, R-172). Le résultat
+    /// porte l'UID de `self`.
+    ///
+    /// Squelette du contrat J5 (lot L0), rempli par le lot L1 : renvoie
+    /// toujours [`CalendarError::Inconsistent`].
+    ///
+    /// # Errors
+    ///
+    /// [`CalendarError::TooManySegments`] si le résultat dépasse le plafond
+    /// de segments.
+    pub fn intersect(&self, other: &Self) -> Result<Self, CalendarError> {
+        let _ = other;
+        Err(self.inconsistent())
+    }
+
+    /// Union : minutes ouvrées dans `self` ou dans `other` (mesure de la
+    /// durée d'une feuille affectée, R-172, R-173). Le résultat porte l'UID
+    /// de `self`.
+    ///
+    /// Squelette du contrat J5 (lot L0), rempli par le lot L1 : renvoie
+    /// toujours [`CalendarError::Inconsistent`].
+    ///
+    /// # Errors
+    ///
+    /// [`CalendarError::TooManySegments`] si le résultat dépasse le plafond
+    /// de segments.
+    pub fn union(&self, other: &Self) -> Result<Self, CalendarError> {
+        let _ = other;
+        Err(self.inconsistent())
+    }
+
     /// Erreur d'invariant interne.
     const fn inconsistent(&self) -> CalendarError {
         CalendarError::Inconsistent { calendar: self.uid }

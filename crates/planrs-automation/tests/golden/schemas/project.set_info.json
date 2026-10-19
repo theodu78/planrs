@@ -24,6 +24,34 @@
         "null"
       ]
     },
+    "default_task_type": {
+      "anyOf": [
+        {
+          "description": "Type de tâche en JSON (S41).",
+          "oneOf": [
+            {
+              "const": "fixed_units",
+              "description": "Unités fixes.",
+              "type": "string"
+            },
+            {
+              "const": "fixed_duration",
+              "description": "Durée fixe.",
+              "type": "string"
+            },
+            {
+              "const": "fixed_work",
+              "description": "Travail fixe (toujours piloté par l'effort).",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Type des nouvelles tâches (S2 `DefaultTaskType`, R-197 ; J5, refusé\n`command.not_yet_available` jusqu'au lot L7)."
+    },
     "manager": {
       "description": "Responsable.",
       "type": [
@@ -35,6 +63,13 @@
       "description": "Nom.",
       "type": [
         "string",
+        "null"
+      ]
+    },
+    "new_tasks_effort_driven": {
+      "description": "Nouvelles tâches pilotées par l'effort (S2 `NewTasksEffortDriven`,\nR-197 ; J5, refusé jusqu'au lot L7).",
+      "type": [
+        "boolean",
         "null"
       ]
     },

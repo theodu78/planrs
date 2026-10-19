@@ -60,4 +60,26 @@ pub enum Action {
     Undo,
     /// Rétablit le dernier lot annulé. Sans effet jusqu'au lot L11.
     Redo,
+    /// Crée un projet vide (« Projet1 »), après confirmation si le
+    /// document courant est modifié.
+    NewProject,
+    /// Enregistre sur le fichier du document, ou demande un chemin s'il
+    /// n'en a pas.
+    Save,
+    /// Enregistre sous un autre nom (boîte de dialogue ou téléchargement).
+    SaveAs,
+    /// Réponse au bandeau « Enregistrer les modifications ? ».
+    Confirm(ConfirmChoice),
+}
+
+/// Réponse au bandeau de confirmation d'un document modifié (fermer, ouvrir
+/// un autre document, créer un projet, quitter).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConfirmChoice {
+    /// Enregistrer, puis poursuivre si l'enregistrement réussit.
+    Save,
+    /// Poursuivre sans enregistrer : les modifications sont perdues.
+    Discard,
+    /// Renoncer : le document reste ouvert, rien n'est perdu.
+    Cancel,
 }

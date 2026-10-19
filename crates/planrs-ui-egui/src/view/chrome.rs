@@ -8,10 +8,11 @@
 use planrs_core::Severity;
 
 use crate::action::Action;
+use crate::action::ConfirmChoice;
 use crate::app::{MAX_MESSAGES, UserMessage};
 use crate::format::format_date;
 use crate::i18n::{Arg, Language, TextId};
-use crate::keymap::{Binding, shortcut_for, shortcut_text};
+use crate::keymap::{Binding, UiBinding, shortcut_for, shortcut_text};
 use crate::state::{LanguagePref, ThemePref};
 use crate::theme::Palette;
 use crate::timescale::TimeScaleZoom;
@@ -38,21 +39,7 @@ pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let has_doc = fc.doc.is_some();
     egui::Panel::top("planrs_menu_bar").show(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button(texts.get(TextId::MenuFile), |ui| {
-                if ui.button(texts.get(TextId::MenuOpenDemo)).clicked() {
-                    fc.actions.push(Action::OpenDemo);
-                }
-                if ui.button(texts.get(TextId::MenuOpen)).clicked() {
-                    fc.actions.push(Action::OpenDialog);
-                }
-                ui.separator();
-                if ui
-                    .add_enabled(has_doc, egui::Button::new(texts.get(TextId::MenuClose)))
-                    .clicked()
-                {
-                    fc.actions.push(Action::CloseDocument);
-                }
-            });
+            ui.menu_button(texts.get(TextId::MenuFile), |ui| file_menu(ui, fc));
             ui.menu_button(texts.get(TextId::MenuEdit), |ui| edit_menu(ui, fc));
             ui.menu_button(texts.get(TextId::MenuView), |ui| {
                 ui.menu_button(texts.get(TextId::MenuZoom), |ui| {
@@ -81,6 +68,44 @@ pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
             });
         });
     });
+}
+
+/// Menu Fichier : Nouveau, exemple, Ouvrir, Enregistrer, Enregistrer
+/// sous, Fermer ; raccourcis de [`crate::keymap::KEYMAP`] affichés.
+/// Enregistrer et Fermer demandent un document.
+fn file_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    let has_doc = fc.doc.is_some();
+    let new = Binding::Command("project.new");
+    menu_item(ui, fc, TextId::MenuNew, Some(new), true, Action::NewProject);
+    menu_item(ui, fc, TextId::MenuOpenDemo, None, true, Action::OpenDemo);
+    let open = Binding::Ui(UiBinding::OpenFile);
+    menu_item(ui, fc, TextId::MenuOpen, Some(open), true, Action::OpenDialog);
+    ui.separator();
+    let save = Binding::Command("project.save");
+    menu_item(ui, fc, TextId::MenuSave, Some(save), has_doc, Action::Save);
+    let save_as = Binding::Ui(UiBinding::SaveAs);
+    menu_item(ui, fc, TextId::MenuSaveAs, Some(save_as), has_doc, Action::SaveAs);
+    ui.separator();
+    menu_item(ui, fc, TextId::MenuClose, None, has_doc, Action::CloseDocument);
+}
+
+/// Entrée de menu : libellé traduit, raccourci éventuel de la liaison,
+/// action poussée au clic.
+fn menu_item(
+    ui: &mut egui::Ui,
+    fc: &mut FrameCtx<'_>,
+    label: TextId,
+    binding: Option<Binding>,
+    enabled: bool,
+    action: Action,
+) {
+    let mut button = egui::Button::new(fc.texts.get(label));
+    if let Some(shortcut) = binding.and_then(shortcut_for) {
+        button = button.shortcut_text(shortcut_text(ui.ctx(), shortcut));
+    }
+    if ui.add_enabled(enabled, button).clicked() {
+        fc.actions.push(action);
+    }
 }
 
 /// Menu Édition : Annuler, Rétablir, actifs seulement s'il y a un lot à
@@ -310,6 +335,36 @@ pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
         });
     });
     message_banner(ui, fc, messages);
+}
+
+/// Bandeau « Enregistrer les modifications de « nom » ? » (Enregistrer /
+/// Ne pas enregistrer / Annuler), non bloquant : rien n'est dessiné si
+/// `pending` vaut `None`. `pending` est le nom du document modifié.
+pub fn confirm_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, pending: Option<&str>) {
+    let Some(name) = pending else {
+        return;
+    };
+    let texts = fc.texts;
+    let fg = fc.palette.text_strong;
+    let frame = egui::Frame::side_top_panel(ui.style()).fill(fc.palette.message_warning_bg);
+    egui::Panel::top("planrs_confirm_banner")
+        .frame(frame)
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                let title = texts.get_args(TextId::ConfirmUnsavedTitle, &[("name", Arg::Str(name.into()))]);
+                ui.label(egui::RichText::new(title).strong().color(fg));
+                let choices = [
+                    (TextId::ConfirmSave, ConfirmChoice::Save),
+                    (TextId::ConfirmDiscard, ConfirmChoice::Discard),
+                    (TextId::ConfirmCancel, ConfirmChoice::Cancel),
+                ];
+                for (label, choice) in choices {
+                    if ui.button(texts.get(label)).clicked() {
+                        fc.actions.push(Action::Confirm(choice));
+                    }
+                }
+            });
+        });
 }
 
 /// Les [`MAX_MESSAGES`] messages les plus récents (fin de la liste) : `App`

@@ -34,6 +34,9 @@ pub enum KeyContext {
 pub enum UiBinding {
     /// Ouvre le sélecteur de fichiers.
     OpenFile,
+    /// Enregistre sous un autre nom (`project.save` avec un chemin choisi
+    /// dans la boîte de dialogue).
+    SaveAs,
 }
 
 /// Liaison d'un raccourci.
@@ -74,6 +77,21 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
         Shortcut::new(Modifiers::COMMAND, Key::O),
         Binding::Ui(UiBinding::OpenFile),
     ),
+    (
+        KeyContext::Global,
+        Shortcut::new(Modifiers::COMMAND, Key::N),
+        Binding::Command("project.new"),
+    ),
+    (
+        KeyContext::Document,
+        Shortcut::new(COMMAND_SHIFT, Key::S),
+        Binding::Ui(UiBinding::SaveAs),
+    ),
+    (
+        KeyContext::Document,
+        Shortcut::new(Modifiers::COMMAND, Key::S),
+        Binding::Command("project.save"),
+    ),
 ];
 
 /// Action de l'interface pour une liaison ; `None` pour un id du registre
@@ -84,8 +102,11 @@ pub fn binding_action(binding: Binding) -> Option<Action> {
     match binding {
         Binding::Command("history.undo") => Some(Action::Undo),
         Binding::Command("history.redo") => Some(Action::Redo),
+        Binding::Command("project.new") => Some(Action::NewProject),
+        Binding::Command("project.save") => Some(Action::Save),
         Binding::Command(_) => None,
         Binding::Ui(UiBinding::OpenFile) => Some(Action::OpenDialog),
+        Binding::Ui(UiBinding::SaveAs) => Some(Action::SaveAs),
     }
 }
 

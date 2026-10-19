@@ -1,0 +1,202 @@
+//! Paramètres des commandes du registre qui ne sont pas des commandes
+//! d'écriture d'un lot : lecture, analyse, historique, fichiers, et
+//! `batch.apply` (ADR-0012 D7, lot L3).
+//!
+//! Ces types fixent la forme JSON et le schéma de chaque outil ; leur
+//! exécution est écrite par `Workspace` (L6). Les surfaces ajoutent
+//! elles-mêmes `dry_run` (écriture) ou `detail` (diff détaillé) au schéma
+//! (L8). Champs inconnus refusés partout.
+
+use planrs_core::{Day, Moment};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use super::{Batch, Command};
+use crate::json::{DaySchema, MomentSchema};
+use crate::text::Language;
+
+/// Paramètres vides (`project.summary`, `analysis.critical_path`,
+/// `history.undo`, `history.redo`, `history.list`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NoParams {}
+
+/// `project.open` : ouvre un fichier MSPDI.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OpenProjectParams {
+    /// Chemin du fichier MSPDI (`.xml`).
+    pub path: String,
+}
+
+/// `project.new` : projet vide, planifié depuis `start` ou à rebours depuis
+/// `finish` (exactement un des deux).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NewProjectParams {
+    /// Nom du projet.
+    pub name: String,
+    /// Date de début (planification depuis le début).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<MomentSchema>")]
+    pub start: Option<Moment>,
+    /// Date de fin (planification à rebours).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<MomentSchema>")]
+    pub finish: Option<Moment>,
+    /// Langue des textes du projet (défaut : celle de la surface).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lang: Option<Language>,
+}
+
+/// `task.list` : tâches dans l'ordre des ID, filtrées et paginées.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskListParams {
+    /// Tâches critiques seulement.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub critical: bool,
+    /// Tâches en retard seulement (J4 : fin planifiée après l'échéance).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub late: bool,
+    /// Tâches dont les dates planifiées touchent ce jour ou un jour suivant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<DaySchema>")]
+    pub from: Option<Day>,
+    /// Tâches dont les dates planifiées touchent ce jour ou un jour précédent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<DaySchema>")]
+    pub to: Option<Day>,
+    /// Niveau hiérarchique maximal (1 : premier niveau seulement).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub outline_max: Option<u16>,
+    /// Récapitulatives seulement (`true`) ou feuilles seulement (`false`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<bool>,
+    /// Reprise après la tâche de cet UID (curseur `next_cursor` d'une page
+    /// précédente).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub cursor: Option<u32>,
+    /// Taille de la page (défaut 50, au plus 500).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 500))]
+    pub limit: Option<u32>,
+    /// Tâches affectées à cette ressource (UID) : réservé (J5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<u32>,
+}
+
+/// `task.get` : une tâche.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskGetParams {
+    /// UID de la tâche.
+    #[schemars(range(min = 1))]
+    pub uid: u32,
+}
+
+/// Échelle de temps d'un rendu.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoomJson {
+    /// Choisie selon l'étendue du projet.
+    #[default]
+    Auto,
+    /// Jours.
+    Day,
+    /// Semaines.
+    Week,
+    /// Mois.
+    Month,
+    /// Trimestres.
+    Quarter,
+}
+
+/// `render.gantt` : diagramme de Gantt en SVG, borné.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RenderGanttParams {
+    /// Premier jour affiché (défaut : début du projet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<DaySchema>")]
+    pub from: Option<Day>,
+    /// Dernier jour affiché (défaut : fin du projet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<DaySchema>")]
+    pub to: Option<Day>,
+    /// Échelle de temps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zoom: Option<ZoomJson>,
+    /// Tâches critiques seulement.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub critical_only: bool,
+    /// Lignes affichées au plus (au plus 200).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 200))]
+    pub max_rows: Option<u32>,
+}
+
+/// `project.save` : enregistre en MSPDI, sur le fichier ouvert ou sous
+/// `path`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SaveProjectParams {
+    /// Chemin (défaut : le fichier ouvert).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// `project.export_mspdi` : écrit une copie MSPDI sans changer le fichier
+/// de la session.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExportMspdiParams {
+    /// Chemin du fichier écrit.
+    pub path: String,
+}
+
+/// `project.import_csv` : ouvre un projet construit depuis un CSV de tâches
+/// (R-144 à R-146).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImportCsvParams {
+    /// Chemin du fichier CSV.
+    pub path: String,
+    /// Langue des en-têtes et des valeurs (défaut : celle de la surface).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lang: Option<Language>,
+}
+
+/// `batch.apply` : lot atomique de commandes (`format_version` facultatif,
+/// 1 par défaut).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApplyBatchParams {
+    /// Version du format (1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format_version: Option<u32>,
+    /// Langue des textes (durées).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lang: Option<Language>,
+    /// Opérations, dans l'ordre ; `{"op":"task.add",…}`.
+    pub ops: Vec<Command>,
+    /// Libellé de l'entrée d'historique.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+impl ApplyBatchParams {
+    /// Lot correspondant (`format_version` 1 par défaut ; une autre version
+    /// est refusée par `Session::apply`).
+    #[must_use]
+    pub fn into_batch(self) -> Batch {
+        Batch {
+            format_version: self.format_version.unwrap_or(1),
+            lang: self.lang,
+            ops: self.ops,
+            label: self.label,
+        }
+    }
+}

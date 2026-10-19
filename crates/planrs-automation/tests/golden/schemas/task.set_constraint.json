@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`task.set_constraint`.",
+  "properties": {
+    "date": {
+      "description": "Date (obligatoire pour les types datés, interdite sinon).",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "kind": {
+      "description": "Type.",
+      "oneOf": [
+        {
+          "const": "asap",
+          "description": "Le plus tôt possible.",
+          "type": "string"
+        },
+        {
+          "const": "alap",
+          "description": "Le plus tard possible.",
+          "type": "string"
+        },
+        {
+          "const": "mso",
+          "description": "Doit commencer le.",
+          "type": "string"
+        },
+        {
+          "const": "mfo",
+          "description": "Doit finir le.",
+          "type": "string"
+        },
+        {
+          "const": "snet",
+          "description": "Ne pas commencer avant le.",
+          "type": "string"
+        },
+        {
+          "const": "snlt",
+          "description": "Ne pas commencer après le.",
+          "type": "string"
+        },
+        {
+          "const": "fnet",
+          "description": "Ne pas finir avant le.",
+          "type": "string"
+        },
+        {
+          "const": "fnlt",
+          "description": "Ne pas finir après le.",
+          "type": "string"
+        }
+      ]
+    },
+    "uid": {
+      "description": "Tâche.",
+      "oneOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "required": [
+    "uid",
+    "kind"
+  ],
+  "title": "SetConstraint",
+  "type": "object"
+}

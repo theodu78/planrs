@@ -17,11 +17,19 @@ path = "src/main.rs"
 [dependencies]
 planrs-core.workspace = true
 planrs-ui-egui.workspace = true
+# Canal de contrôle (ADR-0002, ADR-0012 D9) : rendez-vous publié après
+# l'ouverture d'un fichier par chemin, écouteur `hello`/`query`.
+planrs-automation.workspace = true
 # `persistence` : l'état d'interface (JSON) est relu et sauvegardé par le
 # stockage d'eframe ; la crate d'interface n'en a pas besoin (ADR-0011).
 eframe = { workspace = true, features = ["persistence"] }
 # `clock` : « maintenant » est lu ici seulement, puis injecté (Env::now).
 chrono = { workspace = true, features = ["clock"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Menu applicatif par défaut retiré (Cmd+Q passe par le garde de fermeture,
+# docs/features/ui.md § 1.14).
+winit.workspace = true
 
 [lints]
 workspace = true

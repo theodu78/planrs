@@ -4,13 +4,17 @@
 //! dans une file, appliquée par le réducteur unique d'`App` en fin d'image.
 //! Une action sérialisée préfigure aussi le canal de contrôle (ADR-0002).
 
+use planrs_automation::Batch;
 use planrs_core::TaskUid;
 
+use crate::selection::SelectMode;
 use crate::state::{LanguagePref, ThemePref};
+use crate::structure::StructureOp;
 use crate::timescale::TimeScaleZoom;
 
-/// Intention de l'utilisateur, appliquée en fin d'image.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Intention de l'utilisateur, appliquée en fin d'image. Pas `Copy` :
+/// [`Action::Exec`] porte un lot de commandes (ADR-0012 D11).
+#[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     /// Ouvre le projet d'exemple embarqué.
     OpenDemo,
@@ -51,4 +55,58 @@ pub enum Action {
     ToggleDiagnostics,
     /// Referme le bandeau de messages.
     DismissMessage,
+    /// Applique un lot de commandes à la session du document (toute
+    /// édition passe par le registre). Sans effet jusqu'au lot L11.
+    Exec(Batch),
+    /// Comme [`Action::Exec`], pour le document de numéro d'ouverture
+    /// `opening` seulement (saisie de cellule) : abandonné si un autre
+    /// document l'a remplacé entre-temps (relecture finale J4, F2).
+    ExecOn {
+        /// Numéro d'ouverture du document visé (`OpenDocument::opening`).
+        opening: u64,
+        /// Lot de commandes.
+        batch: Batch,
+    },
+    /// Annule le dernier lot. Sans effet jusqu'au lot L11.
+    Undo,
+    /// Rétablit le dernier lot annulé. Sans effet jusqu'au lot L11.
+    Redo,
+    /// Crée un projet vide (« Projet1 »), après confirmation si le
+    /// document courant est modifié.
+    NewProject,
+    /// Enregistre sur le fichier du document, ou demande un chemin s'il
+    /// n'en a pas.
+    Save,
+    /// Enregistre sous un autre nom (boîte de dialogue ou téléchargement).
+    SaveAs,
+    /// Quitte l'application (desktop : Ctrl/Cmd+Q, menu Fichier), après
+    /// confirmation si le document est modifié ; sans effet sur le web.
+    Quit,
+    /// Réponse au bandeau « Enregistrer les modifications ? ».
+    Confirm(ConfirmChoice),
+    /// Clic de sélection avec modificateur (Ctrl/Cmd : ajout ou retrait ;
+    /// Maj : plage), lot L14.
+    SelectWith {
+        /// Tâche cliquée.
+        uid: TaskUid,
+        /// Mode du clic.
+        mode: SelectMode,
+    },
+    /// Commande de structure sur la sélection (Inser, Suppr, indentation,
+    /// liens), lot L14.
+    Structure(StructureOp),
+    /// Réponse à la confirmation d'une suppression de récapitulative.
+    ConfirmDelete(bool),
+}
+
+/// Réponse au bandeau de confirmation d'un document modifié (fermer, ouvrir
+/// un autre document, créer un projet, quitter).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConfirmChoice {
+    /// Enregistrer, puis poursuivre si l'enregistrement réussit.
+    Save,
+    /// Poursuivre sans enregistrer : les modifications sont perdues.
+    Discard,
+    /// Renoncer : le document reste ouvert, rien n'est perdu.
+    Cancel,
 }

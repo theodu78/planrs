@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`task.list` : tâches dans l'ordre des ID, filtrées et paginées.",
+  "properties": {
+    "critical": {
+      "description": "Tâches critiques seulement.",
+      "type": "boolean"
+    },
+    "cursor": {
+      "description": "Reprise après la tâche de cet UID (curseur `next_cursor` d'une page\nprécédente).",
+      "format": "uint32",
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "from": {
+      "description": "Tâches dont les dates planifiées touchent ce jour ou un jour suivant.",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "late": {
+      "description": "Tâches en retard seulement (J4 : fin planifiée après l'échéance).",
+      "type": "boolean"
+    },
+    "limit": {
+      "description": "Taille de la page (défaut 50, au plus 500).",
+      "format": "uint32",
+      "maximum": 500,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "outline_max": {
+      "description": "Niveau hiérarchique maximal (1 : premier niveau seulement).",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "resource": {
+      "description": "Tâches affectées à cette ressource (UID) : réservé (J5).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "summary": {
+      "description": "Récapitulatives seulement (`true`) ou feuilles seulement (`false`).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "to": {
+      "description": "Tâches dont les dates planifiées touchent ce jour ou un jour précédent.",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "TaskListParams",
+  "type": "object"
+}

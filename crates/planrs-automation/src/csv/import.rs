@@ -16,7 +16,7 @@ use super::{
 };
 use crate::text::lex::{Cursor, bounded_chars, fold};
 use crate::text::{
-    DateRole, Language, TextContext, TextError, parse_date, parse_duration, predecessor_elements,
+    DateOrder, DateRole, Language, TextContext, TextError, parse_date, parse_duration, predecessor_elements,
 };
 
 /// Longueur maximale (en caractères) d'une valeur citée dans un diagnostic.
@@ -652,6 +652,9 @@ impl Build<'_> {
         }
 
         self.links(&mut project, &placed, &ids, &ctx, diags);
+        if self.options.locale.is_none() {
+            self.ambiguous_dates(&placed, &ctx, diags);
+        }
         if opts.dates == CsvDates::Ignore {
             self.compare_dates(&project, &placed, diags);
         }
@@ -825,6 +828,53 @@ impl Build<'_> {
             }
             if let Some(task) = project.tasks.get_mut(p.uid) {
                 task.predecessors = links;
+            }
+        }
+    }
+
+    /// R-144 (amendée en J4) : locale déduite des en-têtes (ou du séparateur
+    /// à égalité), jamais des valeurs. Pour chaque colonne de dates, une
+    /// valeur lue dans l'ordre retenu que l'ordre inverse ne lit pas (jour
+    /// au-delà de 12) lève l'ambiguïté ; sinon, si une valeur se lit autrement dans
+    /// l'ordre inverse (« 03/04/2026 »), `csv.date_ambiguous` une fois, à la
+    /// première d'entre elles. Une date ISO ou identique dans les deux
+    /// ordres (« 03/03/2026 ») ne compte ni pour ni contre.
+    fn ambiguous_dates(&self, placed: &[Placed], ctx: &TextContext, diags: &mut Diags) {
+        let other = TextContext {
+            date_order: match ctx.date_order {
+                DateOrder::DayMonthYear => DateOrder::MonthDayYear,
+                DateOrder::MonthDayYear => DateOrder::DayMonthYear,
+            },
+            ..*ctx
+        };
+        for (column, role) in [
+            (CsvColumn::Start, DateRole::Start),
+            (CsvColumn::Finish, DateRole::Finish),
+        ] {
+            let mut first: Option<(u64, &str)> = None;
+            let mut resolved = false;
+            for p in placed {
+                let read = match role {
+                    DateRole::Start => p.start,
+                    DateRole::Finish => p.finish,
+                };
+                let (Some(read), Some(row)) = (read, self.rows.get(p.row)) else {
+                    continue;
+                };
+                let Some(v) = row.value(self.columns, column) else {
+                    continue;
+                };
+                match parse_date(v, role, &other) {
+                    Err(_) => {
+                        resolved = true;
+                        break;
+                    }
+                    Ok(m) if m != read && first.is_none() => first = Some((row.line, v)),
+                    Ok(_) => {}
+                }
+            }
+            if let (false, Some((line, v))) = (resolved, first) {
+                diags.push(line, self.header(column), CsvCode::DateAmbiguous, Some(v));
             }
         }
     }

@@ -8,9 +8,11 @@
 use planrs_core::Severity;
 
 use crate::action::Action;
+use crate::action::ConfirmChoice;
 use crate::app::{MAX_MESSAGES, UserMessage};
 use crate::format::format_date;
 use crate::i18n::{Arg, Language, TextId};
+use crate::keymap::{Binding, UiBinding, shortcut_for, shortcut_text};
 use crate::state::{LanguagePref, ThemePref};
 use crate::theme::Palette;
 use crate::timescale::TimeScaleZoom;
@@ -31,27 +33,14 @@ const THEME_CHOICES: [(ThemePref, TextId); 3] = [
     (ThemePref::Dark, TextId::ThemeDark),
 ];
 
-/// Barre de menus (Fichier, Affichage).
+/// Barre de menus (Fichier, Édition, Affichage).
 pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let texts = fc.texts;
     let has_doc = fc.doc.is_some();
     egui::Panel::top("planrs_menu_bar").show(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button(texts.get(TextId::MenuFile), |ui| {
-                if ui.button(texts.get(TextId::MenuOpenDemo)).clicked() {
-                    fc.actions.push(Action::OpenDemo);
-                }
-                if ui.button(texts.get(TextId::MenuOpen)).clicked() {
-                    fc.actions.push(Action::OpenDialog);
-                }
-                ui.separator();
-                if ui
-                    .add_enabled(has_doc, egui::Button::new(texts.get(TextId::MenuClose)))
-                    .clicked()
-                {
-                    fc.actions.push(Action::CloseDocument);
-                }
-            });
+            ui.menu_button(texts.get(TextId::MenuFile), |ui| file_menu(ui, fc));
+            ui.menu_button(texts.get(TextId::MenuEdit), |ui| edit_menu(ui, fc));
             ui.menu_button(texts.get(TextId::MenuView), |ui| {
                 ui.menu_button(texts.get(TextId::MenuZoom), |ui| {
                     ui.add_enabled_ui(has_doc, |ui| {
@@ -79,6 +68,90 @@ pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
             });
         });
     });
+}
+
+/// Menu Fichier : Nouveau, exemple, Ouvrir, Enregistrer, Enregistrer
+/// sous, Fermer, Quitter (desktop) ; raccourcis de
+/// [`crate::keymap::KEYMAP`] affichés. Enregistrer et Fermer demandent un
+/// document.
+fn file_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    let has_doc = fc.doc.is_some();
+    let new = Binding::Command("project.new");
+    menu_item(ui, fc, TextId::MenuNew, Some(new), true, Action::NewProject);
+    menu_item(ui, fc, TextId::MenuOpenDemo, None, true, Action::OpenDemo);
+    let open = Binding::Ui(UiBinding::OpenFile);
+    menu_item(ui, fc, TextId::MenuOpen, Some(open), true, Action::OpenDialog);
+    ui.separator();
+    let save = Binding::Command("project.save");
+    menu_item(ui, fc, TextId::MenuSave, Some(save), has_doc, Action::Save);
+    let save_as = Binding::Ui(UiBinding::SaveAs);
+    menu_item(ui, fc, TextId::MenuSaveAs, Some(save_as), has_doc, Action::SaveAs);
+    ui.separator();
+    menu_item(ui, fc, TextId::MenuClose, None, has_doc, Action::CloseDocument);
+    // Quitter : le navigateur ne laisse pas une page fermer son onglet.
+    if !cfg!(target_arch = "wasm32") {
+        ui.separator();
+        let quit = Binding::Ui(UiBinding::Quit);
+        menu_item(ui, fc, TextId::MenuQuit, Some(quit), true, Action::Quit);
+    }
+}
+
+/// Entrée de menu : libellé traduit, raccourci éventuel de la liaison,
+/// action poussée au clic.
+fn menu_item(
+    ui: &mut egui::Ui,
+    fc: &mut FrameCtx<'_>,
+    label: TextId,
+    binding: Option<Binding>,
+    enabled: bool,
+    action: Action,
+) {
+    let mut button = egui::Button::new(fc.texts.get(label));
+    if let Some(shortcut) = binding.and_then(shortcut_for) {
+        button = button.shortcut_text(shortcut_text(ui.ctx(), shortcut));
+    }
+    if ui.add_enabled(enabled, button).clicked() {
+        fc.actions.push(action);
+    }
+}
+
+/// Menu Édition : Annuler, Rétablir, actifs seulement s'il y a un lot à
+/// annuler ou à rétablir ; puis les six commandes de structure du menu
+/// contextuel (grisées sans document, et sans sélection sauf « Insérer une
+/// tâche ») ; raccourcis de [`crate::keymap::KEYMAP`] affichés. Rend la
+/// structure découvrable sans clic droit ni touche Inser (relecture finale
+/// J4, F5).
+fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    let texts = fc.texts;
+    let history = fc.doc.map(|doc| doc.session.history());
+    let can_undo = history.as_ref().is_some_and(|h| !h.entries.is_empty());
+    let can_redo = history.as_ref().is_some_and(|h| !h.redo.is_empty());
+    let items = [
+        (TextId::MenuUndo, "history.undo", can_undo, Action::Undo),
+        (TextId::MenuRedo, "history.redo", can_redo, Action::Redo),
+    ];
+    for (label, id, enabled, action) in items {
+        let mut button = egui::Button::new(texts.get(label));
+        if let Some(shortcut) = shortcut_for(Binding::Command(id)) {
+            button = button.shortcut_text(shortcut_text(ui.ctx(), shortcut));
+        }
+        if ui.add_enabled(enabled, button).clicked() {
+            fc.actions.push(action);
+        }
+    }
+    ui.separator();
+    let has_doc = fc.doc.is_some();
+    let has_selection = fc.selection.is_some();
+    for (op, label, id, needs_selection) in super::main_view::CONTEXT_ENTRIES {
+        let mut button = egui::Button::new(texts.get(label));
+        if let Some(shortcut) = shortcut_for(Binding::Command(id)) {
+            button = button.shortcut_text(shortcut_text(ui.ctx(), shortcut));
+        }
+        let enabled = has_doc && (has_selection || !needs_selection);
+        if ui.add_enabled(enabled, button).clicked() {
+            fc.actions.push(Action::Structure(op));
+        }
+    }
 }
 
 /// Barre d'outils : exemple, ouvrir, zoom, ajuster, thème, langue. Toujours
@@ -164,7 +237,8 @@ fn language_choices(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     }
 }
 
-/// Écran d'accueil (aucun document ouvert) : titre, boutons d'ouverture,
+/// Écran d'accueil (aucun document ouvert) : titre, boutons d'ouverture et
+/// de création,
 /// choix de la langue et du thème.
 pub fn welcome(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let texts = fc.texts;
@@ -191,6 +265,14 @@ pub fn welcome(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
             .clicked()
         {
             fc.actions.push(Action::OpenDialog);
+        }
+        // « Nouveau projet » : sur le web, Ctrl+N appartient au navigateur
+        // (relecture finale J4, F5).
+        if ui
+            .add(egui::Button::new(texts.get(TextId::WelcomeNewProject)).min_size(big))
+            .clicked()
+        {
+            fc.actions.push(Action::NewProject);
         }
         if cfg!(target_arch = "wasm32") {
             ui.label(texts.get(TextId::WelcomeWebNote));
@@ -230,7 +312,8 @@ fn centered_row(ui: &mut egui::Ui, labels: &[String], add_contents: impl FnOnce(
     });
 }
 
-/// Barre d'état (nom, nombre de tâches, plage, diagnostics) et bandeau des
+/// Barre d'état (nom précédé de « * » si le document est modifié, nombre de
+/// tâches, plage, diagnostics) et bandeau des
 /// messages (sous la barre d'outils).
 pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMessage]) {
     let texts = fc.texts;
@@ -240,13 +323,15 @@ pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
                 ui.label(texts.get(TextId::StatusNoDocument));
                 return;
             };
-            ui.strong(doc.origin.name.as_str());
+            // « * » si modifié, comme le titre de la fenêtre : sur le web,
+            // seul indicateur visible dans la page (relecture finale J4, F4).
+            ui.strong(crate::app::document_label(doc));
             ui.separator();
             let count = fc
                 .rows
                 .map(crate::rows::RowModel::len)
                 .filter(|&len| len > 0)
-                .unwrap_or_else(|| doc.project.tasks.len());
+                .unwrap_or_else(|| doc.project().tasks.len());
             let count = i64::try_from(count).unwrap_or(i64::MAX);
             ui.label(texts.get_args(TextId::StatusTasks, &[("count", Arg::Count(count))]));
             ui.separator();
@@ -256,11 +341,11 @@ pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
                 &[
                     (
                         "start",
-                        Arg::Str(format_date(doc.schedule.project_start, labels).into()),
+                        Arg::Str(format_date(doc.schedule().project_start, labels).into()),
                     ),
                     (
                         "finish",
-                        Arg::Str(format_date(doc.schedule.project_finish, labels).into()),
+                        Arg::Str(format_date(doc.schedule().project_finish, labels).into()),
                     ),
                 ],
             ));
@@ -286,6 +371,36 @@ pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
         });
     });
     message_banner(ui, fc, messages);
+}
+
+/// Bandeau « Enregistrer les modifications de « nom » ? » (Enregistrer /
+/// Ne pas enregistrer / Annuler), non bloquant : rien n'est dessiné si
+/// `pending` vaut `None`. `pending` est le nom du document modifié.
+pub fn confirm_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, pending: Option<&str>) {
+    let Some(name) = pending else {
+        return;
+    };
+    let texts = fc.texts;
+    let fg = fc.palette.text_strong;
+    let frame = egui::Frame::side_top_panel(ui.style()).fill(fc.palette.message_warning_bg);
+    egui::Panel::top("planrs_confirm_banner")
+        .frame(frame)
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                let title = texts.get_args(TextId::ConfirmUnsavedTitle, &[("name", Arg::Str(name.into()))]);
+                ui.label(egui::RichText::new(title).strong().color(fg));
+                let choices = [
+                    (TextId::ConfirmSave, ConfirmChoice::Save),
+                    (TextId::ConfirmDiscard, ConfirmChoice::Discard),
+                    (TextId::ConfirmCancel, ConfirmChoice::Cancel),
+                ];
+                for (label, choice) in choices {
+                    if ui.button(texts.get(label)).clicked() {
+                        fc.actions.push(Action::Confirm(choice));
+                    }
+                }
+            });
+        });
 }
 
 /// Les [`MAX_MESSAGES`] messages les plus récents (fin de la liste) : `App`
@@ -321,6 +436,20 @@ fn message_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
     let texts = fc.texts;
     let palette = fc.palette;
     let has_error = messages.iter().any(|message| message.severity == Severity::Error);
+    // Titre de chaque message (« Impossible d'ouvrir le fichier »,
+    // « Modification refusée »), une fois par suite de messages de même
+    // titre.
+    let titled: Vec<(Option<String>, &UserMessage)> = messages
+        .iter()
+        .scan(None, |previous: &mut Option<TextId>, message| {
+            let title = message
+                .title
+                .filter(|title| *previous != Some(*title))
+                .map(|title| texts.get(title));
+            *previous = message.title;
+            Some((title, message))
+        })
+        .collect();
     let (fill, accent) = banner_colors(has_error, palette, ui.visuals());
     let fg = palette.text_strong;
     let frame = egui::Frame::side_top_panel(ui.style()).fill(fill);
@@ -337,15 +466,10 @@ fn message_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
             ui.horizontal(|ui| {
                 ui.add_space(6.0);
                 ui.vertical(|ui| {
-                    if has_error {
-                        ui.label(
-                            egui::RichText::new(texts.get(TextId::OpenErrorTitle))
-                                .strong()
-                                .size(15.0)
-                                .color(fg),
-                        );
-                    }
-                    for message in messages {
+                    for (title, message) in titled {
+                        if let Some(title) = title {
+                            ui.label(egui::RichText::new(title).strong().size(15.0).color(fg));
+                        }
                         ui.label(egui::RichText::new(message.text.as_str()).color(fg));
                     }
                 });
@@ -373,6 +497,7 @@ mod tests {
     fn message(n: usize) -> UserMessage {
         UserMessage {
             severity: Severity::Warning,
+            title: None,
             text: n.to_string(),
         }
     }

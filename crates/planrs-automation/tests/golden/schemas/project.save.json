@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`project.save` : enregistre en MSPDI, sur le fichier ouvert ou sous\n`path`.",
+  "properties": {
+    "path": {
+      "description": "Chemin (défaut : le fichier ouvert).",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "SaveProjectParams",
+  "type": "object"
+}

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`calendar.remove_exception` (R-165).",
+  "properties": {
+    "cal": {
+      "description": "Calendrier.",
+      "oneOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "const": "project"
+        }
+      ]
+    },
+    "from": {
+      "description": "Premier jour de l'exception.",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "cal",
+    "from"
+  ],
+  "title": "CalendarExceptionKey",
+  "type": "object"
+}

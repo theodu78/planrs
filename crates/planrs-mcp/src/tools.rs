@@ -1,0 +1,124 @@
+//! Outils MCP générés depuis `REGISTRY` : nom, schéma d'entrée (plus
+//! `dry_run` ou `detail`), annotations (lot L8).
+//!
+//! Seules les entrées disponibles (`Availability::Now`) sont listées ; une
+//! entrée réservée (J5-J6) reste appelable par son nom et répond
+//! `command.not_yet_available` (erreur structurée, C-MCP-05).
+
+use std::sync::Arc;
+
+use planrs_automation::text::Language;
+use planrs_automation::{CommandSpec, Kind, REGISTRY};
+use rmcp::model::{JsonObject, Tool, ToolAnnotations};
+use serde_json::{Map, Value, json};
+
+/// Outils listés, dans l'ordre du registre.
+pub(crate) fn listed(lang: Language) -> Vec<Tool> {
+    REGISTRY
+        .iter()
+        .filter(|s| s.is_listed())
+        .map(|s| tool_for(s, lang))
+        .collect()
+}
+
+/// Outil MCP d'une entrée du registre.
+pub(crate) fn tool_for(spec: &CommandSpec, lang: Language) -> Tool {
+    let annotations = match spec.kind {
+        Kind::Read | Kind::Analysis => ToolAnnotations::new().read_only(true),
+        Kind::Write | Kind::History | Kind::File => ToolAnnotations::new()
+            .read_only(false)
+            .destructive(spec.id == "task.delete")
+            .idempotent(false)
+            .open_world(false),
+    };
+    Tool::new(
+        spec.mcp_name,
+        spec.summary(lang),
+        Arc::new(input_schema(spec, lang)),
+    )
+    .with_annotations(annotations)
+}
+
+/// Schéma d'entrée : schéma des paramètres, plus `dry_run` et `detail`
+/// pour une écriture (acceptés par `Workspace::call`).
+pub(crate) fn input_schema(spec: &CommandSpec, lang: Language) -> JsonObject {
+    let mut obj = match Value::from((spec.schema)()) {
+        Value::Object(m) => m,
+        // Schéma booléen (`true`) : tout objet.
+        _ => Map::new(),
+    };
+    obj.insert("type".to_owned(), Value::String("object".to_owned()));
+    if spec.dry_run {
+        let props = obj
+            .entry("properties")
+            .or_insert_with(|| Value::Object(Map::new()));
+        if let Value::Object(props) = props {
+            props.insert(
+                "dry_run".to_owned(),
+                json!({ "type": "boolean", "default": false, "description": dry_run_text(lang) }),
+            );
+            props.insert(
+                "detail".to_owned(),
+                json!({ "type": "boolean", "default": false, "description": detail_text(lang) }),
+            );
+        }
+    }
+    obj
+}
+
+const fn dry_run_text(lang: Language) -> &'static str {
+    match lang {
+        Language::Fr => {
+            "Simule sans rien modifier : renvoie le diff du planning calculé par le moteur, sans entrée d'historique."
+        }
+        Language::En => {
+            "Simulate without changing anything: returns the schedule diff computed by the engine, with no history entry."
+        }
+    }
+}
+
+const fn detail_text(lang: Language) -> &'static str {
+    match lang {
+        Language::Fr => "Diff détaillé (jusqu'à 1 000 tâches au lieu des 10 plus décalées).",
+        Language::En => "Detailed diff (up to 1,000 tasks instead of the 10 most shifted).",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, reason = "tests : un échec doit s'arrêter net")]
+
+    use super::*;
+
+    /// C-MCP-07 : noms conformes à `^[a-zA-Z0-9_-]{1,64}$`.
+    fn valid_name(n: &str) -> bool {
+        (1..=64).contains(&n.len())
+            && n.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    }
+
+    #[test]
+    fn tools_names_valid_and_unique() {
+        let tools = listed(Language::En);
+        assert_ne!(tools.len(), 0);
+        let mut names: Vec<_> = tools.iter().map(|t| t.name.to_string()).collect();
+        assert!(names.iter().all(|n| valid_name(n)), "{names:?}");
+        names.sort();
+        let before = names.len();
+        names.dedup();
+        assert_eq!(names.len(), before);
+    }
+
+    #[test]
+    fn tools_write_schema_has_dry_run_and_detail() {
+        for spec in REGISTRY.iter().filter(|s| s.is_listed()) {
+            let schema = input_schema(spec, Language::Fr);
+            assert_eq!(schema.get("type"), Some(&json!("object")), "{}", spec.id);
+            assert!(!schema.contains_key("$ref"), "{}", spec.id);
+            let props = schema.get("properties").and_then(Value::as_object);
+            let has = |k: &str| props.is_some_and(|p| p.contains_key(k));
+            assert_eq!(has("dry_run"), spec.kind == Kind::Write, "{}", spec.id);
+            assert_eq!(has("detail"), spec.kind == Kind::Write, "{}", spec.id);
+        }
+    }
+}

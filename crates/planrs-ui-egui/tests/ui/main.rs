@@ -1,6 +1,10 @@
 //! Tests d'interface `egui_kittest` **sans rendu** (aucun GPU) : parcours de
 //! l'accueil à l'exemple, menus, barre d'outils, langue, thème, zoom,
-//! ouverture annulée, bandeau d'erreur, sélection et défilement synchronisé.
+//! ouverture annulée, bandeau d'erreur, sélection et défilement synchronisé ;
+//! session d'édition, annuler/rétablir et raccourcis (`session.rs`) ;
+//! édition des cellules et ligne vide de fin (`edit.rs`) ;
+//! Nouveau, Enregistrer, document modifié (`files.rs`) ; commandes de
+//! structure sur la sélection (`structure.rs`).
 //!
 //! Cible unique `ui` (un seul binaire lié à wgpu, ADR-0011, décision 12).
 //! Les libellés cherchés sont construits par `Texts` (jamais en dur : le
@@ -20,7 +24,11 @@
 )]
 
 mod common;
+mod edit;
+mod files;
+mod session;
 mod snapshots;
+mod structure;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -202,8 +210,8 @@ fn welcome_open_demo_loads_project() {
     let document = app.document.as_ref().unwrap();
     assert!(document.origin.demo);
     assert_eq!(document.origin.name, fr(TextId::DemoFileName));
-    assert_eq!(document.generation, 1);
-    assert_eq!(document.project.tasks.len(), 49);
+    assert_eq!(document.opening, 1);
+    assert_eq!(document.project().tasks.len(), 49);
     assert!(app.messages().is_empty(), "{:?}", app.messages());
     assert_eq!(app.last_frame.gantt_rows, app.last_frame.table_rows);
     // L'accueil a disparu ; la barre d'état affiche le nom de l'exemple.
@@ -334,7 +342,7 @@ fn open_error_shows_dismissable_banner() {
     harness.run();
     assert_eq!(harness.state().messages().len(), 1);
     // Le document précédent reste affiché.
-    assert_eq!(harness.state().document.as_ref().unwrap().generation, 1);
+    assert_eq!(harness.state().document.as_ref().unwrap().opening, 1);
     assert!(harness.query_by_label(&fr(TextId::OpenErrorTitle)).is_some());
     click(&mut harness, &fr(TextId::MessageDismiss));
     assert_eq!(harness.state().messages().len(), 0);
@@ -454,7 +462,7 @@ fn ctrl_wheel_zoom_is_anchored_under_pointer() {
         .document
         .as_ref()
         .unwrap()
-        .project
+        .project()
         .effective_status_date();
     let x_before = screen_axis(harness.state()).x(date);
     let view = harness.state().view();
@@ -494,7 +502,7 @@ fn zoom_step_action_keeps_date_under_anchor() {
     harness.state_mut().dispatch(Action::ScrollGanttX(100.0));
     harness.run();
     let app = harness.state();
-    let date = app.document.as_ref().unwrap().project.effective_status_date();
+    let date = app.document.as_ref().unwrap().project().effective_status_date();
     let x_before = screen_axis(app).x(date);
     let anchor_x = x_before - app.view().last_gantt_left;
     harness
@@ -563,7 +571,7 @@ fn open_event_success_installs_new_generation() {
     let app = harness.state();
     assert!(!app.is_opening());
     let doc = app.document.as_ref().unwrap();
-    assert_eq!(doc.generation, 2);
+    assert_eq!(doc.opening, 2);
     assert_eq!(doc.origin.name, "maison.xml");
     assert!(app.selection.is_none());
     assert!(!app.view().needs_fit, "zoom ajusté dès l'image suivante");
@@ -580,7 +588,7 @@ fn open_event_error_shows_banner_and_keeps_document() {
     harness.run();
     let app = harness.state();
     assert!(!app.is_opening());
-    assert_eq!(app.document.as_ref().unwrap().generation, 1);
+    assert_eq!(app.document.as_ref().unwrap().opening, 1);
     assert_eq!(app.messages().len(), 1);
     assert!(harness.query_by_label(&fr(TextId::OpenErrorTitle)).is_some());
 }
@@ -616,7 +624,7 @@ fn open_dialog_while_opening_relaunches() {
     harness.run();
     let app = harness.state();
     assert!(!app.is_opening());
-    assert_eq!(app.document.as_ref().unwrap().generation, 1);
+    assert_eq!(app.document.as_ref().unwrap().opening, 1);
 }
 
 /// Relecture A, I1 : un diagnostic de lien pendant (texte du cœur avec

@@ -10,6 +10,9 @@ repository.workspace = true
 [dependencies]
 planrs-core.workspace = true
 planrs-mspdi.workspace = true
+# Session et registre de commandes (ADR-0012 D11) : toute édition passe par
+# `Action::Exec(Batch)`.
+planrs-automation.workspace = true
 egui.workspace = true
 eframe.workspace = true
 chrono.workspace = true
@@ -35,10 +38,14 @@ sys-locale = { workspace = true, features = ["js"] }
 rfd = { workspace = true, features = ["file-handle-inner"] }
 wasm-bindgen-futures.workspace = true
 js-sys.workspace = true
+# Enregistrement web : téléchargement direct (Blob, URL d'objet, ancre
+# `download`) au lieu de la fenêtre de rfd (relecture finale J4, F3).
+web-sys = { workspace = true, features = ["Blob", "BlobPropertyBag", "Url", "HtmlAnchorElement", "HtmlElement"] }
 
 [dev-dependencies]
 egui_kittest.workspace = true
 fluent-syntax.workspace = true
+proptest.workspace = true
 
 [lints]
 workspace = true

@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`render.gantt` : diagramme de Gantt en SVG, borné.",
+  "properties": {
+    "critical_only": {
+      "description": "Tâches critiques seulement.",
+      "type": "boolean"
+    },
+    "from": {
+      "description": "Premier jour affiché (défaut : début du projet).",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "max_rows": {
+      "description": "Lignes affichées au plus (au plus 200).",
+      "format": "uint32",
+      "maximum": 200,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "to": {
+      "description": "Dernier jour affiché (défaut : fin du projet).",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "zoom": {
+      "anyOf": [
+        {
+          "description": "Échelle de temps d'un rendu.",
+          "oneOf": [
+            {
+              "const": "auto",
+              "description": "Choisie selon l'étendue du projet.",
+              "type": "string"
+            },
+            {
+              "const": "day",
+              "description": "Jours.",
+              "type": "string"
+            },
+            {
+              "const": "week",
+              "description": "Semaines.",
+              "type": "string"
+            },
+            {
+              "const": "month",
+              "description": "Mois.",
+              "type": "string"
+            },
+            {
+              "const": "quarter",
+              "description": "Trimestres.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Échelle de temps."
+    }
+  },
+  "title": "RenderGanttParams",
+  "type": "object"
+}

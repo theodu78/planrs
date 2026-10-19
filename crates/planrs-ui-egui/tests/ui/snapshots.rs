@@ -79,7 +79,7 @@ fn snapshot_main_fr_light_day() {
     // l'axe de l'interface, jamais par le test).
     let doc = harness.state().document.as_ref().unwrap();
     let axis = TimeAxis::new(doc.range, TimeScaleZoom::Day, 0.0);
-    let target = axis.x(doc.project.effective_status_date()) - 2.0 * axis.px_per_day();
+    let target = axis.x(doc.project().effective_status_date()) - 2.0 * axis.px_per_day();
     let target = target.max(0.0);
     harness.state_mut().dispatch(Action::ScrollGanttX(target));
     harness.run();

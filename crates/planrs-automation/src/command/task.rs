@@ -1,0 +1,599 @@
+//! Exécution des commandes de tâches (R-152 à R-155, R-157, R-158, R-161 ;
+//! lot L4).
+//!
+//! Chaque commande travaille sur le clone du lot (`Ctx::project`) : un
+//! refus interrompt le lot sans rien laisser (le pipeline jette le clone).
+//! Les contrôles précèdent toujours les modifications de la commande. Les
+//! changements d'ordre passent par `Arena::splice` (un bloc, une passe), sans
+//! insertion élément par élément.
+
+use std::collections::BTreeSet;
+
+use planrs_core::{
+    Assignment, Constraint, ModelError, Moment, OutlineLevel, ScheduleAnchor, SchedulingMode, Subject, Task,
+    TaskUid,
+};
+
+use super::exec::Ctx;
+use super::extras_invalidation::TaskChange;
+use super::outline::{
+    MAX_LEVEL, block_end, level_at, level_limit, order, prev_non_null, renumbered, summaries,
+};
+use super::{Patch, Placement, TaskAdd, TaskDelete, TaskMove, TaskOne, TaskRef, TaskUpdate};
+use crate::error::{CommandError, CommandErrorKind, codes};
+use crate::outcome::SideEffect;
+
+/// Longueur maximale d'un nom de tâche, en caractères (`Task/Name` MSPDI).
+pub(crate) const MAX_NAME_CHARS: usize = 512;
+
+/// `param.invalid` sur `field`, avec une explication.
+fn invalid(field: &str, why: &str) -> CommandError {
+    CommandError::new(
+        codes::PARAM_INVALID,
+        CommandErrorKind::InvalidParam(why.to_owned()),
+    )
+    .with_field(field)
+}
+
+/// Erreur du modèle (jamais attendue : les contrôles la précèdent).
+fn model(e: &ModelError) -> CommandError {
+    CommandError::new(
+        codes::PARAM_INVALID,
+        CommandErrorKind::InvalidParam(e.to_string()),
+    )
+}
+
+/// Nom de tâche : au plus [`MAX_NAME_CHARS`] caractères ; vide accepté
+/// (R-152).
+fn check_name(name: &str) -> Result<(), CommandError> {
+    if name.chars().count() > MAX_NAME_CHARS {
+        return Err(invalid("name", "nom de plus de 512 caractères"));
+    }
+    Ok(())
+}
+
+/// Niveau `level` → `OutlineLevel`.
+fn outline(level: u16) -> Result<OutlineLevel, CommandError> {
+    OutlineLevel::new(level).map_err(|e| model(&e))
+}
+
+/// Niveau d'un enfant de `level` (R-153 : au plus 65 535).
+fn child_level(level: u16) -> Result<u16, CommandError> {
+    level.checked_add(1).ok_or_else(level_limit)
+}
+
+/// Position d'une tâche existante du clone.
+fn position(ctx: &Ctx<'_>, uid: TaskUid, field: &str) -> Result<usize, CommandError> {
+    ctx.project.tasks.position(uid).ok_or_else(|| {
+        CommandError::new(codes::TASK_NOT_FOUND, CommandErrorKind::UnknownTask(uid))
+            .with_field(field)
+            .with_subject(Subject::Task(uid))
+    })
+}
+
+/// Marque `uid` comme touchée par l'opération courante (R-160).
+fn touch(ctx: &mut Ctx<'_>, uid: TaskUid) {
+    ctx.touched.insert(Subject::Task(uid), ctx.op_index);
+}
+
+/// Place d'insertion : position dans l'ordre courant et niveau.
+#[derive(Clone, Copy, Debug)]
+struct Slot {
+    index: usize,
+    level: u16,
+}
+
+/// R-152, R-154 : place désignée par `at` dans l'ordre courant, et la tâche
+/// de référence du placement (aucune pour `End`).
+fn slot(ctx: &Ctx<'_>, at: &Placement, field: &str) -> Result<(Slot, Option<TaskUid>), CommandError> {
+    let tasks = &ctx.project.tasks;
+    let target = |r: &TaskRef| -> Result<(TaskUid, usize, u16), CommandError> {
+        let uid = ctx.task(r, field)?;
+        let pos = position(ctx, uid, field)?;
+        Ok((uid, pos, level_at(tasks, pos)))
+    };
+    Ok(match at {
+        Placement::End => (
+            Slot {
+                index: tasks.len(),
+                level: 1,
+            },
+            None,
+        ),
+        Placement::After(r) => {
+            let (uid, pos, level) = target(r)?;
+            (
+                Slot {
+                    index: block_end(tasks, pos),
+                    level,
+                },
+                Some(uid),
+            )
+        }
+        Placement::Before(r) => {
+            let (uid, pos, level) = target(r)?;
+            (Slot { index: pos, level }, Some(uid))
+        }
+        Placement::FirstChildOf(r) => {
+            let (uid, pos, level) = target(r)?;
+            (
+                Slot {
+                    index: pos.saturating_add(1),
+                    level: child_level(level)?,
+                },
+                Some(uid),
+            )
+        }
+        Placement::LastChildOf(r) => {
+            let (uid, pos, level) = target(r)?;
+            (
+                Slot {
+                    index: block_end(tasks, pos),
+                    level: child_level(level)?,
+                },
+                Some(uid),
+            )
+        }
+    })
+}
+
+/// Côté d'une date saisie (R-158).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Side {
+    Start,
+    Finish,
+}
+
+/// R-158 : contrainte posée par une date saisie. Depuis le début : début →
+/// SNET, fin → FNET ; à rebours : SNLT, FNLT. Date effacée : contrainte par
+/// défaut du sens (ASAP, ALAP à rebours, R-108).
+fn entered_constraint(anchor: &ScheduleAnchor, side: Side, date: Option<Moment>) -> Constraint {
+    let backward = matches!(anchor, ScheduleAnchor::FromFinish(_));
+    match (date, side, backward) {
+        (None, _, _) => Constraint::default_for(anchor),
+        (Some(date), Side::Start, false) => Constraint::StartNoEarlierThan { date },
+        (Some(date), Side::Finish, false) => Constraint::FinishNoEarlierThan { date },
+        (Some(date), Side::Start, true) => Constraint::StartNoLaterThan { date },
+        (Some(date), Side::Finish, true) => Constraint::FinishNoLaterThan { date },
+    }
+}
+
+/// R-158 : date saisie d'une opération, au plus une (début ou fin) :
+/// `None` si aucune, sinon le côté et la date (`None` : effacée).
+fn entered_date(
+    start: &Patch<Moment>,
+    finish: &Patch<Moment>,
+) -> Result<Option<(Side, Option<Moment>)>, CommandError> {
+    let side = |p: &Patch<Moment>, s: Side| match p {
+        Patch::Keep => None,
+        Patch::Set(d) => Some((s, Some(*d))),
+        Patch::Clear => Some((s, None)),
+    };
+    match (side(start, Side::Start), side(finish, Side::Finish)) {
+        (Some(_), Some(_)) => Err(invalid(
+            "finish",
+            "un seul de « start » ou « finish » par opération (chacun pose la contrainte de la tâche)",
+        )),
+        (s, f) => Ok(s.or(f)),
+    }
+}
+
+/// Pose la contrainte d'une date saisie et signale l'effet (R-158) ; vrai
+/// si la contrainte a changé.
+fn set_entered(ctx: &mut Ctx<'_>, uid: TaskUid, side: Side, date: Option<Moment>) -> bool {
+    let constraint = entered_constraint(&ctx.project.anchor, side, date);
+    let Some(t) = ctx.project.tasks.get_mut(uid) else {
+        return false;
+    };
+    let changed = t.constraint != constraint;
+    t.constraint = constraint;
+    ctx.effects.push(SideEffect::ConstraintSet {
+        uid,
+        kind: constraint.kind(),
+    });
+    changed
+}
+
+/// R-161 : hiérarchie changée. Jette les `Extras` de planning des tâches
+/// `moved` et de celles qui deviennent récapitulatives ou cessent de
+/// l'être (`before` : récapitulatives d'avant la commande) ; les marque
+/// touchées (R-160).
+fn hierarchy_changed(ctx: &mut Ctx<'_>, before: &BTreeSet<TaskUid>, moved: &[TaskUid]) {
+    let after = summaries(&ctx.project.tasks);
+    let mut hit: BTreeSet<TaskUid> = moved.iter().copied().collect();
+    hit.extend(
+        before
+            .symmetric_difference(&after)
+            .copied()
+            .filter(|u| ctx.project.tasks.contains(*u)),
+    );
+    for uid in hit {
+        touch(ctx, uid);
+        ctx.drop_task_extras(uid, TaskChange::Outline);
+    }
+}
+
+/// Insère `items` à la position `index` (un bloc, une passe).
+fn insert_block(ctx: &mut Ctx<'_>, index: usize, items: Vec<Task>) -> Result<(), CommandError> {
+    ctx.project
+        .tasks
+        .splice(index..index, items)
+        .map(drop)
+        .map_err(|e| model(&e))
+}
+
+/// R-152 : `task.add`.
+pub(super) fn add(op: &TaskAdd, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
+    check_name(&op.name)?;
+    let at = op.at.clone().unwrap_or_default();
+    let (slot, _) = slot(ctx, &at, "at")?;
+    let duration = op
+        .duration
+        .as_ref()
+        .map(|d| ctx.duration(d, "duration"))
+        .transpose()?;
+    let entered = entered_date(
+        &op.start.map_or(Patch::Keep, Patch::Set),
+        &op.finish.map_or(Patch::Keep, Patch::Set),
+    )?;
+    let uid = ctx.uids.alloc()?;
+    if let Some(label) = &op.label {
+        ctx.define_label(label, uid)?;
+    }
+    let mut task = Task::new(uid, op.name.clone(), &ctx.project.options);
+    task.outline_level = outline(slot.level)?;
+    task.constraint = Constraint::default_for(&ctx.project.anchor);
+    if let Some(d) = duration {
+        task.duration = d;
+    }
+    // R-157 : durée nulle ⇒ jalon ; un `milestone` explicite l'emporte.
+    task.milestone = op.milestone.unwrap_or(task.duration.is_zero());
+    if let Some(notes) = &op.notes {
+        task.notes.clone_from(notes);
+    }
+    let before_order = order(&ctx.project.tasks);
+    let before_summaries = summaries(&ctx.project.tasks);
+    insert_block(ctx, slot.index, vec![task])?;
+    ctx.created.push(uid);
+    touch(ctx, uid);
+    if let Some((side, date)) = entered {
+        set_entered(ctx, uid, side, date);
+    }
+    // Le parent qui reçoit son premier enfant devient récapitulative.
+    hierarchy_changed(ctx, &before_summaries, &[]);
+    if let Some(e) = renumbered(&before_order, &ctx.project.tasks) {
+        ctx.effects.push(e);
+    }
+    Ok(())
+}
+
+/// R-157 : refus d'une date ou d'une durée sur une tâche dont le moteur ne
+/// la recalcule pas, ou la calcule.
+fn check_computed(op: &TaskUpdate, uid: TaskUid, summary: bool, manual: bool) -> Result<(), CommandError> {
+    let fields = [
+        ("duration", !op.duration.is_keep()),
+        ("start", !op.start.is_keep()),
+        ("finish", !op.finish.is_keep()),
+    ];
+    for (field, present) in fields {
+        if !present {
+            continue;
+        }
+        if manual {
+            return Err(CommandError::new(
+                codes::TASK_MANUAL_UNSUPPORTED,
+                CommandErrorKind::ManualTaskUnsupported,
+            )
+            .with_field(field)
+            .with_subject(Subject::Task(uid)));
+        }
+        if summary {
+            return Err(
+                CommandError::new(codes::TASK_COMPUTED_FIELD, CommandErrorKind::ComputedField)
+                    .with_field(field)
+                    .with_subject(Subject::Task(uid)),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// R-157, R-158, R-161 : `task.update`.
+pub(super) fn update(op: &TaskUpdate, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
+    let uid = ctx.task(&op.uid, "uid")?;
+    let pos = position(ctx, uid, "uid")?;
+    let summary = block_end(&ctx.project.tasks, pos) > pos.saturating_add(1);
+    let manual = ctx
+        .project
+        .tasks
+        .get(uid)
+        .is_some_and(|t| matches!(t.mode, SchedulingMode::Manual { .. }));
+    // Contrôles, avant toute modification.
+    match &op.name {
+        Patch::Clear => return Err(invalid("name", "le nom ne s'efface pas (chaîne vide acceptée)")),
+        Patch::Set(n) => check_name(n)?,
+        Patch::Keep => {}
+    }
+    if op.active == Patch::Clear {
+        return Err(invalid("active", "booléen attendu"));
+    }
+    check_computed(op, uid, summary, manual)?;
+    let duration = match &op.duration {
+        Patch::Keep => None,
+        Patch::Set(d) => Some(ctx.duration(d, "duration")?),
+        Patch::Clear => return Err(invalid("duration", "durée attendue (la durée ne s'efface pas)")),
+    };
+    let entered = entered_date(&op.start, &op.finish)?;
+
+    let Some(t) = ctx.project.tasks.get_mut(uid) else {
+        return Err(CommandError::new(
+            codes::TASK_NOT_FOUND,
+            CommandErrorKind::UnknownTask(uid),
+        ));
+    };
+    let mut changes = Vec::new();
+    if let Patch::Set(n) = &op.name
+        && t.name != *n
+    {
+        t.name.clone_from(n);
+        changes.push(TaskChange::Name);
+    }
+    if let Some(d) = duration {
+        if t.duration != d {
+            t.duration = d;
+            changes.push(TaskChange::Duration);
+        }
+        // R-157 : durée nulle ⇒ jalon (sauf `milestone` explicite).
+        if d.is_zero() && op.milestone.is_keep() && !t.milestone {
+            t.milestone = true;
+            changes.push(TaskChange::Milestone);
+        }
+    }
+    let milestone = match op.milestone {
+        Patch::Keep => None,
+        Patch::Set(b) => Some(b),
+        Patch::Clear => Some(false),
+    };
+    if let Some(m) = milestone
+        && t.milestone != m
+    {
+        t.milestone = m;
+        changes.push(TaskChange::Milestone);
+    }
+    let notes = match &op.notes {
+        Patch::Keep => None,
+        Patch::Set(n) => Some(n.as_str()),
+        Patch::Clear => Some(""),
+    };
+    if let Some(n) = notes
+        && t.notes != n
+    {
+        n.clone_into(&mut t.notes);
+        changes.push(TaskChange::Notes);
+    }
+    if let Patch::Set(a) = op.active
+        && t.active != a
+    {
+        t.active = a;
+        changes.push(TaskChange::Active);
+    }
+    if let Some((side, date)) = entered
+        && set_entered(ctx, uid, side, date)
+    {
+        changes.push(TaskChange::Constraint);
+    }
+    touch(ctx, uid);
+    for c in &changes {
+        ctx.drop_task_extras(uid, *c);
+    }
+    if changes.contains(&TaskChange::Duration) {
+        ctx.drop_assignment_extras(uid);
+    }
+    Ok(())
+}
+
+/// R-155 : `task.delete`.
+pub(super) fn delete(op: &TaskDelete, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
+    let uid = ctx.task(&op.uid, "uid")?;
+    let pos = position(ctx, uid, "uid")?;
+    let end = block_end(&ctx.project.tasks, pos);
+    let descendants = end.saturating_sub(pos).saturating_sub(1);
+    if descendants > 0 && !op.cascade {
+        return Err(CommandError::new(
+            codes::TASK_HAS_CHILDREN,
+            CommandErrorKind::HasChildren { count: descendants },
+        )
+        .with_field("cascade")
+        .with_subject(Subject::Task(uid)));
+    }
+    let before_order = order(&ctx.project.tasks);
+    let before_summaries = summaries(&ctx.project.tasks);
+    let removed = ctx
+        .project
+        .tasks
+        .splice(pos..end, Vec::new())
+        .map_err(|e| model(&e))?;
+    let deleted: BTreeSet<TaskUid> = removed.iter().map(Task::uid).collect();
+    for t in &removed {
+        let u = t.uid();
+        touch(ctx, u);
+        ctx.effects.push(SideEffect::TaskDeleted(u));
+    }
+    // Liens dont une tâche supprimée est successeur : partis avec elle.
+    for t in &removed {
+        for l in &t.predecessors {
+            ctx.effects.push(SideEffect::LinkRemoved {
+                pred: l.predecessor,
+                succ: t.uid(),
+            });
+        }
+    }
+    // Liens dont elle est prédécesseur : une passe sur les tâches gardées.
+    let mut relinked = Vec::new();
+    for t in &ctx.project.tasks {
+        if t.predecessors.iter().any(|l| deleted.contains(&l.predecessor)) {
+            relinked.push(t.uid());
+        }
+    }
+    // Successeurs dont les liens changent : Extras jetés après les
+    // affectations, pour l'ordre des effets de R-155.
+    let mut dropped_links = Vec::with_capacity(relinked.len());
+    for succ in relinked {
+        let Some(t) = ctx.project.tasks.get_mut(succ) else {
+            continue;
+        };
+        let mut gone = Vec::new();
+        t.predecessors.retain(|l| {
+            let hit = deleted.contains(&l.predecessor);
+            if hit {
+                gone.push(l.predecessor);
+            }
+            !hit
+        });
+        for pred in gone {
+            ctx.effects.push(SideEffect::LinkRemoved { pred, succ });
+            ctx.touched.insert(
+                Subject::Link {
+                    predecessor: pred,
+                    successor: succ,
+                },
+                ctx.op_index,
+            );
+        }
+        touch(ctx, succ);
+        dropped_links.push(succ);
+    }
+    // Affectations des tâches supprimées : une reconstruction de l'arène.
+    if ctx.project.assignments.iter().any(|a| deleted.contains(&a.task)) {
+        let all: Vec<Assignment> = std::mem::take(&mut ctx.project.assignments).into();
+        let (gone, kept): (Vec<Assignment>, Vec<Assignment>) =
+            all.into_iter().partition(|a| deleted.contains(&a.task));
+        ctx.project.assignments = kept.try_into().map_err(|e: ModelError| model(&e))?;
+        for a in gone {
+            ctx.effects.push(SideEffect::AssignmentRemoved(a.uid()));
+        }
+    }
+    for succ in dropped_links {
+        ctx.drop_task_extras(succ, TaskChange::Links);
+    }
+    hierarchy_changed(ctx, &before_summaries, &[]);
+    if let Some(e) = renumbered(&before_order, &ctx.project.tasks) {
+        ctx.effects.push(e);
+    }
+    Ok(())
+}
+
+/// Décale de `delta` le niveau des tâches `block` (R-153, R-154).
+fn shift_levels(block: &mut [Task], delta: i32) -> Result<(), CommandError> {
+    // Contrôle complet d'abord : un refus ne laisse rien à moitié.
+    let mut levels = Vec::with_capacity(block.len());
+    for t in block.iter() {
+        let level = i32::from(t.outline_level.get())
+            .checked_add(delta)
+            .and_then(|l| u16::try_from(l).ok())
+            .filter(|&l| l >= 1)
+            .ok_or_else(level_limit)?;
+        levels.push(outline(level)?);
+    }
+    for (t, l) in block.iter_mut().zip(levels) {
+        t.outline_level = l;
+    }
+    Ok(())
+}
+
+/// R-154 : `task.move`.
+pub(super) fn move_to(op: &TaskMove, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
+    let uid = ctx.task(&op.uid, "uid")?;
+    let pos = position(ctx, uid, "uid")?;
+    let end = block_end(&ctx.project.tasks, pos);
+    // Cible résolue avant le retrait du bloc.
+    let (slot, target) = slot(ctx, &op.to, "to")?;
+    let into_block = target
+        .and_then(|t| ctx.project.tasks.position(t))
+        .is_some_and(|p| (pos..end).contains(&p))
+        || (pos < slot.index && slot.index < end);
+    if into_block {
+        return Err(CommandError::new(
+            codes::TASK_MOVE_INTO_SUBTREE,
+            CommandErrorKind::MoveIntoOwnSubtree,
+        )
+        .with_field("to")
+        .with_subject(Subject::Task(uid)));
+    }
+    let delta = i32::from(slot.level).saturating_sub(i32::from(level_at(&ctx.project.tasks, pos)));
+    let size = end.saturating_sub(pos);
+    let index = if slot.index >= end {
+        slot.index.saturating_sub(size)
+    } else {
+        slot.index
+    };
+    // Bloc remis à sa place, au même niveau : rien ne change, aucun Extras
+    // n'est jeté (R-161 : un champ n'est modifié que si sa valeur change).
+    if index == pos && delta == 0 {
+        touch(ctx, uid);
+        return Ok(());
+    }
+    let before_order = order(&ctx.project.tasks);
+    let before_summaries = summaries(&ctx.project.tasks);
+    // Contrôle des niveaux sur une copie du bloc, avant tout retrait.
+    let mut block: Vec<Task> = ctx.project.tasks.iter().skip(pos).take(size).cloned().collect();
+    shift_levels(&mut block, delta)?;
+    let moved: Vec<TaskUid> = block.iter().map(Task::uid).collect();
+    ctx.project
+        .tasks
+        .splice(pos..end, Vec::new())
+        .map_err(|e| model(&e))?;
+    insert_block(ctx, index, block)?;
+    hierarchy_changed(ctx, &before_summaries, &moved);
+    if let Some(e) = renumbered(&before_order, &ctx.project.tasks) {
+        ctx.effects.push(e);
+    }
+    Ok(())
+}
+
+/// `task.outline_refused` sur la tâche `uid`.
+fn outline_refused(uid: TaskUid) -> CommandError {
+    CommandError::new(codes::TASK_OUTLINE_REFUSED, CommandErrorKind::OutlineRefused)
+        .with_field("uid")
+        .with_subject(Subject::Task(uid))
+}
+
+/// Décale de `delta` le bloc de la tâche à la position `pos` (en place).
+fn shift_block(ctx: &mut Ctx<'_>, pos: usize, delta: i32) -> Result<(), CommandError> {
+    let end = block_end(&ctx.project.tasks, pos);
+    let size = end.saturating_sub(pos);
+    let mut block: Vec<Task> = ctx.project.tasks.iter().skip(pos).take(size).cloned().collect();
+    shift_levels(&mut block, delta)?;
+    let moved: Vec<TaskUid> = block.iter().map(Task::uid).collect();
+    let before_summaries = summaries(&ctx.project.tasks);
+    ctx.project.tasks.splice(pos..end, block).map_err(|e| model(&e))?;
+    hierarchy_changed(ctx, &before_summaries, &moved);
+    Ok(())
+}
+
+/// R-153 : `task.indent`.
+pub(super) fn indent(op: &TaskOne, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
+    let uid = ctx.task(&op.uid, "uid")?;
+    let pos = position(ctx, uid, "uid")?;
+    let tasks = &ctx.project.tasks;
+    let Some(prev) = prev_non_null(tasks, pos) else {
+        return Err(outline_refused(uid));
+    };
+    if level_at(tasks, pos) > level_at(tasks, prev) {
+        return Err(outline_refused(uid));
+    }
+    if level_at(tasks, pos) == MAX_LEVEL {
+        return Err(level_limit().with_field("uid"));
+    }
+    shift_block(ctx, pos, 1)
+}
+
+/// R-153 : `task.outdent`.
+pub(super) fn outdent(op: &TaskOne, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
+    let uid = ctx.task(&op.uid, "uid")?;
+    let pos = position(ctx, uid, "uid")?;
+    if level_at(&ctx.project.tasks, pos) <= 1 {
+        return Err(outline_refused(uid));
+    }
+    shift_block(ctx, pos, -1)
+}

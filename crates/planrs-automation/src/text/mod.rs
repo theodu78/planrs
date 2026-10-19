@@ -27,14 +27,16 @@ pub use predecessors::{
 };
 
 use planrs_core::{ConversionFactors, DurationUnit, Project, ProjectOptions, TimeOfDay};
-use serde::Serialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 /// Longueur maximale d'une entrée, en caractères.
 pub const MAX_INPUT_CHARS: usize = 1_024;
 
 /// Langue d'écriture. La lecture accepte le français et l'anglais quelle que
-/// soit la langue du contexte.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+/// soit la langue du contexte. Désérialisable (`"fr"`, `"en"`) : langue d'un
+/// lot de commandes (ADR-0012 D6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Language {
     /// Français : « 5j », « 2s », « 3FD+2j ».

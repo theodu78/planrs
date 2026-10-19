@@ -7,9 +7,10 @@
 ## Écran d'accueil
 
 welcome-title = Welcome to { $product }
-welcome-subtitle = Free MS Project clone — read-only for now
+welcome-subtitle = Free MS Project clone — open, edit, save
 welcome-open-demo = Open the sample: house construction
 welcome-open-file = Open an MSPDI file (.xml)…
+welcome-new-project = New project
 welcome-web-note = The file stays in your browser; nothing is uploaded.
 welcome-language = Language
 welcome-theme = Theme
@@ -177,6 +178,27 @@ open-error-title = Could not open the file
 open-error-read = Could not read the file: { $detail }
 open-error-mspdi = Unreadable MSPDI file: { $detail }
 
+## Nouveau, Enregistrer, Enregistrer sous (lot L13)
+
+menu-new = New
+menu-save = Save
+menu-quit = Quit
+menu-save-as = Save As…
+new-project-name = Project1
+dialog-save-title = Save the project (MSPDI)
+save-in-progress = A save is already in progress.
+save-error-title = Could not save the file
+save-error-write = Cannot write the file: { $detail }
+save-adjusted =
+    { $count ->
+        [one] Saved: { $count } value adjusted to the MSPDI format.
+       *[other] Saved: { $count } values adjusted to the MSPDI format.
+    }
+confirm-unsaved-title = Save changes to “{ $name }”?
+confirm-save = Save
+confirm-discard = Don't Save
+confirm-cancel = Cancel
+
 ## Bandeau de messages
 
 message-dismiss = Dismiss
@@ -191,3 +213,78 @@ demo-file-name = Sample: house construction
 file-filter-mspdi = MSPDI file (XML)
 dialog-open-title = Open an MSPDI file
 state-load-warning = Display preferences ignored: { $detail }
+
+## Menu Édition
+
+menu-edit = Edit
+menu-undo = Undo
+menu-redo = Redo
+
+## Structure (menu contextuel, confirmation de suppression)
+
+structure-insert = Insert Task
+structure-delete = Delete Task
+structure-indent = Indent
+structure-outdent = Outdent
+structure-link = Link Tasks
+structure-unlink = Unlink Tasks
+confirm-delete-title = Delete a summary task
+confirm-delete-text =
+    { $count ->
+        [one] The task will be deleted.
+       *[other] The summary task and its subtasks will be deleted ({ $count } tasks).
+    }
+confirm-delete-yes = Delete
+confirm-delete-no = Cancel
+
+## Refus de commande (une clé par code d'erreur du moteur, `error-<code>`)
+
+command-error-title = Change refused
+error-unknown = Error: { $detail }
+error-batch-duplicate_label = Duplicate label: { $detail }
+error-batch-unknown_label = Unknown label: { $detail }
+error-batch-unsupported_version = Unsupported format version: { $detail }
+error-batch-would_create_errors = Change would introduce errors: { $detail }
+error-calendar-exception_not_found = Calendar exception not found: { $detail }
+error-calendar-exception_overlap = Overlapping calendar exceptions: { $detail }
+error-calendar-not_found = Calendar not found: { $detail }
+error-command-not_yet_available = Command not available yet: { $detail }
+error-file-invalid = Unreadable file: { $detail }
+error-file-open_in_app = File open in the application: { $detail }
+error-file-outside_root = Path not allowed: { $detail }
+error-file-read = Read failed: { $detail }
+error-file-too_large = File too large: { $detail }
+error-file-write = Write failed: { $detail }
+error-history-empty = Nothing to undo or redo: { $detail }
+error-history-inconsistent = Inconsistent history: { $detail }
+error-limit-exceeded = Limit exceeded: { $detail }
+error-link-duplicate = Link already exists: { $detail }
+error-link-not_found = Link not found: { $detail }
+error-link-self = Task linked to itself: { $detail }
+error-link-summary_descendant = Link between a summary task and its subtask: { $detail }
+error-param-invalid = Value refused: { $detail }
+error-param-mismatch = Contradictory values: { $detail }
+error-session-none = No document: { $detail }
+error-session-poisoned = Session unavailable: { $detail }
+error-task-computed_field = Computed field: { $detail }
+error-task-has_children = Summary task with subtasks: { $detail }
+error-task-manual_unsupported = Manually scheduled task: { $detail }
+error-task-move_into_subtree = Move not possible: { $detail }
+error-task-not_found = Task not found: { $detail }
+error-task-outline_refused = Outline change refused: { $detail }
+error-text-bad_date = Unreadable date: { $detail }
+error-text-bad_link_type = Unknown link type: { $detail }
+error-text-bad_number = Unreadable number: { $detail }
+error-text-empty = Empty entry: { $detail }
+error-text-external_predecessor = External predecessor: { $detail }
+error-text-negative = Negative value: { $detail }
+error-text-out_of_range = Value out of range: { $detail }
+error-text-too_long = Entry too long: { $detail }
+error-text-unknown_unit = Unknown unit: { $detail }
+
+## Cell editing (lot L12)
+
+blank-row-label = Blank row (new task)
+cell-edit-label = Edit: { $column }
+edit-error-unknown-id = No task with ID { $id }
+edit-error-not-editable = Computed column, read-only

@@ -45,8 +45,8 @@ use crate::arena::Arena;
 use crate::calendar::{CalendarKind, CalendarSet, CompiledCalendar, Span, builtin};
 use crate::diagnostic::{Diagnostic, Diagnostics};
 use crate::duration::Minutes;
-use crate::ids::TaskUid;
-use crate::model::{Project, ScheduleAnchor};
+use crate::ids::{CalendarUid, TaskUid};
+use crate::model::{Project, ScheduleAnchor, Task};
 use crate::time::Moment;
 use constraint::{Mode, PassRole};
 use network::{Fail, Network, NodeIx, pos};
@@ -131,6 +131,8 @@ struct Calc<'n, 'a> {
     project: &'n Project,
     /// Sens de planification.
     mode: Mode,
+    /// Implémentation des marges et des % achevés (lot L15).
+    strategy: Strategy,
     /// Rôle de la passe en cours.
     role: PassRole,
     /// Repasse (R-092) : aucun diagnostic, sauf `schedule.internal`.
@@ -383,6 +385,33 @@ pub fn schedule(project: &Project) -> Schedule {
 /// [`schedule`] avec des plafonds explicites (tests des plafonds, outils).
 #[must_use]
 pub fn schedule_with(project: &Project, limits: Limits) -> Schedule {
+    run(project, limits, Strategy::Fast)
+}
+
+/// [`schedule`] par l'implémentation de référence des marges et du %
+/// achevé des récapitulatives (celle de J3, en O(N × profondeur × liens)) :
+/// oracle des tests d'égalité de l'implémentation rapide (ADR-0012, lot
+/// L15). Résultat identique à [`schedule`] ; ne sert pas en production.
+#[doc(hidden)]
+#[must_use]
+pub fn schedule_reference(project: &Project) -> Schedule {
+    run(project, Limits::default(), Strategy::Reference)
+}
+
+/// Implémentation des marges (R-049) et du % achevé des récapitulatives
+/// (R-055).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Strategy {
+    /// Réduction des arcs hérités et sommes préfixes (lot L15), repli sur la
+    /// référence pour un nœud en échec ou après un drapeau changé.
+    Fast,
+    /// Remontée des ancêtres pour chaque nœud, sous-arbre parcouru pour
+    /// chaque récapitulative (J3), oracle des tests.
+    Reference,
+}
+
+/// Corps de [`schedule_with`] et de [`schedule_reference`].
+fn run(project: &Project, limits: Limits, strategy: Strategy) -> Schedule {
     let (mode, anchor) = match project.anchor {
         ScheduleAnchor::FromStart(m) => (Mode::FromStart, m),
         ScheduleAnchor::FromFinish(m) => (Mode::FromFinish, m),
@@ -434,6 +463,7 @@ pub fn schedule_with(project: &Project, limits: Limits) -> Schedule {
         net: &net,
         project,
         mode,
+        strategy,
         role: PassRole::Primary,
         quiet: false,
         start: anchor,
@@ -485,6 +515,55 @@ fn derived_base<'s>(project: &Project, set: &'s CalendarSet) -> Option<&'s Compi
         return None;
     };
     set.get(*base).ok().filter(|c| c.has_working_time())
+}
+
+/// R-113 (exposée pour l'écrivain MSPDI, R-122) : calendrier qui **mesure**
+/// les marges de `task` (R-048, R-049) et, pour une récapitulative, sa
+/// durée (R-054) — le même que celui du moteur.
+///
+/// - Tâche de calendrier propre utilisable (compilé, avec du temps ouvré) :
+///   ce calendrier, même s'il est le calendrier dérivé désigné par le
+///   projet (il place et mesure).
+/// - Sinon (aucun calendrier propre, calendrier propre inutilisable,
+///   R-066, ligne vide) et pour la récapitulative du projet (UID 0, dont le
+///   calendrier propre n'est pas lu, R-068) : le calendrier du projet, qui
+///   est un calendrier de base ; s'il désigne un calendrier dérivé dont la
+///   base est utilisable, cette base.
+/// - `None` : le calendrier du projet est inutilisable, le moteur mesure sur
+///   le calendrier Standard intégré (repli de R-066).
+///
+/// Une durée écoulée (R-067) se mesure en temps civil : c'est à l'appelant
+/// d'en décider pour une feuille (la fonction ne regarde pas la base de la
+/// durée ; une récapitulative se mesure toujours sur ce calendrier).
+/// Compile les calendriers à chaque appel : pour plusieurs tâches, voir
+/// [`measure_calendar_in`].
+#[must_use]
+pub fn measure_calendar(project: &Project, task: &Task) -> Option<CalendarUid> {
+    let (set, _) = CalendarSet::compile(project);
+    measure_calendar_in(project, &set, task)
+}
+
+/// [`measure_calendar`] sur des calendriers déjà compilés
+/// (`CalendarSet::compile(project)`).
+#[must_use]
+pub fn measure_calendar_in(project: &Project, set: &CalendarSet, task: &Task) -> Option<CalendarUid> {
+    let usable = |uid: CalendarUid| set.get(uid).is_ok_and(CompiledCalendar::has_working_time);
+    if task.uid() != TaskUid::PROJECT_SUMMARY
+        && let Some(own) = task.calendar.filter(|&c| !task.is_null && usable(c))
+    {
+        return Some(own);
+    }
+    if !usable(project.calendar) {
+        return None;
+    }
+    match project
+        .calendars
+        .get(project.calendar)
+        .map(crate::calendar::Calendar::kind)
+    {
+        Some(CalendarKind::Derived { base, .. }) if usable(*base) => Some(*base),
+        _ => Some(project.calendar),
+    }
 }
 
 /// Calendrier Standard intégré, compilé seul, sous l'UID du calendrier du

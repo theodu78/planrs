@@ -73,6 +73,31 @@ jobs:
       - name: planrs-web en WebAssembly
         run: cargo clippy -p planrs-web --target wasm32-unknown-unknown -- -D warnings
 
+  # Critère de fin J4 (lot L18, ADR-0012) : « un agent construit un planning
+  # de 30 tâches via MCP », sans LLM. Le scénario écrit à la main
+  # `tests/mcp/scenarios/build_30.jsonl` est rejoué en mémoire, en HTTP et
+  # sur le vrai binaire `planrs mcp` en stdio : résultats égaux aux attendus,
+  # journal produit égal au scénario octet pour octet, MSPDI enregistré égal
+  # à `tests/mcp/expected/build_30.xml` (par `normalize`), undo complet
+  # jusqu'au projet vide, rejeu en mémoire < 2 s en debug. Détail :
+  # `docs/features/mcp.md`. Les mêmes tests tournent aussi dans `checks`
+  # (`cargo test --workspace`) ; ce job les isole pour le critère.
+  mcp:
+    name: MCP (rejeu build_30)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Rejeu en mémoire et en HTTP
+        run: cargo test -p planrs-mcp --features http --test replay --test replay_http
+
+      - name: Rejeu sur le binaire (stdio)
+        run: cargo test -p planrs-cli --test mcp_replay
+
   tests-matrix:
     name: cargo test (${{ matrix.os }})
     strategy:

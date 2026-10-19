@@ -9,15 +9,29 @@
 //! des `Action` (`ScrollGanttX`, `ZoomStep`, `SetTableWidth`, `Select`) ;
 //! aucune conversion pixel → date : seuls des indices de ligne sont déduits
 //! d'une ordonnée.
+//!
+//! Sélection multiple et menu contextuel (lot L14) : un clic de ligne avec
+//! Ctrl/Cmd ou Maj devient `SelectWith` (la table et le Gantt ne poussent
+//! que `Select`, réécrit ici d'après les modificateurs de l'image) ; un clic
+//! droit sur une ligne la sélectionne (si elle ne l'est pas déjà) et ouvre
+//! le menu des commandes de structure (`Action::Structure`).
 
+use egui::containers::menu::menu_style;
 use egui::scroll_area::ScrollBarVisibility;
-use egui::{CursorIcon, Id, PointerButton, Pos2, Rect, Sense, Stroke, pos2, vec2};
+use egui::{
+    Align, CursorIcon, Id, Layout, PointerButton, Popup, PopupAnchor, PopupKind, Pos2, Rect, Sense,
+    SetOpenCommand, Stroke, pos2, vec2,
+};
+
+use planrs_core::TaskUid;
 
 use super::{FrameCtx, OVERSCAN, ViewTransient, gantt, table, timescale};
 use crate::action::Action;
 use crate::geom::{self, MainLayout};
 use crate::i18n::TextId;
-use crate::rows::RowModel;
+use crate::keymap::{self, Binding};
+use crate::selection::SelectMode;
+use crate::structure::StructureOp;
 use crate::timescale::TimeAxis;
 
 /// Largeur minimale du curseur de la barre horizontale, en points.
@@ -83,7 +97,11 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
     timescale::paint_header(ui, fc, &axis, layout.gantt_header);
     paint_corners(ui, fc, &layout, avail);
 
-    let mut delta_x = paint_rows(ui, fc, view, &layout, &axis);
+    let RowsOut {
+        dx: mut delta_x,
+        context_click,
+    } = paint_rows(ui, fc, view, &layout, &axis);
+    context_menu(ui, fc, context_click);
 
     // Molette horizontale (ou Maj + molette) au-dessus du Gantt : la
     // `ScrollArea` verticale ne consomme pas l'axe x (vérifié par le test
@@ -108,18 +126,50 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
     ui.advance_cursor_after_rect(avail);
 }
 
+/// Résultat du corps : défilement horizontal demandé et clic droit.
+struct RowsOut {
+    /// Défilement horizontal demandé par un glisser sur le Gantt.
+    dx: f32,
+    /// Clic droit sur le corps, s'il y en a eu un.
+    context_click: Option<ContextClick>,
+}
+
+/// Clic droit sur le corps de la vue.
+#[derive(Clone, Copy, Debug)]
+struct ContextClick {
+    /// Tâche de la ligne cliquée (`None` sous la dernière ligne).
+    uid: Option<TaskUid>,
+}
+
+/// Réécrit les `Select(Some(uid))` poussés depuis `start` en `SelectWith`
+/// si Ctrl/Cmd (ajout ou retrait) ou Maj (plage) est enfoncé.
+fn apply_click_modifiers(actions: &mut [Action], start: usize, modifiers: egui::Modifiers) {
+    let mode = if modifiers.command {
+        SelectMode::Toggle
+    } else if modifiers.shift {
+        SelectMode::Range
+    } else {
+        return;
+    };
+    for action in actions.iter_mut().skip(start) {
+        if let Action::Select(Some(uid)) = *action {
+            *action = Action::SelectWith { uid, mode };
+        }
+    }
+}
+
 /// `ScrollArea` verticale unique : corps de la table et du Gantt sur la même
 /// plage de lignes, fond cliquable (sélection, glisser horizontal du Gantt).
-/// Rend le défilement horizontal demandé par un glisser sur le Gantt.
 fn paint_rows(
     ui: &mut egui::Ui,
     fc: &mut FrameCtx<'_>,
     view: &mut ViewTransient,
     layout: &MainLayout,
     axis: &TimeAxis,
-) -> f32 {
+) -> RowsOut {
     let row_h = fc.metrics.row_h;
-    let len = fc.rows.map_or(0, RowModel::len);
+    // Une ligne de plus que de tâches : la ligne vide de fin (création).
+    let len = fc.rows.map_or(0, |rows| rows.len().saturating_add(1));
     let content_h = geom::index_to_f32(len) * row_h;
     let content_h = if content_h.is_finite() {
         content_h.max(0.0)
@@ -148,6 +198,7 @@ fn paint_rows(
     body_ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
     let table_clip = layout.table_clip;
     let gantt_clip = layout.gantt_clip;
+    let edit = &mut view.edit;
     let out = area.show_viewport(&mut body_ui, |ui, viewport| {
         let origin = ui.max_rect().min;
         ui.set_min_size(vec2(ui.available_width().max(0.0), content_h));
@@ -159,7 +210,8 @@ fn paint_rows(
             ui.make_persistent_id("planrs-body-bg"),
             Sense::click_and_drag(),
         );
-        table::paint_body(ui, fc, origin, range.clone(), table_clip);
+        let first_action = fc.actions.len();
+        table::paint_body(ui, fc, edit, origin, range.clone(), table_clip);
         gantt::paint_body(ui, fc, axis, origin, range, gantt_clip);
 
         let mut dx = 0.0;
@@ -175,6 +227,13 @@ fn paint_rows(
             };
             fc.actions.push(Action::Select(uid));
         }
+        let modifiers = ui.input(|i| i.modifiers);
+        apply_click_modifiers(fc.actions, first_action, modifiers);
+        let context_click = secondary_click(ui, table_clip.union(gantt_clip)).map(|p| ContextClick {
+            uid: geom::row_at(p.y - origin.y, row_h, len)
+                .and_then(|i| fc.rows.and_then(|rows| rows.row(i)))
+                .map(|row| row.uid),
+        });
         let from_gantt = ui
             .input(|i| i.pointer.press_origin())
             .is_some_and(|p| gantt_clip.contains(p));
@@ -185,10 +244,93 @@ fn paint_rows(
             }
             ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
         }
-        dx
+        RowsOut { dx, context_click }
     });
     // Les plages dessinées sont relevées par chaque volet lui-même.
     out.inner
+}
+
+/// Position d'un clic droit relâché dans cette image au-dessus de `zone`, sur
+/// la couche de `ui` (un clic dans un menu ou une fenêtre au-dessus ne compte
+/// pas).
+fn secondary_click(ui: &egui::Ui, zone: Rect) -> Option<Pos2> {
+    let pos = ui.input(|i| {
+        i.pointer
+            .button_clicked(PointerButton::Secondary)
+            .then(|| i.pointer.interact_pos())
+            .flatten()
+    })?;
+    let on_layer = ui.ctx().layer_id_at(pos) == Some(ui.layer_id());
+    (zone.contains(pos) && ui.clip_rect().contains(pos) && on_layer).then_some(pos)
+}
+
+/// Entrées du menu contextuel (et du menu Édition) : commande, libellé,
+/// liaison de [`keymap::KEYMAP`] dont le raccourci est affiché, et besoin
+/// d'une sélection.
+pub(crate) const CONTEXT_ENTRIES: [(StructureOp, TextId, &str, bool); 6] = [
+    (
+        StructureOp::InsertBefore,
+        TextId::StructureInsert,
+        "task.add",
+        false,
+    ),
+    (StructureOp::Delete, TextId::StructureDelete, "task.delete", true),
+    (StructureOp::Indent, TextId::StructureIndent, "task.indent", true),
+    (
+        StructureOp::Outdent,
+        TextId::StructureOutdent,
+        "task.outdent",
+        true,
+    ),
+    (StructureOp::Link, TextId::StructureLink, "link.add", true),
+    (StructureOp::Unlink, TextId::StructureUnlink, "link.remove", true),
+];
+
+/// Menu contextuel des commandes de structure, ouvert au pointeur par un
+/// clic droit sur le corps ; la ligne cliquée est d'abord sélectionnée si
+/// elle ne l'est pas (la sélection multiple est gardée sinon).
+fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick>) {
+    let open = click.map(|ContextClick { uid }| {
+        if let Some(uid) = uid
+            && !fc.selected.contains(uid)
+        {
+            fc.actions.push(Action::Select(Some(uid)));
+        }
+        SetOpenCommand::Bool(true)
+    });
+    // La sélection change à la fin de l'image : une ligne cliquée compte
+    // déjà comme sélectionnée pour griser les entrées.
+    let has_selection = fc.selection.is_some() || click.is_some_and(|c| c.uid.is_some());
+    let texts = fc.texts;
+    let ctx = ui.ctx().clone();
+    let mut chosen = None;
+    Popup::new(
+        Id::unique("planrs.structure-menu"),
+        ctx.clone(),
+        PopupAnchor::PointerFixed,
+        ui.layer_id(),
+    )
+    .kind(PopupKind::Menu)
+    .layout(Layout::top_down_justified(Align::Min))
+    .style(menu_style)
+    .open_memory(open)
+    .show(|ui| {
+        for (op, text, command, needs_selection) in CONTEXT_ENTRIES {
+            let mut button = egui::Button::new(texts.get(text));
+            if let Some(shortcut) = keymap::shortcut_for(Binding::Command(command)) {
+                button = button.shortcut_text(keymap::shortcut_text(&ctx, shortcut));
+            }
+            if ui
+                .add_enabled(has_selection || !needs_selection, button)
+                .clicked()
+            {
+                chosen = Some(op);
+            }
+        }
+    });
+    if let Some(op) = chosen {
+        fc.actions.push(Action::Structure(op));
+    }
 }
 
 /// Coins à droite de l'en-tête et de la barre horizontale du Gantt, au-dessus
@@ -434,6 +576,7 @@ mod tests {
                 metrics: &metrics,
                 diagnostics: &diagnostics,
                 selection: None,
+                selected: &crate::selection::Selection::default(),
                 actions: &mut actions,
                 stats: &mut stats,
             };

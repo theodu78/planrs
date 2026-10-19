@@ -31,7 +31,7 @@ pub fn paint_header(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, axis: &TimeAxis, r
     let palette = fc.palette;
     let week_start = fc
         .doc
-        .map_or(Weekday::Monday, |doc| doc.project.options.week_start_day);
+        .map_or(Weekday::Monday, |doc| doc.project().options.week_start_day);
     let (top_unit, bottom_unit) = fc.state.zoom.tiers();
     let labels = fc.texts.format_labels();
     let mid_y = rect.center().y;

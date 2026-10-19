@@ -1,4 +1,4 @@
-//! Ouverture de fichiers sans runtime asynchrone.
+//! Ouverture et enregistrement de fichiers sans runtime asynchrone.
 //!
 //! Le réducteur d'`App` appelle [`FileService::pick_and_open`] ; le résultat
 //! revient par un canal `std::sync::mpsc`, relevé (`try_recv`) au début de
@@ -13,6 +13,16 @@
 //! (promesse rejetée → erreur traduite). Tout chemin qui se termine envoie un
 //! [`OpenEvent`]. Le fil dédié n'existe qu'en natif (`std::thread` panique en
 //! wasm32).
+//!
+//! Enregistrement ([`FileService::save`], lot L13) : les octets MSPDI sont
+//! produits par `Session::save_bytes` sur le fil d'interface, puis écrits
+//! hors de lui. Desktop : chemin connu → `planrs_automation::files::write_atomic`
+//! dans le fil `planrs-save` ; sinon `rfd::AsyncFileDialog::save_file` créé
+//! sur le fil d'interface et attendu dans ce même fil, qui écrit ensuite.
+//! Web : téléchargement direct par `web_sys` (`Blob`, URL d'objet, ancre
+//! `download`), sans la fenêtre de rfd. Tout chemin
+//! qui se termine envoie un [`SaveEvent`] ; l'application ne marque le
+//! document enregistré qu'à la réception de [`SaveEvent::Saved`].
 
 use std::sync::mpsc::Sender;
 
@@ -39,6 +49,51 @@ pub enum OpenEvent {
     },
 }
 
+/// Destination d'un enregistrement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SaveTarget {
+    /// Chemin connu (desktop, « Enregistrer » d'un document déjà lié à un
+    /// fichier) : écriture directe, sans boîte de dialogue.
+    Path(String),
+    /// Boîte « Enregistrer sous » (desktop) ou téléchargement (web).
+    Dialog {
+        /// Nom de fichier proposé (déjà assaini, avec `.xml`).
+        suggested_name: String,
+        /// Titre de la boîte, traduit.
+        title: String,
+        /// Libellé du filtre MSPDI, traduit.
+        filter: String,
+    },
+}
+
+/// Demande d'enregistrement : octets à écrire et destination.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SaveRequest {
+    /// Octets MSPDI (`Session::save_bytes`), écrits tels quels.
+    pub bytes: Vec<u8>,
+    /// Destination.
+    pub target: SaveTarget,
+    /// Langue des messages d'erreur d'écriture.
+    pub language: crate::i18n::Language,
+}
+
+/// Résultat d'une demande d'enregistrement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SaveEvent {
+    /// L'utilisateur a refermé la boîte sans choisir : rien n'est écrit.
+    Cancelled,
+    /// Octets écrits (desktop) ou remis au navigateur (web).
+    Saved {
+        /// Nom affiché du fichier écrit.
+        name: String,
+        /// Chemin UTF-8 écrit (desktop) ; `None` sur le web ou pour un
+        /// chemin non UTF-8 (le prochain « Enregistrer » redemandera).
+        path: Option<String>,
+    },
+    /// Écriture impossible : détail déjà traduit (cause système comprise).
+    Failed(String),
+}
+
 /// Accès aux fichiers, injecté par l'application (`Env::files`).
 pub trait FileService {
     /// Ouvre le sélecteur de fichiers et envoie le résultat par `tx`, puis
@@ -52,6 +107,15 @@ pub trait FileService {
         filter: String,
         tx: Sender<OpenEvent>,
     );
+
+    /// Écrit `request.bytes` vers `request.target` et envoie le résultat par
+    /// `tx`, puis demande une nouvelle image à `ctx`. Par défaut, rien
+    /// n'est écrit et la réponse est [`SaveEvent::Cancelled`], comme un
+    /// utilisateur qui referme la boîte : le document reste modifié.
+    fn save(&mut self, ctx: &egui::Context, request: SaveRequest, tx: Sender<SaveEvent>) {
+        drop(request);
+        deliver(&tx, ctx, SaveEvent::Cancelled);
+    }
 }
 
 /// Sélecteur réel : rfd asynchrone (natif : attendu dans un fil dédié ; web :
@@ -64,10 +128,11 @@ pub struct RfdFileService;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoFileService;
 
-/// Envoie un événement ; une application déjà détruite est ignorée.
-fn deliver(tx: &Sender<OpenEvent>, ctx: &egui::Context, event: OpenEvent) {
+/// Envoie un événement ; une application déjà détruite (ou une demande
+/// abandonnée) est ignorée.
+fn deliver<T>(tx: &Sender<T>, ctx: &egui::Context, event: T) {
     if tx.send(event).is_err() {
-        log::warn!("ouverture : l'application ne reçoit plus les résultats");
+        log::warn!("fichiers : l'application ne reçoit plus les résultats");
     }
     ctx.request_repaint();
 }
@@ -175,6 +240,183 @@ impl FileService for RfdFileService {
             deliver(&tx, &ctx, event);
         });
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save(&mut self, ctx: &egui::Context, request: SaveRequest, tx: Sender<SaveEvent>) {
+        let SaveRequest {
+            bytes,
+            target,
+            language,
+        } = request;
+        // Même schéma que l'ouverture : le fil est créé d'abord, le futur
+        // du sélecteur (s'il y en a un) lui est envoyé ensuite.
+        let (dialog_tx, dialog_rx) = std::sync::mpsc::channel::<SaveFuture>();
+        let thread_ctx = ctx.clone();
+        let thread_tx = tx.clone();
+        let known = match &target {
+            SaveTarget::Path(path) => Some(std::path::PathBuf::from(path)),
+            SaveTarget::Dialog { .. } => None,
+        };
+        let spawned = std::thread::Builder::new()
+            .name("planrs-save".to_owned())
+            .spawn(move || {
+                let path = if let Some(path) = known {
+                    path
+                } else {
+                    // Canal fermé sans futur : demande abandonnée.
+                    let Ok(picked) = dialog_rx.recv() else {
+                        return;
+                    };
+                    let Some(handle) = pollster::block_on(picked) else {
+                        deliver(&thread_tx, &thread_ctx, SaveEvent::Cancelled);
+                        return;
+                    };
+                    handle.path().to_path_buf()
+                };
+                let event = write_path(&path, &bytes, language);
+                deliver(&thread_tx, &thread_ctx, event);
+            });
+        if let Err(error) = spawned {
+            deliver(&tx, ctx, SaveEvent::Failed(error.to_string()));
+            return;
+        }
+        let SaveTarget::Dialog {
+            suggested_name,
+            title,
+            filter,
+        } = target
+        else {
+            return;
+        };
+        // Créé sur le fil d'interface (feuille attachée à la fenêtre sur
+        // macOS, ADR-0011), attendu dans `planrs-save`.
+        let picked = rfd::AsyncFileDialog::new()
+            .set_title(title)
+            .set_file_name(suggested_name)
+            .add_filter(filter, &["xml"])
+            .save_file();
+        if dialog_tx.send(Box::pin(picked)).is_err() {
+            log::error!("enregistrement : le fil d'attente du sélecteur s'est arrêté");
+            deliver(&tx, ctx, SaveEvent::Cancelled);
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn save(&mut self, ctx: &egui::Context, request: SaveRequest, tx: Sender<SaveEvent>) {
+        let SaveRequest { bytes, target, .. } = request;
+        // Pas de chemin sur le web : un chemin connu (impossible ici) est
+        // traité comme un téléchargement sous son nom.
+        let name = match target {
+            SaveTarget::Path(path) => path,
+            SaveTarget::Dialog { suggested_name, .. } => suggested_name,
+        };
+        // Téléchargement direct (Blob + ancre `download`, relecture finale
+        // J4, F3) : rfd 0.17 affichait sa propre fenêtre, dont « Ok » et
+        // « Annuler » rendaient tous deux `Ok` sans rien télécharger, et le
+        // document passait à tort à « enregistré ».
+        let event = match download(&name, &bytes) {
+            Ok(()) => SaveEvent::Saved { name, path: None },
+            Err(detail) => SaveEvent::Failed(detail),
+        };
+        deliver(&tx, ctx, event);
+    }
+}
+
+/// Remet `bytes` au navigateur comme téléchargement nommé `name` : `Blob`
+/// MSPDI, URL d'objet, clic sur une ancre `download` (rien n'est ajouté à
+/// la page), URL révoquée une minute plus tard. Aucun JavaScript écrit à la
+/// main (règle 8) : tout passe par `web_sys`. Une exception du navigateur
+/// devient le détail de l'erreur.
+#[cfg(target_arch = "wasm32")]
+fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
+    use wasm_bindgen_futures::wasm_bindgen::JsCast as _;
+    use wasm_bindgen_futures::wasm_bindgen::closure::Closure;
+
+    let window = web_sys::window().ok_or_else(|| "window introuvable".to_owned())?;
+    let document = window
+        .document()
+        .ok_or_else(|| "document introuvable".to_owned())?;
+    let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
+    let options = web_sys::BlobPropertyBag::new();
+    options.set_type("application/xml");
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options)
+        .map_err(|error| js_error_text(&error))?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(|error| js_error_text(&error))?;
+    let anchor = document
+        .create_element("a")
+        .map_err(|error| js_error_text(&error))?
+        .dyn_into::<web_sys::HtmlAnchorElement>()
+        .map_err(|_| "élément <a> inattendu".to_owned())?;
+    anchor.set_href(&url);
+    anchor.set_download(name);
+    anchor.click();
+    // Révoquée plus tard : certains navigateurs lisent l'URL après le clic.
+    let revoke = Closure::once_into_js(move || {
+        if web_sys::Url::revoke_object_url(&url).is_err() {
+            log::warn!("URL de téléchargement non révoquée");
+        }
+    });
+    if window
+        .set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), 60_000)
+        .is_err()
+    {
+        log::warn!("révocation de l'URL de téléchargement non planifiée");
+    }
+    Ok(())
+}
+
+/// Futur d'une boîte « Enregistrer sous » native, envoyé au fil
+/// `planrs-save`.
+#[cfg(not(target_arch = "wasm32"))]
+type SaveFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Option<rfd::FileHandle>> + Send>>;
+
+/// Écrit atomiquement (`files::write_atomic`) et rend l'événement
+/// correspondant.
+#[cfg(not(target_arch = "wasm32"))]
+fn write_path(path: &std::path::Path, bytes: &[u8], language: crate::i18n::Language) -> SaveEvent {
+    let lang = match language {
+        crate::i18n::Language::Fr => planrs_automation::text::Language::Fr,
+        crate::i18n::Language::En => planrs_automation::text::Language::En,
+    };
+    match planrs_automation::files::write_atomic(path, bytes) {
+        Ok(()) => SaveEvent::Saved {
+            name: path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            path: path.to_str().map(str::to_owned),
+        },
+        Err(error) => SaveEvent::Failed(error.message(lang)),
+    }
+}
+
+/// Nom de fichier proposé à l'enregistrement : `name` sans les caractères
+/// refusés par Windows, macOS ou Linux (`<>:"/\|?*` et contrôles, remplacés
+/// par `_`), espaces de bord retirés, suffixé de `.xml` s'il n'y est pas ;
+/// « planrs.xml » si rien ne reste.
+#[must_use]
+pub fn suggested_file_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let cleaned = cleaned.trim().trim_end_matches('.');
+    let stem = if cleaned.is_empty() {
+        planrs_core::PRODUCT_NAME
+    } else {
+        cleaned
+    };
+    if stem.to_ascii_lowercase().ends_with(".xml") {
+        stem.to_owned()
+    } else {
+        format!("{stem}.xml")
+    }
 }
 
 /// Futur d'un sélecteur natif, envoyé au fil d'attente.
@@ -235,5 +477,25 @@ impl FileService for NoFileService {
         tx: Sender<OpenEvent>,
     ) {
         deliver(&tx, ctx, OpenEvent::Cancelled);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::suggested_file_name;
+
+    #[test]
+    fn suggested_file_name_is_safe_and_xml() {
+        assert_eq!(suggested_file_name("Projet1"), "Projet1.xml");
+        assert_eq!(suggested_file_name("maison.XML"), "maison.XML");
+        assert_eq!(
+            suggested_file_name("Exemple : construction d'une maison"),
+            "Exemple _ construction d'une maison.xml"
+        );
+        assert_eq!(suggested_file_name("a/b\\c*?\u{7}"), "a_b_c___.xml");
+        assert_eq!(
+            suggested_file_name("  ...  "),
+            format!("{}.xml", planrs_core::PRODUCT_NAME)
+        );
     }
 }

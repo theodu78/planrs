@@ -26,10 +26,14 @@ impl Calc<'_, '_> {
     /// topologique des tâches planifiées, les diagnostics triés.
     pub(super) fn output(mut self, order: &[NodeIx]) -> Schedule {
         self.empty_summary_links();
+        let sums = match self.strategy {
+            super::Strategy::Fast => self.percent_sums(),
+            super::Strategy::Reference => None,
+        };
         let mut tasks: BTreeMap<TaskUid, TaskOutcome> = BTreeMap::new();
         for (p, task) in self.project.tasks.iter().enumerate() {
             let outcome = if let Some(info) = self.net.task(p).cloned() {
-                self.outcome(p, task, &info)
+                self.outcome(p, task, &info, sums.as_deref())
             } else {
                 self.diags.push(Diagnostic::ScheduleInternal {
                     detail: format!("tâche {} non classée", task.uid()),
@@ -49,7 +53,7 @@ impl Calc<'_, '_> {
                 sorted.push(node.uid);
             }
         }
-        let project_summary = self.project_summary(&tasks);
+        let project_summary = self.project_summary(&tasks, sums.as_deref());
         Schedule {
             project_start: self.start,
             project_finish: self.finish,
@@ -66,7 +70,11 @@ impl Calc<'_, '_> {
     /// totale ; dates planifiées et durée sur l'enveloppe des dates
     /// planifiées de ces tâches (R-112). `None` si aucune tâche n'est
     /// planifiée.
-    fn project_summary(&self, tasks: &BTreeMap<crate::ids::TaskUid, TaskOutcome>) -> Option<TaskSchedule> {
+    fn project_summary(
+        &self,
+        tasks: &BTreeMap<crate::ids::TaskUid, TaskOutcome>,
+        sums: Option<&[LeafSums]>,
+    ) -> Option<TaskSchedule> {
         let (mut early, mut late, mut planned, mut degraded): (
             Option<Span>,
             Option<Span>,
@@ -122,7 +130,7 @@ impl Calc<'_, '_> {
             // R-101 : sans lien, marge libre = marge totale, bornée à 0.
             free_slack: tf.max(Minutes::ZERO),
             critical: tf <= self.critical_limit(),
-            percent_complete: self.percent_over(0..self.net.tasks.len()),
+            percent_complete: self.percent_of(sums, 0..self.net.tasks.len()),
             driver: Driver::Rollup,
             late_driver: LateDriver::Rollup,
             degraded,
@@ -156,7 +164,7 @@ impl Calc<'_, '_> {
     }
 
     /// Résultat de la tâche en position `p`.
-    fn outcome(&mut self, p: usize, task: &Task, info: &TaskInfo) -> TaskOutcome {
+    fn outcome(&mut self, p: usize, task: &Task, info: &TaskInfo, sums: Option<&[LeafSums]>) -> TaskOutcome {
         let excluded = |reason| TaskOutcome::Excluded {
             reason,
             display: None,
@@ -239,7 +247,7 @@ impl Calc<'_, '_> {
                 TaskRole::Summary,
                 fixed,
                 duration.unwrap_or(Minutes::ZERO),
-                self.percent_over(p.saturating_add(1)..info.end),
+                self.percent_of(sums, p.saturating_add(1)..info.end),
             )
         } else {
             (
@@ -267,6 +275,74 @@ impl Calc<'_, '_> {
         })
     }
 
+    /// R-055 : feuille retenue en position `q` (active, planifiée) :
+    /// `(réel, durée, %)`, réel = `round_div(durée × %, 10 000)` (R-010) ;
+    /// `None` pour une récapitulative, une tâche inactive ou non planifiée.
+    fn leaf_terms(&self, q: usize) -> Option<(i128, i128, i128)> {
+        let (leaf, task) = (self.net.task(q)?, self.project.tasks.at(q)?);
+        if leaf.role != Role::Leaf || leaf.inactive() {
+            return None;
+        }
+        let v = leaf.exit?;
+        let (node, state) = (self.net.node(v)?, self.state(v)?);
+        state.early?;
+        let d = i128::from(node.duration.get());
+        let pct = i128::from(task.progress.percent_complete.get());
+        let a = d.checked_mul(pct).and_then(|x| round_div(x, 10_000)).unwrap_or(0);
+        Some((i128::from(a), d, pct))
+    }
+
+    /// Sommes préfixes de [`Self::leaf_terms`] sur les positions (lot L15) :
+    /// `sums[q]` porte les sommes des positions `0..q`. Le sous-arbre d'une
+    /// récapitulative est une plage contiguë de positions : son % achevé se
+    /// lit en O(1). `None` en cas de débordement (jamais attendu : 2³²
+    /// feuilles de durée `i64::MAX` tiennent en `i128`) ; l'appelant passe
+    /// alors par la référence.
+    fn percent_sums(&self) -> Option<Vec<LeafSums>> {
+        let n = self.net.tasks.len();
+        let mut sums = Vec::with_capacity(n.checked_add(1)?);
+        let mut acc = LeafSums::default();
+        sums.push(acc);
+        for q in 0..n {
+            if let Some((a, d, pct)) = self.leaf_terms(q) {
+                acc = LeafSums {
+                    actual: acc.actual.checked_add(a)?,
+                    total: acc.total.checked_add(d)?,
+                    pct_sum: acc.pct_sum.checked_add(pct)?,
+                    count: acc.count.checked_add(1)?,
+                };
+            }
+            sums.push(acc);
+        }
+        Some(sums)
+    }
+
+    /// R-055 sur les positions `range` : par les sommes préfixes si elles
+    /// existent, sinon par la référence.
+    fn percent_of(&self, sums: Option<&[LeafSums]>, range: Range<usize>) -> Percent {
+        let Some(sums) = sums else {
+            return self.percent_over(range);
+        };
+        let n = sums.len().saturating_sub(1);
+        let end = range.end.min(n);
+        let start = range.start.min(end);
+        let (Some(hi), Some(lo)) = (sums.get(end), sums.get(start)) else {
+            return self.percent_over(range);
+        };
+        let diff = |a: i128, b: i128| a.checked_sub(b);
+        match (
+            diff(hi.actual, lo.actual),
+            diff(hi.total, lo.total),
+            diff(hi.pct_sum, lo.pct_sum),
+            diff(hi.count, lo.count),
+        ) {
+            (Some(actual), Some(total), Some(pct_sum), Some(count)) => {
+                percent_value(actual, total, pct_sum, count)
+            }
+            _ => self.percent_over(range),
+        }
+    }
+
     /// R-055 : % achevé d'une récapitulative,
     /// `round_div(Σ réel × 10 000, Σ durée)` sur ses feuilles descendantes
     /// actives planifiées (récapitulatives intermédiaires exclues), réel =
@@ -274,37 +350,44 @@ impl Calc<'_, '_> {
     /// feuille : 0.
     /// Feuilles des positions `range` (le sous-arbre d'une récapitulative,
     /// ou tout le projet pour la récapitulative du projet, R-068).
+    /// Référence (J3, sous-arbre parcouru) : oracle des sommes préfixes et
+    /// leur repli.
     fn percent_over(&self, range: Range<usize>) -> Percent {
         let (mut actual, mut total, mut pct_sum, mut count) = (0i128, 0i128, 0i128, 0i128);
         for q in range {
-            let (Some(leaf), Some(task)) = (self.net.task(q), self.project.tasks.at(q)) else {
+            let Some((a, d, pct)) = self.leaf_terms(q) else {
                 continue;
             };
-            if leaf.role != Role::Leaf || leaf.inactive() {
-                continue;
-            }
-            let Some(v) = leaf.exit else { continue };
-            let (Some(node), Some(state)) = (self.net.node(v), self.state(v)) else {
-                continue;
-            };
-            if state.early.is_none() {
-                continue;
-            }
-            let d = i128::from(node.duration.get());
-            let pct = i128::from(task.progress.percent_complete.get());
-            let a = d.checked_mul(pct).and_then(|x| round_div(x, 10_000)).unwrap_or(0);
-            actual = actual.saturating_add(i128::from(a));
+            actual = actual.saturating_add(a);
             total = total.saturating_add(d);
             pct_sum = pct_sum.saturating_add(pct);
             count = count.saturating_add(1);
         }
-        let value = if total > 0 {
-            actual.checked_mul(10_000).and_then(|x| round_div(x, total))
-        } else if count > 0 {
-            round_div(pct_sum, count)
-        } else {
-            Some(0)
-        };
-        value.and_then(|v| Percent::new(v).ok()).unwrap_or(Percent::ZERO)
+        percent_value(actual, total, pct_sum, count)
     }
+}
+
+/// Sommes de R-055 sur une plage de positions.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct LeafSums {
+    /// Σ réel.
+    actual: i128,
+    /// Σ durée.
+    total: i128,
+    /// Σ %.
+    pct_sum: i128,
+    /// Nombre de feuilles retenues.
+    count: i128,
+}
+
+/// R-055 : valeur du % achevé depuis ses sommes.
+fn percent_value(actual: i128, total: i128, pct_sum: i128, count: i128) -> Percent {
+    let value = if total > 0 {
+        actual.checked_mul(10_000).and_then(|x| round_div(x, total))
+    } else if count > 0 {
+        round_div(pct_sum, count)
+    } else {
+        Some(0)
+    };
+    value.and_then(|v| Percent::new(v).ok()).unwrap_or(Percent::ZERO)
 }

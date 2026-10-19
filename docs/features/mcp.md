@@ -1,0 +1,81 @@
+# Serveur MCP (`crates/planrs-mcp`, `planrs mcp`)
+
+État au 2026-10-19 (lots L8, L17 et L18 de J4, ADR-0012 D7, D8). Le serveur expose les commandes de `planrs-automation` à un agent IA par le SDK officiel `rmcp` (=3.5.1). Il ne calcule aucune date et ne renvoie jamais de résultat estimé (règle 3) : chaque appel passe par `Workspace::call` (`docs/features/workspace.md`), toute date, durée ou marge de la réponse vient du moteur.
+
+## 1. Lancement
+
+- `planrs mcp [--journal F] [--open plan.xml] [--headless]` : transport stdio, runtime tokio à fil unique ; options globales `--now` et `--lang` (`docs/features/cli.md` § 2). Langue par défaut des textes : anglais (ADR-0012, arbitrage 6) sauf `--lang` explicite.
+- `--http ADDR --root DOSSIER` (feature `http`, lot L17) : « streamable HTTP » sur `http://ADDR/mcp`, chemins confinés à `--root`, sécurité décrite dans `docs/features/cli.md` § 1.
+- Claude Code : `claude mcp add planrs -- planrs mcp --journal run.jsonl`.
+- Consignes du serveur (`instructions` de l'initialisation) : désigner les tâches par leur UID, ne jamais calculer ni estimer une date, `dry_run:true` pour voir le diff sans rien modifier, étiquettes `"as":"$x"` dans `apply_batch`, commencer par `new_project`, `open_project` ou `import_csv`.
+
+## 2. Outils
+
+Générés depuis `planrs_automation::REGISTRY` (`tools.rs`, sans macro `#[tool]`) : nom MCP, description dans la langue du serveur, schéma d'entrée du registre (objet au sommet, sans `$ref`), plus `dry_run` et `detail` pour une écriture ; annotations `readOnlyHint` (lecture, analyse), `destructiveHint` (`delete_task` seul).
+
+| Genre | Outils (30 listés) |
+|---|---|
+| Fichiers | `new_project`, `open_project`, `import_csv`, `save_project`, `export_mspdi` |
+| Lecture | `project_summary`, `list_tasks` (paginé : 50, au plus 500), `get_task`, `critical_path`, `render_gantt` |
+| Écriture (`dry_run`, `detail`) | `add_task`, `update_task`, `delete_task`, `move_task`, `indent_task`, `outdent_task`, `add_link`, `update_link`, `remove_link`, `set_constraint`, `set_deadline`, `set_project_start`, `set_project_info`, `set_status_date`, `edit_calendar`, `remove_calendar_exception`, `apply_batch` |
+| Historique | `undo`, `redo`, `history` |
+
+- Réservés (J5, J6), non listés mais appelables : `explain_date`, `what_if`, `resource_usage`, `baseline_variance`, `add_resource`, `assign_resource`, `update_assignment`, `update_progress`, `set_baseline` → `command.not_yet_available` en erreur structurée.
+- `render_gantt` : contenu texte = résumé (« N tâches, M critiques, fin … », plus les lignes non affichées), puis le SVG, puis le rapport en JSON (comme le recommande la spécification MCP : un client sans `structuredContent` voit aussi `truncated_days` et `truncated_bytes`) ; contenu structuré = rapport du rendu sans le SVG (`shown`, `hidden`, `truncated_days`, `truncated_bytes`, `bytes`).
+- Les autres outils : contenu structuré = la vue JSON, contenu texte = le même JSON (clients sans `structuredContent`).
+
+## 3. Contrats de surface et tests
+
+| Contrat | Énoncé | Tests |
+|---|---|---|
+| C-MCP-04 | un appel d'écriture réussi = une entrée d'historique ; `dry_run` n'en crée pas | `mcp_dry_run_no_history`, `mcp_undo_redo` (`tests/memory.rs`) ; rejeu `build_30` (`history_len` de chaque réponse, appel `history` après le `dry_run`) |
+| C-MCP-05 | aucune erreur métier en erreur JSON-RPC : `CallToolResult::structured_error { code, message, op_index, field, subject, diagnostics }` ; seul un nom d'outil inconnu est `invalid_params` | `mcp_error_is_structured_not_rpc` ; rejeu (`add_link` refusé : `batch.would_create_errors`, `op_index` 0) |
+| C-MCP-06 | ligne d'entrée > 8 Mio → session close, processus vivant, code de sortie 3 | `mcp_line_too_long_closes` |
+| C-MCP-07 | noms d'outils conformes à `^[a-zA-Z0-9_-]{1,64}$`, uniques | `tools_names_valid_and_unique`, `mcp_list_tools_from_registry` |
+| C-MCP-08 | codes de sortie de la CLI | `docs/features/cli.md` § 3 |
+
+Garde ADR-0002 (`file.open_in_app`) : `open_project`, `save_project`, `export_mspdi` et `--open` refusent un fichier tenu par une application planrs vivante (rendez-vous du canal de contrôle, `docs/features/control.md`) ; `--headless` la lève. La garde vise le chemin effectif (`Workspace::resolve_path`) : avec `--root`, un chemin relatif part de la racine, comme pour l'outil, pas du dossier courant du processus. Tests : `tests/guard.rs` (dont `mcp_guard_relative_path_under_root`).
+
+## 4. Journal de rejeu (`--journal`)
+
+Deux lignes `planrs_automation::journal::Entry` par appel, de même `seq` (1 au lancement) : la requête (`tool` = nom MCP, `params`), écrite et synchronisée **avant** l'appel ; puis le résultat (`params` à `null`, `result` = `{"ok": vue}` ou `{"error": erreur structurée}` ; pour `render_gantt`, le rapport sans le SVG). Le fichier est complété s'il existe ; une erreur d'écriture est signalée sur stderr et l'appel continue. Le journal sert au rejeu (§ 5) et à la trace d'un essai réel (§ 6) ; la reprise automatique après plantage est reportée en J7 (ADR-0012).
+
+## 5. Critère de fin J4 : rejeu `build_30` (lot L18)
+
+« Un agent Claude construit un planning de 30 tâches via MCP » est vérifié en CI sans LLM par un scénario écrit à la main, au format exact du journal : `tests/mcp/scenarios/build_30.jsonl` (73 appels, 146 lignes), `--now 2026-10-19T08:00`, langue `fr`.
+
+- **Scénario** : `new_project` « Rénovation maison », début lun 02/11/2026 08:00 ; 30 `add_task` : 4 récapitulatives (Préparation, Gros œuvre, Second œuvre, Finitions), sous-tâches placées par `last_child_of`, 3 jalons (durée « 0j », `milestone:true`) ; 25 `add_link` (FS ×19 dont deux vers une récapitulative, SS ×3, FF ×2, SF ×1 ; décalages « +2j », « -1j », « 50% », « +1ej ») ; 2 `set_constraint` (SNET 14/12/2026 sur Menuiseries extérieures, FNLT 30/04/2027 sur la réception) ; 1 `edit_calendar` (11/11/2026 chômé) ; 1 `apply_batch` en `dry_run` (deux opérations) suivi de `history` (58 entrées, inchangé) ; 1 `add_link` refusé (21 → 10, cycle : `batch.would_create_errors`, `link.cycle`, `op_index` 0) ; 3 `undo` puis 3 `redo` ; `list_tasks` en 2 pages de 20 ; `critical_path` ; `render_gantt` ; `save_project` sous `$TMP/build_30.xml`. Résultat : fin du projet mar 09/02/2027 17:00, 18 feuilles critiques.
+- **Jeton `$TMP`** : remplacé par le dossier temporaire du rejeu avant l'appel, remis à sa place dans les résultats et le journal produit (séparateur `\` de Windows ramené à `/`).
+- **Vérifications** (harnais partagé `crates/planrs-mcp/tests/common/replay.rs`) :
+  1. `replay_build_30_memory` (`crates/planrs-mcp/tests/replay.rs`) : `serve_on` + `tokio::io::duplex`, chaque résultat égal à l'attendu, journal produit égal au scénario octet pour octet, rejeu < 2 s (mesuré en local : 0,2 s en debug) ;
+  2. `replay_build_30_saved_mspdi_matches` : le MSPDI enregistré relu par `planrs_mspdi::read` a 30 tâches, aucun diagnostic de gravité erreur (import et planning recalculé), `normalize` égal à celui de `tests/mcp/expected/build_30.xml` relu ;
+  3. `replay_build_30_undo_to_empty` : `undo` répété jusqu'à `history.empty` (58 annulations), `list_tasks` vide, MSPDI exporté identique octet pour octet à celui du projet juste après `new_project` (P30 de bout en bout) ;
+  4. `replay_build_30_stdio_binary` (`apps/planrs-cli/tests/mcp_replay.rs`) : vrai binaire `planrs --now … --lang fr mcp --headless --journal J` en processus fils, client rmcp sur ses tubes, mêmes résultats, journal produit égal au scénario, sortie 0 à la fermeture de l'entrée ;
+  5. le budget de 2 s est vérifié par le test 1 ;
+  6. `replay_build_30_http` (`crates/planrs-mcp/tests/replay_http.rs`, feature `http`) : même rejeu en HTTP sur `127.0.0.1:0`, `--root` = dossier du rejeu, mêmes résultats et même journal.
+- **Régénération** : `PLANRS_BLESS=1 cargo test -p planrs-mcp --test replay replay_build_30_memory` réécrit le scénario (requêtes gardées, résultats recalculés) et `tests/mcp/expected/build_30.xml` ; relire le diff avant de versionner (le rejeu fige le comportement du moteur, il ne le vérifie pas contre MS Project).
+- **CI** : job `mcp` (`.github/workflows/ci.yml`) ; les mêmes tests tournent aussi dans `checks`, macOS et Windows (`cargo test --workspace`).
+
+## 6. Essai réel avec Claude (une fois, local, hors CI)
+
+Fait le 2026-10-19 sur serveurdvp, sur validation du propriétaire. Procédure suivie :
+
+1. `cargo build --release -p planrs-cli`, puis `claude -p` dans une conversation neuve avec `--strict-mcp-config` et une configuration MCP qui ne déclare que planrs (seul outil disponible pour l'agent) : `planrs --now 2026-10-19T08:00 --lang fr mcp --headless --journal run.jsonl`.
+2. Consigne figée, envoyée telle quelle :
+
+   > Construis le planning de rénovation d'une maison en 30 tâches avec phases, jalons et dépendances, puis montre-moi le chemin critique.
+
+3. Journal relu, chemins absolus remplacés par `$TMP`, versionné sous `tests/mcp/scenarios/claude_run_1.jsonl`, résultats régénérés par `PLANRS_BLESS=1` (diff relu : aucun octet ne change hors des valeurs de chemin), MSPDI enregistré versionné sous `tests/mcp/expected/claude_run_1.xml` (identique octet pour octet au fichier de l'essai).
+
+Résultat :
+
+- 6 appels, 0 erreur : `new_project` (« Rénovation maison », début lun 02/11/2026 08:00), un seul `apply_batch` atomique de 75 opérations (35 `task.add`, 40 `link.add`, étiquettes `$x`, placements `last_child_of`), `critical_path`, `project_summary`, `save_project`, `render_gantt` (semaine, 35 lignes, rien de coupé).
+- Planning obtenu : 35 tâches dont 5 phases (récapitulatives) et 4 jalons, 40 liens, fin mer 10/03/2027 17:00 (93 jours ouvrés), 21 tâches critiques ; une entrée d'historique.
+- Règle 3 tenue : la seule date fournie par l'agent est le début du projet ; toutes les dates, durées calculées et marges de sa réponse finale viennent des résultats du moteur. L'agent a signalé de lui-même les limites du modèle (aucun jour chômé posé, durées estimées, pas de ressources).
+- Rejeu en CI : `replay_claude_run_1` (`crates/planrs-mcp/tests/replay.rs`, job `mcp`) rejoue le journal en mémoire, compare chaque résultat et le journal produit au scénario, et le MSPDI enregistré à l'attendu (`normalize`).
+
+## 7. Limites
+
+- Le rejeu fige les sorties du moteur à une date donnée ; il ne vérifie aucune règle contre MS Project (les règles R-150 à R-165 restent `hypothèse`).
+- Une seule session de travail par serveur (toutes les sessions HTTP partagent l'espace de travail).
+- Pas de PNG (`render_gantt` rend un SVG borné et un résumé texte), pas de notifications de progression, pas de ressources MCP (`resources/*`) ni de prompts.

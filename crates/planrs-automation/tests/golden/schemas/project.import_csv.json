@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`project.import_csv` : ouvre un projet construit depuis un CSV de tâches\n(R-144 à R-146).",
+  "properties": {
+    "lang": {
+      "anyOf": [
+        {
+          "description": "Langue d'écriture. La lecture accepte le français et l'anglais quelle que\nsoit la langue du contexte. Désérialisable (`\"fr\"`, `\"en\"`) : langue d'un\nlot de commandes (ADR-0012 D6).",
+          "oneOf": [
+            {
+              "const": "fr",
+              "description": "Français : « 5j », « 2s », « 3FD+2j ».",
+              "type": "string"
+            },
+            {
+              "const": "en",
+              "description": "Anglais : « 5d », « 2w », « 3FS+2d ».",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Langue des en-têtes et des valeurs (défaut : celle de la surface)."
+    },
+    "path": {
+      "description": "Chemin du fichier CSV.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "title": "ImportCsvParams",
+  "type": "object"
+}

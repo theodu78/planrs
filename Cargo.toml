@@ -44,8 +44,29 @@ thiserror = "2.0.21"
 quick-xml = { version = "0.42.0", features = ["serialize"] }
 # rmcp épinglé exactement (ADR-0005 : API mouvante) ; toute montée est un commit dédié.
 rmcp = { version = "=3.5.1", default-features = false, features = ["server", "macros", "transport-io"] }
+# J4 (ADR-0012) : schémas JSON des commandes (planrs-automation), déjà tirés
+# par rmcp `server` à la même version ; le cœur n'en dépend pas.
+schemars = { version = "1.2.3", default-features = false, features = ["derive", "std"] }
+# Serveur MCP stdio (planrs-mcp) : runtime à fil unique, entrées/sorties
+# standard. Déjà au lock (tiré par rmcp).
+tokio = { version = "1.53.3", default-features = false, features = ["rt", "io-std", "io-util", "macros", "sync"] }
+# MCP HTTP (planrs-mcp, feature `http`, lot L17) : transport « streamable
+# HTTP » de rmcp servi par hyper 1, HTTP/1.1 seulement (pas de h2). Corps de
+# la réponse 401 du jeton porteur : http-body-util et bytes, déjà tirés par
+# rmcp `transport-streamable-http-server`.
+hyper = { version = "1.6.0", default-features = false, features = ["server", "http1"] }
+hyper-util = { version = "0.1.11", default-features = false, features = ["server", "http1", "tokio", "service"] }
+http-body-util = "0.1.3"
+bytes = "1.12.1"
+# Jeton du rendez-vous du canal de contrôle (ADR-0002), hors wasm. Déjà au lock.
+getrandom = "0.3.4"
 egui = "0.37.0"
 eframe = "0.37.0"
+# macOS seulement (apps/planrs) : `EventLoopBuilderExtMacOS::with_default_menu`
+# retire le menu applicatif par défaut de winit, dont « Quitter » (Cmd+Q)
+# appelle `terminate:` sans `CloseRequested`. Même version que celle tirée
+# par eframe ; aucune crate nouvelle.
+winit = { version = "0.30.13", default-features = false }
 # Interface (planrs-ui-egui et applications seulement, ADR-0011). rfd sans
 # `gtk3` ni `wayland` : son portail XDG charge libdbus par dlopen (aucun paquet
 # système à la compilation) et attend ses futurs avec pollster (tiré par

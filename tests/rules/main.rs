@@ -149,6 +149,22 @@ mod r143_dates_text;
 mod r144_csv_format;
 mod r145_csv_import_rows;
 mod r146_csv_export;
+mod r150_refs_and_labels;
+mod r151_uid_allocation;
+mod r152_task_add;
+mod r153_indent_outdent;
+mod r154_task_move;
+mod r155_task_delete;
+mod r156_links;
+mod r157_summary_computed_fields;
+mod r158_entered_dates;
+mod r159_constraints;
+mod r160_refuse_new_errors;
+mod r161_extras_invalidation;
+mod r162_recorded_discarded;
+mod r163_schedule_diff;
+mod r164_history;
+mod r165_calendar_exceptions;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

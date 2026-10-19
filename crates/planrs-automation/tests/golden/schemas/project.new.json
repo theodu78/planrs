@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`project.new` : projet vide, planifié depuis `start` ou à rebours depuis\n`finish` (exactement un des deux).",
+  "properties": {
+    "finish": {
+      "description": "Date de fin (planification à rebours).",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "lang": {
+      "anyOf": [
+        {
+          "description": "Langue d'écriture. La lecture accepte le français et l'anglais quelle que\nsoit la langue du contexte. Désérialisable (`\"fr\"`, `\"en\"`) : langue d'un\nlot de commandes (ADR-0012 D6).",
+          "oneOf": [
+            {
+              "const": "fr",
+              "description": "Français : « 5j », « 2s », « 3FD+2j ».",
+              "type": "string"
+            },
+            {
+              "const": "en",
+              "description": "Anglais : « 5d », « 2w », « 3FS+2d ».",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Langue des textes du projet (défaut : celle de la surface)."
+    },
+    "name": {
+      "description": "Nom du projet.",
+      "type": "string"
+    },
+    "start": {
+      "description": "Date de début (planification depuis le début).",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "title": "NewProjectParams",
+  "type": "object"
+}

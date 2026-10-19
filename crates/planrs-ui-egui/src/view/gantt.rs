@@ -414,7 +414,7 @@ fn background_shapes(
     out.push(Shape::rect_filled(clip, 0.0, palette.background));
     let week_start = fc
         .doc
-        .map_or(Weekday::Monday, |doc| doc.project.options.week_start_day);
+        .map_or(Weekday::Monday, |doc| doc.project().options.week_start_day);
     let (major, minor) = fc.state.zoom.tiers();
     for (unit, color) in [(minor, palette.grid), (major, palette.grid_major)] {
         let stroke = Stroke::new(1.0, color);
@@ -428,9 +428,9 @@ fn background_shapes(
             }
         }
     }
-    if let (Some(rows), Some(selected)) = (fc.rows, fc.selection) {
+    if let Some(rows) = fc.rows.filter(|_| !fc.selected.is_empty()) {
         for i in range.clone() {
-            if rows.row(i).is_some_and(|r| r.uid == selected) {
+            if rows.row(i).is_some_and(|r| fc.selected.contains(r.uid)) {
                 let top = origin.y + index_to_f32(i) * row_h;
                 let rect = Rect::from_min_max(pos2(clip.left(), top), pos2(clip.right(), top + row_h));
                 if rect.is_finite() {
@@ -440,7 +440,7 @@ fn background_shapes(
         }
     }
     if let Some(doc) = fc.doc {
-        let x = axis.x(doc.project.effective_status_date()).round() + 0.5;
+        let x = axis.x(doc.project().effective_status_date()).round() + 0.5;
         if x.is_finite() && x >= clip.left() && x <= clip.right() {
             let line = [pos2(x, clip.top()), pos2(x, clip.bottom())];
             out.extend(Shape::dashed_line(
@@ -732,23 +732,18 @@ mod tests {
         let day = Day::from_naive(chrono::NaiveDate::from_ymd_opt(2027, 1, 15).unwrap()).unwrap();
         let now = Moment::at(day, TimeOfDay::hm(8, 0).unwrap()).unwrap();
         let loaded = crate::document::load(crate::DEMO_MSPDI, now).unwrap();
-        let doc = OpenDocument {
-            project: loaded.project,
-            schedule: loaded.schedule,
-            import_diagnostics: loaded.import_diagnostics,
-            range: loaded.range,
-            origin: DocOrigin {
-                name: String::new(),
-                path: None,
-                demo: true,
-            },
-            generation: 1,
+        let origin = DocOrigin {
+            name: String::new(),
+            path: None,
+            demo: true,
         };
+        let doc = OpenDocument::new(loaded, origin, 1);
         let texts = Texts::new(Language::Fr);
         let rows = RowModel::build(&doc, texts.format_labels());
         let palette = Palette::LIGHT;
         let metrics = Metrics::default();
         let selection = rows.row(2).map(|r| r.uid);
+        let selected = crate::selection::Selection::single(selection);
         let ctx = egui::Context::default();
         for zoom in TimeScaleZoom::ALL {
             let state = UiState {
@@ -767,6 +762,7 @@ mod tests {
                     metrics: &metrics,
                     diagnostics: &crate::view::DiagnosticsView::default(),
                     selection,
+                    selected: &selected,
                     actions: &mut actions,
                     stats: &mut stats,
                 };

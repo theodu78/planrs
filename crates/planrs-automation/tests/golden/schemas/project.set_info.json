@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`project.set_info`.",
+  "properties": {
+    "author": {
+      "description": "Auteur.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "category": {
+      "description": "Catégorie.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "company": {
+      "description": "Société.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "manager": {
+      "description": "Responsable.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "name": {
+      "description": "Nom.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "subject": {
+      "description": "Objet.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "title": {
+      "description": "Titre.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "ProjectInfoPatch",
+  "type": "object"
+}

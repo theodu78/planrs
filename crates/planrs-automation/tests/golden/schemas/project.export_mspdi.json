@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`project.export_mspdi` : écrit une copie MSPDI sans changer le fichier\nde la session.",
+  "properties": {
+    "path": {
+      "description": "Chemin du fichier écrit.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "title": "ExportMspdiParams",
+  "type": "object"
+}

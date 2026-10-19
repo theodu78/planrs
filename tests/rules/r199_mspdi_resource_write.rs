@@ -159,6 +159,29 @@ fn r199_fixed_duration_keeps_entered_duration() {
 }
 
 #[test]
+fn r199_zero_units_keeps_model_duration() {
+    // Unités fixes 2 j : R1 100 % 16 h ; R2 0 % 3 h décalée d'un jour
+    // (`d_a` = durée de la tâche, R-181) ⇒ union lun – mer (3 j). La durée
+    // écrite reste celle du modèle, 2 j : reporter l'union l'allongerait à
+    // chaque recalcul (R-173).
+    let mut p = new_project("2026-10-19T08:00");
+    let t = task(&p, 1, 960, 1, 1_140);
+    p.tasks.push(t).unwrap();
+    resource(&mut p, 1);
+    resource(&mut p, 2);
+    assign(&mut p, 1, 1, 1, 960);
+    let a2 = assign(&mut p, 2, 1, 2, 180);
+    let a = p.assignments.get_mut(a2).unwrap();
+    a.units = planrs_core::Units::ZERO;
+    a.delay = Minutes::new(480);
+    let (xml, _) = written_by_engine(&p);
+    let t1 = entity_xml(&xml, "Task", 1);
+    assert!(t1.contains("<Duration>PT16H0M0S</Duration>"), "{t1}");
+    let a2 = entity_xml(&xml, "Assignment", 2);
+    assert!(a2.contains("<Finish>2026-10-21T17:00:00</Finish>"), "{a2}");
+}
+
+#[test]
 fn r199_resource_overallocated_written() {
     // T1 et T2 en parallèle, 1 j chacune ; R1 à 100 % sur les deux
     // (surutilisée, 16 h), R2 sur T1 seulement (8 h). `PeakUnits` jamais

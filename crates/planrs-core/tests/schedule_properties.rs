@@ -81,6 +81,18 @@
 //!   `S*`.
 //! - **P17** : une graine sur deux planifiée à rebours ; mêmes contrôles
 //!   (a'), (b') hors des tâches dégradées et des composantes manuelles.
+//! - **P34** (J5, R-173) : une affectation de travail unique par feuille
+//!   automatique active, ressource sans calendrier ou sur le calendrier de
+//!   la tâche, sans délai, de `d_a` égal à la durée J4 (durée enregistrée
+//!   déplacée pour les unités fixes) : planning identique à celui du même
+//!   projet sans affectation (réseaux `CONSTRAINED`, depuis le début et à
+//!   rebours) ; l'affectation a les dates de sa tâche.
+//! - **P35** (J5, partie moteur, R-171, R-173) : rendre chômé un jour d'un
+//!   calendrier de ressource ne fait jamais commencer ni finir une tâche
+//!   plus tôt (réseau de feuilles affectées à 1 à 3 ressources, délais,
+//!   liens FS et SS ; comme pour P16, une borne de fin — lien FF, SF,
+//!   contrainte de fin — recule le début d'une tâche allongée, et un
+//!   successeur SS avec lui).
 //! - **P23** : symétrie avant/arrière (ADR-0010) sur un réseau plat, un
 //!   calendrier, décalages ouvrés, sans jalon, sans %, sans échéance :
 //!   liens retournés (FS → FS, SS → FF, FF → SS, SF → SF), contraintes
@@ -113,10 +125,11 @@ use planrs_core::calendar::{
     BuiltinCalendarNames, Calendar, CalendarSet, CompiledCalendar, DayHours, DaySetting, TimeRange, TimeScale,
 };
 use planrs_core::{
-    CalendarUid, Constraint, ConstraintKind, Diagnostic, Driver, Duration, DurationUnit, Lag, LagValue, Link,
-    LinkType, Minutes, Moment, OutlineLevel, OverriddenBound, Project, ProjectInit, Schedule, ScheduleAnchor,
-    SchedulingMode, SignedPercent, Task, TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis, TimeOfDay,
-    Week, percent_of, schedule,
+    Assignment, AssignmentRole, AssignmentUid, CalendarUid, Constraint, ConstraintKind, Diagnostic, Driver,
+    Duration, DurationUnit, Lag, LagValue, Link, LinkType, Minutes, Moment, OutlineLevel, OverriddenBound,
+    Project, ProjectInit, Resource, ResourceUid, Schedule, ScheduleAnchor, SchedulingMode, SignedPercent,
+    Task, TaskOutcome, TaskRole, TaskSchedule, TaskType, TaskUid, TimeBasis, TimeOfDay, Units, Week, Work,
+    percent_of, schedule,
 };
 use proptest::prelude::*;
 
@@ -2324,4 +2337,213 @@ fn p17_regressions() {
     // Lien FF vers une tâche qui finit sur son dernier temps ouvré avant la
     // fin du domaine : l'ancre reportée (R-047) est la fin du domaine.
     p17(&chaos(16_281_757_938_398_638_621, false));
+}
+
+// ---------------------------------------------------------------------------
+// J5 : affectations (P34, P35 partie moteur)
+// ---------------------------------------------------------------------------
+
+/// P34 : sur le projet `oracle` (sans affectation), chaque feuille
+/// automatique active à durée ouvrée reçoit, six fois sur dix, une
+/// affectation de travail unique sans délai, ressource sans calendrier ou
+/// sur le calendrier de la tâche, de travail `d × U / 10 000` exact (donc
+/// `d_a = d`) ; la durée enregistrée d'une tâche à unités fixes est
+/// déplacée d'une heure une fois sur deux (elle ne place plus la tâche,
+/// R-170). Le planning doit être celui de l'oracle, et chaque affectation
+/// porter les dates de sa tâche.
+fn p34(oracle: &Project, seed: u64) {
+    let base = schedule(oracle);
+    let mut r = Rng((seed ^ 0x9E37_79B9_7F4A_7C15) | 1);
+    let mut p = oracle.clone();
+    let mut assigned = Vec::new();
+    let mut next = 1u32;
+    for t in &oracle.tasks {
+        let Some(TaskOutcome::Scheduled(s)) = base.get(t.uid()) else {
+            continue;
+        };
+        if s.role != TaskRole::Leaf || s.manual || t.duration.basis() != TimeBasis::Working || !r.chance(60) {
+            continue;
+        }
+        let d = t.duration.minutes().get();
+        let units = match r.range(0, 3) {
+            0 => 10_000,
+            1 if d % 2 == 0 => 5_000,
+            2 if d % 4 == 0 => 2_500,
+            _ => 20_000,
+        };
+        let ruid = ResourceUid::new(next);
+        let mut res = Resource::new(ruid, format!("R{next}"));
+        res.calendar = if r.chance(50) { t.calendar } else { None };
+        p.resources.push(res).unwrap();
+        let auid = AssignmentUid::new(next);
+        let mut a = Assignment::new(auid, t.uid(), Some(ruid));
+        a.units = Units::new(units).unwrap();
+        a.work = Work::new(Minutes::new(d * units / 10_000)).unwrap();
+        p.assignments.push(a).unwrap();
+        if t.task_type == TaskType::FixedUnits && r.chance(50) {
+            let task = p.tasks.get_mut(t.uid()).unwrap();
+            task.duration =
+                Duration::new(Minutes::new(d + 60), DurationUnit::Day, TimeBasis::Working, false).unwrap();
+        }
+        assigned.push((t.uid(), auid));
+        next += 1;
+    }
+    let got = schedule(&p);
+    let mut stripped = got.clone();
+    stripped.assignments.clear();
+    assert_eq!(stripped, base, "P34, graine {seed}");
+    for (task, auid) in assigned {
+        let s = got.scheduled(task).unwrap();
+        let a = got.assignments.get(&auid).unwrap();
+        assert_eq!(a.role, AssignmentRole::Work, "P34, graine {seed}");
+        assert_eq!(a.span, s.early, "P34, graine {seed}, tâche {task}");
+        assert_eq!(a.late, Some(s.late), "P34, graine {seed}, tâche {task}");
+    }
+}
+
+/// Réseau de P35 : 1 à 12 feuilles automatiques, liens FS et SS tirés vers
+/// l'avant, 1 à 4 ressources de calendriers dérivés du Standard (un
+/// par ressource), 1 à 3 affectations par feuille (travail 0 à 2 400, 50 à
+/// 200 %, délai une fois sur trois), une feuille sur cinq sur le calendrier
+/// aléatoire (UID 4). Rend aussi un jour et une ressource à rendre chômés.
+fn p35_network(seed: u64) -> (Project, CalendarUid, planrs_core::Day) {
+    let mut r = Rng(seed | 1);
+    let start: Moment = "2026-10-19T08:00".parse().unwrap();
+    let mut p = Project::new(ProjectInit {
+        name: "P35".to_owned(),
+        anchor: ScheduleAnchor::FromStart(start),
+        current_date: start,
+        calendar_names: BuiltinCalendarNames::default(),
+    });
+    p.calendars.push(random_calendar(&mut r)).unwrap();
+    let resources = u32::try_from(r.range(1, 4)).unwrap();
+    for k in 1..=resources {
+        let cal = CalendarUid::new(10 + k);
+        p.calendars
+            .push(Calendar::new_derived(cal, format!("R{k}"), CalendarUid::new(1)))
+            .unwrap();
+        let mut res = Resource::new(ResourceUid::new(k), format!("R{k}"));
+        res.calendar = Some(cal);
+        p.resources.push(res).unwrap();
+    }
+    let n = u32::try_from(r.range(1, 12)).unwrap();
+    let options = p.options;
+    let mut next = 1u32;
+    for i in 1..=n {
+        let mut t = Task::new(TaskUid::new(i), format!("T{i}"), &options);
+        t.duration = Duration::new(Minutes::new(480), DurationUnit::Day, TimeBasis::Working, false).unwrap();
+        if r.chance(20) {
+            t.calendar = Some(CalendarUid::new(4));
+        }
+        for _ in 0..r.range(0, 2) {
+            if i == 1 {
+                break;
+            }
+            let pred = TaskUid::new(u32::try_from(r.range(1, i64::from(i) - 1)).unwrap());
+            if t.predecessors.iter().any(|l| l.predecessor == pred) {
+                continue;
+            }
+            let kind = if r.chance(50) {
+                LinkType::FinishToStart
+            } else {
+                LinkType::StartToStart
+            };
+            t.predecessors.push(Link {
+                predecessor: pred,
+                kind,
+                lag: Lag::new(
+                    TimeBasis::Working,
+                    LagValue::Time {
+                        minutes: Minutes::new(r.range(0, 480)),
+                        unit: DurationUnit::Day,
+                    },
+                )
+                .unwrap(),
+            });
+        }
+        p.tasks.push(t).unwrap();
+        for _ in 0..r.range(1, 3) {
+            let res = ResourceUid::new(u32::try_from(r.range(1, i64::from(resources))).unwrap());
+            let mut a = Assignment::new(AssignmentUid::new(next), TaskUid::new(i), Some(res));
+            a.work = Work::new(Minutes::new(r.range(0, 2_400))).unwrap();
+            a.units = Units::new(r.range(1, 4) * 5_000).unwrap();
+            if r.chance(33) {
+                a.delay = Minutes::new(r.range(0, 960));
+            }
+            p.assignments.push(a).unwrap();
+            next += 1;
+        }
+    }
+    let victim = CalendarUid::new(10 + u32::try_from(r.range(1, i64::from(resources))).unwrap());
+    let day = start
+        .day()
+        .checked_add_days(i32::try_from(r.range(0, 30)).unwrap())
+        .unwrap();
+    (p, victim, day)
+}
+
+/// P35 (partie moteur) : rendre chômé le jour `day` du calendrier de
+/// ressource `victim` ne fait commencer ni finir aucune tâche plus tôt, ni
+/// finir le projet plus tôt.
+fn p35(seed: u64) {
+    let (p, victim, day) = p35_network(seed);
+    let before = schedule(&p);
+    let mut q = p.clone();
+    q.calendars
+        .get_mut(victim)
+        .unwrap()
+        .add_exception(planrs_core::calendar::CalendarException {
+            name: "Chômé".to_owned(),
+            period: planrs_core::DayRange::single(day),
+            setting: DaySetting::NonWorking,
+            recurrence: planrs_core::calendar::Recurrence::Period,
+            occurrences: None,
+        })
+        .unwrap();
+    let after = schedule(&q);
+    assert!(
+        after.project_finish >= before.project_finish,
+        "P35, graine {seed}"
+    );
+    for t in &p.tasks {
+        let (Some(a), Some(b)) = (before.scheduled(t.uid()), after.scheduled(t.uid())) else {
+            panic!("P35, graine {seed} : tâche {} non planifiée", t.uid());
+        };
+        assert!(
+            b.early.finish >= a.early.finish,
+            "P35, graine {seed}, tâche {}",
+            t.uid()
+        );
+        assert!(
+            b.early.start >= a.early.start,
+            "P35, graine {seed}, tâche {}",
+            t.uid()
+        );
+    }
+}
+
+proptest! {
+    #![proptest_config(capped(1_024))]
+
+    #[test]
+    fn p34_single_assignment_equals_j4(seed in any::<u64>()) {
+        p34(&generate(seed, CONSTRAINED), seed);
+        p34(&generate_from_finish(seed, CONSTRAINED), seed);
+    }
+
+    #[test]
+    fn p35_resource_day_off_never_shortens(seed in any::<u64>()) {
+        p35(seed);
+    }
+}
+
+/// Graines fixes de P34 et P35.
+#[test]
+fn fixed_seeds_assignments() {
+    for seed in 0..100 {
+        p34(&generate(seed, GENERAL), seed);
+        p34(&generate(seed, CONSTRAINED), seed);
+        p34(&generate_from_finish(seed, CONSTRAINED), seed);
+        p35(seed);
+    }
 }

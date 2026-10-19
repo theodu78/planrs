@@ -8,7 +8,7 @@
 ## Écran d'accueil
 
 welcome-title = Bienvenue dans { $product }
-welcome-subtitle = Clone libre de MS Project — lecture seule pour l'instant
+welcome-subtitle = Clone libre de MS Project — ouvrir, modifier, enregistrer
 welcome-open-demo = Ouvrir l'exemple : construction d'une maison
 welcome-open-file = Ouvrir un fichier MSPDI (.xml)…
 welcome-new-project = Nouveau projet

@@ -7,7 +7,7 @@
 ## Écran d'accueil
 
 welcome-title = Welcome to { $product }
-welcome-subtitle = Free MS Project clone — read-only for now
+welcome-subtitle = Free MS Project clone — open, edit, save
 welcome-open-demo = Open the sample: house construction
 welcome-open-file = Open an MSPDI file (.xml)…
 welcome-new-project = New project

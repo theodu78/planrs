@@ -2,11 +2,12 @@
 
 use planrs_core::{ConversionFactors, Decimal, Money, Rate, Resource, ResourceKind, Subject, Units};
 
+use super::computed::Values;
 use super::emit::Emitter;
 use super::{OrderProfile, baseline, entity, max_len, plan, unscoped};
 use crate::codes;
 use crate::resource::rate_factor;
-use crate::scalar::{format_bool, format_decimal};
+use crate::scalar::{format_bool, format_decimal, format_iso_duration};
 use crate::schema::Parent;
 
 /// Décimales au plus d'un taux horaire écrit.
@@ -39,14 +40,17 @@ pub(crate) fn hourly_rate_text(rate: Rate, factors: &ConversionFactors) -> Strin
         .map_or_else(|| "0".to_owned(), format_decimal)
 }
 
-/// Écrit une ressource ; `position` : rang dans l'arène (`ID` = rang + 1).
+/// Écrit une ressource ; `position` : rang dans l'arène (`ID` = rang + 1) ;
+/// `values` : travail et surutilisation à écrire (R-198, R-122).
 pub(crate) fn write(
     em: &mut Emitter,
     r: &Resource,
     position: usize,
     factors: &ConversionFactors,
+    values: Option<&Values>,
     profile: OrderProfile,
 ) {
+    let computed = values.and_then(|v| v.resources.get(&r.uid()));
     em.subject = Some(Subject::Resource(r.uid()));
     let numbers: Vec<u8> = r.baselines.keys().map(|n| n.get()).collect();
     let planned = plan(em, "Resource", Parent::Resource, &r.extras, &numbers, profile);
@@ -97,6 +101,19 @@ pub(crate) fn write(
             "IsGeneric" => em.leaf(name, format_bool(r.is_generic)),
             "IsInactive" => em.leaf(name, format_bool(r.is_inactive)),
             "IsCostResource" => em.leaf(name, format_bool(r.kind == ResourceKind::Cost)),
+            // R-122, R-198 : valeurs calculées.
+            "OverAllocated" => em.opt_leaf(
+                name,
+                computed
+                    .and_then(|v| v.overallocated)
+                    .map(|b| format_bool(b).to_owned()),
+            ),
+            "Work" => em.opt_leaf(
+                name,
+                computed
+                    .and_then(|v| v.work)
+                    .map(|w| format_iso_duration(w.minutes().get())),
+            ),
             "Baseline" => baseline::resource(em, &r.baselines, &planned, profile),
             _ => {}
         },

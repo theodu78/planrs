@@ -2,6 +2,7 @@
 //! exceptions, semaines datées, tâches (durées, liens ouvrés, écoulés et en
 //! %, contraintes, échéances, mode manuel, lignes vides, avancement),
 //! planification à rebours, ressources, affectations, lignes de base,
+//! retards de nivellement (modèle et `Extras` hérités d'avant J5, R-198),
 //! `Extras` valides et invalides, chaînes avec `&<>"\r` et caractères
 //! interdits. Déterministe : une graine donne un projet.
 //!
@@ -20,10 +21,10 @@ use planrs_core::calendar::{
 use planrs_core::{
     Assignment, AssignmentBaseline, AssignmentUid, BaselineNumber, BuiltinCalendarNames, CalendarUid,
     Constraint, ConversionFactors, Day, DayRange, Duration, DurationUnit, ExtraEntry, Extras, Guid, Lag,
-    LagValue, Link, LinkType, Minutes, Moment, Money, Month, OutlineLevel, Percent, Priority, Project,
-    ProjectInit, Rate, RateUnit, Resource, ResourceBaseline, ResourceKind, ResourceUid, ScheduleAnchor,
-    SchedulingMode, SignedPercent, Task, TaskBaseline, TaskType, TaskUid, TimeBasis, TimeOfDay, Units, Week,
-    Weekday, Work, WorkContour,
+    LagValue, LevelingDelay, Link, LinkType, Minutes, Moment, Money, Month, OutlineLevel, Percent, Priority,
+    Project, ProjectInit, Rate, RateUnit, Resource, ResourceBaseline, ResourceKind, ResourceUid,
+    ScheduleAnchor, SchedulingMode, SignedPercent, Task, TaskBaseline, TaskType, TaskUid, TimeBasis,
+    TimeOfDay, Units, Week, Weekday, Work, WorkContour,
 };
 
 /// Générateur pseudo-aléatoire déterministe (xorshift64*).
@@ -57,6 +58,47 @@ impl Rng {
 
 fn m(s: &str) -> Moment {
     s.parse().unwrap()
+}
+
+/// R-198 : retard de nivellement (nul parfois, pour l'image `None`).
+fn leveling_delay(r: &mut Rng) -> Option<LevelingDelay> {
+    if r.chance(60) {
+        return None;
+    }
+    let minutes = if r.chance(10) { 0 } else { r.int(1, 200_000) };
+    let unit = *r.pick(&[
+        DurationUnit::Minute,
+        DurationUnit::Hour,
+        DurationUnit::Day,
+        DurationUnit::Week,
+        DurationUnit::Month,
+    ]);
+    LevelingDelay::new(Minutes::new(minutes), unit, r.chance(50))
+}
+
+/// `Extras` `LevelingDelay`/`LevelingDelayFormat` d'un projet enregistré
+/// avant J5 (dixièmes de minute, reste possible ; format parfois absent).
+fn legacy_leveling(r: &mut Rng, extras: &mut Extras) {
+    if !r.chance(15) {
+        return;
+    }
+    let mspdi = |key: &str, payload: String| ExtraEntry {
+        origin: "mspdi".to_owned(),
+        key: key.to_owned(),
+        payload,
+    };
+    let tenths = r.int(0, 50_000);
+    extras.0.push(mspdi(
+        "LevelingDelay",
+        format!("<LevelingDelay>{tenths}</LevelingDelay>"),
+    ));
+    if r.chance(70) {
+        let code = *r.pick(&[3_i64, 7, 8, 39, 19, 21, 99]);
+        extras.0.push(mspdi(
+            "LevelingDelayFormat",
+            format!("<LevelingDelayFormat>{code}</LevelingDelayFormat>"),
+        ));
+    }
 }
 
 /// Chaîne : morceaux avec caractères spéciaux, parfois longue.
@@ -424,6 +466,8 @@ pub fn project(seed: u64) -> Project {
             );
         }
         t.extras = extras(r, &TASK_EXTRAS);
+        t.leveling_delay = leveling_delay(r);
+        legacy_leveling(r, &mut t.extras);
         if let Some(n) = t.baselines.keys().next()
             && r.chance(50)
         {
@@ -547,6 +591,8 @@ pub fn project(seed: u64) -> Project {
                 ("UID>Zzz", "<Zzz/>"),
             ],
         );
+        a.leveling_delay = leveling_delay(r);
+        legacy_leveling(r, &mut a.extras);
         p.assignments.push(a).unwrap();
     }
 

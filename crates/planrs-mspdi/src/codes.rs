@@ -92,6 +92,18 @@ pub fn duration_format(code: i64) -> Option<DurationCode> {
     }
 }
 
+/// R-198 : `LevelingDelayFormat` (codes de [`duration_format`], S3) →
+/// (unité, écoulé). Seuls les formats de temps conviennent (7 = j, 8 = ej,
+/// variantes estimées comprises, l'estimation n'étant pas gardée) ; un
+/// pourcentage ou le format nul rendent `None`.
+#[must_use]
+pub fn leveling_delay_format(code: i64) -> Option<(DurationUnit, bool)> {
+    match duration_format(code)? {
+        DurationCode::Time { unit, basis, .. } => Some((unit, basis == TimeBasis::Elapsed)),
+        DurationCode::Percent { .. } | DurationCode::Null { .. } => None,
+    }
+}
+
 /// Type de contrainte, sans sa date : défini dans le cœur (ADR-0010), les
 /// codes `ConstraintType` (0 à 7) restent ici (ADR-0008).
 pub use planrs_core::ConstraintKind;
@@ -373,6 +385,18 @@ pub const fn duration_format_code(unit: DurationUnit, basis: TimeBasis, estimate
     }
 }
 
+/// R-198 : `LevelingDelayFormat` d'un retard de nivellement (inverse de
+/// [`leveling_delay_format`], jamais estimé).
+#[must_use]
+pub const fn leveling_delay_format_code(unit: DurationUnit, elapsed: bool) -> i64 {
+    let basis = if elapsed {
+        TimeBasis::Elapsed
+    } else {
+        TimeBasis::Working
+    };
+    duration_format_code(unit, basis, false)
+}
+
 /// `LagFormat` d'un décalage en pourcentage : 19 (`%`), 20 (`e%`).
 #[must_use]
 pub const fn percent_lag_format_code(basis: TimeBasis) -> i64 {
@@ -594,8 +618,8 @@ mod tests {
 
     use super::{
         ConstraintKind, DayType, DurationCode, ExceptionType, constraint_type, day_type, days_of_week,
-        duration_format, exception_type, link_type, month, month_item, month_position, task_type,
-        week_start_day, work_format,
+        duration_format, exception_type, leveling_delay_format, leveling_delay_format_code, link_type, month,
+        month_item, month_position, task_type, week_start_day, work_format,
     };
     use planrs_core::calendar::{MonthItem, MonthPosition};
     use planrs_core::{DurationUnit, LinkType, Month, TaskType, TimeBasis, Weekday};
@@ -611,6 +635,23 @@ mod tests {
         assert_eq!(link_type(3), Some(LinkType::StartToStart));
         assert_eq!(link_type(4), None);
         assert!(OUT.iter().all(|c| link_type(*c).is_none()));
+    }
+
+    #[test]
+    fn r198_leveling_delay_formats() {
+        assert_eq!(leveling_delay_format(7), Some((DurationUnit::Day, false)));
+        assert_eq!(leveling_delay_format(8), Some((DurationUnit::Day, true)));
+        assert_eq!(leveling_delay_format(39), Some((DurationUnit::Day, false)));
+        assert_eq!(leveling_delay_format(5), Some((DurationUnit::Hour, false)));
+        assert_eq!(leveling_delay_format(19), None);
+        assert_eq!(leveling_delay_format(21), None);
+        assert!(OUT.iter().all(|c| leveling_delay_format(*c).is_none()));
+        for code in (3..=12).chain(35..=44) {
+            let (unit, elapsed) = leveling_delay_format(code).unwrap();
+            let back = leveling_delay_format_code(unit, elapsed);
+            assert_eq!(leveling_delay_format(back), Some((unit, elapsed)));
+            assert!(back <= 12, "{code} → {back}");
+        }
     }
 
     #[test]

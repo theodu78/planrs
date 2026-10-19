@@ -579,7 +579,8 @@ fn causes(
     if p.percent_complete.get() > 0 || p.actual_start.is_some() || p.actual_finish.is_some() {
         out.insert(Cause::Progress);
     }
-    if r.leveling_delay.is_some_and(|d| d.0 != 0) {
+    // R-198 : le retard de nivellement est lu dans le modèle.
+    if task.leveling_delay.is_some() {
         out.insert(Cause::LevelingDelay);
     }
     if r.assignments > 0 {

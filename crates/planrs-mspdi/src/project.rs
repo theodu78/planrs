@@ -83,14 +83,20 @@ pub(crate) fn build(raw: &RawDocument<'_>, options: &ReadOptions, sink: &mut Sin
     let mut recorded = RecordedSchedule {
         project_start: recorded_start,
         project_finish: recorded_finish,
-        tasks: BTreeMap::new(),
+        ..RecordedSchedule::default()
     };
 
     task::import(&raw.tasks, &mut project, &mut recorded, sink);
     honor_constraints_off(&f, &project, sink);
-    project.resources = resource::import(&raw.resources, &project.options.factors, sink);
+    project.resources = resource::import(
+        &raw.resources,
+        &project.options.factors,
+        &mut recorded.resources,
+        sink,
+    );
     let tasks: BTreeSet<TaskUid> = recorded.tasks.keys().copied().collect();
-    let (assignments, dropped_timephased) = assignment::import(&raw.assignments, &tasks, sink);
+    let (assignments, dropped_timephased) =
+        assignment::import(&raw.assignments, &tasks, &mut recorded.assignments, sink);
     for (uid, n) in assignment::count_by_task(&assignments) {
         if let Some(rec) = recorded.tasks.get_mut(&uid) {
             rec.assignments = n;

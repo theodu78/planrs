@@ -37,7 +37,6 @@ fn r083_recorded_dates_and_flags() {
     assert_eq!(a.critical, Some(false));
     assert_eq!(a.summary, Some(false));
     assert_eq!(a.duration, Some(Minutes::new(2_400)));
-    assert_eq!(a.leveling_delay, Some(Tenths(0)));
     // Absents : aucune valeur.
     assert_eq!(rec(&doc, 3).total_slack, None);
     // Une entrée par tâche lue, UID 0 compris.
@@ -46,14 +45,20 @@ fn r083_recorded_dates_and_flags() {
 }
 
 #[test]
-fn r083_leveling_delay_is_reported_not_applied() {
-    // UID 4 : `LevelingDelay` 4 800 dixièmes (1 j) : lu, signalé (J5).
+fn r083_leveling_delay_goes_to_the_model() {
+    // UID 4 : `LevelingDelay` 4 800 dixièmes, sans format : une entrée du
+    // modèle depuis J5 (R-198), plus une valeur enregistrée ni une fonction
+    // non prise en charge ; UID 2 : 0 → aucun retard.
     let doc = fixture();
-    assert_eq!(rec(&doc, 4).leveling_delay, Some(Tenths(4_800)));
-    assert!(doc.diagnostics.iter().any(|d| d.code
-        == ImportCode::Unsupported {
-            what: "leveling_delay".to_owned()
-        }));
+    let task = |uid: u32| doc.project.tasks.get(TaskUid::new(uid)).unwrap();
+    let delay = task(4).leveling_delay.unwrap();
+    assert_eq!(delay.minutes, Minutes::new(480));
+    assert_eq!(task(2).leveling_delay, None);
+    assert!(
+        !doc.diagnostics
+            .iter()
+            .any(|d| matches!(&d.code, ImportCode::Unsupported { what } if what == "leveling_delay"))
+    );
 }
 
 #[test]

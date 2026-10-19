@@ -151,9 +151,7 @@ fn fate(parent: Kind, name: &str, capture: bool) -> Fate {
                     Class::Modeled | Class::ModeledOpt | Class::Derived | Class::Computed | Class::Format,
                 ) => Fate::Build(structured(p, name)),
                 Some(Class::Dropped) => Fate::Drop,
-                // `LevelingDelay` d'une tâche : conservé et lu (R-083).
                 Some(Class::Preserved) | None if capture => Fate::Capture,
-                _ if p == Parent::Task && name == "LevelingDelay" => Fate::Build(Kind::Scalar),
                 Some(Class::Preserved) | None => Fate::Skip,
             }
         }

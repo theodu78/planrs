@@ -105,10 +105,12 @@ pub enum Class {
     /// `IsBaseCalendar`).
     Derived,
     /// C : calculé par planrs ; lu dans `RecordedSchedule`, écrit depuis les
-    /// valeurs calculées (R-122).
+    /// valeurs calculées (R-122). Depuis J5 (R-198) : `Start`/`Finish`
+    /// d'affectation, `Work` et `OverAllocated` de ressource.
     Computed,
     /// X : calculé, non recalculé par planrs (coûts, valeur acquise,
-    /// écarts, surutilisation, travail des ressources) ; ni lu ni conservé,
+    /// écarts, pics d'unités, surutilisation d'une affectation) ; ni lu ni
+    /// conservé,
     /// compté (`SourceInfo::dropped_computed`) : MS Project le recalcule.
     Dropped,
     /// P : non modélisé, capturé verbatim en `Extras` (R-087, R-123).
@@ -639,8 +641,8 @@ const TASK: &[Slot] = &[
     Slot::new("Deadline", MO, 0, false, None),
     Slot::new("LevelAssignments", P, 0, false, None),
     Slot::new("LevelingCanSplit", P, 0, false, None),
-    Slot::new("LevelingDelay", P, 0, false, None),
-    Slot::new("LevelingDelayFormat", P, 0, false, None),
+    Slot::new("LevelingDelay", MO, 0, false, None),
+    Slot::new("LevelingDelayFormat", MO, 0, false, None),
     Slot::new("PreLeveledStart", P, 0, false, None),
     Slot::new("PreLeveledFinish", P, 0, false, None),
     Slot::new("Hyperlink", P, 0, false, Some(512)),
@@ -835,14 +837,14 @@ const RESOURCE: &[Slot] = &[
     Slot::new("HyperlinkSubAddress", P, 0, false, Some(512)),
     Slot::new("MaxUnits", M, 0, false, None),
     Slot::new("PeakUnits", X, 0, false, None),
-    Slot::new("OverAllocated", X, 0, false, None),
+    Slot::new("OverAllocated", C, 0, false, None),
     Slot::new("AvailableFrom", P, 0, false, None),
     Slot::new("AvailableTo", P, 0, false, None),
     Slot::new("Start", X, 0, false, None),
     Slot::new("Finish", X, 0, false, None),
     Slot::new("CanLevel", P, 0, false, None),
     Slot::new("AccrueAt", P, 0, false, None),
-    Slot::new("Work", X, 0, false, None),
+    Slot::new("Work", C, 0, false, None),
     Slot::new("RegularWork", X, 0, false, None),
     Slot::new("OvertimeWork", X, 0, false, None),
     Slot::new("ActualWork", X, 0, false, None),
@@ -997,7 +999,7 @@ const ASSIGNMENT: &[Slot] = &[
     Slot::new("CostVariance", X, 0, false, None),
     Slot::new("CV", X, 0, false, None),
     Slot::new("Delay", M, 0, false, None),
-    Slot::new("Finish", X, 0, false, None),
+    Slot::new("Finish", C, 0, false, None),
     Slot::new("FinishVariance", X, 0, false, None),
     Slot::new("Hyperlink", P, 0, false, Some(512)),
     Slot::new("HyperlinkAddress", P, 0, false, Some(512)),
@@ -1005,8 +1007,8 @@ const ASSIGNMENT: &[Slot] = &[
     Slot::new("WorkVariance", X, 0, false, None),
     Slot::new("HasFixedRateUnits", P, 0, false, None),
     Slot::new("FixedMaterial", P, 0, false, None),
-    Slot::new("LevelingDelay", P, 0, false, None),
-    Slot::new("LevelingDelayFormat", P, 0, false, None),
+    Slot::new("LevelingDelay", MO, 0, false, None),
+    Slot::new("LevelingDelayFormat", MO, 0, false, None),
     Slot::new("LinkedFields", P, 0, false, None),
     Slot::new("Milestone", X, 0, false, None),
     Slot::new("Notes", P, 0, false, None),
@@ -1021,7 +1023,7 @@ const ASSIGNMENT: &[Slot] = &[
     Slot::new("RemainingOvertimeWork", P, 0, false, None),
     Slot::new("RemainingWork", M, 0, false, None),
     Slot::new("ResponsePending", P, 0, false, None),
-    Slot::new("Start", X, 0, false, None),
+    Slot::new("Start", C, 0, false, None),
     Slot::new("Stop", P, 0, false, None),
     Slot::new("Resume", P, 0, false, None),
     Slot::new("StartVariance", X, 0, false, None),
@@ -1574,6 +1576,18 @@ mod tests {
         assert_eq!(task.class("Cost"), Some(Class::Dropped));
         assert_eq!(task.class("ExtendedAttribute"), Some(Class::Preserved));
         assert_eq!(task.class("StartText"), None);
+        // J5 (R-198) : retards de nivellement modélisés, valeurs
+        // d'affectation et de ressource relues.
+        assert_eq!(task.class("LevelingDelay"), Some(Class::ModeledOpt));
+        let assignment = sequence(Parent::Assignment);
+        assert_eq!(assignment.class("LevelingDelayFormat"), Some(Class::ModeledOpt));
+        assert_eq!(assignment.class("Start"), Some(Class::Computed));
+        assert_eq!(assignment.class("Finish"), Some(Class::Computed));
+        assert_eq!(assignment.class("Overallocated"), Some(Class::Dropped));
+        let resource = sequence(Parent::Resource);
+        assert_eq!(resource.class("Work"), Some(Class::Computed));
+        assert_eq!(resource.class("OverAllocated"), Some(Class::Computed));
+        assert_eq!(resource.class("PeakUnits"), Some(Class::Dropped));
         assert_eq!(task.slot("Name").unwrap().max_len, Some(512));
         assert!(task.slot("PredecessorLink").unwrap().many);
         assert_eq!(task.position(Profile::Strict, "UID"), Some(0));

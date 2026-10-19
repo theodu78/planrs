@@ -54,7 +54,7 @@ use planrs_core::{Moment, Project};
 pub use diag::{ImportCode, ImportDiagnostic, LinkIgnoredReason};
 pub use error::{Location, MspdiError};
 pub use normalize::normalize;
-pub use recorded::{RecordedSchedule, RecordedTask, Tenths};
+pub use recorded::{RecordedAssignment, RecordedResource, RecordedSchedule, RecordedTask, Tenths};
 
 /// Plafond de la profondeur d'imbrication, quelle que soit
 /// [`Limits::max_depth`] : la pile des éléments ouverts reste petite, et

@@ -173,6 +173,7 @@ mod r191_remove_effort_driven;
 mod r192_add_remove_not_effort_driven;
 mod r193_fixed_work_and_summary;
 mod r194_work_on_several_assignments;
+mod r198_mspdi_resource_read;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

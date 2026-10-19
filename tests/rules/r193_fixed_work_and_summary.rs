@@ -77,3 +77,47 @@ fn r193_zero_units_fw_refused() {
         Err(EditError::ZeroUnitsFixedWork)
     );
 }
+
+#[test]
+fn r193_import_fixed_work_forced_effort_driven() {
+    // Import (lot L3) : feuille à travail fixe (`Type` 2) relue avec
+    // `EffortDriven` 0 → pilotée, `task.fixed_work_effort_driven` ; une
+    // récapitulative à travail fixe n'est jamais pilotée (gardée telle
+    // quelle) ; une feuille à unités fixes non pilotée reste non pilotée.
+    use planrs_core::{Diagnostic, TaskUid};
+    use planrs_mspdi::{ImportCode, ReadOptions, read};
+    let xml = "<Project><StartDate>2026-10-19T08:00:00</StartDate><Tasks>\
+        <Task><UID>1</UID><ID>1</ID><OutlineLevel>1</OutlineLevel><Type>2</Type><EffortDriven>0</EffortDriven><Duration>PT16H0M0S</Duration></Task>\
+        <Task><UID>2</UID><ID>2</ID><OutlineLevel>2</OutlineLevel><Type>2</Type><EffortDriven>0</EffortDriven><Duration>PT16H0M0S</Duration></Task>\
+        <Task><UID>3</UID><ID>3</ID><OutlineLevel>1</OutlineLevel><Type>0</Type><EffortDriven>0</EffortDriven><Duration>PT16H0M0S</Duration></Task>\
+        </Tasks></Project>";
+    let doc = read(
+        xml.as_bytes(),
+        &ReadOptions::new(planrs_tests::moment("2026-01-01T00:00")),
+    )
+    .unwrap();
+    let driven = |uid: u32| doc.project.tasks.get(TaskUid::new(uid)).unwrap().effort_driven;
+    assert!(!driven(1), "récapitulative");
+    assert!(driven(2), "feuille à travail fixe");
+    assert!(!driven(3), "unités fixes");
+    let forced: Vec<_> = doc
+        .diagnostics
+        .iter()
+        .filter_map(|d| match &d.code {
+            ImportCode::Core(Diagnostic::TaskFixedWorkEffortDriven { task }) => {
+                Some((*task, d.element.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(forced, [(TaskUid::new(2), "Tasks/Task/EffortDriven".to_owned())]);
+    assert_eq!(
+        doc.diagnostics
+            .iter()
+            .find(|d| matches!(d.code, ImportCode::Core(_)))
+            .unwrap()
+            .code
+            .code(),
+        "core.task.fixed_work_effort_driven"
+    );
+}

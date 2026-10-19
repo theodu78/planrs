@@ -367,3 +367,81 @@ Cahier d'implémentation : lots L0 à L18, règles R-150 à R-165.
 (F3) Web : enregistrement par téléchargement direct `web_sys` (`Blob`, URL d'objet, ancre `download`) au lieu de la fenêtre de rfd, qui ne distinguait pas « Ok » de « Annuler » ; `Saved` à la remise au navigateur. Garde `beforeunload` dans `apps/planrs-web` tant que le document est modifié. Pourquoi pas « jamais `mark_saved` sur le web » : l'étoile ne s'effacerait jamais et la garde de l'onglet se déclencherait après chaque enregistrement réussi. Limite : une boîte « Enregistrer sous » du navigateur annulée n'est pas détectable.
 (F4) Le « * » du document modifié est aussi dans la barre d'état et le titre de l'onglet (`document.title`, eframe web ignore `ViewportCommand::Title`).
 (F5) Structure découvrable : six entrées au menu Édition, Retour arrière lié à `task.delete` (clavier Mac sans Suppr), bouton « Nouveau projet » à l'accueil.
+
+## ADR-0013 — 2026-10-19 — Plan et conception J5 (ressources, affectations, types de tâches, pilotage par l'effort, surutilisation)
+
+**Contexte.** Critère de fin J5 (brief § 11) : « toutes les règles ressources documentées et testées ». `Resource`, `Assignment`, `TaskType`, `effort_driven` et `ignore_resource_calendar` sont stockés, aucun n'est calculé. Le moteur place une tâche sur une seule échelle (`network.rs:322`) ; le calendrier désigné de R-113 remplace les calendriers de ressource. `schedule_gaps` force `Recorded`/`Omit` pour A4 et A6 (`ResourceCalendars`, `LevelingDelay`, `computed.rs:34-97`). Quatre entrées sont réservées au registre : `resource.add`, `assignment.add`, `assignment.update`, `analysis.resource_usage`. Parité 119/159, dont A6 0/37. Trois conceptions ont été jugées deux fois : moteur, données et surfaces, risques. Les juges sont un pragmatique et un adversaire.
+Faits vérifiés sur le XML de A6 :
+- UID 2 : l'intervalle jeu 07/11 → lun 11/11 fait 32 h sur le calendrier 9, `Duration` vaut 24 h ;
+- UID 7 : affectations 47 (`LevelingDelay` 4800, format 7, le ven) et 48 (le jeu) ; tâche de 16 h ;
+- UID 20 : `EarlyStart` 14/11, `Start` et `EarlyFinish` 18/11 (`LevelingDelay` 43 200, format 8) ;
+- UID 33 : affectations de 200 h et 240 h qui finissent le 11/12, récapitulative qui finit le 18/12.
+Le cahier d'implémentation est `docs/plans/j5.md` : lots L0 à L10 (L10 coupable) et règles R-170 à R-199.
+
+**Décisions.**
+1. **Une feuille affectée est placée affectation par affectation.**
+   - Calendrier effectif = calendrier de la tâche ∩ calendrier de la ressource.
+   - Si la tâche ignore les calendriers de ressource, on prend le calendrier de la tâche seul ; si elle n'a pas de calendrier propre, celui de la ressource seul ; si la ressource n'en a pas, le calendrier du projet.
+   - `s_a` = ES + retard de nivellement de la tâche + `Delay` + retard de nivellement de l'affectation, puis `f_a = forward_span_a(s_a, d_a)`.
+   - Début de la tâche = ES décalé du seul retard de nivellement de la tâche (`Delay` ne décale que l'affectation, S45). Fin = max `f_a`. Durée calculée = mesure de l'union des intervalles travaillés.
+   - Les contraintes de fin et la passe arrière prennent le min sur les affectations.
+   - *Écarté* : une échelle unique par tâche (ne reproduit pas A6 UID 7) ; début = min `s_a` (contredit S45) ; durée = enveloppe ou durée de l'affectation. L'union reste une `hypothèse`, à confirmer sur S14 dans L0.
+2. **Intersection et union compilées en forme fermée** (`CompiledCalendar::intersect`/`union`), avec un cache `BTreeMap` par paire et par recalcul et un plafond de segments assorti d'un diagnostic. ADR-0008 l'avait prévu. *Écarté* : parcourir deux fonctions W à la volée (perte du O(log n), seconde convention hors de `TimeScale`).
+3. **Le recalcul place, l'édition équilibre.**
+   - `d_a` = `round_div(W × 10 000, U)` en `i128`, borné au domaine.
+   - Exceptions : tâche à durée fixe, ou unités nulles → `d_a` = durée de la tâche.
+   - Types de tâche et pilotage par l'effort sont des fonctions pures du cœur (`planrs_core::resource::edit`), appelées par les seules commandes.
+   - *Écarté* : rééquilibrer à chaque recalcul. Cela dériverait à l'arrondi et casserait l'aller-retour, et la matrice S41 dépend du champ modifié.
+4. **Retards de nivellement lus et appliqués, jamais calculés.**
+   - `LevelingDelay` et son format passent des `Extras` au modèle, pour la tâche et l'affectation.
+   - Le retard de la tâche décale `Start` et EF, pas ES (A6 UID 20).
+   - Le nivellement reste hors V1. *Écarté* : le laisser en `Extras` (A6 resterait divergent, l'écrivain en `Recorded`).
+5. **R-113 amendée.**
+   - Le calendrier désigné ne place plus rien. Une tâche sans affectation de travail ni calendrier propre se place sur le calendrier du projet, sa base s'il est dérivé (S6 « especially when no resources are assigned », A6 UID 24).
+   - La mesure des marges et des récapitulatives est inchangée.
+   - Garde : A4 reste à 42/42, mesuré avant le commit. En cas de régression, repli sur le calendrier désigné, consigné.
+6. **Surutilisation exacte.**
+   - Débit d'une affectation = travail ÷ temps ouvré de son intervalle (unités effectives).
+   - Balayage des intervalles travaillés réels, capacité = `max_units`.
+   - Sortie : diagnostic `resource.overallocated` (un par ressource), intervalles bornés dans `Schedule`, utilisation par période calculée à la demande.
+   - `AvailabilityPeriods` sont ignorées, avec diagnostic.
+   - *Écarté* : des seaux par jour, qui manquent un chevauchement de deux heures (A7 R3).
+7. **Coûts hors J5.** Taux, coût par utilisation et coût fixe sont stockés et relus tels quels. Aucun coût n'est calculé ni comparé. *Écarté* : un calcul pour les vues. Le brief, § 4, ne range pas le coût parmi les valeurs calculées, et le taux 4,15875 (O18) n'est pas représentable en centièmes.
+8. **MSPDI.**
+   - Les manques `ResourceCalendars` et `LevelingDelay` sont retirés.
+   - Écrits depuis le moteur : `Start`/`Finish` d'affectation, `Work` de la tâche et de la ressource, `OverAllocated`.
+   - `TimephasedData` d'une affectation n'est gardé que si son placement est inchangé, sinon jeté avec diagnostic. Ce contrôle à l'écriture solde aussi les successeurs décalés que R-161 ne voyait pas.
+   - L'affectation fictive −65535 est lue et gardée. planrs n'en écrit pas pour ses propres tâches : écart à O24 consigné, et les fichiers de référence J4 restent intacts.
+   - *Écarté* : générer `TimephasedData`, qui produirait un volume invérifiable.
+9. **Surfaces.**
+   - Outils réservés activés : `add_resource`, `assign_resource`, `update_assignment`, `resource_usage`.
+   - Outils créés : `update_resource`, `delete_resource` (`cascade` obligatoire s'il y a des affectations), `unassign_resource`, `list_resources`.
+   - Outils étendus : `update_task` (`type`, `effort_driven`, `work` ; `param.conflict` si la durée et le travail sont modifiés ensemble), `set_project_info` (type et pilotage par défaut), `list_tasks` (filtre `resource`).
+   - `DiffView.overallocated { new, resolved }` signale une surutilisation dès un `dry_run`.
+   - `resource.add` crée par défaut un calendrier propre dérivé, comme MS Project (O34) ; option `calendar` pour partager un calendrier.
+   - *Écarté* : `get_resource` et `set_project_defaults` (un outil de plus pour rien).
+10. **Critère de fin mécanique.** `cargo xtask rules` (job `checks`) vérifie que chaque fiche `R-xxx` a des tests et qu'un test `rNNN_` existe. Le scénario de rejeu `resources_j5.jsonl` passe en mémoire, en stdio et en HTTP.
+
+**Choix structurants signalés au propriétaire.**
+- **Fixtures OfficeIMO (`EvotecIT/OfficeIMO`, MIT).**
+  - Elles ont été ouvertes par l'agent « risques ». ADR-0009 les exclut : dépôt d'un analyseur MSPDI, écarté sans ouverture en J3. **Incident consigné** : seul le XML a été lu, ni code ni documentation.
+  - Elles sont le seul oracle pour les types, l'effort, l'union et une surutilisation positive. Mais elles ont été créées le 10/09/2026 par l'auteur de la bibliothèque.
+  - Options : (A) un ADR d'admission, avec une vérification de provenance écrite, un manifeste, nos propres empreintes et un compteur séparé, hors `FLOOR` ; (B) un refus.
+  - Recommandation : A. **Rien n'en est cité tant que le propriétaire n'a pas tranché.** Le plan tient sans elles (lot L10 coupable).
+- Coûts reportés (D7) ; un calendrier par ressource créée (D9) ; pas d'affectation fictive écrite (D8) ; R-113 amendée avec repli (D5).
+- Pas d'interface en J5 : la roadmap est gardée, la feuille et l'utilisation des ressources viennent en J7.
+
+**Écarts au brief.**
+- § 4 : coût horaire stocké, non calculé.
+- § 5.7 : capacité constante (`AvailabilityPeriods` ignorées).
+- § 6 : `update_resource`, `delete_resource`, `unassign_resource`, `list_resources` ajoutés.
+- § 10.2 : « travail = durée × unités » vérifié par affectation, sauf durée fixe relue (unités effectives).
+
+**Conséquences.**
+- Règles R-170 à R-199 (`hypothèse`) ; amendements de R-079 (base négative → calendrier de base d'UID minimal, O29), R-088, R-113, R-122, R-125, R-161.
+- Sources S41 à S49 ; observations O23 à O34 (Q14 retirée : introuvable). Propriétés P31 à P36 ; P24, P25 et P30 étendues.
+- `Schedule` gagne `assignments` et `resources`, `TaskSchedule` gagne `work`. Budget : 5 000 tâches, 10 000 liens et 10 000 affectations sous 50 ms.
+- Cible A6 ≥ 33/37, mesurée et non promise ; A1, A2, A4 et A7 sans régression. Chaque cas restant est étiqueté par cause.
+- Nouveau document `docs/features/resources.md`.
+
+**Arbitrages (2026-10-19, carte blanche du propriétaire).** (1) Fixtures OfficeIMO : **option B, refus**. Leur provenance (enregistrées par MS Project ou générées par l'outil) n'est pas vérifiable, elles n'apportent donc rien comme oracle, et ADR-0009 avait écarté ce dépôt sans l'ouvrir ; le lot L10 est retiré, aucune valeur lue lors de l'incident n'est utilisée ni citée, et les agents J5 ne rouvrent pas ces fichiers. (2) à (6) retenus tels que proposés : coûts stockés et relus tels quels (hors J5), R-113 amendée sous condition de mesure (A4 reste 42/42, sinon repli), calendrier propre créé par `resource.add`, affectation fictive −65535 lue mais non écrite, aucune interface en J5 (vues ressources en J7, roadmap maintenue). Points ouverts du cahier (§ 3) : tranchés par mesure dans leur lot, hypothèses consignées sinon.

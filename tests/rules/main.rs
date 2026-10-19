@@ -174,6 +174,7 @@ mod r174_assigned_backward_constraints;
 mod r175_unassigned_on_project_calendar;
 mod r176_neutral_assignments;
 mod r177_assignment_delay;
+mod r178_leveling_delays;
 mod r189_task_type_matrix;
 mod r190_add_effort_driven;
 mod r191_remove_effort_driven;

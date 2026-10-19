@@ -45,7 +45,7 @@ use crate::duration::{Duration, Minutes, TimeBasis, Work};
 use crate::error::CalendarError;
 use crate::fixed::round_div;
 use crate::ids::{AssignmentUid, CalendarUid, ResourceUid, TaskUid};
-use crate::model::{ConstraintKind, Project, ResourceKind, SchedulingMode, Task, TaskType};
+use crate::model::{ConstraintKind, LevelingDelay, Project, ResourceKind, SchedulingMode, Task, TaskType};
 use crate::quantity::Units;
 use crate::time::Moment;
 
@@ -96,6 +96,8 @@ struct Resolution {
     duration: Result<Minutes, &'static str>,
     /// Délai d'affectation (R-177).
     delay: Minutes,
+    /// Retard de nivellement de l'affectation (R-178).
+    leveling: Option<LevelingDelay>,
     /// Travail.
     work: Work,
     /// Unités.
@@ -354,6 +356,7 @@ pub(super) fn resolve(
             task_calendar,
             duration: assignment_duration(task, a.work, a.units),
             delay: a.delay.max(Minutes::ZERO),
+            leveling: a.leveling_delay.filter(|l| l.minutes > Minutes::ZERO),
             work: a.work,
             units: a.units,
         });
@@ -397,8 +400,23 @@ pub(super) struct Part {
     pub scale: u32,
     /// Délai d'affectation, ouvré sur l'échelle (R-177).
     pub delay: Minutes,
+    /// Retard de nivellement de l'affectation, ajouté au délai (R-178) :
+    /// minutes, et vrai s'il est écoulé.
+    pub level: (Minutes, bool),
     /// Durée `d_a` (R-170).
     pub d: Minutes,
+}
+
+impl Part {
+    /// Part sans délai ni retard de nivellement.
+    fn undelayed(&self) -> bool {
+        self.delay == Minutes::ZERO && self.level.0 == Minutes::ZERO
+    }
+}
+
+/// Retard de nivellement d'une affectation, sous la forme d'une part.
+fn level_of(l: Option<LevelingDelay>) -> (Minutes, bool) {
+    l.map_or((Minutes::ZERO, false), |l| (l.minutes, l.elapsed))
 }
 
 /// Affectation à ranger dans le planning, avec la part qui la place.
@@ -531,6 +549,7 @@ pub(super) fn attach<'a>(
                             assignment: res.uid,
                             scale: scale_of(res.cal, scales)?,
                             delay: res.delay,
+                            level: level_of(res.leveling),
                             d,
                         });
                     }
@@ -578,10 +597,10 @@ impl<'p, 'a> Placer<'p, 'a> {
         let single = match parts {
             [] => true,
             [first, rest @ ..] => {
-                first.delay == Minutes::ZERO
+                first.undelayed()
                     && rest.iter().all(|p| {
                         p.scale == first.scale
-                            && p.delay == Minutes::ZERO
+                            && p.undelayed()
                             && (p.d == Minutes::ZERO) == (first.d == Minutes::ZERO)
                     })
             }
@@ -608,12 +627,21 @@ impl<'p, 'a> Placer<'p, 'a> {
             .ok_or(Fail::Internal("échelle de part hors bornes"))
     }
 
-    /// R-177 : dates de la part depuis la borne `from` : délai compté en
-    /// temps ouvré de son échelle, puis `d_a` (R-030, R-031).
+    /// R-177, R-178 : dates de la part depuis la borne `from` : délai compté
+    /// en temps ouvré de son échelle, puis retard de nivellement de
+    /// l'affectation (ouvré sur la même échelle, ou écoulé), puis `d_a`
+    /// (R-030, R-031).
     pub fn part_span(scales: &[TimeScale<'a>], part: &Part, from: Moment) -> Result<Span, Fail> {
         let scale = Self::scale(scales, part)?;
         let x = scale.add(from, part.delay)?;
+        let x = Self::level_scale(scale, part).add(x, part.level.0)?;
         Ok(scale.forward_span(x, part.d)?)
+    }
+
+    /// Échelle du retard de nivellement d'une part : la sienne, ou le temps
+    /// écoulé (R-178).
+    fn level_scale(scale: TimeScale<'a>, part: &Part) -> TimeScale<'a> {
+        if part.level.1 { TimeScale::Elapsed } else { scale }
     }
 
     /// Passe avant depuis la borne `from` (R-173) : début `T(from)`, fin
@@ -627,7 +655,7 @@ impl<'p, 'a> Placer<'p, 'a> {
         for part in parts {
             let own = Self::scale(scales, part)?.forward_span(from, part.d)?;
             let start = own.start;
-            let finish = if part.delay == Minutes::ZERO {
+            let finish = if part.undelayed() {
                 own.finish
             } else {
                 Self::part_span(scales, part, from)?.finish
@@ -651,11 +679,9 @@ impl<'p, 'a> Placer<'p, 'a> {
         for part in parts {
             let scale = Self::scale(scales, part)?;
             let b = scale.backward_span(to, part.d)?.start;
-            let back = part
-                .delay
-                .checked_neg()
-                .ok_or(Fail::Internal("délai hors bornes"))?;
-            let origin = scale.add(b, back)?;
+            let neg = |m: Minutes| m.checked_neg().ok_or(Fail::Internal("délai hors bornes"));
+            let b = Self::level_scale(scale, part).add(b, neg(part.level.0)?)?;
+            let origin = scale.add(b, neg(part.delay)?)?;
             start = Some(start.map_or(origin, |s| s.min(origin)));
         }
         let ls = start.ok_or(Fail::Internal("feuille sans part"))?;
@@ -727,7 +753,7 @@ impl<'n, 'a> Calc<'n, 'a> {
         let mut unions: UnionCache = BTreeMap::new();
         for p in 0..net.tasks.len() {
             let parts = net.parts.of(p);
-            if parts.len() < 2 && parts.first().is_none_or(|part| part.delay == Minutes::ZERO) {
+            if parts.len() < 2 && parts.first().is_none_or(Part::undelayed) {
                 continue;
             }
             let Some(planned) = self.planned_start(p) else {
@@ -798,9 +824,7 @@ impl<'n, 'a> Calc<'n, 'a> {
         let parts = net.parts.of(o.res.task_pos);
         let (span, late, duration, calendar) = match o.part.and_then(|i| net.parts.items.get(i)) {
             // Une seule part sans délai : la feuille est la part (P34).
-            Some(part) if parts.len() == 1 && part.delay == Minutes::ZERO => {
-                (early, late, part.d, res.calendar)
-            }
+            Some(part) if parts.len() == 1 && part.undelayed() => (early, late, part.d, res.calendar),
             Some(part) => (
                 Placer::part_span(&net.scales, part, early.start).ok()?,
                 late.and_then(|l| Placer::part_span(&net.scales, part, l.start).ok()),

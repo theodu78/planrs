@@ -242,6 +242,12 @@ impl Calc<'_, '_> {
             Mode::FromStart => early,
             Mode::FromFinish => late,
         };
+        // R-178 : le retard de nivellement d'une feuille décale son début
+        // planifié, pas son début au plus tôt (O27).
+        let early = Span {
+            start: state.undelayed.unwrap_or(early.start),
+            ..early
+        };
         let (role, manual, duration, percent_complete) = if info.role == Role::Summary {
             // R-054, mesurée sur les dates planifiées (R-112) ; récapitulative
             // manuelle datée : durée utilisée (R-064).

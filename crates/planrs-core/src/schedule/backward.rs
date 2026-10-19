@@ -282,7 +282,7 @@ impl Calc<'_, '_> {
             let Some(tl) = self
                 .state(arc.to)
                 .filter(|_| self.reached(arc.to))
-                .and_then(|s| s.late)
+                .and_then(|s| s.late.map(|l| Self::held_late(l, s.held, self.mode)))
             else {
                 continue;
             };
@@ -305,6 +305,20 @@ impl Calc<'_, '_> {
             }
         }
         Ok(caps)
+    }
+
+    /// R-178 : dates au plus tard d'une cible à retard de nivellement, vues
+    /// de ses prédécesseurs : au plus tard son placement sans le retard
+    /// (`held`), depuis le début seulement (le retard a absorbé leur marge,
+    /// A6 UID 21 → 36). Hypothèse.
+    fn held_late(late: Span, held: Option<Span>, mode: Mode) -> Span {
+        match held {
+            Some(h) if mode == Mode::FromStart => Span {
+                start: late.start.min(h.start),
+                finish: late.finish.min(h.finish),
+            },
+            _ => late,
+        }
     }
 
     /// Plafond `h(ancre au plus tard de la cible)` de l'arc de lien `a`
@@ -586,7 +600,7 @@ impl Calc<'_, '_> {
             let Some(tl) = self
                 .state(arc.to)
                 .filter(|_| self.reached(arc.to))
-                .and_then(|s| s.late)
+                .and_then(|s| s.late.map(|l| Self::held_late(l, s.held, self.mode)))
             else {
                 continue;
             };

@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use planrs_core::calendar::{CalendarSet, CompiledCalendar, TimeScale, standard};
 use planrs_core::schedule::measure_calendar_in;
 use planrs_core::{
-    Arena, AssignmentRole, AssignmentUid, Duration, Exclusion, Minutes, Moment, Project, ResourceUid,
-    Schedule, SchedulingMode, Task, TaskOutcome, TaskRole, TaskSchedule, TaskType, TaskUid, TimeBasis, Work,
+    Arena, AssignmentUid, Duration, Exclusion, Minutes, Moment, Project, ResourceUid, Schedule, Task,
+    TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis, Work,
 };
 
 use super::WriteDiagnostic;
@@ -236,45 +236,24 @@ fn from_task_schedule(s: &TaskSchedule, scale: Option<TimeScale<'_>>, summary: b
     }
 }
 
-/// Tâches dont une affectation de travail place les dates (rôle `Work`,
-/// R-173).
-fn placed_by_assignments(schedule: &Schedule) -> BTreeSet<TaskUid> {
-    schedule
-        .assignments
-        .values()
-        .filter(|a| a.role == AssignmentRole::Work)
-        .map(|a| a.task)
-        .collect()
-}
-
 /// R-199 : durée écrite d'une feuille automatique placée par ses
-/// affectations de travail (`placed`), non dégradée : la durée calculée du
-/// moteur (mesure de l'union des intervalles travaillés, R-173), avec
-/// l'unité, la base et l'estimation de la tâche. Durée fixe exclue : la
-/// durée y est l'entrée tenue (S41, ADR-0013 § 0). `None` : la durée du
-/// modèle est écrite.
+/// affectations de travail : la durée calculée du moteur (mesure de l'union
+/// des intervalles travaillés, R-173), la même que celle que la session
+/// reporte dans le modèle (`planrs_core::schedule::assigned_leaf_duration`,
+/// règle et exclusions : durée fixe, S41 ; unités nulles, R-181). `None` :
+/// la durée du modèle est écrite.
 pub(crate) fn assigned_leaf_duration(
     task: &Task,
     s: &TaskSchedule,
     placed: &BTreeSet<TaskUid>,
 ) -> Option<Duration> {
-    let eligible = s.role == TaskRole::Leaf
-        && !s.manual
-        && !s.degraded
-        && matches!(task.mode, SchedulingMode::Auto)
-        && task.task_type != TaskType::FixedDuration
-        && placed.contains(&task.uid());
-    if !eligible {
-        return None;
-    }
-    let d = &task.duration;
-    Duration::new(s.duration, d.unit(), d.basis(), d.is_estimated()).ok()
+    planrs_core::schedule::assigned_leaf_duration(task, s, placed)
 }
 
 /// Valeurs depuis le `Schedule` (R-122).
 pub(crate) fn from_schedule(project: &Project, schedule: &Schedule) -> Values {
     let scales = Scales::new(project);
-    let placed = placed_by_assignments(schedule);
+    let placed = planrs_core::schedule::placed_by_assignments(project, schedule);
     let mut tasks = BTreeMap::new();
     for t in &project.tasks {
         let values = match schedule.get(t.uid()) {
@@ -356,7 +335,7 @@ pub fn schedule_image(project: &Project, schedule: &Schedule) -> Project {
     if !matches(project, schedule) {
         return p;
     }
-    let placed = placed_by_assignments(schedule);
+    let placed = planrs_core::schedule::placed_by_assignments(project, schedule);
     let uids: Vec<TaskUid> = p.tasks.iter().map(Task::uid).collect();
     for uid in uids {
         let (Some(t), Some(TaskOutcome::Scheduled(s))) = (p.tasks.get_mut(uid), schedule.get(uid)) else {

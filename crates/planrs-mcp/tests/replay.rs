@@ -149,9 +149,9 @@ async fn replay_build_30_memory() {
 /// effet et même diff que l'appel validé ; surutilisation signalée par
 /// `diff.overallocated` à l'affectation à 150 %, visible par semaine dans
 /// `resource_usage`, résolue par `update_assignment` ; `delete_resource`
-/// sans `cascade` refusé ; réouverture du MSPDI exporté : mêmes ressources,
-/// mêmes dates, même résumé (hors chemin, état modifié, historique), à
-/// l'écart de durée près des feuilles à plusieurs parts (voir plus bas).
+/// sans `cascade` refusé ; réouverture du MSPDI exporté : mêmes tâches
+/// (durées comprises), mêmes ressources, même résumé (hors chemin, état
+/// modifié, historique).
 #[tokio::test]
 async fn replay_resources_j5_memory() {
     let s = replay_memory("resources_j5", Some("resources_j5.xml")).await;
@@ -181,7 +181,9 @@ async fn replay_resources_j5_memory() {
         ]
     );
     // Électricien ajouté à une tâche pilotée par l'effort : dry_run puis
-    // validé, même diff ; 48 h gardées sur 3 j.
+    // validé, même diff ; 48 h gardées, 24 h chacun (3 j par affectation) ;
+    // durée de la tâche = union des parts, 5 j du lun 23 au ven 27/11 (la
+    // part de l'Électricien décalée par son congé, R-173, S14).
     let dry = at(
         "assign_resource",
         &json!({ "task": 4, "resource": 2, "dry_run": true }),
@@ -192,7 +194,7 @@ async fn replay_resources_j5_memory() {
     let reseaux = ok(at("get_task", &json!({ "uid": 4 })));
     assert_eq!(
         (&reseaux["work"]["text"], &reseaux["duration"]["text"]),
-        (&json!("48h"), &json!("3j"))
+        (&json!("48h"), &json!("5j"))
     );
     // Durée fixe : unités à 50 % ⇒ travail 16 h ; travail fixe : 8 j ⇒ 50 %.
     let charpente = ok(at("get_task", &json!({ "uid": 3 })));
@@ -254,29 +256,23 @@ fn ok_at(s: &Scenario, i: usize) -> &Value {
 fn assert_reopened(s: &Scenario) {
     let at = |tool: &str, params: &Value| index_of(s, tool, params);
     let ok = |i: usize| ok_at(s, i);
-    // Réouverture : mêmes ressources, mêmes dates, travail et marges. Écart
-    // connu (ADR-0013, lot L9) : la durée d'une feuille placée par plusieurs
-    // parts. En session, `Task::duration` garde le plus grand des `d_a`
-    // (Réseaux : 3 j, lot L2) ; l'écrivain écrit la mesure de l'union des
-    // parts (5 j, du lun 23 au ven 27/11, lot L6), relue comme durée.
+    // Réouverture : mêmes tâches (dates, durées, travail, marges), mêmes
+    // ressources. La durée d'une feuille placée par plusieurs parts est la
+    // même en session et relue : l'union des parts (Réseaux, UID 4 : 5 j,
+    // du lun 23 au ven 27/11), reportée dans le modèle après chaque recalcul
+    // (R-173) et écrite par l'écrivain MSPDI (R-199).
     let opened = at("open_project", &json!({ "path": "$TMP/resources_j5.xml" }));
     let before = opened - 4;
     assert_eq!(s.calls[before].tool, "list_tasks");
     assert_eq!(s.calls[opened + 1].tool, "list_tasks");
-    let without_union_gap = |v: &Value, minutes: i64| {
-        let mut v = v.clone();
-        for t in v["tasks"].as_array_mut().unwrap() {
-            if t["uid"] == json!(4) {
-                assert_eq!(t["duration"]["minutes"], json!(minutes), "{t}");
-                t.as_object_mut().unwrap().remove("duration");
-            }
-        }
-        v
-    };
-    assert_eq!(
-        without_union_gap(ok(opened + 1), 2400),
-        without_union_gap(ok(before), 1440)
-    );
+    let reseaux = ok(before)["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["uid"] == json!(4))
+        .unwrap();
+    assert_eq!(reseaux["duration"]["minutes"], json!(2400), "{reseaux}");
+    assert_eq!(ok(opened + 1), ok(before));
     assert_eq!(s.calls[opened + 2].tool, "list_resources");
     assert_eq!(ok(opened + 2), ok(before + 1));
     let strip = |v: &Value| {

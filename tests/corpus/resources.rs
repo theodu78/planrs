@@ -5,10 +5,11 @@
 //! - **Cas de tâche** : une tâche automatique, active, planifiée (feuille ou
 //!   récapitulative, UID 0 exclu) qui porte du travail enregistré ou une
 //!   affectation à une vraie ressource. Champs : `Work` de la tâche (lu dans
-//!   le modèle, `Task::work`, contre `TaskSchedule::work`, R-184) ; pour une
-//!   feuille, `Start` et `Finish` de chacune de ses affectations hors
-//!   affectation fictive −65 535 (`RecordedAssignment` contre
-//!   `AssignmentSchedule::span`, R-173).
+//!   le modèle, `Task::work`, contre `TaskSchedule::work`, R-184) ; `Start`
+//!   et `Finish` de chacune de ses affectations hors affectation fictive
+//!   −65 535 (`RecordedAssignment` contre `AssignmentSchedule::span`, R-173
+//!   pour une feuille, R-179 pour une récapitulative, depuis le
+//!   2026-10-19).
 //! - **Cas de ressource** : une ressource du fichier (UID 0 exclu, O34) dont
 //!   le fichier enregistre `Work` ou `OverAllocated`. Champs : `Work`
 //!   (R-184) et `OverAllocated` (R-186, R-187).
@@ -196,14 +197,15 @@ fn task_cases(doc: &MspdiDocument, schedule: &Schedule, out: &mut ResourceCompar
                 computed: format!("{} min", ts.work.minutes().get()),
             });
         }
-        if kind == ResourceCaseKind::Leaf {
-            assignment_dates(doc, schedule, &assignments, &mut case);
-        }
+        // Feuilles (R-173) et récapitulatives (R-179) : dates de chaque
+        // affectation.
+        assignment_dates(doc, schedule, &assignments, &mut case);
         out.cases.push(case);
     }
 }
 
-/// Dates des affectations d'une feuille, hors fictive −65 535.
+/// Dates des affectations d'une tâche (feuille ou récapitulative), hors
+/// fictive −65 535.
 fn assignment_dates(
     doc: &MspdiDocument,
     schedule: &Schedule,

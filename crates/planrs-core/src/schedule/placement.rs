@@ -128,10 +128,19 @@ fn usable(set: &CalendarSet, uid: CalendarUid) -> bool {
 }
 
 /// R-170 (moteur) : `d_a = round_div(W × 10 000, U)` pour les unités fixes
-/// et le travail fixe ; durée de la tâche pour la durée fixe et pour des
-/// unités nulles (R-181) ; hors du domaine des durées : échec (R-069).
-fn assignment_duration(task: &Task, work: Work, units: Units) -> Result<Minutes, &'static str> {
-    if task.task_type == TaskType::FixedDuration || units == Units::ZERO {
+/// et le travail fixe ; durée de la tâche pour une feuille à durée fixe et
+/// pour des unités nulles (R-181) ; hors du domaine des durées : échec
+/// (R-069). Une récapitulative (`summary`) n'a pas de durée tenue : son
+/// affectation dure W ÷ U quel que soit son type (R-179 ; toutes les
+/// récapitulatives du corpus sont à durée fixe, O32, de durée enregistrée
+/// nulle dans A6).
+fn assignment_duration(
+    task: &Task,
+    work: Work,
+    units: Units,
+    summary: bool,
+) -> Result<Minutes, &'static str> {
+    if (task.task_type == TaskType::FixedDuration && !summary) || units == Units::ZERO {
         return Ok(task.duration.minutes());
     }
     i128::from(work.minutes().get())
@@ -219,13 +228,13 @@ impl Resolver<'_> {
 
     /// Union compilée des calendriers `refs` (triés, sans doublon, au moins
     /// deux), mise en cache ; `None` si elle est trop morcelée.
-    fn union(&mut self, refs: Vec<CalRef>, diags: &mut Diagnostics) -> Option<usize> {
-        if let Some(slot) = self.unions.get(&refs) {
+    fn union(&mut self, refs: &[CalRef], diags: &mut Diagnostics) -> Option<usize> {
+        if let Some(slot) = self.unions.get(refs) {
             return *slot;
         }
         let mut acc: Option<CompiledCalendar> = None;
         let mut failed = false;
-        for &r in &refs {
+        for &r in refs {
             let Some(c) = self.compiled(r) else {
                 failed = true;
                 break;
@@ -257,7 +266,7 @@ impl Resolver<'_> {
             }
             None => None,
         };
-        self.unions.insert(refs, slot);
+        self.unions.insert(refs.to_vec(), slot);
         slot
     }
 
@@ -364,7 +373,9 @@ pub(super) fn resolve(
             cal,
             calendar,
             task_calendar,
-            duration: assignment_duration(task, a.work, a.units),
+            // Rôle de la tâche inconnu ici : une récapitulative est
+            // corrigée par `attach` (R-179).
+            duration: assignment_duration(task, a.work, a.units, false),
             delay: a.delay.max(Minutes::ZERO),
             leveling: a.leveling_delay.filter(|l| l.minutes > Minutes::ZERO),
             contour: a.contour,
@@ -372,14 +383,17 @@ pub(super) fn resolve(
             units: a.units,
         });
     }
-    items.sort_by_key(|i| (i.task_pos, i.uid));
+    // Clés uniques (UID d'affectation) : tri instable sans effet sur l'ordre.
+    items.sort_unstable_by_key(|i| (i.task_pos, i.uid));
     // Union des calendriers effectifs des affectations de travail, par
     // tâche qui en a plusieurs (échelle représentative, R-173).
     let mut unions = BTreeMap::new();
     let mut k = 0;
+    // Tampon réutilisé d'une tâche à l'autre (aucune allocation par tâche).
+    let mut refs: Vec<CalRef> = Vec::new();
     while let Some(first) = items.get(k) {
         let p = first.task_pos;
-        let mut refs: Vec<CalRef> = Vec::new();
+        refs.clear();
         while let Some(i) = items.get(k).filter(|i| i.task_pos == p) {
             if i.work_resource {
                 refs.push(i.cal);
@@ -389,7 +403,7 @@ pub(super) fn resolve(
         refs.sort_unstable();
         refs.dedup();
         if refs.len() >= 2 {
-            let rep = r.union(refs, diags).map(CalRef::Owned);
+            let rep = r.union(&refs, diags).map(CalRef::Owned);
             if let Some(rep) = rep {
                 unions.insert(p, rep);
             }
@@ -422,6 +436,24 @@ impl Part {
     /// Part sans délai ni retard de nivellement.
     fn undelayed(&self) -> bool {
         self.delay == Minutes::ZERO && self.level.0 == Minutes::ZERO
+    }
+}
+
+/// Parts (au moins une) sur une même échelle, sans délai, toutes de durée
+/// non nulle ou toutes nulles : elles commencent au même instant et la
+/// feuille se place comme sa plus longue part ; l'union de leurs
+/// intervalles est cette part (mesure = plus grand `d_a`).
+fn shared_scale(parts: &[Part]) -> bool {
+    match parts {
+        [] => false,
+        [first, rest @ ..] => {
+            first.undelayed()
+                && rest.iter().all(|p| {
+                    p.scale == first.scale
+                        && p.undelayed()
+                        && (p.d == Minutes::ZERO) == (first.d == Minutes::ZERO)
+                })
+        }
     }
 }
 
@@ -526,9 +558,13 @@ pub(super) fn attach<'a>(
             CalRef::Project => return Some(PROJECT),
             CalRef::Elapsed => return Some(ELAPSED),
         };
-        let known = scales
-            .iter()
-            .position(|s| matches!(s, TimeScale::Working(k) if std::ptr::eq(*k, c)));
+        // Une échelle de même forme compilée (calendrier de ressource dérivé
+        // sans exception propre, intersection égale au calendrier de la
+        // tâche) est réutilisée : mêmes conversions, et les parts qui la
+        // partagent se placent comme une durée unique (`Placer::of`).
+        let known = scales.iter().position(
+            |s| matches!(s, TimeScale::Working(k) if std::ptr::eq(*k, c) || k.same_working_time(c)),
+        );
         let i = if let Some(k) = known {
             ix(k)?
         } else {
@@ -561,6 +597,7 @@ pub(super) fn attach<'a>(
             }
             let mut part = None;
             let mut scale = None;
+            let mut resolution = *res;
             if by_parts && res.work_resource {
                 match res.duration {
                     Ok(d) => {
@@ -583,12 +620,17 @@ pub(super) fn attach<'a>(
                 // d'une récapitulative ou mesurer celle d'une manuelle.
                 scale = Some(scale_of(res.cal, scales)?);
                 let summary = info.role == Role::Summary && matches!(task.mode, SchedulingMode::Auto);
-                if summary && res.duration.is_err() {
-                    diags.push(Diagnostic::AssignmentDurationOutOfDomain { assignment: res.uid });
+                if summary {
+                    // R-179 : W ÷ U, même pour une récapitulative à durée
+                    // fixe.
+                    resolution.duration = assignment_duration(task, res.work, res.units, true);
+                    if resolution.duration.is_err() {
+                        diags.push(Diagnostic::AssignmentDurationOutOfDomain { assignment: res.uid });
+                    }
                 }
             }
             out.outputs.push(Output {
-                res: *res,
+                res: resolution,
                 part,
                 scale,
             });
@@ -626,17 +668,7 @@ impl<'p, 'a> Placer<'p, 'a> {
         // Une échelle commune, sans délai, toutes de durée > 0 (ou toutes
         // nulles) : le placement est celui de la plus longue (`d` = max
         // `d_a`), le chemin J4 suffit.
-        let single = match parts {
-            [] => true,
-            [first, rest @ ..] => {
-                first.undelayed()
-                    && rest.iter().all(|p| {
-                        p.scale == first.scale
-                            && p.undelayed()
-                            && (p.d == Minutes::ZERO) == (first.d == Minutes::ZERO)
-                    })
-            }
-        };
+        let single = parts.is_empty() || shared_scale(parts);
         let scale = *pos(place)
             .and_then(|i| scales.get(i))
             .ok_or(Fail::Internal("échelle hors bornes"))?;
@@ -780,9 +812,12 @@ impl<'n, 'a> Calc<'n, 'a> {
         BTreeMap<usize, Minutes>,
     ) {
         let net = self.net;
-        let mut out = BTreeMap::new();
         let mut durations = BTreeMap::new();
         let mut unions: UnionCache = BTreeMap::new();
+        // Dates de chaque part depuis le début planifié, par indice de part :
+        // réutilisées par `assignment_schedule` (même borne, même résultat).
+        let mut placed: Vec<Option<(Moment, Span)>> = vec![None; net.parts.items.len()];
+        let mut spans: Vec<Span> = Vec::new();
         for p in 0..net.tasks.len() {
             let parts = net.parts.of(p);
             if parts.len() < 2 && parts.first().is_none_or(Part::undelayed) {
@@ -791,15 +826,25 @@ impl<'n, 'a> Calc<'n, 'a> {
             let Some(planned) = self.planned_start(p) else {
                 continue;
             };
-            let spans: Vec<Span> = parts
-                .iter()
-                .filter_map(|part| Placer::part_span(&net.scales, part, planned).ok())
-                .collect();
+            let first = net.parts.offsets.get(p).and_then(|&o| pos(o));
+            spans.clear();
+            for (k, part) in parts.iter().enumerate() {
+                let Ok(span) = Placer::part_span(&net.scales, part, planned) else {
+                    continue;
+                };
+                spans.push(span);
+                if let Some(slot) = first
+                    .and_then(|f| f.checked_add(k))
+                    .and_then(|i| placed.get_mut(i))
+                {
+                    *slot = Some((planned, span));
+                }
+            }
             if spans.len() != parts.len() {
                 continue;
             }
-            let measured = if parts.len() == 1 {
-                parts.first().map(|part| part.d)
+            let measured = if parts.len() == 1 || shared_scale(parts) {
+                parts.iter().map(|part| part.d).max()
             } else {
                 // L'union de toutes les échelles des parts est l'échelle de
                 // la feuille (déjà compilée, R-173).
@@ -814,12 +859,16 @@ impl<'n, 'a> Calc<'n, 'a> {
                 durations.insert(p, m);
             }
         }
-        for o in &net.parts.outputs {
-            if let Some(a) = self.assignment_schedule(o) {
-                out.insert(o.res.uid, a);
-            }
-        }
-        (out, durations)
+        // Sortie triée par UID puis construite en bloc (plus rapide que des
+        // insertions une à une).
+        let mut out: Vec<(AssignmentUid, AssignmentSchedule)> = net
+            .parts
+            .outputs
+            .iter()
+            .filter_map(|o| Some((o.res.uid, self.assignment_schedule(o, &placed)?)))
+            .collect();
+        out.sort_unstable_by_key(|(uid, _)| *uid);
+        (out.into_iter().collect(), durations)
     }
 
     /// Début planifié de la tâche en position `p` (au plus tôt depuis le
@@ -834,7 +883,11 @@ impl<'n, 'a> Calc<'n, 'a> {
     }
 
     /// `AssignmentSchedule` d'une affectation, si sa tâche est planifiée.
-    fn assignment_schedule(&self, o: &Output) -> Option<AssignmentSchedule> {
+    fn assignment_schedule(
+        &self,
+        o: &Output,
+        placed: &[Option<(Moment, Span)>],
+    ) -> Option<AssignmentSchedule> {
         let net = self.net;
         let info = net.task(o.res.task_pos)?;
         let task = self.project.tasks.at(o.res.task_pos)?;
@@ -857,12 +910,16 @@ impl<'n, 'a> Calc<'n, 'a> {
         };
         let parts = net.parts.of(o.res.task_pos);
         let mut effective_units = res.units;
-        let (span, late, duration, calendar) = match o.part.and_then(|i| net.parts.items.get(i)) {
+        let span_from = |i: usize, part: &Part, from: Moment| match placed.get(i) {
+            Some(Some((at, span))) if *at == from => Some(*span),
+            _ => Placer::part_span(&net.scales, part, from).ok(),
+        };
+        let (span, late, duration, calendar) = match o.part.and_then(|i| Some((i, net.parts.items.get(i)?))) {
             // Une seule part sans délai : la feuille est la part (P34).
-            Some(part) if parts.len() == 1 && part.undelayed() => (early, late, part.d, res.calendar),
-            Some(part) => (
-                Placer::part_span(&net.scales, part, early.start).ok()?,
-                late.and_then(|l| Placer::part_span(&net.scales, part, l.start).ok()),
+            Some((_, part)) if parts.len() == 1 && part.undelayed() => (early, late, part.d, res.calendar),
+            Some((i, part)) => (
+                span_from(i, part, early.start)?,
+                late.and_then(|l| span_from(i, part, l.start)),
                 part.d,
                 res.calendar,
             ),

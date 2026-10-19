@@ -1,16 +1,18 @@
-//! `planrs mcp [--journal F] [--open plan.xml] [--headless] [--http ADDR]` :
-//! serveur MCP sur l'entrée et la sortie standard (`planrs_mcp::serve_stdio`).
+//! `planrs mcp [--journal F] [--open plan.xml] [--headless]
+//! [--http ADDR --root DOSSIER [--allow-remote] [--token-file F]]` :
+//! serveur MCP sur l'entrée et la sortie standard (`planrs_mcp::serve_stdio`)
+//! ou en HTTP (`planrs_mcp::serve_http`, lot L17).
 //!
 //! Langue par défaut des textes : anglais (ADR-0012, arbitrage 6), sauf
-//! `--lang` explicite. `--http` est le lot L17 (coupable) : refusé ici en
-//! usage (code 2) tant qu'il n'est pas livré.
+//! `--lang` explicite. En HTTP, `--root` est obligatoire (code 2 sinon) ;
+//! une adresse non locale exige `--allow-remote` et `--token-file`.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Args;
 use planrs_automation::text::Language;
-use planrs_mcp::{McpServeError, ServeOptions};
+use planrs_mcp::{HttpOptions, McpServeError, ServeOptions};
 
 use super::{Ctx, warn};
 use crate::exit;
@@ -27,28 +29,43 @@ pub struct McpArgs {
     /// Ignore la garde « fichier ouvert dans l'application » (ADR-0002).
     #[arg(long)]
     pub headless: bool,
-    /// Transport HTTP (lot L17, pas encore disponible).
+    /// Transport HTTP sur ADRESSE (`:8080` = `127.0.0.1:8080`), chemin `/mcp`.
     #[arg(long, value_name = "ADRESSE")]
     pub http: Option<String>,
+    /// Dossier auquel les chemins de fichiers sont confinés (obligatoire avec
+    /// `--http`).
+    #[arg(long, value_name = "DOSSIER", requires = "http")]
+    pub root: Option<PathBuf>,
+    /// Autorise une adresse HTTP non locale (jeton `--token-file` exigé).
+    #[arg(long, requires = "http")]
+    pub allow_remote: bool,
+    /// Fichier du jeton porteur (`Authorization: Bearer …`).
+    #[arg(long, value_name = "FICHIER", requires = "http")]
+    pub token_file: Option<PathBuf>,
 }
 
 /// Exécute la sous-commande.
 pub fn run(ctx: &Ctx, args: McpArgs) -> ExitCode {
-    if args.http.is_some() {
-        warn(ctx.tr(
-            "mcp --http : pas encore disponible (stdio seulement)",
-            "mcp --http: not available yet (stdio only)",
-        ));
-        return ExitCode::from(exit::USAGE);
-    }
     let lang = if ctx.lang_explicit { ctx.lang } else { Language::En };
     let mut opts = ServeOptions::new(ctx.now, lang);
     opts.journal = args.journal;
     opts.open = args.open;
     opts.ignore_app_guard = args.headless;
-    match planrs_mcp::serve_stdio(opts) {
+    let res = match args.http {
+        None => planrs_mcp::serve_stdio(opts),
+        Some(addr) => {
+            let http = HttpOptions {
+                addr,
+                root: args.root,
+                allow_remote: args.allow_remote,
+                token_file: args.token_file,
+            };
+            planrs_mcp::serve_http(&opts, &http)
+        }
+    };
+    match res {
         Ok(()) => ExitCode::from(exit::SUCCESS),
-        Err(e @ McpServeError::NotYetAvailable) => {
+        Err(e @ (McpServeError::NotYetAvailable | McpServeError::Usage(_))) => {
             warn(&format!("mcp : {e}"));
             ExitCode::from(exit::USAGE)
         }

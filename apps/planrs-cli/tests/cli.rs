@@ -430,3 +430,30 @@ fn cli_lang_flag_and_env() {
     let o = run(&["--now", NOW, "summary", s(&house)]);
     assert!(String::from_utf8(o.stdout).unwrap().contains("Fin"));
 }
+
+#[test]
+fn cli_mcp_http_options_checked() {
+    let dir = TempDir::new("http");
+    let root = s(dir.path());
+    // --root obligatoire, --root sans --http, adresse invalide : usage.
+    assert_eq!(code(&run(&["mcp", "--http", ":0"])), 2);
+    assert_eq!(code(&run(&["mcp", "--root", root])), 2);
+    assert_eq!(code(&run(&["mcp", "--http", "exemple:80", "--root", root])), 2);
+    // Adresse non locale sans --allow-remote, puis sans jeton : usage.
+    let o = run(&["mcp", "--http", "192.0.2.1:8080", "--root", root]);
+    assert_eq!(code(&o), 2);
+    assert!(String::from_utf8_lossy(&o.stderr).contains("--allow-remote"));
+    let o = run(&[
+        "mcp",
+        "--http",
+        "192.0.2.1:8080",
+        "--root",
+        root,
+        "--allow-remote",
+    ]);
+    assert_eq!(code(&o), 2);
+    assert!(String::from_utf8_lossy(&o.stderr).contains("--token-file"));
+    // Racine introuvable : erreur de fichier.
+    let missing = dir.join("absent");
+    assert_eq!(code(&run(&["mcp", "--http", ":0", "--root", s(&missing)])), 3);
+}

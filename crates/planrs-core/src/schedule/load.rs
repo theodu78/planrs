@@ -22,6 +22,7 @@
 //! L'utilisation par période (R-188) se calcule à la demande
 //! ([`crate::resource::usage`]) avec les mêmes échelles ([`Scales`]).
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use super::network::{Network, Role};
@@ -44,6 +45,20 @@ pub const MAX_RANGES: u64 = 2_000_000;
 /// Clé `Extras` des disponibilités datées relues (`AvailabilityPeriods`,
 /// R-187).
 const AVAILABILITY_KEY: &str = "AvailabilityPeriods";
+
+/// R-113 : calendrier qui place les tâches sans affectation de travail ni
+/// calendrier propre (échelle `Project` d'une affectation, R-175), comme le
+/// moteur : base du calendrier du projet s'il est dérivé, Standard intégré
+/// s'il est inutilisable (R-066). `None` : repli impossible.
+pub(crate) fn project_place<'s>(
+    project: &Project,
+    set: &'s CalendarSet,
+) -> Option<Cow<'s, CompiledCalendar>> {
+    match set.get(project.calendar) {
+        Ok(c) if c.has_working_time() => Some(Cow::Borrowed(super::derived_base(project, set).unwrap_or(c))),
+        _ => super::compile_builtin_standard(project).map(Cow::Owned),
+    }
+}
 
 /// Échelles effectives des affectations (R-171), par [`EffectiveCalendar`] :
 /// calendriers compilés du projet, intersections recompilées et mises en

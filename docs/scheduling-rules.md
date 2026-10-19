@@ -1203,6 +1203,18 @@ Règles J5 (ADR-0013, cahier `docs/plans/j5.md` § 2.3) : placement affectation 
 - **Statut** : `hypothèse` ; A4 et A6 sans surutilisation (mesuré, lot L5).
 - **Tests** : `tests/rules/r187_overallocation_scope.rs` (`r187_inactive_excluded`, `r187_availability_ignored_diag`, `r187_corpus_no_false_positive`).
 
+## R-188 — Utilisation par période
+- **Formulation** : `resource::usage(p, s, from, to, by, resources)`, calculée à la demande.
+  - Périodes civiles : jour (00:00), semaine (début `week_start_day`), mois (le 1er) ; la première contient `from`, la dernière commence avant `to` ; `periods` donne leurs débuts ; `to <= from` : aucune période.
+  - Travail d'une affectation dans une période = W × (temps ouvré de son échelle effective dans période ∩ `[from, to)` ∩ span) ÷ (temps ouvré du span), par différence de cumuls arrondis (R-001) : la somme sur les périodes qui couvrent le span vaut W. Span sans temps ouvré : tout W dans la période de son début.
+  - Ressource inconnue ou de coût : travail nul ; matérielle : quantités ; affectation fictive jamais comptée.
+  - Drapeau « surutilisée » si un intervalle de `ResourceLoad.overloads` coupe la période ; `truncated` si ces intervalles sont coupés pour une ressource demandée.
+  - Au plus 1 000 périodes et 1 000 ressources (contrat L0), sinon `usage.limit`.
+  - Exemple : R 100 % sur A lun-mer (24 h) et B mar (8 h), par semaine ⇒ semaine du 19/10 : 32 h, surutilisée ; par jour : 8 h, 16 h (surutilisée), 8 h.
+- **Source** : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r188_usage_by_period.rs` (`r188_week_buckets`, `r188_limit`).
+
 ## R-189 — Matrice des types de tâche
 - **Formulation** : à l'édition, la grandeur recalculée dépend du type (fonction pure `resource::edit::apply`, appelée par les seules commandes ; le recalcul du planning ne rééquilibre jamais). Unités fixes : unités → durée (travail gardé), durée → travail, travail → durée. Durée fixe : unités → travail, durée → travail, travail → unités. Travail fixe : unités → durée, durée → unités, travail → durée. Avec plusieurs affectations, la grandeur recalculée l'est sur chacune ; une durée recalculée est le plus grand des d_a (R-170) ; une durée gardée ou saisie est rendue telle quelle. Changer de type ou de pilotage ne recalcule rien. Exemples (une affectation à 100 %, 2 j = 960 min, 16 h) : unités fixes : 50 % ⇒ 4 j, 3 j ⇒ 24 h, 24 h ⇒ 3 j ; durée fixe : 50 % ⇒ 8 h, 3 j ⇒ 24 h, 24 h ⇒ 150 % ; travail fixe : 200 % ⇒ 1 j, 4 j ⇒ 50 %, 24 h ⇒ 3 j ; durée fixe, R1 100 % et R2 50 %, durée → 3 j ⇒ 1 440 et 720.
 - **Source** : support.microsoft.com, « Change the task type for more accurate scheduling » (S41, tableau des trois types) ; durée = max des d_a, multi-affectations : hypothèse.

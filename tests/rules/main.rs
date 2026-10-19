@@ -184,6 +184,7 @@ mod r184_work_rollups;
 mod r185_material_cost_resources;
 mod r186_overallocation;
 mod r187_overallocation_scope;
+mod r188_usage_by_period;
 mod r189_task_type_matrix;
 mod r190_add_effort_driven;
 mod r191_remove_effort_driven;

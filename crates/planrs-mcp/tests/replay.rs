@@ -37,8 +37,12 @@ use tokio::task::JoinHandle;
 
 const SCENARIO: &str = "build_30";
 
-/// Budget du rejeu complet en debug (vérification 5).
-const BUDGET: Duration = Duration::from_secs(2);
+/// Budget du rejeu complet en debug (vérification 5). Temps réel mesuré
+/// pendant que les autres rejeux tournent en parallèle sur les runners de la
+/// CI (2 à 4 cœurs) : 10 s, qui attrape une explosion de complexité sans
+/// dépendre de la charge (0,2 à 0,5 s par rejeu en local, 2,3 s observé sur
+/// la CI Linux le 2026-10-19 avec huit rejeux simultanés).
+const BUDGET: Duration = Duration::from_secs(10);
 
 fn root() -> std::path::PathBuf {
     repo_root(env!("CARGO_MANIFEST_DIR"))

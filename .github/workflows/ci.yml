@@ -85,6 +85,8 @@ jobs:
   # jusqu'au projet vide, rejeu en mémoire < 2 s en debug. Détail :
   # `docs/features/mcp.md`. Les mêmes tests tournent aussi dans `checks`
   # (`cargo test --workspace`) ; ce job les isole pour le critère.
+  # J5 (lot L9) : le scénario `resources_j5.jsonl` (ressources, affectations,
+  # types de tâche, surutilisation) passe par les mêmes trois chemins.
   mcp:
     name: MCP (rejeu build_30)
     runs-on: ubuntu-latest

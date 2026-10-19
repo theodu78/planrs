@@ -15,6 +15,7 @@
     clippy::panic,
     clippy::indexing_slicing,
     clippy::missing_panics_doc,
+    clippy::arithmetic_side_effects,
     reason = "tests : un échec doit s'arrêter net"
 )]
 
@@ -138,6 +139,154 @@ async fn replay_memory(name: &str, saved: Option<&str>) -> Scenario {
 #[tokio::test]
 async fn replay_build_30_memory() {
     replay_memory(SCENARIO, Some("build_30.xml")).await;
+}
+
+/// Scénario J5 (lot L9, `docs/plans/j5.md`) : ressources, affectations,
+/// types de tâche, pilotage par l'effort, surutilisation, rejoué en mémoire ;
+/// MSPDI exporté égal à l'attendu par `normalize`.
+///
+/// Vérifications du cahier, sur les résultats attendus : `dry_run` sans
+/// effet et même diff que l'appel validé ; surutilisation signalée par
+/// `diff.overallocated` à l'affectation à 150 %, visible par semaine dans
+/// `resource_usage`, résolue par `update_assignment` ; `delete_resource`
+/// sans `cascade` refusé ; réouverture du MSPDI exporté : mêmes ressources,
+/// mêmes dates, même résumé (hors chemin, état modifié, historique), à
+/// l'écart de durée près des feuilles à plusieurs parts (voir plus bas).
+#[tokio::test]
+async fn replay_resources_j5_memory() {
+    let s = replay_memory("resources_j5", Some("resources_j5.xml")).await;
+    if replay::blessing() {
+        return;
+    }
+    let at = |tool: &str, params: &Value| index_of(&s, tool, params);
+    let ok = |i: usize| ok_at(&s, i);
+    assert!(
+        s.calls
+            .iter()
+            .filter(|c| c.tool != "delete_resource")
+            .all(|c| error_code(c.expected.as_ref().unwrap()).is_none())
+    );
+    // Quatre ressources, un calendrier propre pour chaque ressource de travail.
+    let added: Vec<&Value> = (0..s.calls.len())
+        .filter(|&i| s.calls[i].tool == "add_resource")
+        .map(|i| &ok(i)["side_effects"])
+        .collect();
+    assert_eq!(
+        added,
+        [
+            &json!([{ "calendar_created": 4 }]),
+            &json!([{ "calendar_created": 5 }]),
+            &json!([]),
+            &json!([])
+        ]
+    );
+    // Électricien ajouté à une tâche pilotée par l'effort : dry_run puis
+    // validé, même diff ; 48 h gardées sur 3 j.
+    let dry = at(
+        "assign_resource",
+        &json!({ "task": 4, "resource": 2, "dry_run": true }),
+    );
+    assert_eq!(ok(dry)["committed"], json!(false));
+    assert_eq!(ok(dry)["diff"], ok(dry + 1)["diff"]);
+    assert_eq!(ok(dry + 1)["committed"], json!(true));
+    let reseaux = ok(at("get_task", &json!({ "uid": 4 })));
+    assert_eq!(
+        (&reseaux["work"]["text"], &reseaux["duration"]["text"]),
+        (&json!("48h"), &json!("3j"))
+    );
+    // Durée fixe : unités à 50 % ⇒ travail 16 h ; travail fixe : 8 j ⇒ 50 %.
+    let charpente = ok(at("get_task", &json!({ "uid": 3 })));
+    assert_eq!(charpente["work"]["text"], json!("16h"));
+    let enduits = ok(at("get_task", &json!({ "uid": 6 })));
+    assert_eq!(
+        (
+            &enduits["work"]["text"],
+            &enduits["resources"][0]["units"]["text"]
+        ),
+        (&json!("32h"), &json!("50%"))
+    );
+    // Surutilisation du Maçon (UID 1).
+    let over = at(
+        "assign_resource",
+        &json!({ "task": 7, "resource": 1, "units": { "text": "150%" } }),
+    );
+    assert_eq!(
+        ok(over)["diff"]["overallocated"],
+        json!({ "new": [1], "resolved": [] })
+    );
+    let usage = ok(over + 1);
+    assert_eq!(s.calls[over + 1].tool, "resource_usage");
+    assert_eq!(
+        usage["rows"][0]["overallocated"],
+        json!([false, true, false, false])
+    );
+    let fix = at(
+        "update_assignment",
+        &json!({ "task": 7, "resource": 1, "units": { "text": "100%" } }),
+    );
+    assert_eq!(
+        ok(fix)["diff"]["overallocated"],
+        json!({ "new": [], "resolved": [1] })
+    );
+    let refused = s.calls.iter().find(|c| c.tool == "delete_resource").unwrap();
+    assert_eq!(
+        error_code(refused.expected.as_ref().unwrap()),
+        Some("resource.has_assignments")
+    );
+    assert_reopened(&s);
+}
+
+/// Index du premier appel `tool` de paramètres `params`.
+fn index_of(s: &Scenario, tool: &str, params: &Value) -> usize {
+    s.calls
+        .iter()
+        .position(|c| c.tool == tool && &c.params == params)
+        .unwrap_or_else(|| panic!("{tool} {params} absent du scénario"))
+}
+
+/// Résultat `ok` attendu de l'appel `i`.
+fn ok_at(s: &Scenario, i: usize) -> &Value {
+    let r = s.calls[i].expected.as_ref().unwrap();
+    r.get("ok").unwrap_or_else(|| panic!("appel {} : {r}", i + 1))
+}
+
+/// `resources_j5` : la réouverture du MSPDI exporté redonne le projet.
+fn assert_reopened(s: &Scenario) {
+    let at = |tool: &str, params: &Value| index_of(s, tool, params);
+    let ok = |i: usize| ok_at(s, i);
+    // Réouverture : mêmes ressources, mêmes dates, travail et marges. Écart
+    // connu (ADR-0013, lot L9) : la durée d'une feuille placée par plusieurs
+    // parts. En session, `Task::duration` garde le plus grand des `d_a`
+    // (Réseaux : 3 j, lot L2) ; l'écrivain écrit la mesure de l'union des
+    // parts (5 j, du lun 23 au ven 27/11, lot L6), relue comme durée.
+    let opened = at("open_project", &json!({ "path": "$TMP/resources_j5.xml" }));
+    let before = opened - 4;
+    assert_eq!(s.calls[before].tool, "list_tasks");
+    assert_eq!(s.calls[opened + 1].tool, "list_tasks");
+    let without_union_gap = |v: &Value, minutes: i64| {
+        let mut v = v.clone();
+        for t in v["tasks"].as_array_mut().unwrap() {
+            if t["uid"] == json!(4) {
+                assert_eq!(t["duration"]["minutes"], json!(minutes), "{t}");
+                t.as_object_mut().unwrap().remove("duration");
+            }
+        }
+        v
+    };
+    assert_eq!(
+        without_union_gap(ok(opened + 1), 2400),
+        without_union_gap(ok(before), 1440)
+    );
+    assert_eq!(s.calls[opened + 2].tool, "list_resources");
+    assert_eq!(ok(opened + 2), ok(before + 1));
+    let strip = |v: &Value| {
+        let mut v = v.clone();
+        for k in ["dirty", "path", "history_len"] {
+            v.as_object_mut().unwrap().remove(k);
+        }
+        v
+    };
+    assert_eq!(strip(ok(opened + 3)), strip(ok(before + 2)));
 }
 
 /// Essai réel avec Claude du 2026-10-19 (`docs/features/mcp.md` § 6) :

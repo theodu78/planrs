@@ -593,6 +593,23 @@ pub fn project(seed: u64) -> Project {
         );
         a.leveling_delay = leveling_delay(r);
         legacy_leveling(r, &mut a.extras);
+        // R-199 : répartition d'un profil modifié à la main (type 1, gardée
+        // à la lecture) et réel (type 2) ; le placement qu'elle décrit
+        // diffère presque toujours de celui du moteur (jetée à l'écriture
+        // avec les valeurs du moteur, `schedule_image`).
+        if a.contour == WorkContour::Contoured && r.chance(50) {
+            let at = planrs_mspdi::scalar::format_datetime(moment_near(r, start));
+            for kind in [1, 2] {
+                a.extras.0.push(ExtraEntry {
+                    origin: "mspdi".to_owned(),
+                    key: "TimephasedData".to_owned(),
+                    payload: format!(
+                        "<TimephasedData><Type>{kind}</Type><UID>{}</UID><Start>{at}</Start><Finish>{at}</Finish><Unit>2</Unit><Value>PT1H0M0S</Value></TimephasedData>",
+                        i + 1
+                    ),
+                });
+            }
+        }
         p.assignments.push(a).unwrap();
     }
 

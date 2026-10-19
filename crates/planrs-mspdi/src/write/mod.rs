@@ -21,6 +21,7 @@ mod leveling;
 mod project;
 mod resource;
 mod task;
+mod timephased;
 
 use std::collections::BTreeMap;
 
@@ -30,7 +31,7 @@ use crate::extras::{self, Anchor, ExtraKey, ORIGIN};
 pub use crate::schema::Profile as OrderProfile;
 use crate::schema::{Class, Parent, sequence};
 pub(crate) use computed::leveling_delay as leveling_payload_int;
-pub use computed::{Computed, ScheduleGap, choose_computed, schedule_gaps};
+pub use computed::{Computed, ScheduleGap, choose_computed, schedule_gaps, schedule_image};
 use emit::Emitter;
 pub(crate) use emit::is_xml_char;
 pub(crate) use resource::hourly_rate_text;
@@ -142,6 +143,13 @@ pub enum WriteCode {
         /// Manques.
         gaps: Vec<ScheduleGap>,
     },
+    /// R-199 : `TimephasedData` d'une affectation (sujet du diagnostic)
+    /// jetées, son placement par le moteur n'étant plus celui qu'elles
+    /// décrivent.
+    TimephasedDropped {
+        /// Nombre d'éléments `TimephasedData` jetés.
+        count: u32,
+    },
 }
 
 impl WriteCode {
@@ -155,6 +163,7 @@ impl WriteCode {
             Self::ExtraInvalid => "mspdi.write.extra_invalid",
             Self::ScheduleMismatch => "mspdi.write.schedule_mismatch",
             Self::ScheduleIncomplete { .. } => "mspdi.write.schedule_incomplete",
+            Self::TimephasedDropped { .. } => "mspdi.write.timephased_dropped",
         }
     }
 }

@@ -197,3 +197,35 @@ fn r171_unusable_resource_calendar_falls_back() {
         run.codes()
     );
 }
+
+#[test]
+fn r171_combined_segment_budget_falls_back_to_task_calendar() {
+    // Budget des calendriers combinés épuisé (`Limits::combined_segments`
+    // 0, R-172, règle 10) : l'intersection L6 ∩ S n'est pas compilée,
+    // `calendar.too_many_segments`, l'affectation retombe sur le
+    // calendrier de la tâche (comme une intersection vide) : samedi ouvré,
+    // fin sam 24/10 17:00 au lieu du lun 26/10.
+    let build = || {
+        let net = with_l6(Net::new("2026-10-22T08:00"))
+            .task("A", 1_440)
+            .calendar("A", L6);
+        assign(resource(net, 1, Some(STANDARD)), 1, "A", 1, 1_440)
+    };
+    let run = build().run_with(planrs_core::Limits {
+        combined_segments: 0,
+        ..planrs_core::Limits::default()
+    });
+    assert_eq!(run.at("A").finish, moment("2026-10-24T17:00"));
+    assert_eq!(
+        placed(&run, 1).calendar,
+        EffectiveCalendar::Task(CalendarUid::new(L6))
+    );
+    assert!(
+        run.codes().contains(&"calendar.too_many_segments"),
+        "{:?}",
+        run.codes()
+    );
+    // Budget par défaut : intersection compilée.
+    let run = build().run();
+    assert_eq!(run.at("A").finish, moment("2026-10-26T17:00"));
+}

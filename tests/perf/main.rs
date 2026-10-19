@@ -32,7 +32,10 @@ use planrs_core::{
     OutlineLevel, Percent, Project, ProjectInit, ScheduleAnchor, Severity, Task, TaskOutcome, TaskRole,
     TaskUid, TimeBasis, schedule,
 };
-use planrs_tests::generate::{assigned_network, constrained_network, from_finish_network, large_network};
+use planrs_tests::generate::{
+    assigned_network, constrained_network, from_finish_network, hostile_combined_calendars, hostile_parts,
+    large_network,
+};
 
 /// Seuil d'échec de la médiane.
 const BUDGET: Duration = Duration::from_millis(50);
@@ -192,6 +195,67 @@ fn assigned_network_shape() {
 #[ignore = "budget mesuré en release, job CI perf"]
 fn perf_5000_assigned() {
     budget("5000_assigned", &assigned_network(2026));
+}
+
+/// Un calcul chronométré ; échec au-delà de `limit`.
+fn once(name: &str, p: &Project, limit: Duration) -> planrs_core::Schedule {
+    let t = Instant::now();
+    let s = schedule(p);
+    let took = t.elapsed();
+    eprintln!("schedule ({name}) : {took:?}");
+    assert!(took <= limit, "{name} : {took:?} au-delà de {limit:?}");
+    s
+}
+
+/// Adversaire F2 de la relecture finale J5 : 1 000 paires (tâche,
+/// ressource) de calendriers à 60 000 segments. Le budget des calendriers
+/// combinés (`Limits::combined_segments`, 4 M segments gardés, 32 M lus)
+/// refuse les intersections au-delà : `calendar.too_many_segments`, repli
+/// sur le calendrier de la tâche, mémoire bornée (environ 128 Mo de
+/// segments combinés au lieu de 4 Go), calcul fini.
+#[test]
+#[ignore = "projet hostile, mesuré en release, job CI perf"]
+fn hostile_combined_calendars_bounded() {
+    let s = once(
+        "calendriers combinés hostiles",
+        &hostile_combined_calendars(),
+        Duration::from_secs(10),
+    );
+    assert!(
+        s.diagnostics
+            .iter()
+            .any(|d| d.code() == "calendar.too_many_segments"),
+        "budget jamais atteint"
+    );
+    assert_eq!(s.assignments.len(), 1_000);
+}
+
+/// Adversaire F1 de la relecture finale J5 : 100 000 affectations
+/// distinctes sur une seule feuille. Mesure exacte de l'union bornée à
+/// 1 000 parts (`assignment.too_many_parts`, durée = plus grand `d_a`) ;
+/// le reste du calcul est linéaire en parts.
+#[test]
+#[ignore = "projet hostile, mesuré en release, job CI perf"]
+fn hostile_parts_bounded() {
+    let s = once("100 000 parts", &hostile_parts(100_000), Duration::from_secs(5));
+    assert!(
+        s.diagnostics
+            .iter()
+            .any(|d| d.code() == "assignment.too_many_parts")
+    );
+    // 1 000 parts : sous le plafond, mesure exacte par balayage
+    // (O(P log P)) ; la plus décalée finit 999 min après la première.
+    let s = once("1 000 parts", &hostile_parts(1_000), Duration::from_millis(500));
+    assert!(
+        !s.diagnostics
+            .iter()
+            .any(|d| d.code() == "assignment.too_many_parts")
+    );
+    let duration = match s.tasks.get(&TaskUid::new(1)) {
+        Some(TaskOutcome::Scheduled(a)) => Some(a.duration),
+        _ => None,
+    };
+    assert_eq!(duration, Some(Minutes::new(480 + 999)));
 }
 
 /// Profondeur de la hiérarchie hostile.

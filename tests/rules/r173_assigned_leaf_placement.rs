@@ -238,7 +238,7 @@ fn r173_session_duration_follows_later_edits() {
         // Reste des affectations dérivé à l'écriture (R-199) : relu égal au
         // travail, laissé tel quel en session ; le reste est identique.
         let mut relu = r.project().assignments.clone();
-        for o in s.project().assignments.iter() {
+        for o in &s.project().assignments {
             if let Some(a) = relu.get_mut(planrs_core::HasUid::uid(o)) {
                 a.remaining_work = o.remaining_work;
             }
@@ -285,4 +285,62 @@ fn r173_duration_sync_exclusions() {
         (480, 0, 0),
     ));
     assert_eq!(changed, Vec::<planrs_core::TaskUid>::new());
+}
+
+/// R1 sur le Standard 80 h (lun 19 – ven 30/10) ; R2 sur un calendrier de
+/// week-end (sam-dim 08:00-12:00, 13:00-17:00) 16 h (sam 24 – dim 25/10).
+fn weekend_parts() -> Net {
+    use crate::r171_assignment_effective_calendar::base_calendar;
+    use planrs_core::Weekday;
+    let net = Net::new("2026-10-19T08:00").task("A", 4_800).project(|p| {
+        p.calendars
+            .push(base_calendar(30, |d| {
+                matches!(d, Weekday::Saturday | Weekday::Sunday)
+            }))
+            .unwrap();
+    });
+    let net = resource(resource(net, 1, None), 2, Some(30));
+    assign(assign(net, 1, "A", 1, 4_800), 2, "A", 2, 960)
+}
+
+#[test]
+fn r173_measure_without_compiled_union() {
+    // Union des deux calendriers non compilée (budget nul, R-172) : sur
+    // [sam 24 08:00, dim 25 17:00), où les deux parts sont actives, la
+    // mesure passe par le repli (plus grand des temps ouvrés : 16 h de R2),
+    // jamais par l'échelle de la première part seule (0 h le week-end).
+    // Durée = 40 h + 16 h + 40 h = 5 760, comme avec l'union compilée.
+    let run = weekend_parts().run_with(planrs_core::Limits {
+        combined_segments: 0,
+        ..planrs_core::Limits::default()
+    });
+    assert!(
+        run.codes().contains(&"calendar.too_many_segments"),
+        "{:?}",
+        run.codes()
+    );
+    assert_eq!(run.at("A").duration, Minutes::new(5_760));
+    assert_eq!(weekend_parts().run().at("A").duration, Minutes::new(5_760));
+}
+
+#[test]
+fn r173_too_many_parts_measured_as_longest() {
+    // 1 001 affectations de 1 h décalées chacune d'une heure de plus
+    // (plafond de la mesure exacte : 1 000 parts, règle 10) : durée = le
+    // plus grand `d_a` (60), `assignment.too_many_parts` ; les dates ne
+    // changent pas (fin = dernière part, 1 001 h ouvrées après le début).
+    let mut net = Net::new("2026-10-19T08:00").task("A", 60);
+    for k in 1..=1_001u32 {
+        net = resource(net, k, None);
+        net = assign_full(net, k, "A", Some(k), (60, 10_000, i64::from(k - 1) * 60));
+    }
+    let run = net.run();
+    assert!(
+        run.codes().contains(&"assignment.too_many_parts"),
+        "{:?}",
+        run.codes()
+    );
+    let a = run.at("A");
+    assert_eq!(a.duration, Minutes::new(60));
+    assert_eq!(a.start, moment("2026-10-19T08:00"));
 }

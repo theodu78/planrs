@@ -63,6 +63,68 @@ const UNION_CACHE_LIMIT: usize = 256;
 /// feuille, R-173) ; `None` : union trop morcelée.
 type UnionCache = BTreeMap<Vec<u32>, Option<CompiledCalendar>>;
 
+/// Segments combinés gardés par recalcul, par défaut (`Limits`, règle 10) :
+/// environ 128 Mo de segments (32 octets chacun) ; 20 000 intersections ou
+/// unions de calendriers à 200 segments (Standard à 100 fériés).
+pub(super) const DEFAULT_COMBINED_SEGMENTS: usize = 4_000_000;
+
+/// Travail des combinaisons (segments lus) permis par segment gardé.
+const WORK_FACTOR: usize = 8;
+
+/// Parts d'une feuille au plus pour la mesure exacte de l'union (R-173,
+/// règle 10) ; au-delà, durée = plus grand `d_a`,
+/// `assignment.too_many_parts`.
+pub(super) const MAX_MEASURED_PARTS: usize = 1_000;
+
+/// Budget des calendriers combinés d'un recalcul (R-172, règle 10) : le
+/// travail (segments lus par chaque combinaison) et les segments gardés
+/// sont décomptés ; une combinaison qui le dépasse n'est pas faite.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct Budget {
+    /// Segments gardés restants.
+    kept: usize,
+    /// Travail restant.
+    work: usize,
+    /// Plafond (segments gardés), pour le diagnostic.
+    limit: usize,
+}
+
+impl Budget {
+    /// Budget de `limit` segments gardés.
+    const fn new(limit: usize) -> Self {
+        Self {
+            kept: limit,
+            work: limit.saturating_mul(WORK_FACTOR),
+            limit,
+        }
+    }
+
+    /// Réserve le travail d'une combinaison de calendriers de `cost`
+    /// segments ; faux si le budget est épuisé.
+    fn admit(&mut self, cost: usize) -> bool {
+        if cost > self.work {
+            return false;
+        }
+        self.work = self.work.saturating_sub(cost);
+        true
+    }
+
+    /// Garde le calendrier combiné `c` ; faux s'il dépasse le budget.
+    fn keep(&mut self, c: &CompiledCalendar) -> bool {
+        let n = c.segment_count();
+        if n > self.kept {
+            return false;
+        }
+        self.kept = self.kept.saturating_sub(n);
+        true
+    }
+
+    /// Plafond, pour `calendar.too_many_segments`.
+    fn limit_u32(&self) -> u32 {
+        u32::try_from(self.limit).unwrap_or(u32::MAX)
+    }
+}
+
 /// Calendrier effectif résolu, avant l'indexation des échelles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum CalRef {
@@ -112,7 +174,7 @@ struct Resolution {
 
 /// Résultat de [`resolve`] : décisions par affectation et calendriers
 /// combinés possédés.
-pub(super) struct Resolved {
+pub(crate) struct Resolved {
     /// Intersections et unions compilées.
     owned: Vec<CompiledCalendar>,
     /// Affectations résolues, triées par (position de tâche, UID).
@@ -120,6 +182,21 @@ pub(super) struct Resolved {
     /// Échelle représentative d'une tâche dont les affectations de travail
     /// ont plusieurs calendriers effectifs (union, R-173), par position.
     unions: BTreeMap<usize, CalRef>,
+    /// Intersections par paire (tâche, ressource), indices dans `owned` ;
+    /// `None` : vide, en échec ou hors budget. Reprises par `load` (aucune
+    /// recompilation).
+    pairs: BTreeMap<(CalendarUid, CalendarUid), Option<usize>>,
+    /// Budget restant, pour la mesure des unions (R-173).
+    budget: Budget,
+}
+
+impl Resolved {
+    /// Intersection compilée de la paire (tâche, ressource), si elle a été
+    /// gardée.
+    pub(crate) fn intersection(&self, task: CalendarUid, resource: CalendarUid) -> Option<&CompiledCalendar> {
+        let i = (*self.pairs.get(&(task, resource))?)?;
+        self.owned.get(i)
+    }
 }
 
 /// Calendrier compilé utilisable (compilé, avec du temps ouvré).
@@ -162,6 +239,8 @@ struct Resolver<'s> {
     pairs: BTreeMap<(CalendarUid, CalendarUid), Option<usize>>,
     /// Unions par ensemble trié de calendriers effectifs.
     unions: BTreeMap<Vec<CalRef>, Option<usize>>,
+    /// Budget des combinaisons.
+    budget: Budget,
 }
 
 impl Resolver<'_> {
@@ -189,8 +268,22 @@ impl Resolver<'_> {
             }
             return *slot;
         }
-        let combined = match (self.set.get(own), self.set.get(res)) {
-            (Ok(a), Ok(b)) => a.intersect(b),
+        let set = self.set;
+        let over = CalendarError::TooManySegments {
+            limit: self.budget.limit_u32(),
+        };
+        let combined = match (set.get(own), set.get(res)) {
+            (Ok(a), Ok(b)) => {
+                if self
+                    .budget
+                    .admit(a.segment_count().saturating_add(b.segment_count()))
+                {
+                    a.intersect(b)
+                        .and_then(|c| if self.budget.keep(&c) { Ok(c) } else { Err(over) })
+                } else {
+                    Err(over)
+                }
+            }
             (Err(e), _) | (_, Err(e)) => Err(e),
         };
         let slot = match combined {
@@ -234,21 +327,28 @@ impl Resolver<'_> {
         }
         let mut acc: Option<CompiledCalendar> = None;
         let mut failed = false;
+        let mut budget = self.budget;
+        let limit = budget.limit_u32();
         for &r in refs {
             let Some(c) = self.compiled(r) else {
                 failed = true;
                 break;
             };
+            let cost = acc
+                .as_ref()
+                .map_or(0, CompiledCalendar::segment_count)
+                .saturating_add(c.segment_count());
             let next = match &acc {
+                _ if !budget.admit(cost) => Err(CalendarError::TooManySegments { limit }),
                 None => Ok(c.clone()),
                 Some(a) => a.union(c),
             };
             match next {
                 Ok(n) => acc = Some(n),
                 Err(e) => {
-                    if let (CalendarError::TooManySegments { limit }, Some(a)) = (e, &acc) {
+                    if let CalendarError::TooManySegments { limit } = e {
                         diags.push(Diagnostic::CalendarTooManySegments {
-                            calendar: a.uid(),
+                            calendar: acc.as_ref().map_or(c.uid(), CompiledCalendar::uid),
                             other: c.uid(),
                             limit,
                         });
@@ -259,13 +359,22 @@ impl Resolver<'_> {
             }
         }
         let slot = match acc.filter(|_| !failed) {
-            Some(c) => {
+            Some(c) if budget.keep(&c) => {
                 let i = self.owned.len();
                 self.owned.push(c);
                 Some(i)
             }
+            Some(c) => {
+                diags.push(Diagnostic::CalendarTooManySegments {
+                    calendar: c.uid(),
+                    other: c.uid(),
+                    limit: budget.limit_u32(),
+                });
+                None
+            }
             None => None,
         };
+        self.budget = budget;
         self.unions.insert(refs.to_vec(), slot);
         slot
     }
@@ -323,11 +432,13 @@ impl Resolver<'_> {
 /// Étape 1 : résout chaque affectation d'une tâche connue (R-170, R-171,
 /// R-176) et l'union des calendriers effectifs des tâches qui en ont
 /// plusieurs. `project_place` : calendrier du projet, de base (échelle
-/// `PROJECT`, R-113, R-175).
+/// `PROJECT`, R-113, R-175) ; `combined_segments` : budget des calendriers
+/// combinés (`Limits`).
 pub(super) fn resolve(
     project: &Project,
     set: &CalendarSet,
     project_place: &CompiledCalendar,
+    combined_segments: usize,
     diags: &mut Diagnostics,
 ) -> Resolved {
     let mut r = Resolver {
@@ -336,6 +447,7 @@ pub(super) fn resolve(
         owned: Vec::new(),
         pairs: BTreeMap::new(),
         unions: BTreeMap::new(),
+        budget: Budget::new(combined_segments),
     };
     let mut items = Vec::with_capacity(project.assignments.len());
     for a in &project.assignments {
@@ -413,6 +525,8 @@ pub(super) fn resolve(
         owned: r.owned,
         items,
         unions,
+        pairs: r.pairs,
+        budget: r.budget,
     }
 }
 
@@ -490,6 +604,8 @@ pub(super) struct Parts {
     /// Affectations à ranger (feuilles actives, récapitulatives, manuelles),
     /// triées par position de tâche puis UID.
     outputs: Vec<Output>,
+    /// Budget des combinaisons restant après `resolve` (mesure des unions).
+    budget: Budget,
 }
 
 impl Parts {
@@ -515,6 +631,13 @@ impl Parts {
         let parts = self.of(p);
         let first = parts.first()?;
         Some(self.rep.get(&p).copied().unwrap_or(first.scale))
+    }
+
+    /// Union compilée des échelles des parts de la feuille en position `p`
+    /// (R-173) ; `None` sans union (une seule échelle, union trop morcelée
+    /// ou hors budget).
+    pub fn union_scale(&self, p: usize) -> Option<u32> {
+        self.rep.get(&p).copied()
     }
 
     /// Durée de la tâche pour le réseau (lags en %, jalon, % achevé) : le
@@ -578,6 +701,7 @@ pub(super) fn attach<'a>(
     let n = tasks.len();
     let mut out = Parts {
         offsets: Vec::with_capacity(n.checked_add(1)?),
+        budget: resolved.budget,
         ..Parts::default()
     };
     out.offsets.push(0);
@@ -814,6 +938,8 @@ impl<'n, 'a> Calc<'n, 'a> {
         let net = self.net;
         let mut durations = BTreeMap::new();
         let mut unions: UnionCache = BTreeMap::new();
+        let mut budget = net.parts.budget;
+        let mut sweep = Sweep::default();
         // Dates de chaque part depuis le début planifié, par indice de part :
         // réutilisées par `assignment_schedule` (même borne, même résultat).
         let mut placed: Vec<Option<(Moment, Span)>> = vec![None; net.parts.items.len()];
@@ -845,15 +971,34 @@ impl<'n, 'a> Calc<'n, 'a> {
             }
             let measured = if parts.len() == 1 || shared_scale(parts) {
                 parts.iter().map(|part| part.d).max()
+            } else if parts.len() > MAX_MEASURED_PARTS {
+                // Règle 10 : mesure exacte bornée ; repli sur le plus grand
+                // `d_a`, signalé.
+                if let Some(task) = net.tasks.get(p).map(|t| t.uid) {
+                    self.diags.push(Diagnostic::AssignmentTooManyParts {
+                        task,
+                        parts: u32::try_from(parts.len()).unwrap_or(u32::MAX),
+                        limit: u32::try_from(MAX_MEASURED_PARTS).unwrap_or(u32::MAX),
+                    });
+                }
+                parts.iter().map(|part| part.d).max()
             } else {
                 // L'union de toutes les échelles des parts est l'échelle de
-                // la feuille (déjà compilée, R-173).
+                // la feuille quand elle a été compilée (R-173) ; sinon (union
+                // trop morcelée ou hors budget), chaque intervalle passe par
+                // `measure_union` et son repli, jamais par l'échelle de la
+                // première part seule.
                 let mut all: Vec<u32> = parts.iter().map(|part| part.scale).collect();
                 all.sort_unstable();
                 all.dedup();
-                let place = net.parts.place(p).and_then(|i| net.scale(i)).copied();
-                let full = place.map(|s| (all.as_slice(), s));
-                union_measure(&net.scales, parts, &spans, (full, &mut unions))
+                let union = net.parts.union_scale(p).and_then(|i| net.scale(i)).copied();
+                let full = union.map(|s| (all.as_slice(), s));
+                union_measure(
+                    &net.scales,
+                    (parts, &spans),
+                    (full, &mut unions, &mut budget),
+                    &mut sweep,
+                )
             };
             if let Some(m) = measured {
                 durations.insert(p, m);
@@ -1010,37 +1155,76 @@ fn notices(res: &Resolution, diags: &mut Diagnostics) {
     }
 }
 
+/// Tampons de [`union_measure`], réutilisés d'une feuille à l'autre.
+#[derive(Debug, Default)]
+struct Sweep {
+    /// Événements `(instant, fin ?, échelle)`.
+    events: Vec<(Moment, bool, u32)>,
+    /// Échelles des parts actives, triées, sans doublon.
+    keys: Vec<u32>,
+    /// Parts actives de chaque échelle de `keys`.
+    counts: Vec<u32>,
+}
+
 /// R-173 : mesure de l'union des intervalles travaillés `[s_a, f_a)` des
-/// parts, chacun sur son échelle : balayage des bornes ; sur chaque
-/// intervalle élémentaire, temps ouvré de l'union des échelles des parts
-/// actives (union compilée mise en cache par ensemble d'échelles). `None`
-/// si une conversion échoue.
+/// parts, chacun sur son échelle : balayage des débuts et des fins triés,
+/// compteur de parts actives par échelle (O(P log P) pour P parts, et non
+/// un filtrage de toutes les parts par intervalle élémentaire) ; sur
+/// chaque intervalle élémentaire, temps ouvré de l'union des échelles des
+/// parts actives (union compilée mise en cache par ensemble d'échelles).
+/// `None` si une conversion échoue.
 fn union_measure(
     scales: &[TimeScale<'_>],
-    parts: &[Part],
-    spans: &[Span],
-    (full, cache): (Option<(&[u32], TimeScale<'_>)>, &mut UnionCache),
+    (parts, spans): (&[Part], &[Span]),
+    (full, cache, budget): (Option<(&[u32], TimeScale<'_>)>, &mut UnionCache, &mut Budget),
+    sweep: &mut Sweep,
 ) -> Option<Minutes> {
-    let mut bounds: Vec<Moment> = spans.iter().flat_map(|s| [s.start, s.finish]).collect();
-    bounds.sort_unstable();
-    bounds.dedup();
+    let Sweep { events, keys, counts } = sweep;
+    events.clear();
+    keys.clear();
+    counts.clear();
+    // À un même instant, les débuts avant les fins (un intervalle vide
+    // entre puis sort).
+    for (part, s) in parts.iter().zip(spans) {
+        events.push((s.start, false, part.scale));
+        events.push((s.finish, true, part.scale));
+    }
+    events.sort_unstable();
     let mut total = Minutes::ZERO;
-    for w in bounds.windows(2) {
-        let (lo, hi) = (*w.first()?, *w.get(1)?);
-        let mut active: Vec<u32> = parts
-            .iter()
-            .zip(spans)
-            .filter(|(_, s)| s.start <= lo && s.finish >= hi)
-            .map(|(part, _)| part.scale)
-            .collect();
-        active.sort_unstable();
-        active.dedup();
-        let m = match active.as_slice() {
+    let mut i = 0usize;
+    while let Some(&(lo, _, _)) = events.get(i) {
+        // Événements de l'instant `lo` : parts actives sur `[lo, suivant)`.
+        while let Some(&(_, end, scale)) = events.get(i).filter(|e| e.0 == lo) {
+            match (keys.binary_search(&scale), end) {
+                (Ok(k), false) => {
+                    let n = counts.get_mut(k)?;
+                    *n = n.saturating_add(1);
+                }
+                (Err(k), false) => {
+                    keys.insert(k, scale);
+                    counts.insert(k, 1);
+                }
+                (Ok(k), true) => {
+                    let n = counts.get_mut(k)?;
+                    *n = n.saturating_sub(1);
+                    if *n == 0 {
+                        keys.remove(k);
+                        counts.remove(k);
+                    }
+                }
+                (Err(_), true) => return None,
+            }
+            i = i.saturating_add(1);
+        }
+        let Some(&(hi, _, _)) = events.get(i) else {
+            break;
+        };
+        let m = match keys.as_slice() {
             [] => Minutes::ZERO,
             [one] => scales.get(pos(*one)?)?.between(lo, hi).ok()?,
             many => match full {
-                Some((all, place)) if all == many => place.between(lo, hi).ok()?,
-                _ => measure_union(scales, many, (lo, hi), cache)?,
+                Some((all, union)) if all == many => union.between(lo, hi).ok()?,
+                _ => measure_union(scales, many, (lo, hi), (cache, budget))?,
             },
         };
         total = total.checked_add(m)?;
@@ -1054,7 +1238,7 @@ fn measure_union(
     scales: &[TimeScale<'_>],
     many: &[u32],
     (lo, hi): (Moment, Moment),
-    cache: &mut UnionCache,
+    (cache, budget): (&mut UnionCache, &mut Budget),
 ) -> Option<Minutes> {
     let working = |i: u32| match scales.get(pos(i)?)? {
         TimeScale::Working(c) => Some(*c),
@@ -1064,7 +1248,12 @@ fn measure_union(
         let mut acc: Option<CompiledCalendar> = None;
         for &i in many {
             let c = working(i);
+            let cost = acc
+                .as_ref()
+                .map_or(0, CompiledCalendar::segment_count)
+                .saturating_add(c.map_or(0, CompiledCalendar::segment_count));
             acc = match (acc, c) {
+                _ if !budget.admit(cost) => None,
                 (None, Some(c)) => Some(c.clone()),
                 (Some(a), Some(c)) => a.union(c).ok(),
                 _ => None,
@@ -1073,6 +1262,7 @@ fn measure_union(
                 break;
             }
         }
+        let acc = acc.filter(|u| budget.keep(u));
         cache.insert(many.to_vec(), acc);
     }
     if let Some(Some(u)) = cache.get(many) {

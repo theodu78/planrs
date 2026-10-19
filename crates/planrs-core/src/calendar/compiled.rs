@@ -488,6 +488,14 @@ impl CompiledCalendar {
             && self.day_patterns == other.day_patterns
     }
 
+    /// Nombre de segments de la forme compilée (coût d'une combinaison,
+    /// R-172 : linéaire en segments des deux calendriers ; budget du
+    /// recalcul, `Limits::combined_segments`).
+    #[must_use]
+    pub fn segment_count(&self) -> usize {
+        self.segments.len()
+    }
+
     /// Vrai si le calendrier a au moins une minute ouvrée sur le domaine.
     #[must_use]
     pub const fn has_working_time(&self) -> bool {

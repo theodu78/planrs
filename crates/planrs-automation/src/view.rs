@@ -29,7 +29,9 @@ use serde::Serialize;
 use crate::command::params::TaskListParams;
 use crate::diff::{ScheduleDiff, TaskChange};
 use crate::error::{CommandError, CommandErrorKind, MAX_MESSAGE_CHARS, codes};
-use crate::json::{ConstraintKindJson, DurationJson, LagJson, LinkTypeJson};
+use crate::json::{
+    ConstraintKindJson, DurationJson, GranularityJson, LagJson, LinkTypeJson, ResourceKindJson, UnitsJson,
+};
 use crate::outcome::{ApplyOutcome, SideEffect};
 use crate::session::Session;
 use crate::text::TextContext;
@@ -204,6 +206,93 @@ pub struct DiffView {
     pub changed: Vec<TaskChangeView>,
     /// Vrai si `changed` est coupé.
     pub truncated: bool,
+    /// Ressources surutilisées apparues ou résolues (J5, ADR-0013 D9,
+    /// signalées dès un `dry_run`) ; absent du JSON quand vide.
+    #[serde(skip_serializing_if = "OverallocationView::is_empty")]
+    pub overallocated: OverallocationView,
+}
+
+/// Surutilisations changées par un lot (J5).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct OverallocationView {
+    /// Ressources (UID) devenues surutilisées.
+    pub new: Vec<u32>,
+    /// Ressources (UID) qui ne le sont plus.
+    pub resolved: Vec<u32>,
+}
+
+impl OverallocationView {
+    /// Vrai si rien n'a changé.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.new.is_empty() && self.resolved.is_empty()
+    }
+}
+
+/// Ressource, telle que planifiée (J5, `resource.list` ; rempli par le lot
+/// L8).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ResourceView {
+    /// UID.
+    pub uid: u32,
+    /// Nom.
+    pub name: String,
+    /// Type.
+    pub kind: ResourceKindJson,
+    /// Étiquette d'unité (ressource matérielle).
+    pub material_label: Option<String>,
+    /// Capacité maximale.
+    pub max_units: UnitsJson,
+    /// Calendrier propre.
+    pub calendar: Option<u32>,
+    /// Initiales.
+    pub initials: String,
+    /// Groupe.
+    pub group: String,
+    /// Travail total calculé par le moteur (R-184).
+    pub work: DurationJson,
+    /// Surutilisée (R-186).
+    pub overallocated: bool,
+    /// Inactive.
+    pub inactive: bool,
+}
+
+/// Page de `resource.list` (J5).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ResourceListView {
+    /// Ressources de la page, dans l'ordre des UID.
+    pub resources: Vec<ResourceView>,
+    /// UID à passer en `cursor` pour la page suivante ; absent à la fin.
+    pub next_cursor: Option<u32>,
+    /// Ressources retenues par le filtre, toutes pages comprises.
+    pub total: usize,
+}
+
+/// Utilisation par période (J5, `analysis.resource_usage`, R-188 ; rempli
+/// par le lot L8).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct UsageView {
+    /// Granularité.
+    pub by: GranularityJson,
+    /// Début de chaque période (ISO local).
+    pub periods: Vec<String>,
+    /// Une ligne par ressource.
+    pub rows: Vec<UsageRowView>,
+    /// Vrai si le rapport est coupé.
+    pub truncated: bool,
+}
+
+/// Ligne d'une ressource dans [`UsageView`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct UsageRowView {
+    /// UID de la ressource.
+    pub uid: u32,
+    /// Nom.
+    pub name: String,
+    /// Travail de chaque période.
+    pub work: Vec<DurationJson>,
+    /// Surutilisation de chaque période.
+    pub overallocated: Vec<bool>,
 }
 
 /// Changement d'une tâche.
@@ -490,6 +579,7 @@ impl<'a> ViewCtx<'a> {
             changed_total: d.changed_total,
             truncated: d.truncated || changed.len() < d.changed.len(),
             changed,
+            overallocated: OverallocationView::default(),
         }
     }
 

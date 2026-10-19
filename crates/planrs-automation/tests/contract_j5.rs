@@ -1,0 +1,244 @@
+//! Contrat J5 (lot L0, ADR-0013) : types, squelettes et registre. Les
+//! commandes nouvelles se lisent et se relisent, sont refusées
+//! `command.not_yet_available` sans toucher la session ; les champs
+//! étendus aussi ; les huit entrées J5 du registre sont réservées et non
+//! listées ; les types du cœur se construisent et répondent sans paniquer.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "tests : un échec doit s'arrêter net et lisiblement"
+)]
+
+use std::collections::BTreeSet;
+
+use planrs_automation::command::{
+    AnchorSpec, Command, Patch, ResourceCalendarJson, ResourceKindJson, ResourceRef, TaskRef, TaskTypeJson,
+};
+use planrs_automation::error::codes;
+use planrs_automation::registry::{Availability, Kind, by_mcp_name, listed, lookup};
+use planrs_automation::text::Language;
+use planrs_automation::{ApplyMode, Batch, NewProject, REGISTRY, Session, Workspace};
+use planrs_core::calendar::CompiledCalendar;
+use planrs_core::resource::{Granularity, usage};
+use planrs_core::{CalendarUid, Moment, ResourceUid, TaskOutcome, TaskUid};
+use serde_json::json;
+
+fn now() -> Moment {
+    "2026-10-19T08:00".parse().unwrap()
+}
+
+fn session_with_task() -> Session {
+    let init = NewProject {
+        name: "Projet1".to_owned(),
+        anchor: AnchorSpec::Start("2026-10-19T08:00".parse().unwrap()),
+        lang: None,
+    };
+    let mut s = Session::new_project(init, now()).unwrap();
+    let batch = Batch::from_json(json!({
+        "format_version": 1,
+        "ops": [{ "op": "task.add", "name": "A", "duration": { "text": "2j" } }]
+    }))
+    .unwrap();
+    s.apply(&batch, ApplyMode::Commit).unwrap();
+    s
+}
+
+/// Les huit entrées J5 (ADR-0013 D9) : quatre réservées en J4, quatre
+/// créées en L0.
+const J5_ENTRIES: [(&str, &str); 8] = [
+    ("analysis.resource_usage", "resource_usage"),
+    ("assignment.add", "assign_resource"),
+    ("assignment.remove", "unassign_resource"),
+    ("assignment.update", "update_assignment"),
+    ("resource.add", "add_resource"),
+    ("resource.delete", "delete_resource"),
+    ("resource.list", "list_resources"),
+    ("resource.update", "update_resource"),
+];
+
+#[test]
+fn contract_compiles() {
+    let mut s = session_with_task();
+    let before = s.project().clone();
+    let generation = s.generation();
+
+    // Commandes nouvelles : lues, relues à l'identique, refusées sans effet.
+    let ops = [
+        json!({"op": "resource.add", "name": "Dev", "as": "$dev", "kind": "work",
+               "max_units": {"value": 10_000}, "calendar": "own", "initials": "D", "group": "G"}),
+        json!({"op": "resource.update", "uid": "$dev", "name": "Dev 2", "max_units": {"text": "50%"},
+               "calendar": 3, "notes": null, "inactive": true}),
+        json!({"op": "resource.delete", "uid": 4, "cascade": true}),
+        json!({"op": "assignment.add", "task": 1, "resource": "$dev", "units": {"text": "50%"},
+               "work": {"text": "16h"}, "delay": {"text": "1j"}}),
+        json!({"op": "assignment.update", "task": 1, "resource": 2, "quantity": {"value": 30_000},
+               "delay": null}),
+        json!({"op": "assignment.remove", "task": 1, "resource": 2}),
+    ];
+    for (i, op) in ops.iter().enumerate() {
+        let batch = Batch::from_json(json!({ "format_version": 1, "ops": [op] })).unwrap();
+        let again: Batch = serde_json::from_value(serde_json::to_value(&batch).unwrap()).unwrap();
+        assert_eq!(again, batch, "aller-retour {i}");
+        assert_eq!(batch.ops[0].id(), op["op"].as_str().unwrap());
+        for mode in [ApplyMode::DryRun, ApplyMode::Commit] {
+            let err = s.apply(&batch, mode).unwrap_err();
+            assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{i}");
+            assert_eq!(err.op_index, Some(0));
+        }
+    }
+    let batch = Batch::from_json(json!({ "format_version": 1, "ops": [ops[0]] })).unwrap();
+    let Command::ResourceAdd(add) = &batch.ops[0] else {
+        panic!("resource.add attendu");
+    };
+    assert_eq!(add.label.as_deref(), Some("$dev"));
+    assert_eq!(add.kind, Some(ResourceKindJson::Work));
+    assert_eq!(add.calendar, Some(ResourceCalendarJson::Own));
+
+    // Champs étendus : refusés sur le champ posé.
+    for (op, field) in [
+        (
+            json!({"op": "task.update", "uid": 1, "type": "fixed_work"}),
+            "type",
+        ),
+        (
+            json!({"op": "task.update", "uid": 1, "effort_driven": true}),
+            "effort_driven",
+        ),
+        (
+            json!({"op": "task.update", "uid": 1, "work": {"text": "16h"}}),
+            "work",
+        ),
+        (
+            json!({"op": "project.set_info", "default_task_type": "fixed_duration"}),
+            "default_task_type",
+        ),
+        (
+            json!({"op": "project.set_info", "new_tasks_effort_driven": false}),
+            "new_tasks_effort_driven",
+        ),
+    ] {
+        let batch = Batch::from_json(json!({ "format_version": 1, "ops": [op] })).unwrap();
+        let err = s.apply(&batch, ApplyMode::Commit).unwrap_err();
+        assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{field}");
+        assert_eq!(err.field.as_deref(), Some(field));
+        assert_ne!(err.message(Language::Fr), err.message(Language::En));
+    }
+    let batch = Batch::from_json(json!({
+        "format_version": 1,
+        "ops": [{"op": "task.update", "uid": 1, "type": "fixed_units"}]
+    }))
+    .unwrap();
+    let Command::TaskUpdate(update) = &batch.ops[0] else {
+        panic!("task.update attendu");
+    };
+    assert_eq!(update.task_type, Patch::Set(TaskTypeJson::FixedUnits));
+    assert_eq!(update.uid, TaskRef::Uid(TaskUid::new(1)));
+    assert_eq!(s.project(), &before);
+    assert_eq!(s.generation(), generation);
+
+    // Désignations : étiquette mal formée, calendrier inconnu refusés.
+    assert_eq!(
+        serde_json::from_value::<ResourceRef>(json!(0)).unwrap(),
+        ResourceRef::Uid(ResourceUid::new(0))
+    );
+    assert!(serde_json::from_value::<ResourceRef>(json!("dev")).is_err());
+    assert_eq!(
+        serde_json::from_value::<ResourceCalendarJson>(json!("project")).unwrap(),
+        ResourceCalendarJson::Project
+    );
+    assert_eq!(
+        serde_json::from_value::<ResourceCalendarJson>(json!(7)).unwrap(),
+        ResourceCalendarJson::Uid(CalendarUid::new(7))
+    );
+    assert!(serde_json::from_value::<ResourceCalendarJson>(json!("mine")).is_err());
+    assert!(
+        Batch::from_json(json!({"format_version": 1, "ops": [{"op": "resource.add", "name": "R", "x": 1}]}))
+            .is_err()
+    );
+
+    core_contract(&s);
+
+    // Surfaces : les entrées réservées sont refusées par l'espace de travail.
+    let mut ws = Workspace::new(now(), Language::Fr);
+    for (id, _) in J5_ENTRIES {
+        let err = ws.call(id, json!({})).unwrap_err();
+        assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{id}");
+    }
+}
+
+/// Types du cœur (contrat J5) : planning sans affectation ni charge, JSON
+/// inchangé, squelettes qui répondent sans paniquer.
+fn core_contract(s: &Session) {
+    let schedule = s.schedule().clone();
+    assert!(schedule.assignments.is_empty() && schedule.resources.is_empty());
+    let Some(TaskOutcome::Scheduled(t)) = schedule.get(TaskUid::new(1)) else {
+        panic!("tâche 1 planifiée attendue");
+    };
+    assert_eq!(t.work, planrs_core::Work::ZERO);
+    let text = serde_json::to_string(&schedule).unwrap();
+    assert!(!text.contains("assignments") && !text.contains("\"work\""));
+    assert_eq!(
+        serde_json::from_str::<planrs_core::Schedule>(&text).unwrap(),
+        schedule
+    );
+    let report = usage(
+        s.project(),
+        &schedule,
+        schedule.project_start,
+        schedule.project_finish,
+        Granularity::Week,
+        &[],
+    )
+    .unwrap();
+    assert!(report.rows.is_empty() && !report.truncated);
+    let cal = CompiledCalendar::compile(&s.project().calendars, s.project().calendar).unwrap();
+    assert!(cal.intersect(&cal).is_err() && cal.union(&cal).is_err());
+}
+
+#[test]
+fn registry_sorted_and_unique() {
+    let ids: Vec<&str> = REGISTRY.iter().map(|s| s.id).collect();
+    for pair in ids.windows(2) {
+        assert!(pair[0] < pair[1], "REGISTRY non trié ou en double : {pair:?}");
+    }
+    let names: BTreeSet<&str> = REGISTRY.iter().map(|s| s.mcp_name).collect();
+    assert_eq!(names.len(), REGISTRY.len(), "noms MCP en double");
+    for (id, mcp) in J5_ENTRIES {
+        let spec = lookup(id).unwrap();
+        assert_eq!(spec.mcp_name, mcp);
+        assert_eq!(by_mcp_name(mcp).unwrap().id, id);
+        // Schéma du contrat déjà fixé : un objet, généré sans panique.
+        let schema = serde_json::to_value((spec.schema)()).unwrap();
+        assert_eq!(schema["type"], "object", "{id}");
+        assert!(schema.get("properties").is_some(), "{id}");
+        let expected = match id {
+            "analysis.resource_usage" => Kind::Analysis,
+            "resource.list" => Kind::Read,
+            _ => Kind::Write,
+        };
+        assert_eq!(spec.kind, expected, "{id}");
+        assert_eq!(spec.undoable, expected == Kind::Write, "{id}");
+    }
+}
+
+#[test]
+fn registry_reserved_not_listed() {
+    for (id, _) in J5_ENTRIES {
+        let spec = lookup(id).unwrap();
+        assert_eq!(spec.available, Availability::Milestone(5), "{id}");
+        assert!(!spec.is_listed(), "{id}");
+        assert!(listed().all(|s| s.id != id), "{id} listé");
+    }
+    // Les commandes nouvelles restent hors du schéma des lots tant que leurs
+    // outils sont réservés.
+    let batch = serde_json::to_string(&(lookup("batch.apply").unwrap().schema)()).unwrap();
+    for (id, _) in J5_ENTRIES {
+        assert!(
+            !batch.contains(&format!("\"const\":\"{id}\"")),
+            "{id} dans batch.apply"
+        );
+    }
+}

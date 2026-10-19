@@ -5,7 +5,7 @@
 //! par le MCP, la CLI et l'interface (clé de traduction `.ftl`), et un
 //! message en français ou en anglais ([`CommandError::message`]).
 
-use planrs_core::{Diagnostic, ModelError, Subject, TaskUid};
+use planrs_core::{Diagnostic, ModelError, ResourceUid, Subject, TaskUid};
 use planrs_mspdi::MspdiError;
 
 use crate::text::{Language, TextError};
@@ -76,6 +76,23 @@ pub mod codes {
     /// Entrée d'historique incohérente avec le projet : annulation refusée,
     /// session intacte (R-164 ; jamais attendu).
     pub const HISTORY_INCONSISTENT: &str = "history.inconsistent";
+    /// Ressource (UID) inconnue (J5, R-195).
+    pub const RESOURCE_NOT_FOUND: &str = "resource.not_found";
+    /// Ressource affectée supprimée sans `cascade` (J5, R-195).
+    pub const RESOURCE_HAS_ASSIGNMENTS: &str = "resource.has_assignments";
+    /// Aucune affectation de cette ressource à cette tâche (J5, R-196).
+    pub const ASSIGNMENT_NOT_FOUND: &str = "assignment.not_found";
+    /// Ressource déjà affectée à cette tâche (J5, R-196).
+    pub const ASSIGNMENT_DUPLICATE: &str = "assignment.duplicate";
+    /// Champ d'affectation contraire au type de la ressource (`quantity`
+    /// pour une ressource de travail…) (J5, R-196).
+    pub const ASSIGNMENT_KIND_MISMATCH: &str = "assignment.kind_mismatch";
+    /// Unités nulles sur une tâche à travail fixe (J5, R-181, R-196).
+    pub const ASSIGNMENT_ZERO_UNITS_FIXED_WORK: &str = "assignment.zero_units_fixed_work";
+    /// Tâche à travail fixe non pilotée par l'effort (J5, R-193, R-197).
+    pub const TASK_FIXED_WORK_EFFORT_DRIVEN: &str = "task.fixed_work_effort_driven";
+    /// Champs qui s'excluent modifiés ensemble (durée et travail, R-197).
+    pub const PARAM_CONFLICT: &str = "param.conflict";
 }
 
 /// Commande refusée. L'état de la session est intact (atomicité du lot).
@@ -144,6 +161,35 @@ pub enum CommandErrorKind {
     ManualTaskUnsupported,
     /// Paramètres contradictoires.
     ParamMismatch,
+    /// Ressource inconnue (J5).
+    UnknownResource(ResourceUid),
+    /// Ressource affectée (J5).
+    ResourceHasAssignments {
+        /// Nombre d'affectations.
+        count: usize,
+    },
+    /// Affectation absente (J5).
+    UnknownAssignment {
+        /// Tâche.
+        task: TaskUid,
+        /// Ressource.
+        resource: ResourceUid,
+    },
+    /// Affectation déjà présente (J5).
+    DuplicateAssignment {
+        /// Tâche.
+        task: TaskUid,
+        /// Ressource.
+        resource: ResourceUid,
+    },
+    /// Champ contraire au type de la ressource (J5).
+    AssignmentKindMismatch,
+    /// Unités nulles sur une tâche à travail fixe (J5).
+    ZeroUnitsFixedWork,
+    /// Travail fixe non piloté par l'effort (J5).
+    FixedWorkEffortDriven,
+    /// Champs qui s'excluent (J5) : les deux noms.
+    ParamConflict(&'static str, &'static str),
 }
 
 impl CommandError {
@@ -386,6 +432,64 @@ fn kind_message(kind: &CommandErrorKind, lang: Language) -> String {
                 "paramètres contradictoires (par exemple « text » et « minutes » d'une durée)".to_owned()
             } else {
                 "contradictory parameters (for example the \"text\" and \"minutes\" of a duration)".to_owned()
+            }
+        }
+        K::UnknownResource(uid) => {
+            if fr {
+                format!("aucune ressource d'UID {uid}")
+            } else {
+                format!("no resource with UID {uid}")
+            }
+        }
+        K::ResourceHasAssignments { count } => {
+            if fr {
+                format!("ressource affectée à {count} tâche(s) : supprimer avec \"cascade\": true")
+            } else {
+                format!("resource assigned to {count} task(s): delete with \"cascade\": true")
+            }
+        }
+        K::UnknownAssignment { task, resource } => {
+            if fr {
+                format!("la ressource {resource} n'est pas affectée à la tâche {task}")
+            } else {
+                format!("resource {resource} is not assigned to task {task}")
+            }
+        }
+        K::DuplicateAssignment { task, resource } => {
+            if fr {
+                format!(
+                    "la ressource {resource} est déjà affectée à la tâche {task} (utiliser assignment.update)"
+                )
+            } else {
+                format!("resource {resource} is already assigned to task {task} (use assignment.update)")
+            }
+        }
+        K::AssignmentKindMismatch => {
+            if fr {
+                "champ contraire au type de la ressource (« units » et « work » pour une ressource de travail, « quantity » pour une ressource matérielle)".to_owned()
+            } else {
+                "field does not match the resource type (\"units\" and \"work\" for a work resource, \"quantity\" for a material resource)".to_owned()
+            }
+        }
+        K::ZeroUnitsFixedWork => {
+            if fr {
+                "unités nulles refusées sur une tâche à travail fixe".to_owned()
+            } else {
+                "zero units are refused on a fixed-work task".to_owned()
+            }
+        }
+        K::FixedWorkEffortDriven => {
+            if fr {
+                "une tâche à travail fixe est toujours pilotée par l'effort".to_owned()
+            } else {
+                "a fixed-work task is always effort driven".to_owned()
+            }
+        }
+        K::ParamConflict(a, b) => {
+            if fr {
+                format!("« {a} » et « {b} » ne se modifient pas ensemble")
+            } else {
+                format!("\"{a}\" and \"{b}\" cannot be changed together")
             }
         }
     }

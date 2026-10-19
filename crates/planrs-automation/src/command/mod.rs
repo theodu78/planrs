@@ -11,6 +11,7 @@
 //! (`link.rs`, `constraint.rs`, `project.rs`, `calendar.rs`) ; contexte
 //! d'exécution (`exec.rs`), L2.
 
+mod assignment;
 mod calendar;
 mod constraint;
 pub(crate) mod exec;
@@ -20,13 +21,14 @@ pub(crate) mod outline;
 pub mod params;
 mod project;
 mod refs;
+mod resource;
 mod task;
 
 pub use outline::is_summary_at;
 
 use std::borrow::Cow;
 
-use planrs_core::{CalendarUid, Day, Moment, TaskUid, TimeOfDay};
+use planrs_core::{CalendarUid, Day, Moment, ResourceUid, TaskUid, TimeOfDay};
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -34,7 +36,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use self::refs::label_refusal;
 pub use self::refs::{LABEL_PATTERN, define_label, is_valid_label, resolve_task};
 use crate::error::{CommandError, CommandErrorKind, codes};
-pub use crate::json::{ConstraintKindJson, DurationJson, DurationUnitJson, LagJson, LinkTypeJson};
+pub use crate::json::{
+    ConstraintKindJson, DurationJson, DurationUnitJson, GranularityJson, LagJson, LinkTypeJson,
+    ResourceKindJson, TaskTypeJson, UnitsJson,
+};
 use crate::json::{DaySchema, MomentSchema, TimeOfDaySchema};
 use crate::text::Language;
 
@@ -176,6 +181,31 @@ pub enum Command {
     /// Retire une exception de calendrier (R-165).
     #[serde(rename = "calendar.remove_exception")]
     CalendarRemoveException(CalendarExceptionKey),
+    /// Ajoute une ressource (R-195 ; contrat J5, réservée jusqu'au lot L8 :
+    /// hors du schéma des lots, refusée `command.not_yet_available`).
+    #[serde(rename = "resource.add")]
+    #[schemars(skip)]
+    ResourceAdd(ResourceAdd),
+    /// Modifie une ressource (R-195 ; réservée jusqu'au lot L8).
+    #[serde(rename = "resource.update")]
+    #[schemars(skip)]
+    ResourceUpdate(ResourceUpdate),
+    /// Supprime une ressource (R-195 ; réservée jusqu'au lot L8).
+    #[serde(rename = "resource.delete")]
+    #[schemars(skip)]
+    ResourceDelete(ResourceDelete),
+    /// Affecte une ressource à une tâche (R-196 ; réservée jusqu'au lot L8).
+    #[serde(rename = "assignment.add")]
+    #[schemars(skip)]
+    AssignmentAdd(AssignmentAdd),
+    /// Modifie une affectation (R-196 ; réservée jusqu'au lot L8).
+    #[serde(rename = "assignment.update")]
+    #[schemars(skip)]
+    AssignmentUpdate(AssignmentUpdate),
+    /// Retire une affectation (R-196 ; réservée jusqu'au lot L8).
+    #[serde(rename = "assignment.remove")]
+    #[schemars(skip)]
+    AssignmentRemove(AssignmentKey),
 }
 
 impl Command {
@@ -199,6 +229,12 @@ impl Command {
             Self::ProjectSetStatusDate(_) => "project.set_status_date",
             Self::CalendarSetException(_) => "calendar.set_exception",
             Self::CalendarRemoveException(_) => "calendar.remove_exception",
+            Self::ResourceAdd(_) => "resource.add",
+            Self::ResourceUpdate(_) => "resource.update",
+            Self::ResourceDelete(_) => "resource.delete",
+            Self::AssignmentAdd(_) => "assignment.add",
+            Self::AssignmentUpdate(_) => "assignment.update",
+            Self::AssignmentRemove(_) => "assignment.remove",
         }
     }
 }
@@ -388,6 +424,34 @@ pub struct TaskUpdate {
     /// Tâche active.
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
     pub active: Patch<bool>,
+    /// Type de tâche (R-189, R-197 ; J5, refusé `command.not_yet_available`
+    /// jusqu'au lot L7).
+    #[serde(rename = "type", default, skip_serializing_if = "Patch::is_keep")]
+    pub task_type: Patch<TaskTypeJson>,
+    /// Pilotée par l'effort (R-190 à R-193, R-197 ; J5, refusé jusqu'au lot
+    /// L7).
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub effort_driven: Patch<bool>,
+    /// Travail total (R-189, R-197 ; `param.conflict` avec `duration` ; J5,
+    /// refusé jusqu'au lot L7).
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub work: Patch<DurationJson>,
+}
+
+impl TaskUpdate {
+    /// Champs J5 posés (`type`, `effort_driven`, `work`), dans l'ordre du
+    /// schéma : refusés tant que le lot L7 ne les exécute pas.
+    #[must_use]
+    pub fn j5_fields(&self) -> Vec<&'static str> {
+        [
+            ("type", self.task_type.is_keep()),
+            ("effort_driven", self.effort_driven.is_keep()),
+            ("work", self.work.is_keep()),
+        ]
+        .into_iter()
+        .filter_map(|(name, keep)| (!keep).then_some(name))
+        .collect()
+    }
 }
 
 /// `task.delete`.
@@ -507,6 +571,29 @@ pub struct ProjectInfoPatch {
     /// Catégorie.
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
     pub category: Patch<String>,
+    /// Type des nouvelles tâches (S2 `DefaultTaskType`, R-197 ; J5, refusé
+    /// `command.not_yet_available` jusqu'au lot L7).
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub default_task_type: Patch<TaskTypeJson>,
+    /// Nouvelles tâches pilotées par l'effort (S2 `NewTasksEffortDriven`,
+    /// R-197 ; J5, refusé jusqu'au lot L7).
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub new_tasks_effort_driven: Patch<bool>,
+}
+
+impl ProjectInfoPatch {
+    /// Champs J5 posés (`default_task_type`, `new_tasks_effort_driven`) :
+    /// refusés tant que le lot L7 ne les exécute pas.
+    #[must_use]
+    pub fn j5_fields(&self) -> Vec<&'static str> {
+        [
+            ("default_task_type", self.default_task_type.is_keep()),
+            ("new_tasks_effort_driven", self.new_tasks_effort_driven.is_keep()),
+        ]
+        .into_iter()
+        .filter_map(|(name, keep)| (!keep).then_some(name))
+        .collect()
+    }
 }
 
 /// Sens de planification et date pilote. JSON : `{"start":"…"}` ou
@@ -642,4 +729,248 @@ pub struct CalendarExceptionKey {
     /// Premier jour de l'exception.
     #[schemars(with = "DaySchema")]
     pub from: Day,
+}
+
+/// Désignation d'une ressource (R-195, même motif que [`TaskRef`]). JSON :
+/// entier → UID ; chaîne `"$x"` → étiquette d'une ressource créée plus tôt
+/// dans le lot (`resource.add`, `"as"`).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "ResourceRefRepr", into = "ResourceRefRepr")]
+pub enum ResourceRef {
+    /// UID.
+    Uid(ResourceUid),
+    /// Étiquette `$x` d'une ressource créée plus tôt dans le lot.
+    Label(String),
+}
+
+/// Forme JSON de [`ResourceRef`].
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+enum ResourceRefRepr {
+    Uid(u32),
+    Label(String),
+}
+
+impl TryFrom<ResourceRefRepr> for ResourceRef {
+    type Error = String;
+
+    fn try_from(r: ResourceRefRepr) -> Result<Self, Self::Error> {
+        match r {
+            ResourceRefRepr::Uid(u) => Ok(Self::Uid(ResourceUid::new(u))),
+            ResourceRefRepr::Label(s) if is_valid_label(&s) => Ok(Self::Label(s)),
+            ResourceRefRepr::Label(s) => Err(label_refusal(&s)),
+        }
+    }
+}
+
+impl From<ResourceRef> for ResourceRefRepr {
+    fn from(r: ResourceRef) -> Self {
+        match r {
+            ResourceRef::Uid(u) => Self::Uid(u.get()),
+            ResourceRef::Label(s) => Self::Label(s),
+        }
+    }
+}
+
+impl JsonSchema for ResourceRef {
+    fn schema_name() -> Cow<'static, str> {
+        "ResourceRef".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "oneOf": [
+                { "type": "integer", "minimum": 0, "maximum": 4_294_967_295_u32 },
+                { "type": "string", "pattern": LABEL_PATTERN }
+            ],
+            "description": "Ressource : UID (entier) ou étiquette \"$x\" d'une ressource créée plus tôt dans le même lot."
+        })
+    }
+}
+
+/// Calendrier d'une ressource créée : `"own"` (calendrier propre dérivé du
+/// calendrier du projet, défaut, O34), `"project"` (calendrier du projet
+/// partagé) ou UID d'un calendrier existant.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "ResourceCalendarRepr", into = "ResourceCalendarRepr")]
+pub enum ResourceCalendarJson {
+    /// Calendrier propre, créé et dérivé du calendrier du projet.
+    #[default]
+    Own,
+    /// Calendrier du projet.
+    Project,
+    /// Calendrier existant.
+    Uid(CalendarUid),
+}
+
+/// Forme JSON de [`ResourceCalendarJson`].
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+enum ResourceCalendarRepr {
+    Uid(u32),
+    Name(String),
+}
+
+impl TryFrom<ResourceCalendarRepr> for ResourceCalendarJson {
+    type Error = &'static str;
+
+    fn try_from(r: ResourceCalendarRepr) -> Result<Self, Self::Error> {
+        match r {
+            ResourceCalendarRepr::Uid(u) => Ok(Self::Uid(CalendarUid::new(u))),
+            ResourceCalendarRepr::Name(s) if s == "own" => Ok(Self::Own),
+            ResourceCalendarRepr::Name(s) if s == "project" => Ok(Self::Project),
+            ResourceCalendarRepr::Name(_) => Err("« own », « project » ou UID de calendrier attendu"),
+        }
+    }
+}
+
+impl From<ResourceCalendarJson> for ResourceCalendarRepr {
+    fn from(c: ResourceCalendarJson) -> Self {
+        match c {
+            ResourceCalendarJson::Own => Self::Name("own".to_owned()),
+            ResourceCalendarJson::Project => Self::Name("project".to_owned()),
+            ResourceCalendarJson::Uid(u) => Self::Uid(u.get()),
+        }
+    }
+}
+
+impl JsonSchema for ResourceCalendarJson {
+    fn schema_name() -> Cow<'static, str> {
+        "ResourceCalendar".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "oneOf": [
+                { "type": "integer", "minimum": 0, "maximum": 4_294_967_295_u32 },
+                { "enum": ["own", "project"] }
+            ]
+        })
+    }
+}
+
+/// `resource.add` (R-195).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceAdd {
+    /// Nom.
+    pub name: String,
+    /// Étiquette `$x` de la ressource créée, pour la suite du lot.
+    #[serde(rename = "as", default, skip_serializing_if = "Option::is_none")]
+    #[schemars(pattern(LABEL_PATTERN))]
+    pub label: Option<String>,
+    /// Type (défaut : travail).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ResourceKindJson>,
+    /// Étiquette d'unité d'une ressource matérielle (« m³ »).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_label: Option<String>,
+    /// Capacité maximale (défaut 100 %, S47).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_units: Option<UnitsJson>,
+    /// Calendrier (défaut : calendrier propre, O34).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar: Option<ResourceCalendarJson>,
+    /// Initiales.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initials: Option<String>,
+    /// Groupe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+}
+
+/// `resource.update` (R-195).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceUpdate {
+    /// Ressource.
+    pub uid: ResourceRef,
+    /// Nom (`null` refusé).
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub name: Patch<String>,
+    /// Capacité maximale.
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub max_units: Patch<UnitsJson>,
+    /// Calendrier (`null` : aucun, calendrier de la tâche ou du projet).
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    #[schemars(with = "Patch<u32>")]
+    pub calendar: Patch<CalendarUid>,
+    /// Initiales.
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub initials: Patch<String>,
+    /// Groupe.
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub group: Patch<String>,
+    /// Notes.
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub notes: Patch<String>,
+    /// Ressource inactive.
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub inactive: Patch<bool>,
+}
+
+/// `resource.delete` (R-195).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceDelete {
+    /// Ressource.
+    pub uid: ResourceRef,
+    /// Retirer aussi ses affectations (obligatoire si elle en a :
+    /// `resource.has_assignments`).
+    #[serde(default)]
+    pub cascade: bool,
+}
+
+/// `assignment.add` (R-196).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AssignmentAdd {
+    /// Tâche.
+    pub task: TaskRef,
+    /// Ressource.
+    pub resource: ResourceRef,
+    /// Unités (ressource de travail ; défaut 100 %).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub units: Option<UnitsJson>,
+    /// Travail de l'affectation (ressource de travail).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work: Option<DurationJson>,
+    /// Quantité (ressource matérielle).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quantity: Option<UnitsJson>,
+    /// Retard d'affectation (`Delay`, R-177).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delay: Option<DurationJson>,
+}
+
+/// `assignment.update` (R-196).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AssignmentUpdate {
+    /// Tâche.
+    pub task: TaskRef,
+    /// Ressource.
+    pub resource: ResourceRef,
+    /// Unités.
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub units: Patch<UnitsJson>,
+    /// Travail.
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub work: Patch<DurationJson>,
+    /// Quantité (ressource matérielle).
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub quantity: Patch<UnitsJson>,
+    /// Retard d'affectation.
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub delay: Patch<DurationJson>,
+}
+
+/// `assignment.remove` (R-196) : l'affectation de `resource` à `task`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AssignmentKey {
+    /// Tâche.
+    pub task: TaskRef,
+    /// Ressource.
+    pub resource: ResourceRef,
 }

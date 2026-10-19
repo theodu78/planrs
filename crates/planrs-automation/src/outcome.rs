@@ -3,7 +3,9 @@
 
 use std::collections::BTreeMap;
 
-use planrs_core::{AssignmentUid, ConstraintKind, Diagnostic, Subject, TaskId, TaskUid};
+use planrs_core::{
+    AssignmentUid, CalendarUid, ConstraintKind, Diagnostic, ResourceUid, Subject, TaskId, TaskUid,
+};
 use serde::Serialize;
 
 use crate::diff::ScheduleDiff;
@@ -25,6 +27,13 @@ pub struct ApplyOutcome {
     pub side_effects: Vec<SideEffect>,
     /// Nombre d'entrées de l'historique après l'opération.
     pub history_len: usize,
+    /// Étiquettes `$x` → UID des ressources créées par le lot (J5, R-195) ;
+    /// absent du JSON quand vide.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub resource_labels: BTreeMap<String, ResourceUid>,
+    /// Ressources créées, dans l'ordre (J5) ; absent du JSON quand vide.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub created_resources: Vec<ResourceUid>,
 }
 
 /// Effet de bord d'une commande, signalé à l'appelant.
@@ -65,4 +74,10 @@ pub enum SideEffect {
         /// Type posé.
         kind: ConstraintKind,
     },
+    /// Calendrier propre créé pour une ressource (`resource.add`, O34 ;
+    /// J5).
+    CalendarCreated(CalendarUid),
+    /// Affectation fictive −65 535 retirée par l'affectation d'une vraie
+    /// ressource (`assignment.add`, O24 ; J5).
+    PlaceholderRemoved(AssignmentUid),
 }

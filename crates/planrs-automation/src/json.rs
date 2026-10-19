@@ -13,9 +13,10 @@
 
 use std::borrow::Cow;
 
+use planrs_core::resource::Granularity;
 use planrs_core::{
     ConstraintKind, Duration, DurationError, DurationUnit, Lag, LagValue, LinkType, Minutes, SignedPercent,
-    TimeBasis,
+    TaskType, TimeBasis,
 };
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
@@ -397,6 +398,101 @@ impl From<ConstraintKindJson> for ConstraintKind {
             ConstraintKindJson::Snlt => Self::StartNoLaterThan,
             ConstraintKindJson::Fnet => Self::FinishNoEarlierThan,
             ConstraintKindJson::Fnlt => Self::FinishNoLaterThan,
+        }
+    }
+}
+
+/// Unités (affectation, capacité, quantité d'une ressource matérielle) en
+/// JSON (contrat J5) : `value` en 1/10 000 (10 000 = 100 % = 1,0 en MSPDI),
+/// `text` en pourcentage (`"50%"`). En entrée, l'un ou l'autre suffit ; les
+/// deux doivent concorder (`param.mismatch`), comme [`DurationJson`]. La
+/// lecture est écrite par le lot L7.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UnitsJson {
+    /// Valeur en 1/10 000 (10 000 = 100 %).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0))]
+    pub value: Option<i64>,
+    /// Pourcentage en texte (`"50%"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+/// Type de tâche en JSON (S41).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskTypeJson {
+    /// Unités fixes.
+    FixedUnits,
+    /// Durée fixe.
+    FixedDuration,
+    /// Travail fixe (toujours piloté par l'effort).
+    FixedWork,
+}
+
+impl From<TaskType> for TaskTypeJson {
+    fn from(t: TaskType) -> Self {
+        match t {
+            TaskType::FixedUnits => Self::FixedUnits,
+            TaskType::FixedDuration => Self::FixedDuration,
+            TaskType::FixedWork => Self::FixedWork,
+        }
+    }
+}
+
+impl From<TaskTypeJson> for TaskType {
+    fn from(t: TaskTypeJson) -> Self {
+        match t {
+            TaskTypeJson::FixedUnits => Self::FixedUnits,
+            TaskTypeJson::FixedDuration => Self::FixedDuration,
+            TaskTypeJson::FixedWork => Self::FixedWork,
+        }
+    }
+}
+
+/// Type de ressource en JSON.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceKindJson {
+    /// Travail (personne, machine).
+    #[default]
+    Work,
+    /// Matérielle (consommée en quantité, étiquette d'unité).
+    Material,
+    /// Coût.
+    Cost,
+}
+
+/// Granularité d'un rapport d'utilisation en JSON (R-188).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GranularityJson {
+    /// Jour.
+    Day,
+    /// Semaine (défaut).
+    #[default]
+    Week,
+    /// Mois.
+    Month,
+}
+
+impl From<GranularityJson> for Granularity {
+    fn from(g: GranularityJson) -> Self {
+        match g {
+            GranularityJson::Day => Self::Day,
+            GranularityJson::Week => Self::Week,
+            GranularityJson::Month => Self::Month,
+        }
+    }
+}
+
+impl From<Granularity> for GranularityJson {
+    fn from(g: Granularity) -> Self {
+        match g {
+            Granularity::Day => Self::Day,
+            Granularity::Week => Self::Week,
+            Granularity::Month => Self::Month,
         }
     }
 }

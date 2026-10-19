@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use planrs_core::{Project, Subject, TaskUid};
 
-use super::{Command, calendar, constraint, link, project, task};
+use super::{Command, assignment, calendar, constraint, link, project, resource, task};
 use crate::error::CommandError;
 use crate::outcome::SideEffect;
 use crate::text::TextContext;
@@ -45,7 +45,10 @@ impl Exec for Command {
     fn exec(&self, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
         match self {
             Self::TaskAdd(op) => task::add(op, ctx),
-            Self::TaskUpdate(op) => task::update(op, ctx),
+            Self::TaskUpdate(op) => {
+                reserved_fields(&op.j5_fields())?;
+                task::update(op, ctx)
+            }
             Self::TaskDelete(op) => task::delete(op, ctx),
             Self::TaskMove(op) => task::move_to(op, ctx),
             Self::TaskIndent(op) => task::indent(op, ctx),
@@ -55,11 +58,30 @@ impl Exec for Command {
             Self::LinkRemove(op) => link::remove(op, ctx),
             Self::TaskSetConstraint(op) => constraint::set_constraint(op, ctx),
             Self::TaskSetDeadline(op) => constraint::set_deadline(op, ctx),
-            Self::ProjectSetInfo(op) => project::set_info(op, ctx),
+            Self::ProjectSetInfo(op) => {
+                reserved_fields(&op.j5_fields())?;
+                project::set_info(op, ctx)
+            }
             Self::ProjectSetAnchor(op) => project::set_anchor(op, ctx),
             Self::ProjectSetStatusDate(op) => project::set_status_date(op, ctx),
             Self::CalendarSetException(op) => calendar::set_exception(op, ctx),
             Self::CalendarRemoveException(op) => calendar::remove_exception(op, ctx),
+            Self::ResourceAdd(op) => resource::add(op, ctx),
+            Self::ResourceUpdate(op) => resource::update(op, ctx),
+            Self::ResourceDelete(op) => resource::delete(op, ctx),
+            Self::AssignmentAdd(op) => assignment::add(op, ctx),
+            Self::AssignmentUpdate(op) => assignment::update(op, ctx),
+            Self::AssignmentRemove(op) => assignment::remove(op, ctx),
         }
+    }
+}
+
+/// Contrat J5 : champs étendus de `task.update` et `project.set_info`
+/// refusés (`command.not_yet_available`, sur le premier champ posé) tant
+/// que le lot L7 ne les exécute pas.
+fn reserved_fields(fields: &[&str]) -> Result<(), CommandError> {
+    match fields.first() {
+        Some(field) => Err(CommandError::not_yet(5).with_field(field)),
+        None => Ok(()),
     }
 }

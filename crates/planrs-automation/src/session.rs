@@ -392,6 +392,8 @@ impl Session {
                 warnings: delta.warnings,
                 side_effects: effects,
                 history_len: self.history.len(),
+                resource_labels: BTreeMap::new(),
+                created_resources: Vec::new(),
             });
         }
         let entity_delta = diff_projects(&self.project, &work);
@@ -422,6 +424,8 @@ impl Session {
             warnings: delta.warnings,
             side_effects: effects,
             history_len: self.history.len(),
+            resource_labels: BTreeMap::new(),
+            created_resources: Vec::new(),
         })
     }
 
@@ -435,6 +439,8 @@ impl Session {
             warnings: Vec::new(),
             side_effects: Vec::new(),
             history_len: self.history.len(),
+            resource_labels: BTreeMap::new(),
+            created_resources: Vec::new(),
         }
     }
 
@@ -472,6 +478,8 @@ impl Session {
             warnings,
             side_effects: Vec::new(),
             history_len: 0,
+            resource_labels: BTreeMap::new(),
+            created_resources: Vec::new(),
         }
     }
 

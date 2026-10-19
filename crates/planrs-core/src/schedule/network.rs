@@ -537,9 +537,9 @@ fn leaf_node(
     diags: &mut Diagnostics,
 ) -> Option<Node> {
     // R-173 : feuille affectée, placée par ses affectations ; mesurée comme
-    // si elle ne l'était pas (R-174).
+    // si elle ne l'était pas (R-174 ; durée écoulée : temps civil, R-182).
     let (place, measure) = if let Some(place) = parts.place(p) {
-        (place, info.cal)
+        (place, place_of(task, info.cal))
     } else {
         let place = place_of(task, info.cal);
         (place, place)

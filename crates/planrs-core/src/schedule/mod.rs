@@ -70,7 +70,15 @@ const PERCENT_LAG_FROM_SUMMARY: &str = "lag.percent_of_summary_from_finish";
 struct NodeState {
     /// Dates au plus tôt ; porte : `(G, G)` ; agrégat : (min ES, max EF),
     /// ou les dates saisies d'une récapitulative manuelle datée (R-064).
+    /// Feuille à retard de nivellement : dates retardées (R-178).
     early: Option<Span>,
+    /// Feuille à retard de nivellement : début au plus tôt non retardé,
+    /// affiché comme `early.start` (R-178, O27).
+    undelayed: Option<Moment>,
+    /// Feuille à retard de nivellement : placement sans le retard depuis
+    /// toutes ses bornes ; plafonne les dates au plus tard que la feuille
+    /// impose à ses prédécesseurs (R-178, A6 UID 21 → 36).
+    held: Option<Span>,
     /// Agrégat : (min ES, max EF) des enfants, même pour une récapitulative
     /// manuelle datée (début réel des sous-tâches, lu par la marge libre
     /// d'un lien vers sa porte).
@@ -113,6 +121,8 @@ struct NodeState {
 impl NodeState {
     const NEW: Self = Self {
         early: None,
+        undelayed: None,
+        held: None,
         children: None,
         late: None,
         driver: Driver::ProjectStart,

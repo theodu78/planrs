@@ -668,3 +668,31 @@ fn workspace_import_csv_roundtrip() {
         list["tasks"]
     );
 }
+
+#[test]
+fn workspace_batch_version_checked_before_ops() {
+    // ADR-0012 L3 (4) : un lot d'un format futur est refusé comme tel, même
+    // si ses opérations sont inconnues de cette version.
+    let mut ws = fresh(Language::Fr);
+    let err = ws
+        .call(
+            "batch.apply",
+            json!({ "format_version": 2, "ops": [{ "op": "resource.add", "name": "R" }] }),
+        )
+        .unwrap_err();
+    assert_eq!(err.code, codes::BATCH_UNSUPPORTED_VERSION);
+    assert_eq!(err.field.as_deref(), Some("format_version"));
+    // Version 1 ou absente : l'opération inconnue est un défaut de forme.
+    for batch in [
+        json!({ "format_version": 1, "ops": [{ "op": "resource.add", "name": "R" }] }),
+        json!({ "ops": [{ "op": "resource.add", "name": "R" }] }),
+    ] {
+        let err = ws.call("batch.apply", batch).unwrap_err();
+        assert_eq!(err.code, codes::PARAM_INVALID);
+    }
+    // Version non entière : `param.invalid`.
+    let err = ws
+        .call("batch.apply", json!({ "format_version": "2", "ops": [] }))
+        .unwrap_err();
+    assert_eq!(err.code, codes::PARAM_INVALID);
+}

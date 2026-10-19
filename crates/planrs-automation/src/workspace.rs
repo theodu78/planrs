@@ -305,6 +305,7 @@ impl Workspace {
                 let mut obj = object(params, lang)?;
                 let dry_run = take_flag(&mut obj, "dry_run", lang)?;
                 let detail = take_flag(&mut obj, "detail", lang)?;
+                check_batch_version(&obj).map_err(cmd)?;
                 let p = parse_params::<ApplyBatchParams>(Value::Object(obj)).map_err(cmd)?;
                 self.apply(&p.into_batch(), dry_run, detail)
             }
@@ -498,6 +499,21 @@ fn no_session(lang: Language) -> ToolError {
         )
         .to_owned(),
     )
+}
+
+/// Version d'un lot contrôlée avant ses opérations (ADR-0012 L3) : un lot
+/// d'un format futur est refusé comme tel (`batch.unsupported_version`),
+/// même si ses opérations sont inconnues ici. Absente : 1 ; non entière :
+/// `param.invalid` par la lecture qui suit.
+fn check_batch_version(obj: &Map<String, Value>) -> Result<(), CommandError> {
+    match obj.get("format_version").and_then(Value::as_u64) {
+        Some(v) if v != u64::from(Batch::FORMAT_VERSION) => Err(CommandError::new(
+            codes::BATCH_UNSUPPORTED_VERSION,
+            CommandErrorKind::UnsupportedVersion(u32::try_from(v).unwrap_or(u32::MAX)),
+        )
+        .with_field("format_version")),
+        _ => Ok(()),
+    }
 }
 
 /// Erreur d'annulation ou de rétablissement.

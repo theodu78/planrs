@@ -19,7 +19,7 @@ Routeur unique : un id du registre (`REGISTRY`), des paramètres JSON, une valeu
 | `history.undo`, `history.redo` | — | `OutcomeView` |
 | `history.list` | — | `HistoryView` |
 | écritures (`task.add`…) | schéma de la commande + `dry_run`, `detail` | `OutcomeView` ; lot d'une commande |
-| `batch.apply` | `ops`, `lang`, `label`, `format_version` + `dry_run`, `detail` | `OutcomeView` |
+| `batch.apply` | `ops`, `lang`, `label`, `format_version` (absent : 1 ; contrôlé avant `ops`, autre entier → `batch.unsupported_version`) + `dry_run`, `detail` | `OutcomeView` |
 
 - Commande réservée (J5, J6) : `command.not_yet_available` ; id inconnu ou paramètres mal formés : `param.invalid` ; sans session : `session.none` (message qui cite `open_project`, `new_project`, `import_csv`).
 - Une écriture réussie hors `dry_run` crée une entrée d'historique (C-MCP-04, vérifié en L8) ; `dry_run` laisse la session intacte.

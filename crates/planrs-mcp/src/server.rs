@@ -175,7 +175,13 @@ impl PlanrsServer {
         let Some(dir) = &self.control_dir else {
             return Ok(());
         };
-        let given = params.get("path").and_then(Value::as_str).map(PathBuf::from);
+        // Chemin effectif (confiné à `--root` s'il y en a une) : la garde
+        // vise le fichier que l'outil touchera, pas le chemin brut relatif
+        // au dossier courant du processus.
+        let given = match params.get("path").and_then(Value::as_str) {
+            Some(p) => Some(ws.resolve_path(p)?),
+            None => None,
+        };
         let target = match id {
             "project.open" | "project.export_mspdi" => given,
             "project.save" => given.or_else(|| {

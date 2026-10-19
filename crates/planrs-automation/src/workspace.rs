@@ -539,6 +539,19 @@ fn display_name(path: &std::path::Path) -> String {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Workspace {
+    /// Chemin effectif d'un paramètre `path`, tel que les outils de fichier
+    /// le liront ou l'écriront : confiné à la racine s'il y en a une (un
+    /// chemin relatif part alors de la racine), tel quel sinon. Sert à la
+    /// garde ADR-0002 des surfaces, qui doit viser le même fichier.
+    ///
+    /// # Errors
+    ///
+    /// `param.invalid` (chemin vide) ; `file.outside_root` et les erreurs
+    /// de confinement (champ `path`).
+    pub fn resolve_path(&self, path: &str) -> Result<PathBuf, ToolError> {
+        self.resolve(path, "path")
+    }
+
     /// Chemin effectif : confiné à la racine s'il y en a une.
     fn resolve(&self, path: &str, field: &str) -> Result<PathBuf, ToolError> {
         let lang = self.lang;

@@ -34,7 +34,7 @@ Générés depuis `planrs_automation::REGISTRY` (`tools.rs`, sans macro `#[tool]
 | C-MCP-07 | noms d'outils conformes à `^[a-zA-Z0-9_-]{1,64}$`, uniques | `tools_names_valid_and_unique`, `mcp_list_tools_from_registry` |
 | C-MCP-08 | codes de sortie de la CLI | `docs/features/cli.md` § 3 |
 
-Garde ADR-0002 (`file.open_in_app`) : `open_project`, `save_project`, `export_mspdi` et `--open` refusent un fichier tenu par une application planrs vivante (rendez-vous du canal de contrôle, `docs/features/control.md`) ; `--headless` la lève. Tests : `tests/guard.rs`.
+Garde ADR-0002 (`file.open_in_app`) : `open_project`, `save_project`, `export_mspdi` et `--open` refusent un fichier tenu par une application planrs vivante (rendez-vous du canal de contrôle, `docs/features/control.md`) ; `--headless` la lève. La garde vise le chemin effectif (`Workspace::resolve_path`) : avec `--root`, un chemin relatif part de la racine, comme pour l'outil, pas du dossier courant du processus. Tests : `tests/guard.rs` (dont `mcp_guard_relative_path_under_root`).
 
 ## 4. Journal de rejeu (`--journal`)
 

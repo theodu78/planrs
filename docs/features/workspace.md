@@ -4,7 +4,7 @@
 
 ## 1. `Workspace::call(id, params)`
 
-Routeur unique : un id du registre (`REGISTRY`), des paramètres JSON, une valeur JSON ou une `ToolError { code, message, op_index, field, subject, diagnostics }`. Au plus une session ouverte ; « maintenant » et la langue sont injectés à la construction ; `with_root(dir)` confine tous les chemins (MCP HTTP).
+Routeur unique : un id du registre (`REGISTRY`), des paramètres JSON, une valeur JSON ou une `ToolError { code, message, op_index, field, subject, diagnostics }`. Au plus une session ouverte ; « maintenant » et la langue sont injectés à la construction ; `with_root(dir)` confine tous les chemins (MCP HTTP) ; `resolve_path(p)` rend le chemin effectif qu'un outil de fichier visera (garde ADR-0002 des surfaces).
 
 | Id | Paramètres | Résultat |
 |---|---|---|

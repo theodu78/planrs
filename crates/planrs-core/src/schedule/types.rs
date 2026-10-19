@@ -181,7 +181,9 @@ pub struct AssignmentSchedule {
     pub resource: Option<ResourceUid>,
     /// Rôle dans le placement de la tâche (R-176, R-179, R-183).
     pub role: AssignmentRole,
-    /// Dates au plus tôt de l'affectation (`s_a`, `f_a`, R-173).
+    /// Dates planifiées de l'affectation (`s_a`, `f_a`, R-173) : placement
+    /// depuis le début planifié de la tâche, au plus tôt depuis le début, au
+    /// plus tard à rebours (R-112).
     pub span: Span,
     /// Dates au plus tard (R-174) ; `None` si la passe arrière ne les donne
     /// pas.

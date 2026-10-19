@@ -895,6 +895,14 @@ impl<'n, 'a> Calc<'n, 'a> {
         let state = self.state(v)?;
         let early = state.early?;
         let late = state.late;
+        // R-112 : l'affectation est rangée sur les dates planifiées de sa
+        // tâche (au plus tôt depuis le début, au plus tard à rebours, repli
+        // au plus tôt sans dates au plus tard comme `rollup`) ; ses dates au
+        // plus tard restent dans `late`.
+        let planned = match self.mode {
+            Mode::FromStart => early,
+            Mode::FromFinish => late.unwrap_or(early),
+        };
         let node = net.node(v)?;
         let res = &o.res;
         // R-183 : une tâche manuelle (feuille ou récapitulative) range ses
@@ -916,9 +924,9 @@ impl<'n, 'a> Calc<'n, 'a> {
         };
         let (span, late, duration, calendar) = match o.part.and_then(|i| Some((i, net.parts.items.get(i)?))) {
             // Une seule part sans délai : la feuille est la part (P34).
-            Some((_, part)) if parts.len() == 1 && part.undelayed() => (early, late, part.d, res.calendar),
+            Some((_, part)) if parts.len() == 1 && part.undelayed() => (planned, late, part.d, res.calendar),
             Some((i, part)) => (
-                span_from(i, part, early.start)?,
+                span_from(i, part, planned.start)?,
                 late.and_then(|l| span_from(i, part, l.start)),
                 part.d,
                 res.calendar,
@@ -936,7 +944,7 @@ impl<'n, 'a> Calc<'n, 'a> {
                         d,
                     };
                     (
-                        Placer::part_span(&net.scales, &part, early.start).ok()?,
+                        Placer::part_span(&net.scales, &part, planned.start).ok()?,
                         late.and_then(|l| Placer::part_span(&net.scales, &part, l.start).ok()),
                         d,
                         res.calendar,
@@ -947,12 +955,12 @@ impl<'n, 'a> Calc<'n, 'a> {
                 (AssignmentRole::Manual, Some(scale), _) => {
                     let measured = net
                         .scale(scale)
-                        .and_then(|s| s.between(early.start, early.finish).ok())
+                        .and_then(|s| s.between(planned.start, planned.finish).ok())
                         .filter(|m| m.get() > 0);
                     if let Some(m) = measured {
                         effective_units = rate(res.work, m).unwrap_or(res.units);
                     }
-                    (early, late, measured.unwrap_or(node.duration), res.calendar)
+                    (planned, late, measured.unwrap_or(node.duration), res.calendar)
                 }
                 _ => {
                     let calendar = match role {
@@ -962,7 +970,7 @@ impl<'n, 'a> Calc<'n, 'a> {
                         AssignmentRole::Work | AssignmentRole::Summary => res.calendar,
                         AssignmentRole::Neutral | AssignmentRole::Manual => res.task_calendar,
                     };
-                    (early, late, node.duration, calendar)
+                    (planned, late, node.duration, calendar)
                 }
             },
         };

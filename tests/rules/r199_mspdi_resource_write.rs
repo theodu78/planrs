@@ -4,8 +4,9 @@
 //! d'affectation écrits).
 
 use planrs_core::{
-    Assignment, AssignmentUid, Duration, DurationUnit, ExtraEntry, Extras, Link, Minutes, OutlineLevel,
-    Project, Resource, ResourceUid, Subject, Task, TaskType, TaskUid, TimeBasis, Work, WorkContour, schedule,
+    Assignment, AssignmentUid, Constraint, Duration, DurationUnit, ExtraEntry, Extras, Link, Minutes,
+    OutlineLevel, Project, Resource, ResourceUid, ScheduleAnchor, Subject, Task, TaskType, TaskUid,
+    TimeBasis, Work, WorkContour, schedule,
 };
 use planrs_mspdi::write::{Computed, WriteCode, WriteOptions, choose_computed, schedule_image, write};
 use planrs_mspdi::{ReadOptions, normalize, read};
@@ -111,6 +112,30 @@ fn r199_assignment_dates_written() {
     // Sans valeurs calculées : rien d'écrit (R-125 avant J5).
     let omitted = compact(&text(&write(&p, Computed::Omit, &WriteOptions::default())));
     assert!(!entity_xml(&omitted, "Assignment", 2).contains("<Start>"));
+}
+
+#[test]
+fn r199_from_finish_assignment_dates_written() {
+    // À rebours depuis ven 23/10/2026 17:00 : T1 1 j ALAP avec R1 8 h, T2
+    // 5 j sans ressource. T1 est planifiée ven 08:00 – 17:00 (dates au plus
+    // tard, R-112) ; l'affectation est écrite sur ces mêmes dates, et non
+    // sur le lundi de ses dates au plus tôt.
+    let mut p = new_project("2026-10-19T08:00");
+    p.anchor = ScheduleAnchor::FromFinish(moment("2026-10-23T17:00"));
+    let mut t1 = task(&p, 1, 480, 1, 480);
+    t1.constraint = Constraint::AsLateAsPossible;
+    p.tasks.push(t1).unwrap();
+    let mut t2 = task(&p, 2, 2_400, 1, 0);
+    t2.constraint = Constraint::AsLateAsPossible;
+    p.tasks.push(t2).unwrap();
+    resource(&mut p, 1);
+    assign(&mut p, 1, 1, 1, 480);
+    let (xml, _) = written_by_engine(&p);
+    let t1 = entity_xml(&xml, "Task", 1);
+    assert!(t1.contains("<Start>2026-10-23T08:00:00</Start>"), "{t1}");
+    let a1 = entity_xml(&xml, "Assignment", 1);
+    assert!(a1.contains("<Start>2026-10-23T08:00:00</Start>"), "{a1}");
+    assert!(a1.contains("<Finish>2026-10-23T17:00:00</Finish>"), "{a1}");
 }
 
 #[test]

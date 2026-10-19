@@ -2410,7 +2410,13 @@ fn p34(oracle: &Project, seed: u64) {
         let s = got.scheduled(task).unwrap();
         let a = got.assignments.get(&auid).unwrap();
         assert_eq!(a.role, AssignmentRole::Work, "P34, graine {seed}");
-        assert_eq!(a.span, s.early, "P34, graine {seed}, tâche {task}");
+        // Dates planifiées de la tâche (R-112, R-173 amendée) : au plus tôt
+        // depuis le début, au plus tard à rebours.
+        let planned = planrs_core::Span {
+            start: s.start,
+            finish: s.finish,
+        };
+        assert_eq!(a.span, planned, "P34, graine {seed}, tâche {task}");
         assert_eq!(a.late, Some(s.late), "P34, graine {seed}, tâche {task}");
     }
 }

@@ -262,14 +262,71 @@ async fn mcp_error_is_structured_not_rpc() {
     let e = refused(&client, "add_link", json!({ "pred": b, "succ": a })).await;
     assert_eq!(e["code"], json!("batch.would_create_errors"));
     assert_ne!(e["diagnostics"].as_array().map(Vec::len), Some(0));
-    // Commande réservée (J5-J6) appelée par son nom : erreur structurée.
-    let e = refused(&client, "add_resource", json!({})).await;
+    // Commande réservée (J6) appelée par son nom : erreur structurée.
+    let e = refused(&client, "set_baseline", json!({})).await;
     assert_eq!(e["code"], json!("command.not_yet_available"));
     // Seul un nom inconnu est une erreur JSON-RPC.
     let rpc = client.call_tool(CallToolRequestParams::new("no_such_tool")).await;
     assert!(rpc.is_err());
     // La session reste utilisable.
     assert_eq!(ok(&client, "project_summary", json!({})).await["tasks"], json!(2));
+    client.cancel().await.unwrap();
+}
+
+/// Lot L8 J5 : ressources créées par un lot, affectées, puis
+/// `resource_usage` en contenu structuré (travail et surutilisation par
+/// période, calculés par le moteur) ; `list_resources`, filtre `resource`
+/// de `list_tasks`, `delete_resource` sans `cascade` refusé.
+#[tokio::test]
+async fn mcp_resource_usage_structured() {
+    let (client, _server) = connect(opts()).await;
+    new_project(&client).await;
+    let out = ok(
+        &client,
+        "apply_batch",
+        json!({ "ops": [
+            { "op": "resource.add", "name": "Mason", "as": "$m" },
+            { "op": "task.add", "name": "A", "as": "$a", "duration": { "text": "5d" } },
+            { "op": "task.add", "name": "B", "as": "$b", "duration": { "text": "5d" } },
+            { "op": "assignment.add", "task": "$a", "resource": "$m" }
+        ] }),
+    )
+    .await;
+    let m = out["resource_labels"]["$m"].clone();
+    let b = out["labels"]["$b"].clone();
+    assert_eq!(out["created_resources"], json!([m.clone()]));
+    let added = ok(
+        &client,
+        "assign_resource",
+        json!({ "task": b, "resource": m, "units": { "text": "150%" } }),
+    )
+    .await;
+    assert_eq!(added["diff"]["overallocated"]["new"], json!([m.clone()]));
+    let r = call(
+        &client,
+        "resource_usage",
+        json!({ "by": "week", "resources": [m.clone()] }),
+    )
+    .await;
+    assert_eq!(r.is_error, Some(false));
+    let usage = r.structured_content.unwrap();
+    assert_eq!(usage["by"], json!("week"));
+    assert_eq!(usage["periods"][0], json!("2026-11-02T00:00"));
+    let row = &usage["rows"][0];
+    assert_eq!(row["uid"], m);
+    assert_eq!(row["name"], json!("Mason"));
+    // 40 h + 60 h la semaine du 02/11, surutilisée.
+    assert_eq!(row["work"][0]["minutes"], json!(6_000));
+    assert_eq!(row["overallocated"][0], json!(true));
+    let list = ok(&client, "list_resources", json!({ "overallocated": true })).await;
+    assert_eq!(list["resources"][0]["uid"], m);
+    let tasks = ok(&client, "list_tasks", json!({ "resource": m.clone() })).await;
+    assert_eq!(tasks["total"], json!(2));
+    let e = refused(&client, "delete_resource", json!({ "uid": m.clone() })).await;
+    assert_eq!(e["code"], json!("resource.has_assignments"));
+    let deleted = ok(&client, "delete_resource", json!({ "uid": m, "cascade": true })).await;
+    assert_eq!(deleted["committed"], json!(true));
+    assert_ne!(deleted["diff"]["overallocated"]["resolved"], json!([]));
     client.cancel().await.unwrap();
 }
 

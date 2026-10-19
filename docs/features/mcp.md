@@ -11,16 +11,18 @@
 
 ## 2. Outils
 
-Générés depuis `planrs_automation::REGISTRY` (`tools.rs`, sans macro `#[tool]`) : nom MCP, description dans la langue du serveur, schéma d'entrée du registre (objet au sommet, sans `$ref`), plus `dry_run` et `detail` pour une écriture ; annotations `readOnlyHint` (lecture, analyse), `destructiveHint` (`delete_task` seul).
+Générés depuis `planrs_automation::REGISTRY` (`tools.rs`, sans macro `#[tool]`) : nom MCP, description dans la langue du serveur, schéma d'entrée du registre (objet au sommet, sans `$ref`), plus `dry_run` et `detail` pour une écriture ; annotations `readOnlyHint` (lecture, analyse), `destructiveHint` (`delete_task`, `delete_resource`).
 
-| Genre | Outils (30 listés) |
+| Genre | Outils (38 listés) |
 |---|---|
 | Fichiers | `new_project`, `open_project`, `import_csv`, `save_project`, `export_mspdi` |
-| Lecture | `project_summary`, `list_tasks` (paginé : 50, au plus 500), `get_task`, `critical_path`, `render_gantt` |
-| Écriture (`dry_run`, `detail`) | `add_task`, `update_task`, `delete_task`, `move_task`, `indent_task`, `outdent_task`, `add_link`, `update_link`, `remove_link`, `set_constraint`, `set_deadline`, `set_project_start`, `set_project_info`, `set_status_date`, `edit_calendar`, `remove_calendar_exception`, `apply_batch` |
+| Lecture | `project_summary`, `list_tasks` (paginé : 50, au plus 500 ; filtre `resource`), `get_task`, `critical_path`, `render_gantt`, `list_resources` (paginé : 50, au plus 500 ; filtre `overallocated`) |
+| Analyse | `resource_usage` |
+| Écriture (`dry_run`, `detail`) | `add_task`, `update_task`, `delete_task`, `move_task`, `indent_task`, `outdent_task`, `add_link`, `update_link`, `remove_link`, `set_constraint`, `set_deadline`, `set_project_start`, `set_project_info`, `set_status_date`, `edit_calendar`, `remove_calendar_exception`, `add_resource`, `update_resource`, `delete_resource`, `assign_resource`, `update_assignment`, `unassign_resource`, `apply_batch` |
 | Historique | `undo`, `redo`, `history` |
 
-- Réservés (J5, J6), non listés mais appelables : `explain_date`, `what_if`, `resource_usage`, `baseline_variance`, `add_resource`, `assign_resource`, `update_assignment`, `update_progress`, `set_baseline` → `command.not_yet_available` en erreur structurée.
+- Réservés (J6), non listés mais appelables : `explain_date`, `what_if`, `baseline_variance`, `update_progress`, `set_baseline` → `command.not_yet_available` en erreur structurée.
+- Ressources (J5, lot L8, ADR-0013 D9) : les six écritures `resource.*` et `assignment.*` entrent aussi dans `apply_batch` (étiquettes `"as":"$x"` des ressources, espace de noms distinct de celui des tâches ; résultat `resource_labels` et `created_resources`, absents quand vides). Vues : `ResourceView { uid, id, name, kind, material_label?, max_units, calendar, initials, group, work, peak, overallocated, inactive, assignments (≤ 100), assignments_total }`, `AssignmentView { uid, task, resource, units, work, delay?, start, finish, effective_units }`, `UsageView { by, periods, rows: [{uid, name, work[], overallocated[]}], truncated }` ; unités en `{value (1/10 000), text "50%"}` (quantité « 3 » d'une ressource matérielle), travail en heures. `TaskView` gagne `resources: [{uid, name, units}]` et `work`, omis quand vides ou nuls ; `get_task` gagne `scheduling { type, effort_driven }`, omis s'ils valent les défauts du projet ou pour une récapitulative. Le diff (`DiffView`) gagne `overallocated { new, resolved }` (UID des ressources surutilisées après et pas avant, et l'inverse ; omis si vides), signalé dès un `dry_run`. Ressource UID 0 des fichiers MS Project (O34) cachée : ni listée ni comptée par défaut. `resource_usage` : `from`/`to` par défaut les dates du projet, `by` semaine par défaut, au plus 20 000 cellules (périodes × ressources, `limit.exceeded`) en plus des bornes du cœur (R-188). Test : `mcp_resource_usage_structured`.
 - `render_gantt` : contenu texte = résumé (« N tâches, M critiques, fin … », plus les lignes non affichées), puis le SVG, puis le rapport en JSON (comme le recommande la spécification MCP : un client sans `structuredContent` voit aussi `truncated_days` et `truncated_bytes`) ; contenu structuré = rapport du rendu sans le SVG (`shown`, `hidden`, `truncated_days`, `truncated_bytes`, `bytes`).
 - Les autres outils : contenu structuré = la vue JSON, contenu texte = le même JSON (clients sans `structuredContent`).
 

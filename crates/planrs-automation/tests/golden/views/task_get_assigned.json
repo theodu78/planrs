@@ -1,0 +1,51 @@
+{
+  "constraint": null,
+  "critical": true,
+  "deadline": null,
+  "diagnostics": [],
+  "duration": {
+    "elapsed": false,
+    "estimated": false,
+    "minutes": 2400,
+    "text": "5j",
+    "unit": "day"
+  },
+  "finish": "2026-10-23T17:00",
+  "free_slack": {
+    "minutes": 0,
+    "text": "0j",
+    "unit": "day"
+  },
+  "id": 1,
+  "level": 1,
+  "milestone": false,
+  "name": "A",
+  "predecessors": [],
+  "resources": [
+    {
+      "name": "Maçon",
+      "uid": 1,
+      "units": {
+        "text": "100%",
+        "value": 10000
+      }
+    }
+  ],
+  "scheduling": {
+    "effort_driven": true,
+    "type": "fixed_work"
+  },
+  "start": "2026-10-19T08:00",
+  "summary": false,
+  "total_slack": {
+    "minutes": 0,
+    "text": "0j",
+    "unit": "day"
+  },
+  "uid": 1,
+  "work": {
+    "minutes": 2400,
+    "text": "40h",
+    "unit": "hour"
+  }
+}

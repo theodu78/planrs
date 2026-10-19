@@ -7,14 +7,17 @@
 | Commande | Ids du registre | Sortie |
 |---|---|---|
 | `planrs summary <plan> [--json]` | `project.open`, `project.summary` | `SummaryView` ; texte : nom, début, fin, durée, comptes |
-| `planrs tasks <plan> [--critical] [--late] [--from J] [--to J] [--limit N] [--json]` | `task.list` | `ListView` ; texte : tableau ID, nom (indenté), durée, début, fin, marge totale, `*` si critique |
+| `planrs tasks <plan> [--critical] [--late] [--from J] [--to J] [--resource ID] [--limit N] [--json]` | `task.list` | `ListView` ; texte : tableau ID, nom (indenté), durée, début, fin, marge totale, `*` si critique |
+| `planrs resources <plan> [--overallocated] [--json]` | `resource.list` | `ResourceListView` (toutes pages) ; texte : tableau ID, nom, type, capacité, travail, pic, `!` si surutilisée |
+| `planrs usage <plan> [--resource ID]… [--by day\|week\|month] [--from D] [--to D] [--json]` | `analysis.resource_usage` | `UsageView` ; texte : une section par ressource, une ligne par période (début, travail), `!` si surutilisée |
 | `planrs apply <plan> <ops.json> [--dry-run] [-o out.xml] [--json]` | `batch.apply`, `project.save` | `OutcomeView` ; texte : appliqué ou simulé, fin avant → après, tâches décalées, fichier écrit |
 | `planrs render <plan> -o x.svg [--from J] [--to J] [--critical] [--zoom auto\|day\|week\|month\|quarter]` | `render.gantt` | SVG écrit ; texte : lignes affichées, masquées, octets |
 | `planrs import-csv <in.csv> -o out.xml` | `project.import_csv`, `project.save` | MSPDI écrit ; texte : tâches, liens, diagnostics (détail sur la sortie d'erreur) |
 | `planrs mcp [--journal F] [--open plan.xml] [--headless] [--http ADDR --root DOSSIER [--allow-remote] [--token-file F]]` | `planrs_mcp::serve_stdio`, `planrs_mcp::serve_http` | serveur MCP stdio (lot L8) ou HTTP « streamable HTTP » sur `http://ADDR/mcp` (lot L17) |
 | `planrs explain <plan> --task N` (cachée) | — | « disponible en J6 », code 2, fichier non lu |
 
-- Dates d'option : jours `AAAA-MM-JJ` (`--from`, `--to`) ; une valeur mal formée est une erreur d'usage (2).
+- Dates d'option : jours `AAAA-MM-JJ` (`--from`, `--to`) ; pour `usage`, aussi `AAAA-MM-JJTHH:MM` (un jour seul vaut minuit, `--to` exclu) ; une valeur mal formée est une erreur d'usage (2).
+- `--resource ID` (`tasks`, `usage`, J5) : ID de la colonne ID de `planrs resources` (position + 1, comme l'écrivain MSPDI), converti en UID ; ID inconnu : `resource.not_found` (code 1).
 - `tasks` sans `--limit` lit toutes les pages (500 par page) et rend une seule `ListView` sans `next_cursor` ; avec `--limit N` (1 à 500), une seule page telle que le MCP la rend (`next_cursor` s'il en reste) ; `N` hors plage est une erreur d'usage (code 2) contrôlée par clap avant la lecture du plan (test `cli_explain_hidden_exit_2`).
 - `apply` : le fichier de lot a le format versionné unique (`{"format_version":1,"lang":"fr","ops":[{"op":"task.add",…}]}`, ADR-0012 D6), lu au plus 64 Mio. `--dry-run` n'écrit rien, même avec `-o` (un `"dry_run": true` dans le fichier aussi). `-o` écrit le résultat ailleurs et laisse `<plan>` intact ; sans `-o`, `<plan>` est remplacé de façon atomique (`files::write_atomic` : temporaire du même dossier, `fsync`, renommage). Un lot refusé ne touche aucun fichier.
 - `render` : 200 lignes au plus (borne de `render.gantt`), thème clair, libellés dans la langue de la CLI ; une troncature (plage, taille) est signalée sur la sortie d'erreur.
@@ -45,4 +48,5 @@ Binaire lancé par `env!("CARGO_BIN_EXE_planrs")`, `PLANRS_NOW` retiré et `LANG
 - `cli_summary_house_json_equals_mcp_view` : `summary --json` et `tasks --json` (toutes pages, `--critical`, `--limit`) égaux aux vues de `Workspace::call` sur `house.xml`.
 - `cli_apply_dry_run_leaves_file`, `cli_apply_writes_atomic` (`-o`, remplacement sans temporaire résiduel), `cli_apply_refused_exit_1` (erreur structurée, fichier intact).
 - `cli_missing_file_exit_3` (absent, MSPDI illisible, lot absent, écriture impossible), `cli_render_svg_bytes_stable` (deux rendus identiques, égaux à `render.gantt`), `cli_now_env_and_flag_precedence`, `cli_explain_hidden_exit_2`, `cli_import_csv_roundtrip`, `cli_lang_flag_and_env`.
+- `cli_resources_json` (`resources --json` égal à `resource.list`, `--overallocated`, texte, `tasks --resource`, ID inconnu), `cli_usage_by_week` (`usage --json` égal à `analysis.resource_usage`, plage par jour, texte, `--by` inconnu : code 2) : plan à ressources construit par `Workspace::call` puis enregistré.
 - Tests unitaires : priorité de « maintenant » et lecture de `LANG` (`now.rs`), familles de codes (`exit.rs`).

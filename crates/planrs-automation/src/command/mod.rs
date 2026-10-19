@@ -181,30 +181,23 @@ pub enum Command {
     /// Retire une exception de calendrier (R-165).
     #[serde(rename = "calendar.remove_exception")]
     CalendarRemoveException(CalendarExceptionKey),
-    /// Ajoute une ressource (R-195 ; contrat J5, réservée jusqu'au lot L8 :
-    /// hors du schéma des lots, refusée `command.not_yet_available`).
+    /// Ajoute une ressource (R-195).
     #[serde(rename = "resource.add")]
-    #[schemars(skip)]
     ResourceAdd(ResourceAdd),
-    /// Modifie une ressource (R-195 ; réservée jusqu'au lot L8).
+    /// Modifie une ressource (R-195).
     #[serde(rename = "resource.update")]
-    #[schemars(skip)]
     ResourceUpdate(ResourceUpdate),
-    /// Supprime une ressource (R-195 ; réservée jusqu'au lot L8).
+    /// Supprime une ressource (R-195).
     #[serde(rename = "resource.delete")]
-    #[schemars(skip)]
     ResourceDelete(ResourceDelete),
-    /// Affecte une ressource à une tâche (R-196 ; réservée jusqu'au lot L8).
+    /// Affecte une ressource à une tâche (R-196).
     #[serde(rename = "assignment.add")]
-    #[schemars(skip)]
     AssignmentAdd(AssignmentAdd),
-    /// Modifie une affectation (R-196 ; réservée jusqu'au lot L8).
+    /// Modifie une affectation (R-196).
     #[serde(rename = "assignment.update")]
-    #[schemars(skip)]
     AssignmentUpdate(AssignmentUpdate),
-    /// Retire une affectation (R-196 ; réservée jusqu'au lot L8).
+    /// Retire une affectation (R-196).
     #[serde(rename = "assignment.remove")]
-    #[schemars(skip)]
     AssignmentRemove(AssignmentKey),
 }
 

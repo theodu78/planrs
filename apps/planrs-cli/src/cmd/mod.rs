@@ -13,8 +13,10 @@ pub mod explain;
 pub mod import_csv;
 pub mod mcp;
 pub mod render;
+pub mod resources;
 pub mod summary;
 pub mod tasks;
+pub mod usage;
 
 use std::io::Write as _;
 use std::process::ExitCode;

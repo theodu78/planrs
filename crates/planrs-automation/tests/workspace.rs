@@ -405,9 +405,10 @@ fn list_pagination_cursor_stable() {
     let err = ws.call("task.list", json!({ "cursor": 999_999 })).unwrap_err();
     assert_eq!(err.code, codes::TASK_NOT_FOUND);
     assert_eq!(err.field.as_deref(), Some("cursor"));
-    // Ressource : réservée à J5.
-    let err = ws.call("task.list", json!({ "resource": 1 })).unwrap_err();
-    assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE);
+    // Ressource inconnue : refusée (J5, lot L8).
+    let err = ws.call("task.list", json!({ "resource": 999_999 })).unwrap_err();
+    assert_eq!(err.code, codes::RESOURCE_NOT_FOUND);
+    assert_eq!(err.field.as_deref(), Some("resource"));
 }
 
 #[test]

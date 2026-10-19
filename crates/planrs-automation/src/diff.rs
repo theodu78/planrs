@@ -4,7 +4,9 @@ use std::cmp::Ordering;
 use std::collections::btree_map;
 use std::iter::Peekable;
 
-use planrs_core::{Minutes, Moment, Project, Schedule, TaskId, TaskOutcome, TaskSchedule, TaskUid};
+use planrs_core::{
+    Minutes, Moment, Project, ResourceLoad, ResourceUid, Schedule, TaskId, TaskOutcome, TaskSchedule, TaskUid,
+};
 use serde::Serialize;
 
 /// Diff de planning d'un lot (R-163).
@@ -24,6 +26,14 @@ pub struct ScheduleDiff {
     pub changed: Vec<TaskChange>,
     /// Vrai si `changed` a été coupé.
     pub truncated: bool,
+    /// Ressources surutilisées après et pas avant (R-186 ; J5, lot L8),
+    /// par UID ; absent du JSON quand vide.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub overallocated_new: Vec<ResourceUid>,
+    /// Ressources surutilisées avant et plus après (ou supprimées), par
+    /// UID ; absent du JSON quand vide.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub overallocated_resolved: Vec<ResourceUid>,
 }
 
 /// Changement d'une tâche (R-163). Chaque paire est (avant, après).
@@ -59,6 +69,8 @@ impl ScheduleDiff {
             changed_total: 0,
             changed: Vec::new(),
             truncated: false,
+            overallocated_new: Vec::new(),
+            overallocated_resolved: Vec::new(),
         }
     }
 }
@@ -87,7 +99,10 @@ pub(crate) fn diff_schedules(
         changed_total: 0,
         changed: Vec::new(),
         truncated: false,
+        overallocated_new: Vec::new(),
+        overallocated_resolved: Vec::new(),
     };
+    overallocation_changes(&before.resources, &after.resources, &mut d);
     let mut changed = Vec::new();
     for (uid, b, a) in Join::new(&before.tasks, &after.tasks) {
         let bs = b.and_then(scheduled);
@@ -125,6 +140,29 @@ pub(crate) fn diff_schedules(
     changed.truncate(n);
     d.changed = changed;
     d
+}
+
+/// Surutilisations apparues et résolues (J5, ADR-0013 D9) : jointure
+/// triée des charges par UID ; une ressource absente d'un côté compte comme
+/// non surutilisée de ce côté.
+fn overallocation_changes(
+    before: &std::collections::BTreeMap<ResourceUid, ResourceLoad>,
+    after: &std::collections::BTreeMap<ResourceUid, ResourceLoad>,
+    d: &mut ScheduleDiff,
+) {
+    let over = |m: &std::collections::BTreeMap<ResourceUid, ResourceLoad>, uid: &ResourceUid| {
+        m.get(uid).is_some_and(|l| l.overallocated)
+    };
+    for (uid, load) in after {
+        if load.overallocated && !over(before, uid) {
+            d.overallocated_new.push(*uid);
+        }
+    }
+    for (uid, load) in before {
+        if load.overallocated && !over(after, uid) {
+            d.overallocated_resolved.push(*uid);
+        }
+    }
 }
 
 /// Ordre de R-163.

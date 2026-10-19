@@ -165,6 +165,13 @@ mod r162_recorded_discarded;
 mod r163_schedule_diff;
 mod r164_history;
 mod r165_calendar_exceptions;
+mod r170_work_equals_duration_times_units;
+mod r189_task_type_matrix;
+mod r190_add_effort_driven;
+mod r191_remove_effort_driven;
+mod r192_add_remove_not_effort_driven;
+mod r193_fixed_work_and_summary;
+mod r194_work_on_several_assignments;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

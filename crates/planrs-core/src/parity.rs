@@ -14,10 +14,11 @@
 //! jamais, sauf ADR (fichier retiré, valeur enregistrée reconnue fausse).
 
 /// Somme des `floor` du manifeste du corpus (vérifiée par le harnais).
-/// Mesuré le 2026-10-19 : A1 51, A2 18, A4 42, A6 4, A7 8 (159 cas ; J2 : 91,
-/// A4 22, A7 0 ; J3 : contraintes FNET de A7, R-090, R-094 ; calendrier du
-/// projet dérivé de A4, R-113 ; J5 : placement par affectation sur A6).
-pub const CORPUS_FLOOR: u32 = 123;
+/// Mesuré le 2026-10-19 : A1 51, A2 18, A4 42, A6 34, A7 8 (159 cas ; J2 :
+/// 91, A4 22, A7 0 ; J3 : contraintes FNET de A7, R-090, R-094 ; calendrier
+/// du projet dérivé de A4, R-113 ; J5 : placement par affectation sur A6,
+/// puis retards de nivellement, R-178).
+pub const CORPUS_FLOOR: u32 = 153;
 
 /// Cas de l'oracle MS Project (`tests/oracle`), zéro sans licence.
 pub const ORACLE_FLOOR: u32 = 0;

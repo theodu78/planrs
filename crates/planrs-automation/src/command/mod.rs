@@ -22,6 +22,8 @@ mod project;
 mod refs;
 mod task;
 
+pub use outline::is_summary_at;
+
 use std::borrow::Cow;
 
 use planrs_core::{CalendarUid, Day, Moment, TaskUid, TimeOfDay};

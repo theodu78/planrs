@@ -83,16 +83,11 @@ fn level_at(project: &Project, pos: usize) -> Option<u16> {
     project.tasks.at(pos).map(|t| t.outline_level.get())
 }
 
-/// Vrai si la tâche à `pos` est récapitulative (R-052 : la suivante est plus
-/// profonde).
+/// Vrai si la tâche à `pos` est récapitulative (R-052 : la tâche non vide
+/// suivante est plus profonde, lignes vides intercalées ignorées). Même
+/// règle que l'automatisation et le moteur.
 fn is_summary_at(project: &Project, pos: usize) -> bool {
-    match (
-        level_at(project, pos),
-        pos.checked_add(1).and_then(|n| level_at(project, n)),
-    ) {
-        (Some(level), Some(next)) => next > level,
-        _ => false,
-    }
+    planrs_automation::command::is_summary_at(&project.tasks, pos)
 }
 
 /// Fin (exclue) du bloc de la tâche à `pos` : tâches suivantes plus
@@ -344,7 +339,7 @@ pub fn confirm_modal(ctx: &egui::Context, texts: &Texts, pending: &PendingDelete
 )]
 mod tests {
     use planrs_automation::{Batch, Command, Placement, TaskRef};
-    use planrs_core::{Moment, Project, TaskUid};
+    use planrs_core::{Arena, Moment, Project, ProjectOptions, Task, TaskUid};
 
     use super::{StructureOp, block_end, is_summary_at, plan};
     use crate::app::{App, Env};
@@ -496,6 +491,27 @@ mod tests {
         assert_eq!(plan_unlink_count(p, &sel), 0);
         sel.click(pred, SelectMode::Toggle, rows);
         assert!(plan_unlink_count(p, &sel) >= 1);
+    }
+
+    /// R-052 : une ligne vide entre une tâche et sa première sous-tâche ne
+    /// la rend pas feuille ; sa suppression demande toujours la cascade.
+    #[test]
+    fn summary_ignores_null_row_before_child() {
+        let app = demo();
+        let s = first_summary(&app);
+        let mut p = project(&app).clone();
+        let mut null = Task::new(TaskUid::new(999_999), String::new(), &ProjectOptions::default());
+        null.outline_level = p.tasks.at(s).unwrap().outline_level;
+        null.is_null = true;
+        let mut tasks: Vec<Task> = p.tasks.iter().cloned().collect();
+        tasks.insert(s + 1, null);
+        p.tasks = Arena::try_from(tasks).unwrap();
+        assert!(is_summary_at(&p, s));
+        assert!(!is_summary_at(&p, s + 1));
+        let uid = p.tasks.at(s).unwrap().uid();
+        let plan = plan(StructureOp::Delete, &p, &Selection::single(Some(uid))).unwrap();
+        assert_eq!(plan.confirm_cascade, Some(block_end(&p, s) - s));
+        assert!(matches!(&plan.batch.ops[..], [Command::TaskDelete(d)] if d.cascade));
     }
 
     fn plan_unlink_count(p: &Project, sel: &Selection) -> usize {

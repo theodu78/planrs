@@ -48,7 +48,8 @@ pub(super) fn block_end(tasks: &Tasks, pos: usize) -> usize {
 /// non vide, et la tâche non vide suivante est d'un niveau supérieur. Les
 /// lignes vides intercalées ne comptent pas, comme dans le moteur et
 /// [`summaries`]. S'arrête à la première tâche non vide qui suit.
-pub(crate) fn is_summary_at(tasks: &Tasks, pos: usize) -> bool {
+#[must_use]
+pub fn is_summary_at(tasks: &Tasks, pos: usize) -> bool {
     let Some(task) = tasks.at(pos).filter(|t| !t.is_null) else {
         return false;
     };

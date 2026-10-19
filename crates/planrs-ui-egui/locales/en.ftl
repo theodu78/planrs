@@ -177,6 +177,26 @@ open-error-title = Could not open the file
 open-error-read = Could not read the file: { $detail }
 open-error-mspdi = Unreadable MSPDI file: { $detail }
 
+## Nouveau, Enregistrer, Enregistrer sous (lot L13)
+
+menu-new = New
+menu-save = Save
+menu-save-as = Save As…
+new-project-name = Project1
+dialog-save-title = Save the project (MSPDI)
+save-in-progress = A save is already in progress.
+save-error-title = Could not save the file
+save-error-write = Cannot write the file: { $detail }
+save-adjusted =
+    { $count ->
+        [one] Saved: { $count } value adjusted to the MSPDI format.
+       *[other] Saved: { $count } values adjusted to the MSPDI format.
+    }
+confirm-unsaved-title = Save changes to “{ $name }”?
+confirm-save = Save
+confirm-discard = Don't Save
+confirm-cancel = Cancel
+
 ## Bandeau de messages
 
 message-dismiss = Dismiss

@@ -11,22 +11,34 @@
 //! Toute édition passe par [`App::execute`] (lot de commandes du registre,
 //! ADR-0012 D11), [`App::undo`] ou [`App::redo`] ; après chacune,
 //! [`App::refresh`] reconstruit les caches d'affichage.
+//!
+//! Fichiers (lot L13) : « Nouveau » ([`App::new_project`]), « Enregistrer »
+//! et « Enregistrer sous » (octets de `Session::save_bytes` remis au
+//! [`FileService`] ; `mark_saved` seulement à la réception du succès, et
+//! seulement si le document n'a pas changé entre-temps). Fermer, ouvrir un
+//! autre document, créer un projet ou quitter avec un document modifié
+//! affiche un bandeau non bloquant (Enregistrer / Ne pas enregistrer /
+//! Annuler) ; sur le desktop, la fermeture de la fenêtre est annulée
+//! (`ViewportCommand::CancelClose`) jusqu'à la réponse.
 
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use planrs_automation::error::codes;
 use planrs_automation::{
-    ApplyMode, ApplyOutcome, Batch, CommandError, CommandErrorKind, HistoryError, Session,
+    AnchorSpec, ApplyMode, ApplyOutcome, Batch, CommandError, CommandErrorKind, HistoryError, NewProject,
+    Session,
 };
-use planrs_core::{Day, Moment, PRODUCT_NAME, Project, Schedule, Severity, TaskUid};
+use planrs_core::{Day, Moment, PRODUCT_NAME, Project, Schedule, Severity, TaskUid, TimeOfDay, Weekday};
 use planrs_mspdi::ImportDiagnostic;
 
-use crate::action::Action;
+use crate::action::{Action, ConfirmChoice};
 use crate::document::{self, LoadedDocument, OpenError};
 use crate::edit::TableEdit;
 use crate::geom;
 use crate::i18n::{Arg, Language, TextId, Texts, error_text_id};
-use crate::io::{FileService, NoFileService, OpenEvent};
+use crate::io::{
+    FileService, NoFileService, OpenEvent, SaveEvent, SaveRequest, SaveTarget, suggested_file_name,
+};
 use crate::rows::RowModel;
 use crate::state::{StateLoadError, TABLE_WIDTH_MAX, TABLE_WIDTH_MIN, ThemePref, UiState};
 use crate::theme::Palette;
@@ -178,6 +190,37 @@ impl Env {
     }
 }
 
+/// Opération suspendue au bandeau de confirmation (document modifié).
+#[derive(Debug)]
+enum Pending {
+    /// Fermer le document.
+    Close,
+    /// Ouvrir l'exemple.
+    OpenDemo,
+    /// Lancer le sélecteur de fichiers.
+    OpenDialog,
+    /// Créer un projet vide.
+    NewProject,
+    /// Fermer la fenêtre (desktop).
+    Quit,
+    /// Installer un document arrivé du sélecteur alors que le document
+    /// courant a été modifié depuis la demande.
+    Install(Box<(LoadedDocument, DocOrigin)>),
+}
+
+/// Enregistrement en cours.
+#[derive(Debug)]
+struct SaveJob {
+    /// Clé du document enregistré (numéro d'ouverture, génération) au
+    /// moment où ses octets ont été produits.
+    key: (u64, u64),
+    /// Opération à poursuivre après un enregistrement réussi.
+    then: Option<Pending>,
+    /// Nombre de valeurs ajustées au format MSPDI (diagnostics
+    /// d'écriture), signalé après le succès.
+    adjusted: usize,
+}
+
 /// Message affiché à l'utilisateur (bandeau).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UserMessage {
@@ -230,6 +273,20 @@ pub struct App {
     observer: Option<Box<dyn DocumentObserver>>,
     /// Dernier titre de fenêtre envoyé à eframe.
     sent_title: String,
+    /// Opération en attente de la réponse au bandeau de confirmation.
+    confirm: Option<Pending>,
+    /// Enregistrement en cours (un seul à la fois).
+    saving: Option<SaveJob>,
+    /// Émetteur des résultats d'enregistrement (cloné vers le service).
+    save_tx: Sender<SaveEvent>,
+    /// Récepteur des résultats d'enregistrement.
+    save_rx: Receiver<SaveEvent>,
+    /// Fermeture de la fenêtre acceptée (« Ne pas enregistrer », ou
+    /// enregistrement réussi) : la prochaine demande n'est plus annulée.
+    quit_confirmed: bool,
+    /// Clé du document au lancement du sélecteur : un document arrivé alors
+    /// que le document courant a changé depuis redemande confirmation.
+    open_confirmed_for: Option<(u64, u64)>,
 }
 
 impl App {
@@ -239,6 +296,7 @@ impl App {
         let state = state.normalized();
         let texts = Texts::new(Language::resolve(state.language, env.system_language));
         let (tx, rx) = mpsc::channel();
+        let (save_tx, save_rx) = mpsc::channel();
         Self {
             state,
             document: None,
@@ -258,6 +316,12 @@ impl App {
             diagnostics: DiagnosticsView::default(),
             observer: None,
             sent_title: PRODUCT_NAME.to_owned(),
+            confirm: None,
+            saving: None,
+            save_tx,
+            save_rx,
+            quit_confirmed: false,
+            open_confirmed_for: None,
         }
     }
 
@@ -405,6 +469,230 @@ impl App {
                 let star = if document.is_dirty() { "*" } else { "" };
                 format!("{star}{} \u{2014} {PRODUCT_NAME}", document.origin.name)
             }
+        }
+    }
+
+    /// Crée un projet vide (R-032) : nom traduit « Projet1 », planifié
+    /// depuis le lundi qui suit « maintenant », 08:00 (hypothèse, voir
+    /// [`next_monday_morning`]). Ne demande aucune confirmation : passer
+    /// par [`Action::NewProject`] pour protéger un document modifié.
+    pub fn new_project(&mut self) {
+        let now = (self.env.now)();
+        let name = self.texts.get(TextId::NewProjectName);
+        let init = NewProject {
+            name: name.clone(),
+            anchor: AnchorSpec::Start(next_monday_morning(now)),
+            lang: Some(self.text_language()),
+        };
+        match Session::new_project(init, now) {
+            Ok(session) => {
+                let range = default_range(session.project(), session.schedule());
+                let loaded = LoadedDocument {
+                    session,
+                    import_diagnostics: Vec::new(),
+                    range: range.span,
+                    range_truncated: range.truncated,
+                };
+                let origin = DocOrigin {
+                    name,
+                    path: None,
+                    demo: false,
+                };
+                self.install(loaded, origin);
+            }
+            Err(error) => self.report_command_error(&error),
+        }
+    }
+
+    /// Un bandeau « Enregistrer les modifications ? » attend une réponse.
+    #[must_use]
+    pub const fn confirmation_pending(&self) -> bool {
+        self.confirm.is_some()
+    }
+
+    /// Un enregistrement est en cours.
+    #[must_use]
+    pub const fn is_saving(&self) -> bool {
+        self.saving.is_some()
+    }
+
+    /// Le document courant est modifié depuis son dernier enregistrement.
+    fn document_dirty(&self) -> bool {
+        self.document.as_ref().is_some_and(OpenDocument::is_dirty)
+    }
+
+    /// Demande une opération qui remplacerait le document : bandeau de
+    /// confirmation si le document est modifié, exécution sinon.
+    fn request(&mut self, pending: Pending, ctx: &egui::Context) {
+        if self.document_dirty() {
+            self.confirm = Some(pending);
+        } else {
+            self.perform(pending, ctx);
+        }
+    }
+
+    /// Exécute une opération confirmée (ou sans rien à perdre).
+    fn perform(&mut self, pending: Pending, ctx: &egui::Context) {
+        match pending {
+            Pending::Close => self.close_document(),
+            Pending::OpenDemo => self.open_demo(),
+            Pending::OpenDialog => {
+                self.open_confirmed_for = self.document.as_ref().map(OpenDocument::cache_key);
+                self.open_dialog(ctx);
+            }
+            Pending::NewProject => self.new_project(),
+            Pending::Quit => {
+                self.quit_confirmed = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Pending::Install(boxed) => {
+                let (loaded, origin) = *boxed;
+                self.install(loaded, origin);
+            }
+        }
+    }
+
+    /// Réponse au bandeau de confirmation.
+    fn answer(&mut self, choice: ConfirmChoice, ctx: &egui::Context) {
+        let Some(pending) = self.confirm.take() else {
+            return;
+        };
+        match choice {
+            ConfirmChoice::Save => self.start_save(false, Some(pending), ctx),
+            ConfirmChoice::Discard => self.perform(pending, ctx),
+            ConfirmChoice::Cancel => {}
+        }
+    }
+
+    /// Ferme le document courant, sans confirmation.
+    fn close_document(&mut self) {
+        self.document = None;
+        self.rows = None;
+        self.diagnostics = DiagnosticsView::default();
+        self.selection = None;
+        self.view = self.fresh_view(false);
+        self.notify_observer();
+    }
+
+    /// Lance un enregistrement : octets produits ici (`save_bytes`, qui
+    /// n'altère rien), écrits par le [`FileService`]. Chemin connu et pas
+    /// « Enregistrer sous » : écriture directe ; sinon boîte de dialogue
+    /// (desktop) ou téléchargement (web). Un seul enregistrement à la fois
+    /// sur le desktop (deux écritures du même fichier pourraient finir dans
+    /// le désordre) ; sur le web, une demande restée sans réponse est
+    /// abandonnée, comme pour l'ouverture.
+    fn start_save(&mut self, save_as: bool, then: Option<Pending>, ctx: &egui::Context) {
+        if self.saving.is_some() {
+            if cfg!(target_arch = "wasm32") {
+                log::warn!("enregistrement précédent sans réponse : abandonné");
+                let (save_tx, save_rx) = mpsc::channel();
+                self.save_tx = save_tx;
+                self.save_rx = save_rx;
+                self.saving = None;
+            } else {
+                let text = self.texts.get(TextId::SaveInProgress);
+                self.push_message(Severity::Info, text);
+                return;
+            }
+        }
+        let Some(document) = &self.document else {
+            return;
+        };
+        let written = document
+            .session
+            .save_bytes(&planrs_mspdi::write::WriteOptions::default());
+        let target = match (&document.origin.path, save_as) {
+            (Some(path), false) => SaveTarget::Path(path.clone()),
+            _ => SaveTarget::Dialog {
+                suggested_name: suggested_file_name(&document.origin.name),
+                title: self.texts.get(TextId::DialogSaveTitle),
+                filter: self.texts.get(TextId::FileFilterMspdi),
+            },
+        };
+        self.saving = Some(SaveJob {
+            key: document.cache_key(),
+            then,
+            adjusted: written.diagnostics.len(),
+        });
+        let request = SaveRequest {
+            bytes: written.xml,
+            target,
+            language: self.texts.language(),
+        };
+        self.env.files.save(ctx, request, self.save_tx.clone());
+    }
+
+    /// Relève les résultats d'enregistrement arrivés depuis l'image
+    /// précédente.
+    fn poll_save(&mut self, ctx: &egui::Context) {
+        while let Ok(event) = self.save_rx.try_recv() {
+            let Some(job) = self.saving.take() else {
+                continue;
+            };
+            match event {
+                // Annulé : l'opération suspendue est abandonnée, le
+                // document reste modifié.
+                SaveEvent::Cancelled => {}
+                SaveEvent::Failed(detail) => {
+                    let text = self
+                        .texts
+                        .get_args(TextId::SaveErrorWrite, &[("detail", Arg::Str(detail.into()))]);
+                    self.push_titled(Severity::Error, Some(TextId::SaveErrorTitle), text);
+                }
+                SaveEvent::Saved { name, path } => self.finish_save(job, name, path, ctx),
+            }
+        }
+    }
+
+    /// Enregistrement réussi : nouvelle origine, `mark_saved` si le document
+    /// est resté celui dont les octets ont été écrits, puis opération
+    /// suspendue éventuelle. Un document fermé ou remplacé entre-temps
+    /// n'est pas touché.
+    fn finish_save(&mut self, job: SaveJob, name: String, path: Option<String>, ctx: &egui::Context) {
+        let Some(document) = &mut self.document else {
+            return;
+        };
+        if document.opening != job.key.0 {
+            return;
+        }
+        document.set_origin(DocOrigin {
+            name,
+            path,
+            demo: false,
+        });
+        let saved = document.generation() == job.key.1;
+        if saved {
+            document.session.mark_saved();
+        }
+        self.clear_titled(TextId::SaveErrorTitle);
+        if job.adjusted > 0 {
+            let count = i64::try_from(job.adjusted).unwrap_or(i64::MAX);
+            let text = self
+                .texts
+                .get_args(TextId::SaveAdjusted, &[("count", Arg::Count(count))]);
+            self.push_message(Severity::Info, text);
+        }
+        self.notify_observer();
+        if saved && let Some(pending) = job.then {
+            self.perform(pending, ctx);
+        }
+    }
+
+    /// Fermeture de la fenêtre demandée (desktop) : annulée si le document
+    /// est modifié (bandeau de confirmation) ou si un enregistrement est en
+    /// cours (la fenêtre se ferme quand il réussit).
+    fn guard_close(&mut self, ctx: &egui::Context) {
+        if self.quit_confirmed || !ctx.input(|input| input.viewport().close_requested()) {
+            return;
+        }
+        if let Some(job) = &mut self.saving {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            if job.then.is_none() {
+                job.then = Some(Pending::Quit);
+            }
+        } else if self.document_dirty() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.confirm = Some(Pending::Quit);
         }
     }
 
@@ -573,7 +861,19 @@ impl App {
             match event {
                 OpenEvent::Cancelled => {}
                 OpenEvent::Opened { origin, result } => match result {
-                    Ok(loaded) => self.install(loaded, origin),
+                    Ok(loaded) => {
+                        // Le document courant a été modifié depuis la
+                        // demande (ou la confirmation) : nouvelle
+                        // confirmation avant de le remplacer.
+                        let confirmed = self.document.as_ref().is_none_or(|document| {
+                            !document.is_dirty() || Some(document.cache_key()) == self.open_confirmed_for
+                        });
+                        if confirmed {
+                            self.install(loaded, origin);
+                        } else {
+                            self.confirm = Some(Pending::Install(Box::new((loaded, origin))));
+                        }
+                    }
                     Err(error) => self.report_open_error(&error),
                 },
             }
@@ -693,16 +993,13 @@ impl App {
     /// Réducteur : applique une action.
     fn apply(&mut self, action: Action, ctx: &egui::Context) {
         match action {
-            Action::OpenDemo => self.open_demo(),
-            Action::OpenDialog => self.open_dialog(ctx),
-            Action::CloseDocument => {
-                self.document = None;
-                self.rows = None;
-                self.diagnostics = DiagnosticsView::default();
-                self.selection = None;
-                self.view = self.fresh_view(false);
-                self.notify_observer();
-            }
+            Action::OpenDemo => self.request(Pending::OpenDemo, ctx),
+            Action::OpenDialog => self.request(Pending::OpenDialog, ctx),
+            Action::CloseDocument => self.request(Pending::Close, ctx),
+            Action::NewProject => self.request(Pending::NewProject, ctx),
+            Action::Save => self.start_save(false, None, ctx),
+            Action::SaveAs => self.start_save(true, None, ctx),
+            Action::Confirm(choice) => self.answer(choice, ctx),
             Action::Select(selection) => self.selection = selection,
             Action::SetLanguage(language) => {
                 self.state.language = language;
@@ -791,6 +1088,8 @@ impl App {
     pub(crate) fn show(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.poll_io();
+        self.poll_save(&ctx);
+        self.guard_close(&ctx);
         self.apply_theme(&ctx);
         self.apply_language();
         let palette = Palette::for_theme(ctx.theme());
@@ -800,6 +1099,13 @@ impl App {
         // widget.
         crate::keymap::dispatch(&ctx, self.document.is_some(), &mut actions);
         let mut stats = FrameStats::default();
+        // Nom du document du bandeau de confirmation, s'il y en a un.
+        let confirm_name = self.confirm.as_ref().map(|_| {
+            self.document
+                .as_ref()
+                .map(|document| document.origin.name.clone())
+                .unwrap_or_default()
+        });
         {
             // Champs disjoints : le contexte d'image emprunte l'état en
             // lecture, la vue transitoire est empruntée à part.
@@ -818,6 +1124,7 @@ impl App {
             view::chrome::menu_bar(ui, &mut fc);
             view::chrome::toolbar(ui, &mut fc);
             view::chrome::status_bar(ui, &mut fc, &self.messages);
+            view::chrome::confirm_banner(ui, &mut fc, confirm_name.as_deref());
             if self.state.diagnostics_open {
                 view::diagnostics::panel(ui, &mut fc);
             }
@@ -854,6 +1161,30 @@ impl App {
             self.sent_title = title;
         }
     }
+}
+
+/// Début d'un projet neuf : le lundi strictement après le jour de `now`,
+/// à 08:00 (hypothèse : début de journée du calendrier Standard ; MS
+/// Project propose la date du jour). Repli sur `now` hors du domaine des
+/// dates.
+#[must_use]
+pub fn next_monday_morning(now: Moment) -> Moment {
+    let day = now.day();
+    let ahead = match day.weekday() {
+        Weekday::Sunday => 1,
+        Weekday::Monday => 7,
+        Weekday::Tuesday => 6,
+        Weekday::Wednesday => 5,
+        Weekday::Thursday => 4,
+        Weekday::Friday => 3,
+        Weekday::Saturday => 2,
+    };
+    // 480 minutes : 08:00.
+    day.checked_add_days(ahead)
+        .ok()
+        .zip(TimeOfDay::new(480).ok())
+        .and_then(|(monday, morning)| Moment::at(monday, morning).ok())
+        .unwrap_or(now)
 }
 
 /// Nombre de jours d'une plage (0 si vide ou inversée).
@@ -1021,6 +1352,25 @@ mod tests {
         app.dispatch(Action::CloseDocument);
         frame(&ctx, &mut app);
         assert_eq!(app.diagnostics_view().entries.len(), 0);
+    }
+
+    /// Projet neuf : lundi strictement suivant, 08:00.
+    #[test]
+    fn next_monday_morning_is_strictly_after() {
+        let cases = [
+            ("2027-01-15T08:00", "2027-01-18T08:00"), // vendredi
+            ("2027-01-17T23:59", "2027-01-18T08:00"), // dimanche
+            ("2027-01-18T07:00", "2027-01-25T08:00"), // lundi
+            ("2027-01-16T12:00", "2027-01-18T08:00"), // samedi
+        ];
+        for (now, expected) in cases {
+            let now: Moment = now.parse().unwrap();
+            assert_eq!(
+                super::next_monday_morning(now),
+                expected.parse().unwrap(),
+                "{now}"
+            );
+        }
     }
 
     #[test]

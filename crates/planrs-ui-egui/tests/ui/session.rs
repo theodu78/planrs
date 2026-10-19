@@ -212,6 +212,32 @@ fn check_keymap_entry(i: usize) {
                 harness.state().messages()
             );
         }
+        Binding::Command("project.new") => {
+            let mut harness = harness();
+            harness.run();
+            press(&mut harness, i);
+            let document = harness.state().document.as_ref().expect("projet créé");
+            assert_eq!(document.project().tasks.len(), 0);
+        }
+        Binding::Command("project.save") => {
+            let mut sim = crate::files::sim(crate::files::SaveReply::Ok);
+            open_demo(&mut sim.harness);
+            crate::files::edit_first_leaf(&mut sim.harness, "17j");
+            press(&mut sim.harness, i);
+            assert_eq!(sim.requests.borrow().len(), 1);
+            assert!(!sim.harness.state().document.as_ref().unwrap().is_dirty());
+        }
+        Binding::Ui(UiBinding::SaveAs) => {
+            let mut sim = crate::files::sim(crate::files::SaveReply::Ok);
+            open_demo(&mut sim.harness);
+            press(&mut sim.harness, i);
+            let requests = sim.requests.borrow();
+            assert_eq!(requests.len(), 1);
+            assert!(matches!(
+                requests[0].target,
+                planrs_ui_egui::io::SaveTarget::Dialog { .. }
+            ));
+        }
         other => panic!("entrée {i} sans vérification : {other:?}"),
     }
 }
@@ -238,6 +264,9 @@ keymap_entry_tests! {
     ui_keymap_each_shortcut_dispatches_1 => 1,
     ui_keymap_each_shortcut_dispatches_2 => 2,
     ui_keymap_each_shortcut_dispatches_3 => 3,
+    ui_keymap_each_shortcut_dispatches_4 => 4,
+    ui_keymap_each_shortcut_dispatches_5 => 5,
+    ui_keymap_each_shortcut_dispatches_6 => 6,
 }
 
 /// Lot refusé : UID absent.

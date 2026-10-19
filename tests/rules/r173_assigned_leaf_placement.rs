@@ -235,7 +235,15 @@ fn r173_session_duration_follows_later_edits() {
         apply(&mut r, ops);
         assert_eq!(duration(&s, 1), expected, "édition {k}");
         assert_eq!(duration(&r, 1), duration(&s, 1), "édition {k}");
-        assert_eq!(s.project().assignments, r.project().assignments, "édition {k}");
+        // Reste des affectations dérivé à l'écriture (R-199) : relu égal au
+        // travail, laissé tel quel en session ; le reste est identique.
+        let mut relu = r.project().assignments.clone();
+        for o in s.project().assignments.iter() {
+            if let Some(a) = relu.get_mut(planrs_core::HasUid::uid(o)) {
+                a.remaining_work = o.remaining_work;
+            }
+        }
+        assert_eq!(s.project().assignments, relu, "édition {k}");
         if k == 2 {
             assert_eq!(units_work(&s, 1, 3), (10_000, 1_920));
         }

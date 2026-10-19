@@ -194,8 +194,10 @@ pub fn find_live_for(path: &Path) -> Option<Rendezvous> {
 ///
 /// Les fichiers sont lus dans l'ordre de leur nom. Un rendez-vous qui
 /// désigne `path` (comparé par chemin canonique) est sondé par un `hello`
-/// avec son jeton ; un échec le supprime (application morte ou rendez-vous
-/// périmé). Sont aussi supprimés : un fichier de version 1 illisible, et
+/// avec son jeton. Il n'est supprimé que sur une preuve de mort (jeton
+/// refusé, socket absente ou sans écouteur) ; un délai ou une connexion
+/// fermée sans réponse (application au maximum de ses connexions) le
+/// laissent en place et l'application est tenue pour vivante. Sont aussi supprimés : un fichier de version 1 illisible, et
 /// sous Unix un rendez-vous dont la socket n'existe plus.
 ///
 /// Windows (J4, hypothèse) : pas d'écouteur ; un rendez-vous est tenu pour
@@ -263,9 +265,31 @@ fn endpoint_gone(_r: &Rendezvous) -> bool {
     false
 }
 
+/// Vivant sauf preuve de mort : un `hello` réussi, ou un échec qui ne
+/// prouve rien (délai, connexion fermée sans réponse parce que
+/// l'application sert déjà son maximum de connexions, réponse illisible).
+/// Mort : jeton refusé (rendez-vous périmé : l'écouteur n'est plus celui
+/// qui l'a publié), socket absente ou sans écouteur (`ECONNREFUSED`).
 #[cfg(unix)]
 fn is_live(r: &Rendezvous, _file: &Path) -> bool {
-    probe(r).is_ok()
+    match probe(r) {
+        Ok(_) => true,
+        Err(ControlError::Refused(_)) => false,
+        Err(_) => !endpoint_dead(r),
+    }
+}
+
+/// Vrai si la socket du rendez-vous n'existe plus ou que personne n'y
+/// écoute. Une connexion acceptée puis fermée prouve un écouteur vivant.
+#[cfg(unix)]
+fn endpoint_dead(r: &Rendezvous) -> bool {
+    use std::io::ErrorKind;
+    use std::os::unix::net::UnixStream;
+
+    match UnixStream::connect(&r.endpoint) {
+        Ok(_) => false,
+        Err(e) => matches!(e.kind(), ErrorKind::NotFound | ErrorKind::ConnectionRefused),
+    }
 }
 
 #[cfg(not(unix))]

@@ -26,7 +26,7 @@
 
 - Canonicalise `path` (fichier absent ⇒ `None`), lit les `.json` du dossier dans l'ordre de leur nom (64 Kio au plus chacun).
 - Fichier de version 1 illisible : supprimé. Autre version, ou sans `v` : ignoré et **conservé** (appartient à une autre version de l'application). `.tmp` : ignoré.
-- Rendez-vous qui désigne `path` : sondé par `probe` (`hello` avec son jeton, délai 2 s). Réponse `ok` ⇒ rendu ; échec (socket absente, refus du jeton, délai) ⇒ fichier supprimé.
+- Rendez-vous qui désigne `path` : sondé par `probe` (`hello` avec son jeton, délai 2 s). Réponse `ok` ⇒ rendu. Fichier supprimé seulement sur une preuve de mort : refus du jeton (rendez-vous périmé), socket absente ou sans écouteur (`ECONNREFUSED`). Tout autre échec (délai, connexion fermée sans réponse parce que l'application sert déjà ses 8 connexions, réponse illisible) ⇒ application tenue pour vivante, rendez-vous gardé et rendu : la garde ADR-0002 n'est jamais levée par une application occupée (test `control_busy_app_kept_live`).
 - Rendez-vous d'un autre fichier : sous Unix, supprimé si sa socket n'existe plus (nettoyage au passage, sans connexion) ; sinon laissé.
 - **Windows (hypothèse J4, à remplacer en J7)** : pas d'écouteur (le named pipe demanderait un runtime côté interface) ; un rendez-vous est tenu pour vivant si son fichier a été écrit il y a moins de 24 h. Conséquence connue : une application plantée bloque son fichier jusqu'à 24 h, ou jusqu'à suppression manuelle du rendez-vous.
 

@@ -241,3 +241,10 @@ error-text-negative = Valeur négative : { $detail }
 error-text-out_of_range = Valeur hors limites : { $detail }
 error-text-too_long = Saisie trop longue : { $detail }
 error-text-unknown_unit = Unité inconnue : { $detail }
+
+## Édition des cellules (lot L12)
+
+blank-row-label = Ligne vide (nouvelle tâche)
+cell-edit-label = Saisie : { $column }
+edit-error-unknown-id = Aucune tâche d'ID { $id }
+edit-error-not-editable = Colonne calculée, non modifiable

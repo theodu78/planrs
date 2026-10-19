@@ -11,31 +11,90 @@
 //! L'onglet porte le titre de la fenêtre desktop (« *nom — planrs » si le
 //! document est modifié) : eframe web ignore `ViewportCommand::Title`, un
 //! observateur du document ([`web::TabObserver`]) pose `document.title`.
+//! Le même observateur tient un drapeau « modifié » ([`UnsavedFlag`]) : tant
+//! qu'il est levé, l'écouteur `beforeunload` demande confirmation avant de
+//! fermer ou de recharger l'onglet (relecture finale J4, F3).
 //!
 //! Compilée pour une cible native (ce que fait `cargo check --workspace`), le
 //! binaire se contente d'indiquer qu'il faut passer par trunk.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
+use planrs_ui_egui::{DocumentObserver, OpenDocument};
+
+/// Drapeau partagé « le document ouvert est modifié », lu par l'écouteur
+/// `beforeunload` et tenu par l'observateur du document.
+#[cfg_attr(
+    not(any(target_arch = "wasm32", test)),
+    allow(dead_code, reason = "utilisé par la seule cible wasm32 (et les tests)")
+)]
+#[derive(Clone, Debug, Default)]
+pub struct UnsavedFlag(Rc<Cell<bool>>);
+
+#[cfg_attr(
+    not(any(target_arch = "wasm32", test)),
+    allow(dead_code, reason = "utilisé par la seule cible wasm32 (et les tests)")
+)]
+impl UnsavedFlag {
+    /// Le document courant a des modifications non enregistrées.
+    #[must_use]
+    pub fn is_set(&self) -> bool {
+        self.0.get()
+    }
+}
+
+impl DocumentObserver for UnsavedFlag {
+    fn document_changed(&mut self, document: Option<&OpenDocument>) {
+        self.0.set(document.is_some_and(OpenDocument::is_dirty));
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 mod web {
+    use eframe::wasm_bindgen::closure::Closure;
     use eframe::wasm_bindgen::{JsCast as _, JsValue};
     use planrs_core::Moment;
     use planrs_ui_egui::app::window_title_for;
     use planrs_ui_egui::{DocumentObserver, Env, Language, OpenDocument, PlanrsApp, RfdFileService};
 
+    use super::UnsavedFlag;
+
     /// Identifiant du canevas déclaré dans `index.html`.
     const CANVAS_ID: &str = "planrs_canvas";
 
-    /// Observateur du document : titre de l'onglet tenu à jour (ouverture,
-    /// édition, enregistrement, fermeture).
+    /// Observateur du document : titre de l'onglet et drapeau « modifié »
+    /// tenus à jour (ouverture, édition, enregistrement, fermeture).
     pub struct TabObserver {
         /// Document HTML de la page.
         document: web_sys::Document,
+        /// Drapeau lu par l'écouteur `beforeunload`.
+        unsaved: UnsavedFlag,
     }
 
     impl DocumentObserver for TabObserver {
         fn document_changed(&mut self, document: Option<&OpenDocument>) {
             self.document.set_title(&window_title_for(document));
+            self.unsaved.document_changed(document);
         }
+    }
+
+    /// Écouteur `beforeunload` : fermer ou recharger l'onglet d'un document
+    /// modifié demande confirmation (boîte du navigateur). L'écouteur vit
+    /// autant que la page (`forget`).
+    fn guard_unload(window: &web_sys::Window, unsaved: UnsavedFlag) -> Result<(), JsValue> {
+        let listener = Closure::<dyn FnMut(web_sys::BeforeUnloadEvent)>::new(
+            move |event: web_sys::BeforeUnloadEvent| {
+                if unsaved.is_set() {
+                    event.prevent_default();
+                    // Navigateurs plus anciens : une valeur non vide.
+                    event.set_return_value(planrs_core::PRODUCT_NAME);
+                }
+            },
+        );
+        window.add_event_listener_with_callback("beforeunload", listener.as_ref().unchecked_ref())?;
+        listener.forget();
+        Ok(())
     }
 
     /// Point d'entrée appelé par la colle wasm-bindgen au chargement.
@@ -75,12 +134,16 @@ mod web {
     }
 
     async fn start() -> Result<(), JsValue> {
-        let document = web_sys::window()
-            .and_then(|window| window.document())
+        let window = web_sys::window().ok_or_else(|| JsValue::from_str("window introuvable"))?;
+        let document = window
+            .document()
             .ok_or_else(|| JsValue::from_str("document introuvable"))?;
         document.set_title(planrs_core::PRODUCT_NAME);
+        let unsaved = UnsavedFlag::default();
+        guard_unload(&window, unsaved.clone())?;
         let tab = TabObserver {
             document: document.clone(),
+            unsaved,
         };
         let canvas = document
             .get_element_by_id(CANVAS_ID)
@@ -118,4 +181,41 @@ fn main() -> std::process::ExitCode {
         planrs_core::PRODUCT_NAME
     );
     std::process::ExitCode::FAILURE
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    reason = "tests : un échec doit s'arrêter net et lisiblement"
+)]
+mod tests {
+    use planrs_automation::Batch;
+    use planrs_ui_egui::{App, EditOrigin, Env};
+
+    use super::UnsavedFlag;
+
+    /// Relecture finale J4, F3 : le drapeau lu par `beforeunload` suit le
+    /// document (levé par une édition, baissé par l'annulation et la
+    /// fermeture).
+    #[test]
+    fn web_unsaved_flag_follows_document() {
+        let flag = UnsavedFlag::default();
+        let mut app = App::new(
+            planrs_ui_egui::UiState::default(),
+            Env::fixed("2027-01-15T08:00".parse().unwrap()),
+        );
+        app.set_observer(Box::new(flag.clone()));
+        app.open_demo();
+        assert!(!flag.is_set());
+        let batch =
+            Batch::from_json_str(r#"{"format_version":1,"ops":[{"op":"task.update","uid":3,"name":"X"}]}"#)
+                .unwrap();
+        app.execute(&batch, EditOrigin::User).unwrap();
+        assert!(flag.is_set());
+        app.undo().unwrap();
+        assert!(!flag.is_set());
+        app.execute(&batch, EditOrigin::User).unwrap();
+        app.open_demo();
+        assert!(!flag.is_set());
+    }
 }

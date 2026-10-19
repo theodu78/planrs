@@ -1167,6 +1167,42 @@ Règles J5 (ADR-0013, cahier `docs/plans/j5.md` § 2.3) : placement affectation 
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r183_manual_inactive_assigned.rs` (`r183_manual_effective_units`, `r183_manual_summary_compressed`, `r183_inactive_no_assignment_schedule`).
 
+## R-184 — Cumuls du travail
+- **Formulation** : le moteur calcule le travail après le placement (lot L5).
+  - Feuille : `TaskSchedule.work` = Σ W de ses affectations à des ressources de travail connues (affectation fictive −65 535, ressources matérielles, de coût ou inconnues exclues).
+  - Récapitulative : Σ du travail de ses enfants + Σ W de ses propres affectations de travail.
+  - Récapitulative du projet (UID 0) : Σ des tâches de premier niveau.
+  - Ressource : `ResourceLoad.work` = Σ W de ses affectations des tâches actives (ressource matérielle : quantités, R-185 ; de coût : 0). Une charge par ressource du projet, UID 0 exclu.
+  - Lu sur les affectations du modèle (une tâche planifiée dégradée garde son travail) ; somme saturée au plafond de `Work` (règle 10).
+  - Exemples : A4 UID 4, 40 h à 100 % + 20 h à 50 % ⇒ 60 h ; récapitulative d'enfants 8 h + 8 h portant R3 20 h et un matériel ⇒ 36 h (A6 UID 33 : 352 + 200 + 240 = 792 h, matériel R10 exclu) ; A6 R3 = 80 h (mesuré).
+- **Source** : O25, O28.
+- **Statut** : `hypothèse` (A6 R3 80 h reproduit).
+- **Tests** : `tests/rules/r184_work_rollups.rs` (`r184_leaf_sum`, `r184_summary_includes_own_assignments`, `r184_placeholder_excluded`).
+
+## R-185 — Ressources matérielles et de coût
+- **Formulation** : la quantité d'une affectation matérielle est son travail en heures (PT3H = 3, O30) ; elle ne place rien (R-176), n'entre ni dans le travail de la tâche (R-184) ni dans la surutilisation (R-187) ; sa ressource cumule les quantités (`ResourceLoad.work`), pic 0. Une ressource de coût n'a ni travail ni unités (`work` 0, pic 0). Exemple : A 2 j, R1 16 h, matériel quantité 3 sur A et 10 000 sur B en parallèle ⇒ dates de A inchangées, A 16 h, B 0, matériel 600 180 min, non surutilisé.
+- **Source** : S5 ; O30.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r185_material_cost_resources.rs` (`r185_material_quantity_no_effect`).
+
+## R-186 — Surutilisation : définition, débit effectif
+- **Formulation** :
+  - Débit d'une affectation (`effective_units`) = `round_div(W × 10 000, temps ouvré du span)` sur son échelle effective (R-171) quand `d_a` ne vient pas des unités : tâche à durée fixe, unités nulles (R-170, R-181) ; tâche manuelle : R-183 ; sinon les unités saisies (= W ÷ d_a à l'arrondi près). Temps ouvré nul : unités gardées.
+  - Charge de la ressource r à l'instant t = Σ des débits de ses affectations dont le span contient t et dont l'échelle effective est ouvrée à t.
+  - Surutilisée ⇔ charge > `max_units` sur au moins une minute. `overloads` : intervalles maximaux de minutes surchargées, fusionnés quand ils se touchent, avec leur pic, dans l'ordre, au plus 1 000 (`truncated` au-delà) ; `peak` : maximum de la charge ; diagnostic `resource.overallocated { resource, from, to, peak }` sur le premier intervalle (avertissement, un par ressource).
+  - Calcul : balayage des bornes des spans ; sur chaque intervalle élémentaire, débits regroupés par échelle. Une échelle : la charge vaut la somme sur ses minutes ouvrées (plages énumérées seulement pour sortir les intervalles) ; plusieurs : plages ouvrées énumérées si la somme dépasse la capacité ou le pic courant. Au plus 2 000 000 plages par calcul, sinon `truncated` (règle 10).
+  - Une affectation seule au-delà de la capacité : toutes les plages ouvrées de son span (pause de midi et nuits les séparent, comme pour deux affectations).
+  - Exemples (S) : R 100 % sur A lun-mer et B mar ⇒ mar [08:00, 12:00) et [13:00, 17:00), pic 200 % ; A seule à 150 % sur lun-mar ⇒ 4 plages, pic 150 % ; A lun 08:00-17:00 et B 2 h depuis lun 15:00 ⇒ [15:00, 17:00) (comme A7 R3, ven 18:00-20:00) ; A à durée fixe 2 j, 8 h saisies à 100 % ⇒ débit 50 %, avec B 2 j à 50 % : pic 100 %, non surutilisée.
+- **Source** : support.microsoft.com, « Max Units (resource field) » (S47 : « The default for the Max Units field is 100 percent. » ; « the resource is overallocated, and the Overallocated field is set to Yes. ») ; O31 ; débit effectif et seuil instantané (à la minute) : hypothèse (la page « Leveling options », base « jour par jour », n'a pas été lue).
+- **Statut** : `hypothèse` ; A7 indicatif : les 4 ressources surutilisées, comme `OverAllocated` (O31).
+- **Tests** : `tests/rules/r186_overallocation.rs` (`r186_parallel_tasks_overallocated`, `r186_single_over_capacity`, `r186_intraday_overlap`, `r186_fixed_duration_effective_units`) ; P36 : `crates/planrs-core/tests/load_properties.rs` (`r186_p36_matches_minute_oracle`, `r186_p36_removal_never_creates`).
+
+## R-187 — Surutilisation : périmètre, capacité, disponibilités
+- **Formulation** : la surutilisation porte sur les ressources de travail actives, génériques comprises ; ressources inactives, matérielles, de coût, UID 0, affectation fictive et ressources inconnues exclues ; seules les affectations des tâches actives comptent (R-062, R-183), manuelles et récapitulatives comprises. Capacité = `max_units`, constante. `AvailabilityPeriods` relues (gardées en `Extras`, clé `AvailabilityPeriods`) : ignorées, `resource.availability_ignored` (info, une fois par ressource contrôlée). Exemple : R1 inactive sur deux tâches parallèles ⇒ non surutilisée (travail 16 h compté) ; R2 sur A et sur C inactive en parallèle ⇒ non surutilisée.
+- **Source** : S47 ; support.microsoft.com, « Available From (resource field) » (S49 : « a resource can be scheduled for work beyond the availability dates. » « However, in this case, Project indicates that the resource is overallocated. » : la disponibilité datée devrait compter pour la surutilisation, écart assumé, ADR-0013 D6) ; O31 (A4 et A6 : `OverAllocated` 0 sur leurs 14 ressources : aucun faux positif admis).
+- **Statut** : `hypothèse` ; A4 et A6 sans surutilisation (mesuré, lot L5).
+- **Tests** : `tests/rules/r187_overallocation_scope.rs` (`r187_inactive_excluded`, `r187_availability_ignored_diag`, `r187_corpus_no_false_positive`).
+
 ## R-189 — Matrice des types de tâche
 - **Formulation** : à l'édition, la grandeur recalculée dépend du type (fonction pure `resource::edit::apply`, appelée par les seules commandes ; le recalcul du planning ne rééquilibre jamais). Unités fixes : unités → durée (travail gardé), durée → travail, travail → durée. Durée fixe : unités → travail, durée → travail, travail → unités. Travail fixe : unités → durée, durée → unités, travail → durée. Avec plusieurs affectations, la grandeur recalculée l'est sur chacune ; une durée recalculée est le plus grand des d_a (R-170) ; une durée gardée ou saisie est rendue telle quelle. Changer de type ou de pilotage ne recalcule rien. Exemples (une affectation à 100 %, 2 j = 960 min, 16 h) : unités fixes : 50 % ⇒ 4 j, 3 j ⇒ 24 h, 24 h ⇒ 3 j ; durée fixe : 50 % ⇒ 8 h, 3 j ⇒ 24 h, 24 h ⇒ 150 % ; travail fixe : 200 % ⇒ 1 j, 4 j ⇒ 50 %, 24 h ⇒ 3 j ; durée fixe, R1 100 % et R2 50 %, durée → 3 j ⇒ 1 440 et 720.
 - **Source** : support.microsoft.com, « Change the task type for more accurate scheduling » (S41, tableau des trois types) ; durée = max des d_a, multi-affectations : hypothèse.

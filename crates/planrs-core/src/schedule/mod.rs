@@ -29,7 +29,7 @@
 mod backward;
 mod constraint;
 mod forward;
-mod load;
+pub(crate) mod load;
 mod network;
 mod order;
 mod placement;
@@ -528,7 +528,11 @@ fn run(project: &Project, limits: Limits, strategy: Strategy) -> Schedule {
     calc.summary_late();
     calc.slack();
     calc.check_constraints();
-    calc.output(&order)
+    let mut out = calc.output(&order);
+    // J5 (lot L5) : travail, débits, charges et surutilisation (R-184 à
+    // R-187).
+    load::apply(project, &net, (&set, project_cal), &mut out);
+    out
 }
 
 /// R-113 : calendrier de base du calendrier du projet quand celui-ci est

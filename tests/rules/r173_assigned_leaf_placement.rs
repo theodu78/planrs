@@ -6,7 +6,7 @@
 //! intervalles travaillés (et non l'enveloppe). Source : S45, S14 (« total
 //! span of active working time »), S8 ; O23, O26.
 
-use planrs_core::{LinkType, Minutes, TaskSchedule};
+use planrs_core::{LinkType, Minutes, TaskSchedule, Work};
 use planrs_tests::moment;
 use planrs_tests::net::{Net, lag_w};
 
@@ -48,9 +48,11 @@ fn r173_two_finishes() {
     assert_eq!(placed(&run, 1).span.start, moment("2026-10-20T08:00"));
 }
 
-/// Champs de date et de marge d'une tâche planifiée.
+/// Champs de date et de marge d'une tâche planifiée (travail, R-184,
+/// retiré).
 fn dates(s: &TaskSchedule) -> (TaskSchedule, Minutes) {
     let mut c = *s;
+    c.work = Work::ZERO;
     c.driver = planrs_core::Driver::ProjectStart;
     c.late_driver = planrs_core::LateDriver::ProjectFinish;
     (c, s.duration)

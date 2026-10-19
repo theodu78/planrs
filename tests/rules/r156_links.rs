@@ -202,20 +202,25 @@ fn r156_unknown_tasks_refused() {
 
 #[test]
 fn r161_link_change_drops_leveling_extras() {
-    // R-161 (liens) : `LevelingDelay` du successeur jeté, effet signalé ;
-    // une clé sans rapport (`Hyperlink`) est gardée.
+    // R-161 (liens) : `PreLeveledStart` du successeur jeté, effet signalé ;
+    // une clé sans rapport (`Hyperlink`) est gardée, `LevelingDelay` aussi
+    // (R-161 amendée en J5 : entrée du modèle).
     let mut p = two(1);
     let extra = |key: &str| ExtraEntry {
         origin: "mspdi".to_owned(),
         key: key.to_owned(),
         payload: format!("<{key}>4800</{key}>"),
     };
-    p.tasks.get_mut(TaskUid::new(2)).unwrap().extras.0 = vec![extra("Hyperlink"), extra("LevelingDelay")];
+    p.tasks.get_mut(TaskUid::new(2)).unwrap().extras.0 = vec![
+        extra("Hyperlink"),
+        extra("LevelingDelay"),
+        extra("PreLeveledStart"),
+    ];
     let mut s = session(p);
     let o = run(&mut s, r#"{"op":"link.add","pred":1,"succ":2}"#).unwrap();
     assert!(o.side_effects.contains(&SideEffect::ExtrasDropped {
         subject: Subject::Task(TaskUid::new(2)),
-        keys: vec!["LevelingDelay".to_owned()],
+        keys: vec!["PreLeveledStart".to_owned()],
     }));
     let keys: Vec<&str> = s
         .project()
@@ -227,7 +232,7 @@ fn r161_link_change_drops_leveling_extras() {
         .iter()
         .map(|e| e.key.as_str())
         .collect();
-    assert_eq!(keys, ["Hyperlink"]);
+    assert_eq!(keys, ["Hyperlink", "LevelingDelay"]);
     // Plus rien à jeter : aucun effet.
     let o = run(&mut s, r#"{"op":"link.update","pred":1,"succ":2,"kind":"ss"}"#).unwrap();
     assert!(

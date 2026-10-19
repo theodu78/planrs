@@ -309,11 +309,11 @@ fn kind_message(kind: &CommandErrorKind, lang: Language) -> String {
         K::UnknownLabel(l) => {
             if fr {
                 format!(
-                    "étiquette « {l} » inconnue : elle doit être créée par un task.add antérieur du même lot (\"as\")"
+                    "étiquette « {l} » inconnue : elle doit être créée par un task.add ou un resource.add antérieur du même lot (\"as\")"
                 )
             } else {
                 format!(
-                    "unknown label \u{201c}{l}\u{201d}: it must be created by an earlier task.add of the same batch (\"as\")"
+                    "unknown label \u{201c}{l}\u{201d}: it must be created by an earlier task.add or resource.add of the same batch (\"as\")"
                 )
             }
         }

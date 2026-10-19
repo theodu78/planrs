@@ -8,8 +8,15 @@
 //! change ce dont ces dates dépendent, et sont alors jetés, chaque jet
 //! signalé par `SideEffect::ExtrasDropped`. Table figée par un test contre
 //! `planrs_mspdi::schema`.
+//!
+//! R-161 amendée (J5, lot L7) : `LevelingDelay` et `LevelingDelayFormat`
+//! sortent de la table. Le retard de nivellement est une entrée du modèle
+//! (ADR-0013 D4), gardé à l'édition comme MS Project garde un retard posé ;
+//! un `Extras` hérité d'avant J5 l'est aussi (l'écrivain le réécrit tant que
+//! le modèle n'a pas de retard, R-198). Une affectation dont les unités, le
+//! travail, le délai ou la ressource changent perd sa répartition.
 
-use planrs_core::{Subject, TaskUid};
+use planrs_core::{AssignmentUid, Subject, TaskUid};
 use planrs_mspdi::extras::ORIGIN;
 
 use super::exec::Ctx;
@@ -34,30 +41,40 @@ pub(crate) enum TaskChange {
     Links,
     /// Place dans la hiérarchie (niveau, parent, récapitulative ou non).
     Outline,
+    /// Type de tâche (la durée fixe place sur la durée de la tâche, R-170).
+    Type,
+    /// Travail total de la tâche (R-194, R-197).
+    Work,
+    /// Pilotage par l'effort : sans effet sur les dates.
+    EffortDriven,
 }
 
 /// Éléments de tâche MSPDI qui dépendent des dates calculées : répartition
-/// (`TimephasedData`), nivellement (`LevelingDelay`, `LevelingDelayFormat`,
-/// `PreLeveledStart`, `PreLeveledFinish`), interruption (`Resume`, `Stop`).
+/// (`TimephasedData`), dates d'avant nivellement (`PreLeveledStart`,
+/// `PreLeveledFinish`), interruption (`Resume`, `Stop`). `LevelingDelay` et
+/// `LevelingDelayFormat` n'en sont plus (R-161 amendée, J5) : entrées du
+/// modèle.
 pub(crate) const TASK_SCHEDULE_KEYS: &[&str] = &[
     "TimephasedData",
-    "LevelingDelay",
-    "LevelingDelayFormat",
     "PreLeveledStart",
     "PreLeveledFinish",
     "Resume",
     "Stop",
 ];
 
-/// Éléments d'affectation MSPDI jetés quand la durée de sa tâche change ou
-/// qu'un calendrier qui la planifie change (R-165) : répartition.
+/// Éléments d'affectation MSPDI jetés quand la durée de sa tâche change,
+/// qu'un calendrier qui la planifie change (R-165), ou que ses unités, son
+/// travail, son délai ou sa ressource changent (R-161 amendée, J5) :
+/// répartition.
 pub(crate) const ASSIGNMENT_SCHEDULE_KEYS: &[&str] = &["TimephasedData"];
 
 /// R-161 : clés d'`Extras` de la tâche jetées quand `change` est modifié.
 pub(crate) const fn task_keys(change: TaskChange) -> &'static [&'static str] {
     match change {
-        TaskChange::Name | TaskChange::Notes => &[],
+        TaskChange::Name | TaskChange::Notes | TaskChange::EffortDriven => &[],
         TaskChange::Duration
+        | TaskChange::Type
+        | TaskChange::Work
         | TaskChange::Constraint
         | TaskChange::Milestone
         | TaskChange::Active
@@ -114,16 +131,23 @@ impl Ctx<'_> {
             .map(planrs_core::HasUid::uid)
             .collect();
         for a in touched {
-            let Some(assignment) = self.project.assignments.get_mut(a) else {
-                continue;
-            };
-            let dropped = drop_keys(&mut assignment.extras, ASSIGNMENT_SCHEDULE_KEYS);
-            if !dropped.is_empty() {
-                self.effects.push(SideEffect::ExtrasDropped {
-                    subject: Subject::Assignment(a),
-                    keys: dropped,
-                });
-            }
+            self.drop_one_assignment_extras(a);
+        }
+    }
+
+    /// R-161 (amendée, J5) : les unités, le travail, le délai ou la
+    /// ressource de l'affectation `uid` ont changé ; jette sa répartition et
+    /// signale le jet ; sans effet si rien n'est jeté.
+    pub(crate) fn drop_one_assignment_extras(&mut self, uid: AssignmentUid) {
+        let Some(assignment) = self.project.assignments.get_mut(uid) else {
+            return;
+        };
+        let dropped = drop_keys(&mut assignment.extras, ASSIGNMENT_SCHEDULE_KEYS);
+        if !dropped.is_empty() {
+            self.effects.push(SideEffect::ExtrasDropped {
+                subject: Subject::Assignment(uid),
+                keys: dropped,
+            });
         }
     }
 }
@@ -150,7 +174,10 @@ mod tests {
         // Table figée.
         assert_eq!(task_keys(TaskChange::Name), [] as [&str; 0]);
         assert_eq!(task_keys(TaskChange::Notes), [] as [&str; 0]);
+        assert_eq!(task_keys(TaskChange::EffortDriven), [] as [&str; 0]);
         for c in [
+            TaskChange::Type,
+            TaskChange::Work,
             TaskChange::Duration,
             TaskChange::Constraint,
             TaskChange::Milestone,
@@ -164,8 +191,6 @@ mod tests {
             TASK_SCHEDULE_KEYS,
             [
                 "TimephasedData",
-                "LevelingDelay",
-                "LevelingDelayFormat",
                 "PreLeveledStart",
                 "PreLeveledFinish",
                 "Resume",

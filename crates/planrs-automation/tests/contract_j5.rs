@@ -1,8 +1,9 @@
 //! Contrat J5 (lot L0, ADR-0013) : types, squelettes et registre. Les
-//! commandes nouvelles se lisent et se relisent, sont refusées
-//! `command.not_yet_available` sans toucher la session ; les champs
-//! étendus aussi ; les huit entrées J5 du registre sont réservées et non
-//! listées ; les types du cœur se construisent et répondent sans paniquer.
+//! commandes nouvelles se lisent et se relisent ; exécutées dans un lot
+//! depuis le lot L7 (R-195 à R-197), elles restent refusées
+//! `command.not_yet_available` par l'espace de travail tant que les huit
+//! entrées J5 du registre sont réservées et non listées (lot L8) ; les
+//! types du cœur se construisent et répondent sans paniquer.
 
 #![allow(
     clippy::unwrap_used,
@@ -83,12 +84,18 @@ fn contract_compiles() {
         let again: Batch = serde_json::from_value(serde_json::to_value(&batch).unwrap()).unwrap();
         assert_eq!(again, batch, "aller-retour {i}");
         assert_eq!(batch.ops[0].id(), op["op"].as_str().unwrap());
-        for mode in [ApplyMode::DryRun, ApplyMode::Commit] {
-            let err = s.apply(&batch, mode).unwrap_err();
-            assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{i}");
-            assert_eq!(err.op_index, Some(0));
-        }
     }
+    // Lot L7 : exécutées dans un lot (simulé ici, la session reste
+    // intacte) ; la ressource 4 n'existe pas.
+    let batch = Batch::from_json(json!({ "format_version": 1, "ops": [ops[2]] })).unwrap();
+    assert_eq!(
+        s.apply(&batch, ApplyMode::DryRun).unwrap_err().code,
+        codes::RESOURCE_NOT_FOUND
+    );
+    let batch = Batch::from_json(json!({ "format_version": 1, "ops": [ops[0], ops[1], ops[3]] })).unwrap();
+    let o = s.apply(&batch, ApplyMode::DryRun).unwrap();
+    assert!(!o.committed);
+    assert_eq!(o.created_resources, [ResourceUid::new(1)]);
     let batch = Batch::from_json(json!({ "format_version": 1, "ops": [ops[0]] })).unwrap();
     let Command::ResourceAdd(add) = &batch.ops[0] else {
         panic!("resource.add attendu");
@@ -97,35 +104,26 @@ fn contract_compiles() {
     assert_eq!(add.kind, Some(ResourceKindJson::Work));
     assert_eq!(add.calendar, Some(ResourceCalendarJson::Own));
 
-    // Champs étendus : refusés sur le champ posé.
-    for (op, field) in [
-        (
-            json!({"op": "task.update", "uid": 1, "type": "fixed_work"}),
-            "type",
-        ),
-        (
-            json!({"op": "task.update", "uid": 1, "effort_driven": true}),
-            "effort_driven",
-        ),
-        (
-            json!({"op": "task.update", "uid": 1, "work": {"text": "16h"}}),
-            "work",
-        ),
-        (
-            json!({"op": "project.set_info", "default_task_type": "fixed_duration"}),
-            "default_task_type",
-        ),
-        (
-            json!({"op": "project.set_info", "new_tasks_effort_driven": false}),
-            "new_tasks_effort_driven",
-        ),
+    // Champs étendus (lot L7) : exécutés, simulés ici ; le travail saisi
+    // sur une tâche sans affectation de travail est refusé sur son champ.
+    for op in [
+        json!({"op": "task.update", "uid": 1, "type": "fixed_work"}),
+        json!({"op": "task.update", "uid": 1, "effort_driven": true}),
+        json!({"op": "project.set_info", "default_task_type": "fixed_duration"}),
+        json!({"op": "project.set_info", "new_tasks_effort_driven": false}),
     ] {
         let batch = Batch::from_json(json!({ "format_version": 1, "ops": [op] })).unwrap();
-        let err = s.apply(&batch, ApplyMode::Commit).unwrap_err();
-        assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{field}");
-        assert_eq!(err.field.as_deref(), Some(field));
-        assert_ne!(err.message(Language::Fr), err.message(Language::En));
+        assert!(!s.apply(&batch, ApplyMode::DryRun).unwrap().committed, "{op}");
     }
+    let batch = Batch::from_json(json!({
+        "format_version": 1,
+        "ops": [{"op": "task.update", "uid": 1, "work": {"text": "16h"}}]
+    }))
+    .unwrap();
+    let err = s.apply(&batch, ApplyMode::Commit).unwrap_err();
+    assert_eq!(err.code, codes::PARAM_INVALID);
+    assert_eq!(err.field.as_deref(), Some("work"));
+    assert_ne!(err.message(Language::Fr), err.message(Language::En));
     let batch = Batch::from_json(json!({
         "format_version": 1,
         "ops": [{"op": "task.update", "uid": 1, "type": "fixed_units"}]

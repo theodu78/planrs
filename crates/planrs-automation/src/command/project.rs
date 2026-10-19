@@ -3,11 +3,11 @@
 //! Aucune n'est une règle de calcul : elles posent des entrées du moteur
 //! (sens et date pilote, date d'état), que le recalcul du lot exploite.
 
-use planrs_core::{ScheduleAnchor, Subject};
+use planrs_core::{ScheduleAnchor, Subject, TaskType};
 
 use super::exec::Ctx;
 use super::{AnchorSpec, Patch, ProjectInfoPatch, SetStatusDate};
-use crate::error::CommandError;
+use crate::error::{CommandError, CommandErrorKind, codes};
 
 /// Applique un `Patch<String>` : `Clear` vide le champ.
 fn patch_string(field: &mut String, patch: &Patch<String>) {
@@ -18,12 +18,36 @@ fn patch_string(field: &mut String, patch: &Patch<String>) {
     }
 }
 
+/// `param.invalid` sur `field`.
+fn invalid(field: &str, why: &str) -> CommandError {
+    CommandError::new(
+        codes::PARAM_INVALID,
+        CommandErrorKind::InvalidParam(why.to_owned()),
+    )
+    .with_field(field)
+}
+
 /// `project.set_info` : champs descriptifs ; absent gardé, `null` vidé.
-#[allow(
-    clippy::unnecessary_wraps,
-    reason = "signature commune des commandes, appelée par la répartition `Exec` (exec.rs)"
-)]
+/// Type et pilotage par défaut des nouvelles tâches (R-197, S2
+/// `DefaultTaskType`, `NewTasksEffortDriven`) : seules les tâches créées
+/// ensuite les prennent (R-152) ; `null` refusé.
 pub(super) fn set_info(op: &ProjectInfoPatch, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
+    let default_task_type = match op.default_task_type {
+        Patch::Keep => None,
+        Patch::Set(t) => Some(TaskType::from(t)),
+        Patch::Clear => return Err(invalid("default_task_type", "type attendu (il ne s'efface pas)")),
+    };
+    let effort = match op.new_tasks_effort_driven {
+        Patch::Keep => None,
+        Patch::Set(e) => Some(e),
+        Patch::Clear => return Err(invalid("new_tasks_effort_driven", "booléen attendu")),
+    };
+    if let Some(t) = default_task_type {
+        ctx.project.options.default_task_type = t;
+    }
+    if let Some(e) = effort {
+        ctx.project.options.new_tasks_effort_driven = e;
+    }
     let info = &mut ctx.project.info;
     patch_string(&mut info.name, &op.name);
     patch_string(&mut info.title, &op.title);

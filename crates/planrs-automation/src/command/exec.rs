@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use planrs_core::{Project, Subject, TaskUid};
+use planrs_core::{Project, ResourceUid, Subject, TaskUid};
 
 use super::{Command, assignment, calendar, constraint, link, project, resource, task};
 use crate::error::CommandError;
@@ -33,6 +33,11 @@ pub(crate) struct Ctx<'a> {
     pub text: &'a TextContext,
     /// Tâches créées, dans l'ordre.
     pub created: &'a mut Vec<TaskUid>,
+    /// Étiquettes `$x` → UID des ressources créées dans le lot (R-195) ;
+    /// espace de noms distinct de celui des tâches.
+    pub resource_labels: &'a mut BTreeMap<String, ResourceUid>,
+    /// Ressources créées, dans l'ordre (R-195).
+    pub created_resources: &'a mut Vec<ResourceUid>,
 }
 
 /// Exécution d'une commande sur le contexte.
@@ -45,10 +50,7 @@ impl Exec for Command {
     fn exec(&self, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
         match self {
             Self::TaskAdd(op) => task::add(op, ctx),
-            Self::TaskUpdate(op) => {
-                reserved_fields(&op.j5_fields())?;
-                task::update(op, ctx)
-            }
+            Self::TaskUpdate(op) => task::update(op, ctx),
             Self::TaskDelete(op) => task::delete(op, ctx),
             Self::TaskMove(op) => task::move_to(op, ctx),
             Self::TaskIndent(op) => task::indent(op, ctx),
@@ -58,10 +60,7 @@ impl Exec for Command {
             Self::LinkRemove(op) => link::remove(op, ctx),
             Self::TaskSetConstraint(op) => constraint::set_constraint(op, ctx),
             Self::TaskSetDeadline(op) => constraint::set_deadline(op, ctx),
-            Self::ProjectSetInfo(op) => {
-                reserved_fields(&op.j5_fields())?;
-                project::set_info(op, ctx)
-            }
+            Self::ProjectSetInfo(op) => project::set_info(op, ctx),
             Self::ProjectSetAnchor(op) => project::set_anchor(op, ctx),
             Self::ProjectSetStatusDate(op) => project::set_status_date(op, ctx),
             Self::CalendarSetException(op) => calendar::set_exception(op, ctx),
@@ -73,15 +72,5 @@ impl Exec for Command {
             Self::AssignmentUpdate(op) => assignment::update(op, ctx),
             Self::AssignmentRemove(op) => assignment::remove(op, ctx),
         }
-    }
-}
-
-/// Contrat J5 : champs étendus de `task.update` et `project.set_info`
-/// refusés (`command.not_yet_available`, sur le premier champ posé) tant
-/// que le lot L7 ne les exécute pas.
-fn reserved_fields(fields: &[&str]) -> Result<(), CommandError> {
-    match fields.first() {
-        Some(field) => Err(CommandError::not_yet(5).with_field(field)),
-        None => Ok(()),
     }
 }

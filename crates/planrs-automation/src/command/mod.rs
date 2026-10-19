@@ -888,7 +888,14 @@ pub struct ResourceUpdate {
     /// Nom (`null` refusé).
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
     pub name: Patch<String>,
-    /// Capacité maximale.
+    /// Type (`null` refusé ; refusé `resource.has_assignments` si la
+    /// ressource est affectée ; ajout du lot L7 au contrat L0).
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub kind: Patch<ResourceKindJson>,
+    /// Étiquette d'unité d'une ressource matérielle (ajout du lot L7).
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub material_label: Patch<String>,
+    /// Capacité maximale (`null` refusé).
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
     pub max_units: Patch<UnitsJson>,
     /// Calendrier (`null` : aucun, calendrier de la tâche ou du projet).

@@ -121,7 +121,8 @@ fn r155_ids_renumbered() {
 
 #[test]
 fn r155_effects_order_extras_after_assignments() {
-    // 2 → 4, 4 → 5 ; 5 relue avec `LevelingDelay` ; affectation sur 4.
+    // 2 → 4, 4 → 5 ; 5 relue avec `PreLeveledStart` (R-161 amendée en J5 :
+    // `LevelingDelay` n'est plus jeté) ; affectation sur 4.
     // `delete 4` : TaskDeleted, LinkRemoved, AssignmentRemoved, puis
     // ExtrasDropped (5), puis IdsRenumbered — l'ordre de la fiche.
     let mut p = new_project("2026-11-02T08:00");
@@ -130,8 +131,8 @@ fn r155_effects_order_extras_after_assignments() {
     link(&mut p, 4, 5);
     p.tasks.get_mut(uid(5)).unwrap().extras.0.push(ExtraEntry {
         origin: "mspdi".to_owned(),
-        key: "LevelingDelay".to_owned(),
-        payload: "<LevelingDelay>4800</LevelingDelay>".to_owned(),
+        key: "PreLeveledStart".to_owned(),
+        payload: "<PreLeveledStart>2026-11-02T08:00:00</PreLeveledStart>".to_owned(),
     });
     p.assignments
         .push(Assignment::new(AssignmentUid::new(1), uid(4), None))
@@ -153,7 +154,7 @@ fn r155_effects_order_extras_after_assignments() {
             SideEffect::AssignmentRemoved(AssignmentUid::new(1)),
             SideEffect::ExtrasDropped {
                 subject: Subject::Task(uid(5)),
-                keys: vec!["LevelingDelay".to_owned()],
+                keys: vec!["PreLeveledStart".to_owned()],
             },
             SideEffect::IdsRenumbered {
                 from: TaskId::new(4),

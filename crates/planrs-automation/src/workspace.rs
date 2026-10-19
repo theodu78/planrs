@@ -283,14 +283,7 @@ impl Workspace {
                 })?;
                 to_value(&v)
             }
-            "resource.list" => {
-                let p = parse_params::<ResourceListParams>(params).map_err(cmd)?;
-                to_value(&view::list_resources(self.current()?, &p).map_err(cmd)?)
-            }
-            "analysis.resource_usage" => {
-                let p = parse_params::<UsageParams>(params).map_err(cmd)?;
-                to_value(&view::resource_usage(self.current()?, &p).map_err(cmd)?)
-            }
+            "resource.list" | "analysis.resource_usage" => self.resource_read(id, params),
             "analysis.critical_path" => {
                 parse_params::<NoParams>(params).map_err(cmd)?;
                 to_value(&ViewCtx::new(self.current()?).critical_path())
@@ -340,6 +333,20 @@ impl Workspace {
                 codes::PARAM_INVALID,
                 format!("{} : {id}", tr(lang, "commande inconnue", "unknown command")),
             )),
+        }
+    }
+
+    /// Lectures des ressources (J5) : `resource.list`,
+    /// `analysis.resource_usage`.
+    fn resource_read(&self, id: &str, params: Value) -> Result<Value, ToolError> {
+        let lang = self.lang;
+        let cmd = |e: CommandError| ToolError::from_command(&e, lang);
+        if id == "resource.list" {
+            let p = parse_params::<ResourceListParams>(params).map_err(cmd)?;
+            to_value(&view::list_resources(self.current()?, &p).map_err(cmd)?)
+        } else {
+            let p = parse_params::<UsageParams>(params).map_err(cmd)?;
+            to_value(&view::resource_usage(self.current()?, &p).map_err(cmd)?)
         }
     }
 

@@ -324,12 +324,7 @@ async fn mcp_resource_usage_structured() {
     assert_eq!(tasks["total"], json!(2));
     let e = refused(&client, "delete_resource", json!({ "uid": m.clone() })).await;
     assert_eq!(e["code"], json!("resource.has_assignments"));
-    let deleted = ok(
-        &client,
-        "delete_resource",
-        json!({ "uid": m, "cascade": true }),
-    )
-    .await;
+    let deleted = ok(&client, "delete_resource", json!({ "uid": m, "cascade": true })).await;
     assert_eq!(deleted["committed"], json!(true));
     assert_ne!(deleted["diff"]["overallocated"]["resolved"], json!([]));
     client.cancel().await.unwrap();

@@ -143,7 +143,10 @@ fn diff_overallocated_new_and_resolved() {
     dry["dry_run"] = json!(true);
     let preview = ws.call("assignment.add", dry).unwrap();
     assert_eq!(preview["committed"], json!(false));
-    assert_eq!(preview["diff"]["overallocated"], json!({ "new": [m], "resolved": [] }));
+    assert_eq!(
+        preview["diff"]["overallocated"],
+        json!({ "new": [m], "resolved": [] })
+    );
     let applied = ws.call("assignment.add", add).unwrap();
     assert_eq!(applied["diff"]["overallocated"]["new"], json!([m]));
     let list = ws
@@ -159,9 +162,7 @@ fn diff_overallocated_new_and_resolved() {
     assert_eq!(usage["by"], json!("week"));
     assert_eq!(usage["rows"][0]["overallocated"][0], json!(true));
     // Une écriture sans effet sur la charge : rien de signalé.
-    let quiet = ws
-        .call("task.update", json!({ "uid": b, "name": "B2" }))
-        .unwrap();
+    let quiet = ws.call("task.update", json!({ "uid": b, "name": "B2" })).unwrap();
     assert!(quiet["diff"].get("overallocated").is_none());
     // Retrait : résolu.
     let removed = ws

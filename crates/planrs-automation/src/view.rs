@@ -30,9 +30,9 @@ use std::collections::BTreeMap;
 use planrs_core::calendar::CompiledCalendar;
 use planrs_core::resource::{UsageError, usage as core_usage};
 use planrs_core::{
-    Assignment, Decimal, Diagnostic, Duration, DurationUnit, HasUid, LagValue, Minutes,
-    Moment, Project, Resource, ResourceKind, ResourceUid, Schedule, Severity, Subject, Task, TaskRole,
-    TaskSchedule, TaskUid, TimeBasis, Units, Work,
+    Assignment, Decimal, Diagnostic, Duration, DurationUnit, HasUid, LagValue, Minutes, Moment, Project,
+    Resource, ResourceKind, ResourceUid, Schedule, Severity, Subject, Task, TaskRole, TaskSchedule, TaskUid,
+    TimeBasis, Units, Work,
 };
 use serde::Serialize;
 
@@ -591,7 +591,7 @@ impl<'a> ViewCtx<'a> {
         }
         let project = session.project();
         let mut by_task: BTreeMap<TaskUid, Vec<&'a Assignment>> = BTreeMap::new();
-        for a in project.assignments.iter() {
+        for a in &project.assignments {
             by_task.entry(a.task).or_default().push(a);
         }
         Self {
@@ -687,7 +687,12 @@ impl<'a> ViewCtx<'a> {
             .unwrap_or(u32::MAX);
         let mut assignments = Vec::new();
         let mut total = 0usize;
-        for a in self.project.assignments.iter().filter(|a| a.resource == Some(uid)) {
+        for a in self
+            .project
+            .assignments
+            .iter()
+            .filter(|a| a.resource == Some(uid))
+        {
             total = total.saturating_add(1);
             if assignments.len() < MAX_RESOURCE_ASSIGNMENTS {
                 assignments.push(self.assignment(a));
@@ -722,8 +727,8 @@ impl<'a> ViewCtx<'a> {
         let task = self.project.tasks.at(pos).filter(|t| !t.is_null)?;
         let view = self.task_at(pos, task);
         let options = &self.project.options;
-        let defaults =
-            task.task_type == options.default_task_type && task.effort_driven == options.new_tasks_effort_driven;
+        let defaults = task.task_type == options.default_task_type
+            && task.effort_driven == options.new_tasks_effort_driven;
         let scheduling = (!view.summary && !defaults).then(|| SchedulingOut {
             task_type: task.task_type.into(),
             effort_driven: task.effort_driven,
@@ -1193,11 +1198,7 @@ pub fn list_resources(session: &Session, p: &ResourceListParams) -> Result<Resou
         .enumerate()
         .filter(|(_, r)| !is_hidden_resource(r))
         .filter(|(_, r)| {
-            !p.overallocated
-                || schedule
-                    .resources
-                    .get(&r.uid())
-                    .is_some_and(|l| l.overallocated)
+            !p.overallocated || schedule.resources.get(&r.uid()).is_some_and(|l| l.overallocated)
         })
         .collect();
     rows.sort_by_key(|(_, r)| r.uid());

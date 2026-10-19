@@ -522,7 +522,10 @@ fn cli_resources_json() {
     assert_eq!(code(&o), 0);
     let text = String::from_utf8(o.stdout).unwrap();
     assert_eq!(text.lines().count(), 4, "{text}");
-    assert!(text.lines().any(|l| l.starts_with("!1") && l.contains("Maçon")), "{text}");
+    assert!(
+        text.lines().any(|l| l.starts_with("!1") && l.contains("Maçon")),
+        "{text}"
+    );
     // `tasks --resource ID` : tâches du Maçon (ID 1 → son UID).
     let o = run(&["--now", NOW, "tasks", s(&plan), "--json", "--resource", "1"]);
     assert_eq!(code(&o), 0, "{}", String::from_utf8_lossy(&o.stderr));
@@ -543,7 +546,15 @@ fn cli_usage_by_week() {
     let dir = TempDir::new("usage");
     let plan = resource_plan(&dir);
     let o = run(&[
-        "--now", NOW, "usage", s(&plan), "--json", "--by", "week", "--resource", "1",
+        "--now",
+        NOW,
+        "usage",
+        s(&plan),
+        "--json",
+        "--by",
+        "week",
+        "--resource",
+        "1",
     ]);
     assert_eq!(code(&o), 0, "{}", String::from_utf8_lossy(&o.stderr));
     let cli = stdout_json(&o);

@@ -3414,6 +3414,7 @@ dependencies = [
  "hyper-util",
  "planrs-automation",
  "planrs-core",
+ "planrs-mspdi",
  "planrs-render",
  "rmcp",
  "serde_json",

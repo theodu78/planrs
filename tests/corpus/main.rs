@@ -572,3 +572,142 @@ fn p25_round_trip_of_a_sample_and_verdict() {
         "{md}"
     );
 }
+
+// --- Ressources (J5, lot L9) ----------------------------------------------
+
+/// Parité des valeurs de ressources (compteur séparé des cas de tâches,
+/// hors `FLOOR`) : chaque fichier présent tient son plancher de
+/// `resources::FLOORS`, et `CORPUS_RESOURCE_FLOOR` en vaut la somme.
+#[test]
+fn corpus_resource_floor() {
+    use planrs_core::parity::CORPUS_RESOURCE_FLOOR;
+    use planrs_tests::corpus::resources::FLOORS;
+
+    let m = load_manifest();
+    let floor_sum: u32 = FLOORS.iter().map(|(_, f)| f).sum();
+    assert_eq!(
+        CORPUS_RESOURCE_FLOOR, floor_sum,
+        "CORPUS_RESOURCE_FLOOR = somme de resources::FLOORS"
+    );
+    for (name, _) in FLOORS {
+        assert!(
+            m.file.iter().any(|e| e.name == name),
+            "{name} : absent du manifeste"
+        );
+    }
+    let runs = corpus::run(&m.file, &planrs_tests::tests_path("corpus/files"));
+    let mut failures = Vec::new();
+    let mut present = 0_u32;
+    for run in &runs {
+        let Some(cmp) = &run.resources else { continue };
+        present += 1;
+        let floor = FLOORS
+            .iter()
+            .find(|(n, _)| *n == run.entry.name)
+            .map_or(0, |(_, f)| *f);
+        let identical = cmp.identical_count();
+        println!(
+            "ressources {} : {} / {} cas identiques (plancher {floor}), {} fictive(s) écartée(s), écartées {:?}",
+            run.entry.name,
+            identical,
+            cmp.case_count(),
+            cmp.placeholders,
+            cmp.excluded
+        );
+        for c in cmp.cases.iter().filter(|c| !c.identical()) {
+            println!("  {:?} {} : {:?}", c.kind, c.uid, c.divergences);
+        }
+        if identical < floor {
+            failures.push(format!("{} : {identical} < plancher {floor}", run.entry.name));
+        }
+        if identical > floor {
+            println!(
+                "{} : plancher de ressources relevable ({floor} → {identical})",
+                run.entry.name
+            );
+        }
+    }
+    let all: Vec<_> = runs
+        .iter()
+        .filter_map(|r| Some((r.entry.name.as_str(), r.resources.as_ref()?)))
+        .collect();
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(
+        dir.join("corpus-resources.json"),
+        serde_json::to_string_pretty(&all).unwrap(),
+    )
+    .unwrap();
+    if present == 0 {
+        let required = std::env::var("PLANRS_CORPUS").is_ok_and(|v| v == "required");
+        assert!(!required, "corpus absent sous PLANRS_CORPUS=required");
+        eprintln!("avertissement : corpus absent, parité des ressources non mesurée");
+    }
+    assert!(
+        failures.is_empty(),
+        "parité des ressources en échec : {failures:#?}"
+    );
+}
+
+/// `sample` plus une ressource affectée à A (8 h, lun 19/10) et une
+/// affectation fictive −65 535 sur B ; `finish` remplace la fin enregistrée
+/// de l'affectation de A.
+fn sample_with_resource(finish: &str) -> String {
+    let xml = sample("2026-10-20T17:00:00").replacen(
+        "<Name>Alpha confidentiel</Name><OutlineLevel>1</OutlineLevel><Duration>PT8H0M0S</Duration><DurationFormat>7</DurationFormat>",
+        "<Name>Alpha confidentiel</Name><OutlineLevel>1</OutlineLevel><Duration>PT8H0M0S</Duration><DurationFormat>7</DurationFormat><Work>PT8H0M0S</Work>",
+        1,
+    );
+    assert!(xml.contains("<Work>PT8H0M0S</Work>"));
+    xml.replace(
+        "</Tasks>",
+        &format!(
+            "</Tasks><Resources><Resource><UID>1</UID><ID>1</ID><Name>R</Name><Type>1</Type>\
+<MaxUnits>1.00</MaxUnits><Work>PT8H0M0S</Work><OverAllocated>0</OverAllocated></Resource></Resources>\
+<Assignments><Assignment><UID>1</UID><TaskUID>1</TaskUID><ResourceUID>1</ResourceUID><Units>1</Units>\
+<Work>PT8H0M0S</Work><Start>2026-10-19T08:00:00</Start><Finish>{finish}</Finish></Assignment>\
+<Assignment><UID>2</UID><TaskUID>2</TaskUID><ResourceUID>-65535</ResourceUID><Units>1</Units>\
+<Work>PT8H0M0S</Work><Start>2026-10-20T08:00:00</Start><Finish>2026-10-20T17:00:00</Finish></Assignment></Assignments>"
+        ),
+    )
+}
+
+/// Harnais des ressources : un projet cohérent est identique (un cas de
+/// tâche à trois valeurs, un cas de ressource à deux), l'affectation fictive
+/// n'est jamais comparée, et une fin d'affectation fausse est nommée.
+#[test]
+fn resource_comparison_counts_cases_and_reports_divergences() {
+    use planrs_tests::corpus::resources::{ResourceCaseKind, ResourceField};
+
+    let xml = sample_with_resource("2026-10-19T17:00:00");
+    let run = corpus::run_bytes(&entry("res.xml", xml.as_bytes(), 0), xml.as_bytes());
+    let cmp = run.resources.as_ref().expect("comparé");
+    assert_eq!((cmp.case_count(), cmp.identical_count()), (2, 2), "{cmp:#?}");
+    assert_eq!(cmp.placeholders, 1);
+    let shape: Vec<_> = cmp.cases.iter().map(|c| (c.kind, c.uid, c.compared)).collect();
+    assert_eq!(
+        shape,
+        [(ResourceCaseKind::Leaf, 1, 3), (ResourceCaseKind::Resource, 1, 2)]
+    );
+
+    let xml = sample_with_resource("2026-10-19T16:00:00");
+    let run = corpus::run_bytes(&entry("res-diff.xml", xml.as_bytes(), 0), xml.as_bytes());
+    let cmp = run.resources.as_ref().unwrap();
+    assert_eq!(cmp.identical_count(), 1);
+    let d = &cmp.cases[0].divergences;
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert_eq!(
+        (
+            d[0].field,
+            d[0].assignment,
+            d[0].recorded.as_str(),
+            d[0].computed.as_str()
+        ),
+        (
+            ResourceField::AssignmentFinish,
+            Some(1),
+            "2026-10-19T16:00",
+            "2026-10-19T17:00"
+        )
+    );
+}

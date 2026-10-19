@@ -1,0 +1,60 @@
+# Ressources, affectations, types de tâches (J5)
+
+État au 2026-10-19 (lots L0 à L9 de J5, ADR-0013, cahier `docs/plans/j5.md`). Toutes les règles sont au statut `hypothèse` (`docs/scheduling-rules.md`, section « Ressources et affectations ») ; le corpus en reproduit une partie à l'identique (§ 5), sans qu'aucune fiche ne soit passée à « vérifié ».
+
+## 1. Ce que planrs calcule
+
+- **Placement par affectation** (ADR-0013 D1) : une feuille automatique qui a au moins une affectation de travail est placée affectation par affectation, chacune sur son calendrier effectif (calendrier de la tâche ∩ calendrier de la ressource, R-171, R-172), avec `d_a` = travail ÷ unités (R-170), le délai d'affectation (R-177) et les retards de nivellement relus (R-178). Début de la tâche = premier instant où une ressource affectée peut travailler, fin = la plus tardive des fins d'affectation, durée calculée = temps ouvré de l'union des intervalles (R-173). Passe arrière, contraintes et échéances : R-174.
+- **Tâches sans affectation de travail** : calendrier propre, sinon calendrier du projet (sa base s'il est dérivé), R-175 ; affectations neutres (fictive −65 535, matérielle, coût, ressource inconnue) sans effet sur les dates, R-176.
+- **Cas limites** : récapitulatives (R-179), profils non uniformes placés comme uniformes avec diagnostic (R-180), unités nulles et `d_a` hors domaine (R-181), durée écoulée (R-182), manuelles et inactives (R-183).
+- **Cumuls** : travail des tâches, des récapitulatives et des ressources (R-184) ; matérielles en quantité, coût sans travail (R-185).
+- **Surutilisation exacte** (ADR-0013 D6) : débit effectif par affectation, balayage des intervalles travaillés réels, capacité = `max_units`, intervalles bornés à 1 000 par ressource (R-186, R-187) ; diagnostic `resource.overallocated`, `Schedule.resources[uid].overloads`. `AvailabilityPeriods` ignorées (diagnostic `resource.availability_ignored`).
+- **Utilisation par période** à la demande (jour, semaine, mois), travail et surutilisation par cellule (R-188).
+- **Édition** (fonctions pures `planrs_core::resource::edit::apply`, appelées par les commandes) : matrice des types de tâche FU/FD/FW (R-189), ajout et retrait de ressource avec ou sans pilotage par l'effort (R-190 à R-192), travail fixe toujours piloté, récapitulative jamais (R-193), travail saisi réparti (R-194).
+
+## 2. Surfaces
+
+- Commandes (R-195 à R-197) : `resource.add` (calendrier propre dérivé par défaut, O34), `resource.update`, `resource.delete` (`cascade` obligatoire s'il y a des affectations), `assignment.add` (retire l'affectation fictive), `assignment.update`, `assignment.remove`, `task.update` étendu (`type`, `effort_driven`, `work`), `project.set_info` (type et pilotage par défaut).
+- MCP et CLI : `add_resource`, `update_resource`, `delete_resource`, `list_resources`, `assign_resource`, `update_assignment`, `unassign_resource`, `resource_usage` ; `list_tasks resource=…` ; `DiffView.overallocated { new, resolved }`, y compris en `dry_run` ; CLI `planrs resources` et `planrs usage`.
+- MSPDI : lecture des retards de nivellement et des valeurs enregistrées (R-198) ; écriture de `Start`/`Finish` d'affectation, `Work` des tâches et des ressources, `OverAllocated`, depuis le moteur ; `TimephasedData` de type 1 gardée seulement si le placement est inchangé (R-199).
+
+## 3. Hors J5 et limites
+
+- Coûts : taux, coût par utilisation et coût fixe stockés et réécrits tels quels, jamais calculés (ADR-0013 D7).
+- Nivellement : non calculé ; les retards enregistrés sont lus et appliqués.
+- Capacité constante (`AvailabilityPeriods` ignorées) ; profils non uniformes placés comme uniformes.
+- Affectation fictive −65 535 lue et gardée, jamais écrite pour les tâches de planrs (écart à O24).
+- Aucune interface egui pour les ressources (J7).
+- Aucune vérification par MS Project lui-même (pas de licence) : « vérifié » veut dire « reproduit sur un fichier enregistré par MS Project ».
+
+## 4. Scénario de rejeu `resources_j5`
+
+`tests/mcp/scenarios/resources_j5.jsonl` (63 appels), même forme et même harnais que `build_30` (`docs/features/mcp.md` § 5), `--now 2026-10-19T08:00`, langue `fr`, début du projet lun 02/11/2026 :
+
+- `new_project` ; 4 `add_resource` : Maçon (travail, 200 %), Électricien, Béton (matérielle, « m³ »), Location (coût) ; calendriers propres 4 et 5 créés pour les deux ressources de travail ;
+- congé de l'Électricien (`edit_calendar` sur son calendrier, lun 23 et mar 24/11) ;
+- 10 tâches, 10 liens FS ; Maçon sur Fondations (5 j ⇒ 40 h) ;
+- Réseaux (6 j) en unités fixes pilotée par l'effort, Maçon seul, puis Électricien ajouté en `dry_run` (non validé, même diff) puis validé : 48 h gardées, 24 h chacun, la part de l'Électricien décalée par son congé (fin ven 27/11) ;
+- Charpente en durée fixe, unités à 50 % ⇒ travail 16 h ; Enduits en travail fixe, durée 8 j ⇒ unités 50 % ;
+- Béton (quantité 12) sur Dalle, Location sur Murs ;
+- Maçon sur Murs à 100 % et sur Dalle à 150 %, en parallèle : `diff.overallocated.new` = [1], `resource_usage --by week` surutilisé la semaine du 09/11 seulement (64 h), `list_resources overallocated` ; `update_assignment` à 100 % ⇒ `resolved` = [1] ; `unassign_resource` de Location ;
+- `delete_resource` du Maçon sans `cascade` refusé (`resource.has_assignments`) ; 3 `undo` puis 3 `redo` ; `list_tasks resource=1`, `list_resources`, `project_summary` ;
+- `export_mspdi` égal par `normalize` à `tests/mcp/expected/resources_j5.xml`, puis `open_project` du fichier exporté et mêmes lectures.
+
+Tests : `replay_resources_j5_memory` (`crates/planrs-mcp/tests/replay.rs`, avec les vérifications ci-dessus), `replay_resources_j5_http` (`replay_http.rs`), `replay_resources_j5_stdio` (`apps/planrs-cli/tests/mcp_replay.rs`) ; job CI `mcp`. Régénération : `PLANRS_BLESS=1 cargo test -p planrs-mcp --test replay replay_resources_j5_memory`, diff à relire.
+
+**Écart connu à la réouverture** (consigné par le test) : la durée d'une feuille placée par plusieurs parts. En session, `Task::duration` garde le plus grand des `d_a` (Réseaux : 3 j, convention du lot L2) ; l'écrivain MSPDI écrit la mesure de l'union des parts (5 j, lot L6), qui devient la durée relue. Dates, travail, marges et ressources sont identiques ; une édition ultérieure qui part de la durée (retrait d'une ressource sans pilotage, passage en durée fixe) ne donne pas le même résultat avant et après la réouverture. À trancher (§ 6).
+
+## 5. Vérification
+
+- **Règles** : `cargo xtask rules` vert sur R-001 à R-199 (180 fiches actives, chacune avec ses tests `rNNN_*`).
+- **Corpus, cas de tâches** : 153 / 159 (A1 51/51, A2 18/18, A4 42/42, A6 34/37, A7 8/11). Restent A6 UID 24, 26, 42 (marge libre 0 contre 480, cause non établie, R-049) et A7 UID 2, 3 et l'UID 0 (avancement, J6).
+- **Corpus, ressources** (`corpus_resource_floor`, compteur séparé, `CORPUS_RESOURCE_FLOOR` = 84, hors `FLOOR`) : un cas par tâche automatique active portant du travail ou une vraie affectation (`Work` de la tâche ; pour une feuille, `Start`/`Finish` de chaque affectation hors fictive) et un cas par ressource (`Work`, `OverAllocated`). A4 44/44 (29 feuilles, 11 récapitulatives, 4 ressources), A6 35/35 (16 feuilles, 9 récapitulatives, 10 ressources), A7 5/7 (UID 2 et 3 : avancement, J6 ; `OverAllocated` indicatif, O31), A1 et A2 sans cas (affectations fictives seulement). Aucun faux positif de surutilisation sur A4 et A6.
+- **Performance** : `perf_5000_assigned` (5 000 tâches, 10 000 liens, 10 000 affectations, placement, cumuls et surutilisation compris), budget 50 ms de médiane, job `perf` ; mesuré en local (serveurdvp, release) 48,3 ms le 2026-10-19 : marge faible.
+
+## 6. Points ouverts
+
+1. Durée d'une feuille à plusieurs parts : `Task::duration` (plus grand des `d_a`) contre durée écrite (union). Options : (a) les commandes d'affectation écrivent l'union dans `Task::duration` après recalcul ; (b) l'écrivain écrit le plus grand des `d_a` (contraire à S14 et à O23) ; (c) garder l'écart, documenté. Recommandation : (a).
+2. Affectation de travail d'une récapitulative à durée fixe (`Type` 1, toutes les récapitulatives du corpus) : `d_a` = durée du modèle de la récapitulative (nulle dans A6) au lieu de W ÷ U (R-179) ; span vide, donc pas de charge par période pour A6 R8 et R11 (signalé par le lot L5, non corrigé ; `Work` des ressources juste).
+3. Débit et seuil instantané de la surutilisation (R-186) : A7 reste indicatif tant que la base « jour par jour » de MS Project n'est pas établie.
+4. Budget de 50 ms : médiane locale à 48 ms ; à surveiller sur les machines de la CI.

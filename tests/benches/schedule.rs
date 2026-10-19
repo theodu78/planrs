@@ -11,48 +11,8 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use planrs_core::calendar::Calendar;
-use planrs_core::{
-    Assignment, AssignmentUid, CalendarUid, Minutes, Project, Resource, ResourceUid, Units, Work, schedule,
-};
-use planrs_tests::generate::{chain, fan_in, large_network};
-
-/// Grand réseau (5 000 tâches, 10 000 liens) dont chaque tâche reçoit deux
-/// affectations de travail (10 000 au total, ADR-0013) : 20 ressources, une
-/// sur deux sur un calendrier propre dérivé du Standard, une affectation
-/// sur dix décalée d'un jour ; les feuilles automatiques à deux calendriers
-/// effectifs sont placées par leurs parts (R-173).
-fn assigned_network(seed: u64) -> Project {
-    let mut p = large_network(seed);
-    for k in 1..=20u32 {
-        let mut r = Resource::new(ResourceUid::new(k), format!("R{k}"));
-        if k % 2 == 0 {
-            let cal = CalendarUid::new(100 + k);
-            p.calendars
-                .push(Calendar::new_derived(cal, format!("R{k}"), CalendarUid::new(1)))
-                .unwrap();
-            r.calendar = Some(cal);
-        }
-        p.resources.push(r).unwrap();
-    }
-    let tasks: Vec<_> = p.tasks.iter().map(|t| (t.uid(), t.duration.minutes())).collect();
-    let mut next = 1u32;
-    for (i, (task, d)) in tasks.into_iter().enumerate() {
-        for j in 0..2u32 {
-            let k = u32::try_from(i % 20).unwrap() + 1;
-            let res = ResourceUid::new((k + j * 7 - 1) % 20 + 1);
-            let mut a = Assignment::new(AssignmentUid::new(next), task, Some(res));
-            a.units = Units::FULL;
-            a.work = Work::new(d).unwrap();
-            if next.is_multiple_of(10) {
-                a.delay = Minutes::new(480);
-            }
-            p.assignments.push(a).unwrap();
-            next += 1;
-        }
-    }
-    p
-}
+use planrs_core::schedule;
+use planrs_tests::generate::{assigned_network, chain, fan_in, large_network};
 
 fn bench(c: &mut Criterion) {
     let large = large_network(2026);
@@ -65,7 +25,7 @@ fn bench(c: &mut Criterion) {
     c.bench_function("schedule/10000_links_into_one", |b| {
         b.iter(|| schedule(black_box(&wide)));
     });
-    // J5 (lot L4a) : budget visé ≤ 50 ms en release (médiane), informatif.
+    // J5 : budget bloquant de 50 ms dans `tests/perf` (`perf_5000_assigned`).
     let assigned = assigned_network(2026);
     c.bench_function("schedule/5000_assigned", |b| {
         b.iter(|| schedule(black_box(&assigned)));

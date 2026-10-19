@@ -20,6 +20,13 @@
 /// puis retards de nivellement, R-178).
 pub const CORPUS_FLOOR: u32 = 153;
 
+/// Plancher de la comparaison des ressources du corpus (J5, lot L9) :
+/// cas de tâches (`Work`, dates des affectations) et de ressources (`Work`,
+/// `OverAllocated`) identiques, somme des planchers par fichier du harnais
+/// (`tests/corpus/resources.rs`). Compteur séparé, hors [`FLOOR`].
+/// Mesuré le 2026-10-19 : A4 44/44, A6 35/35, A7 5/7 (A1, A2 : aucun cas).
+pub const CORPUS_RESOURCE_FLOOR: u32 = 84;
+
 /// Cas de l'oracle MS Project (`tests/oracle`), zéro sans licence.
 pub const ORACLE_FLOOR: u32 = 0;
 

@@ -170,7 +170,8 @@ fn contract_compiles() {
 }
 
 /// Types du cœur (contrat J5) : planning sans affectation ni charge, JSON
-/// inchangé, squelettes qui répondent sans paniquer.
+/// inchangé, squelettes qui répondent sans paniquer, combinaisons de
+/// calendriers implémentées (L1).
 fn core_contract(s: &Session) {
     let schedule = s.schedule().clone();
     assert!(schedule.assignments.is_empty() && schedule.resources.is_empty());
@@ -195,7 +196,9 @@ fn core_contract(s: &Session) {
     .unwrap();
     assert!(report.rows.is_empty() && !report.truncated);
     let cal = CompiledCalendar::compile(&s.project().calendars, s.project().calendar).unwrap();
-    assert!(cal.intersect(&cal).is_err() && cal.union(&cal).is_err());
+    // Implémentées par le lot L1 (R-172) : a ∩ a = a et a ∪ a = a.
+    assert_eq!(cal.intersect(&cal).unwrap(), cal);
+    assert_eq!(cal.union(&cal).unwrap(), cal);
 }
 
 #[test]

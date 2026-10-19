@@ -6,9 +6,9 @@
 
 use std::collections::BTreeMap;
 
-use planrs_core::{Project, Subject, TaskUid};
+use planrs_core::{Project, ResourceUid, Subject, TaskUid};
 
-use super::{Command, calendar, constraint, link, project, task};
+use super::{Command, assignment, calendar, constraint, link, project, resource, task};
 use crate::error::CommandError;
 use crate::outcome::SideEffect;
 use crate::text::TextContext;
@@ -33,6 +33,11 @@ pub(crate) struct Ctx<'a> {
     pub text: &'a TextContext,
     /// Tâches créées, dans l'ordre.
     pub created: &'a mut Vec<TaskUid>,
+    /// Étiquettes `$x` → UID des ressources créées dans le lot (R-195) ;
+    /// espace de noms distinct de celui des tâches.
+    pub resource_labels: &'a mut BTreeMap<String, ResourceUid>,
+    /// Ressources créées, dans l'ordre (R-195).
+    pub created_resources: &'a mut Vec<ResourceUid>,
 }
 
 /// Exécution d'une commande sur le contexte.
@@ -60,6 +65,12 @@ impl Exec for Command {
             Self::ProjectSetStatusDate(op) => project::set_status_date(op, ctx),
             Self::CalendarSetException(op) => calendar::set_exception(op, ctx),
             Self::CalendarRemoveException(op) => calendar::remove_exception(op, ctx),
+            Self::ResourceAdd(op) => resource::add(op, ctx),
+            Self::ResourceUpdate(op) => resource::update(op, ctx),
+            Self::ResourceDelete(op) => resource::delete(op, ctx),
+            Self::AssignmentAdd(op) => assignment::add(op, ctx),
+            Self::AssignmentUpdate(op) => assignment::update(op, ctx),
+            Self::AssignmentRemove(op) => assignment::remove(op, ctx),
         }
     }
 }

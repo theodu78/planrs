@@ -13,15 +13,17 @@
 
 use std::borrow::Cow;
 
+use planrs_core::resource::Granularity;
 use planrs_core::{
-    ConstraintKind, Duration, DurationError, DurationUnit, Lag, LagValue, LinkType, Minutes, SignedPercent,
-    TimeBasis,
+    ConstraintKind, Decimal, Duration, DurationError, DurationUnit, Lag, LagValue, LinkType, Minutes,
+    SignedPercent, TaskType, TimeBasis, Units,
 };
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CommandError, CommandErrorKind, codes};
-use crate::text::{TextContext, format_duration, format_lag, parse_duration, parse_lag};
+use crate::text::lex::{Cursor, bounded_chars};
+use crate::text::{TextContext, TextError, format_duration, format_lag, parse_duration, parse_lag};
 
 /// Schéma JSON d'un instant (`planrs_core::Moment`) : ISO local à la minute,
 /// sans fuseau (`"2026-11-02T08:00"`, `":00"` final toléré).
@@ -397,6 +399,169 @@ impl From<ConstraintKindJson> for ConstraintKind {
             ConstraintKindJson::Snlt => Self::StartNoLaterThan,
             ConstraintKindJson::Fnet => Self::FinishNoEarlierThan,
             ConstraintKindJson::Fnlt => Self::FinishNoLaterThan,
+        }
+    }
+}
+
+/// Unités (affectation, capacité, quantité d'une ressource matérielle) en
+/// JSON (contrat J5) : `value` en 1/10 000 (10 000 = 100 % = 1,0 en MSPDI),
+/// `text` en pourcentage (`"50%"`). En entrée, l'un ou l'autre suffit ; les
+/// deux doivent concorder (`param.mismatch`), comme [`DurationJson`]. La
+/// lecture est écrite par le lot L7.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UnitsJson {
+    /// Valeur en 1/10 000 (10 000 = 100 %).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0))]
+    pub value: Option<i64>,
+    /// Pourcentage en texte (`"50%"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+/// Lecture du texte d'un [`UnitsJson`] : nombre (langue du contexte), puis
+/// `%` si `percent`, rien d'autre ; espaces admis autour.
+fn parse_units_text(text: &str, percent: bool, ctx: &TextContext) -> Result<Units, TextError> {
+    let chars = bounded_chars(text)?;
+    let mut cur = Cursor::new(&chars);
+    cur.skip_spaces();
+    if cur.at_end() {
+        return Err(TextError::Empty);
+    }
+    let value: Decimal = cur.decimal_in(ctx.language)?;
+    cur.skip_spaces();
+    let unit: String = cur.rest().iter().collect();
+    let unit = unit.trim_end();
+    let read = match (percent, unit) {
+        (true, "%") => Units::from_percent(value),
+        (false, "") => Units::from_fraction(value),
+        _ => {
+            return Err(TextError::UnknownUnit {
+                unit: unit.to_owned(),
+            });
+        }
+    };
+    read.map_err(|_| TextError::OutOfRange)
+}
+
+impl UnitsJson {
+    /// Unités d'affectation ou capacité (R-195, R-196) : `value` en
+    /// 1/10 000 (10 000 = 100 %) ou `text` en pourcentage (« 50% »,
+    /// « 150 % », « 12,5% »), arrondi par R-001 ; les deux fournis doivent
+    /// concorder (comme [`DurationJson::to_duration`]).
+    ///
+    /// # Errors
+    ///
+    /// `text.*` si le texte est illisible ; `param.mismatch` si `value`
+    /// contredit le texte ; `param.invalid` sans valeur, ou hors de
+    /// `0..=600 000 000 000` (R-002). Le champ fautif est posé par
+    /// l'appelant.
+    pub fn to_units(&self, ctx: &TextContext) -> Result<Units, CommandError> {
+        self.read(true, ctx)
+    }
+
+    /// Quantité d'une ressource matérielle (R-196) : `value` en 1/10 000
+    /// (30 000 = 3 unités de son étiquette) ou `text` en nombre (« 3 »,
+    /// « 1,5 »), sans `%`.
+    ///
+    /// # Errors
+    ///
+    /// Comme [`UnitsJson::to_units`].
+    pub fn to_quantity(&self, ctx: &TextContext) -> Result<Units, CommandError> {
+        self.read(false, ctx)
+    }
+
+    fn read(&self, percent: bool, ctx: &TextContext) -> Result<Units, CommandError> {
+        if let Some(text) = &self.text {
+            let u = parse_units_text(text, percent, ctx).map_err(CommandError::text)?;
+            return if agrees(self.value, u.get()) {
+                Ok(u)
+            } else {
+                Err(mismatch())
+            };
+        }
+        let Some(value) = self.value else {
+            return Err(invalid("« value » ou « text » attendu"));
+        };
+        Units::new(value).map_err(|_| invalid("unités hors des bornes (0 à 600 000 000 000, R-002)"))
+    }
+}
+
+/// Type de tâche en JSON (S41).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskTypeJson {
+    /// Unités fixes.
+    FixedUnits,
+    /// Durée fixe.
+    FixedDuration,
+    /// Travail fixe (toujours piloté par l'effort).
+    FixedWork,
+}
+
+impl From<TaskType> for TaskTypeJson {
+    fn from(t: TaskType) -> Self {
+        match t {
+            TaskType::FixedUnits => Self::FixedUnits,
+            TaskType::FixedDuration => Self::FixedDuration,
+            TaskType::FixedWork => Self::FixedWork,
+        }
+    }
+}
+
+impl From<TaskTypeJson> for TaskType {
+    fn from(t: TaskTypeJson) -> Self {
+        match t {
+            TaskTypeJson::FixedUnits => Self::FixedUnits,
+            TaskTypeJson::FixedDuration => Self::FixedDuration,
+            TaskTypeJson::FixedWork => Self::FixedWork,
+        }
+    }
+}
+
+/// Type de ressource en JSON.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceKindJson {
+    /// Travail (personne, machine).
+    #[default]
+    Work,
+    /// Matérielle (consommée en quantité, étiquette d'unité).
+    Material,
+    /// Coût.
+    Cost,
+}
+
+/// Granularité d'un rapport d'utilisation en JSON (R-188).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GranularityJson {
+    /// Jour.
+    Day,
+    /// Semaine (défaut).
+    #[default]
+    Week,
+    /// Mois.
+    Month,
+}
+
+impl From<GranularityJson> for Granularity {
+    fn from(g: GranularityJson) -> Self {
+        match g {
+            GranularityJson::Day => Self::Day,
+            GranularityJson::Week => Self::Week,
+            GranularityJson::Month => Self::Month,
+        }
+    }
+}
+
+impl From<Granularity> for GranularityJson {
+    fn from(g: Granularity) -> Self {
+        match g {
+            Granularity::Day => Self::Day,
+            Granularity::Week => Self::Week,
+            Granularity::Month => Self::Month,
         }
     }
 }

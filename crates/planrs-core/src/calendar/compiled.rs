@@ -15,13 +15,22 @@
 //! aucune mutabilité intérieure : la structure est immuable, `Send + Sync` et
 //! déterministe ; elle est recompilée à chaque recalcul.
 //!
-//! Coût d'une conversion, sans allocation : une dichotomie sur les segments,
-//! une sur au plus 7 jours, une sur au plus 5 plages.
+//! Coût d'une conversion, sans allocation : le segment d'un jour par un index
+//! de blocs de 64 jours (calculé à la compilation, immuable : le premier
+//! segment de chaque bloc) puis une dichotomie sur les seuls segments du
+//! bloc ; le segment d'un cumul par une dichotomie, ou par une recherche
+//! galopante depuis le segment d'un instant déjà converti (placement d'une
+//! durée : la cible est presque toujours dans le même segment ou les
+//! suivants) ; une dichotomie sur au plus 7 jours, une sur les plages du
+//! jour (au plus 5 pour un calendrier stocké, davantage pour un calendrier
+//! combiné par [`CompiledCalendar::intersect`] ou
+//! [`CompiledCalendar::union`], R-172).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::arena::Arena;
 use crate::calendar::Direction;
+use crate::calendar::combine::{Op, combine};
 use crate::calendar::model::{Calendar, CalendarKind, DaySetting, TimeRange};
 use crate::calendar::recurrence::{DayClaims, expand_exception};
 use crate::calendar::resolve::{
@@ -37,13 +46,18 @@ use crate::time::{Day, Moment, TimeOfDay, Week, Weekday};
 /// Minutes par jour civil (R-005).
 const MINUTES_PER_DAY: i64 = 1_440;
 /// Nombre de jours du domaine (1984-01-01 à 2149-12-31).
-const DAY_COUNT: i32 = 60_631;
+pub(super) const DAY_COUNT: i32 = 60_631;
+/// Jours par bloc de l'index des segments (2⁶).
+const BLOCK_SHIFT: i32 = 6;
+/// En deçà de ce nombre de segments, une dichotomie directe est plus
+/// rapide que l'index de blocs ou la recherche galopante.
+const FEW_SEGMENTS: usize = 16;
 
 /// Motif d'un jour : plages fusionnées (contiguës réunies), cumul avant
 /// chaque plage, total.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct DayPattern {
-    ranges: Vec<TimeRange>,
+pub(super) struct DayPattern {
+    pub(super) ranges: Vec<TimeRange>,
     cum: Vec<i64>,
     total: i64,
 }
@@ -65,6 +79,12 @@ impl DayPattern {
             .into_iter()
             .filter_map(|(a, b)| TimeRange::new(TimeOfDay::new(a).ok()?, TimeOfDay::new(b).ok()?).ok())
             .collect();
+        Self::from_ranges(ranges)
+    }
+
+    /// Motif de plages déjà triées, disjointes et non contiguës (forme
+    /// fusionnée) : cumuls et total.
+    pub(super) fn from_ranges(ranges: Vec<TimeRange>) -> Self {
         let mut cum = Vec::with_capacity(ranges.len());
         let mut total: i64 = 0;
         for r in &ranges {
@@ -76,6 +96,7 @@ impl DayPattern {
     }
 
     /// Minutes ouvrées du motif avant la minute `m` du jour (`0..=1440`).
+    #[inline]
     fn within(&self, m: i64) -> Option<i64> {
         let count = self.ranges.partition_point(|r| i64::from(r.from().minutes()) < m);
         let Some(j) = count.checked_sub(1) else {
@@ -89,6 +110,7 @@ impl DayPattern {
 
     /// Minute du jour qui termine la `w`-ième minute ouvrée du motif
     /// (`1 <= w <= total`).
+    #[inline]
     fn locate(&self, w: i64) -> Option<i64> {
         let j = self.cum.partition_point(|c| *c < w).checked_sub(1)?;
         let r = self.ranges.get(j)?;
@@ -103,8 +125,8 @@ impl DayPattern {
 /// Motif de semaine : motif de jour de chaque jour de semaine, cumul avant
 /// chaque jour (`prefix[k]` = minutes des jours `0..k`, dimanche = 0), total.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct WeekPattern {
-    days: Week<u32>,
+pub(super) struct WeekPattern {
+    pub(super) days: Week<u32>,
     prefix: [i64; 8],
     total: i64,
 }
@@ -127,6 +149,7 @@ impl WeekPattern {
 
     /// Wp(d) : minutes du motif répété depuis le jour 0 jusqu'au jour `d`
     /// exclu. Le jour 0 est un dimanche.
+    #[inline]
     fn cum_at(&self, day: i32) -> Option<i64> {
         let q = i64::from(day.checked_div_euclid(7)?);
         let k = usize::try_from(day.checked_rem_euclid(7)?).ok()?;
@@ -135,8 +158,8 @@ impl WeekPattern {
 }
 
 /// Règle d'un segment.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SegmentRule {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum SegmentRule {
     /// Motif de semaine répété.
     Weekly(u32),
     /// Chaque jour identique (série de jours d'exception).
@@ -145,9 +168,9 @@ enum SegmentRule {
 
 /// Segment `[first_day, jour suivant le segment)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Segment {
-    first_day: i32,
-    rule: SegmentRule,
+pub(super) struct Segment {
+    pub(super) first_day: i32,
+    pub(super) rule: SegmentRule,
     /// W au début du segment.
     cum_start: i64,
     /// `Wp(first_day)` pour un segment `Weekly`, 0 sinon.
@@ -159,25 +182,40 @@ struct Segment {
 pub struct CompiledCalendar {
     uid: CalendarUid,
     /// Motifs de jour internés ; `day_patterns[0]` est le jour chômé.
-    day_patterns: Vec<DayPattern>,
+    pub(super) day_patterns: Vec<DayPattern>,
     /// Motifs de semaine internés.
-    week_patterns: Vec<WeekPattern>,
+    pub(super) week_patterns: Vec<WeekPattern>,
     /// Partition triée de `[0, 60 631)` ; `segments[0].first_day == 0`.
-    segments: Vec<Segment>,
+    pub(super) segments: Vec<Segment>,
+    /// Index des segments par bloc de 64 jours : `blocks[b]` = indice du
+    /// segment qui contient le jour `b × 64` (fonction des segments, donc
+    /// sans effet sur l'égalité).
+    blocks: Vec<u32>,
+    /// Empreinte des segments et du nombre de motifs (fonction des
+    /// segments, donc sans effet sur l'égalité), calculée à l'assemblage :
+    /// voir [`CompiledCalendar::shape_fingerprint`].
+    fingerprint: u64,
     /// `W(Moment::MAX)`.
     total: i64,
 }
 
+/// Mélange déterministe d'un mot dans une empreinte (multiplication par une
+/// constante impaire puis rotation, même résultat sur toutes les
+/// plateformes).
+const fn mix(h: u64, v: u64) -> u64 {
+    (h ^ v).wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(29)
+}
+
 /// Motifs en cours d'internement.
-struct Patterns {
-    days: Vec<DayPattern>,
+pub(super) struct Patterns {
+    pub(super) days: Vec<DayPattern>,
     day_index: BTreeMap<Vec<TimeRange>, u32>,
-    weeks: Vec<WeekPattern>,
+    pub(super) weeks: Vec<WeekPattern>,
     week_index: BTreeMap<[u32; 7], u32>,
 }
 
 impl Patterns {
-    fn new() -> Option<Self> {
+    pub(super) fn new() -> Option<Self> {
         let mut p = Self {
             days: Vec::new(),
             day_index: BTreeMap::new(),
@@ -190,7 +228,16 @@ impl Patterns {
     }
 
     fn day(&mut self, setting: &DaySetting) -> Option<u32> {
-        let pattern = DayPattern::new(setting);
+        self.intern_day(DayPattern::new(setting))
+    }
+
+    /// Motif de jour de plages déjà fusionnées (voir
+    /// [`DayPattern::from_ranges`]), interné.
+    pub(super) fn day_of_ranges(&mut self, ranges: Vec<TimeRange>) -> Option<u32> {
+        self.intern_day(DayPattern::from_ranges(ranges))
+    }
+
+    fn intern_day(&mut self, pattern: DayPattern) -> Option<u32> {
         if let Some(i) = self.day_index.get(&pattern.ranges) {
             return Some(*i);
         }
@@ -205,6 +252,11 @@ impl Patterns {
         for wd in Weekday::ALL {
             *days.get_mut(wd) = self.day(settings.get(wd))?;
         }
+        self.week_of_days(days)
+    }
+
+    /// Motif de semaine de motifs de jour déjà internés, interné.
+    pub(super) fn week_of_days(&mut self, days: Week<u32>) -> Option<u32> {
         let key = Weekday::ALL.map(|wd| *days.get(wd));
         if let Some(i) = self.week_index.get(&key) {
             return Some(*i);
@@ -250,6 +302,38 @@ fn resolved_week(
         base_week.get(wd).clone()
     };
     Some(Week::from_fn(day))
+}
+
+/// Résultat d'une conversion, avec son erreur propre.
+pub(super) type Converted = Result<Moment, CalendarError>;
+
+/// W(t) et le segment de `t` ([`CompiledCalendar::probe`]).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Probe {
+    v: i64,
+    seg: usize,
+}
+
+/// Index des segments par bloc de `2^BLOCK_SHIFT` jours : pour chaque bloc,
+/// l'indice du segment qui contient son premier jour ; `None` si un
+/// invariant est violé.
+fn block_index(segments: &[Segment]) -> Option<Vec<u32>> {
+    let count = usize::try_from((DAY_COUNT >> BLOCK_SHIFT).checked_add(1)?).ok()?;
+    let mut blocks = Vec::with_capacity(count);
+    let mut i = 0usize;
+    for b in 0..count {
+        let day = i32::try_from(b)
+            .ok()?
+            .checked_shl(u32::try_from(BLOCK_SHIFT).ok()?)?;
+        while segments
+            .get(i.checked_add(1)?)
+            .is_some_and(|s| s.first_day <= day)
+        {
+            i = i.checked_add(1)?;
+        }
+        blocks.push(u32::try_from(i).ok()?);
+    }
+    Some(blocks)
 }
 
 /// Jour de semaine du jour `day` (le jour 0 est un dimanche).
@@ -351,7 +435,14 @@ impl CompiledCalendar {
             }
         }
 
-        // 5. Cumuls.
+        Self::assemble(uid, patterns, &raw)
+    }
+
+    /// Étape 5 de la compilation, partagée avec la combinaison (R-172) :
+    /// cumuls d'une partition `raw` de `[0, 60 631)` (premier jour et règle
+    /// de chaque segment, voisins distincts) ; `None` si un invariant est
+    /// violé.
+    pub(super) fn assemble(uid: CalendarUid, patterns: Patterns, raw: &[(i32, SegmentRule)]) -> Option<Self> {
         let mut segments = Vec::with_capacity(raw.len());
         let mut cum: i64 = 0;
         for (i, (first_day, rule)) in raw.iter().enumerate() {
@@ -379,11 +470,28 @@ impl CompiledCalendar {
             });
             cum = cum.checked_add(work)?;
         }
+        let blocks = block_index(&segments)?;
+        let mut fingerprint = mix(
+            u64::try_from(patterns.days.len()).ok()?,
+            u64::try_from(patterns.weeks.len()).ok()?,
+        );
+        for seg in &segments {
+            let rule = match seg.rule {
+                SegmentRule::Weekly(i) => u64::from(i) << 1,
+                SegmentRule::Daily(i) => (u64::from(i) << 1) | 1,
+            };
+            // Bits recopiés (complément à deux), déterministe.
+            let first = u64::from_le_bytes(i64::from(seg.first_day).to_le_bytes());
+            let cum = u64::from_le_bytes(seg.cum_start.to_le_bytes());
+            fingerprint = mix(mix(mix(fingerprint, first), rule), cum);
+        }
         Some(Self {
             uid,
             day_patterns: patterns.days,
             week_patterns: patterns.weeks,
             segments,
+            blocks,
+            fingerprint,
             total: cum,
         })
     }
@@ -392,6 +500,36 @@ impl CompiledCalendar {
     #[must_use]
     pub const fn uid(&self) -> CalendarUid {
         self.uid
+    }
+
+    /// Vrai si `self` et `other` ont la même forme compilée, UID mis à part
+    /// (mêmes motifs, mêmes segments) : ils ont alors la même fonction W et
+    /// donnent les mêmes conversions. Condition suffisante, non nécessaire
+    /// (deux formes différentes peuvent décrire le même temps ouvré).
+    #[must_use]
+    pub fn same_working_time(&self, other: &Self) -> bool {
+        self.total == other.total
+            && self.segments == other.segments
+            && self.week_patterns == other.week_patterns
+            && self.day_patterns == other.day_patterns
+    }
+
+    /// Nombre de segments de la forme compilée (coût d'une combinaison,
+    /// R-172 : linéaire en segments des deux calendriers ; budget du
+    /// recalcul, `Limits::combined_segments`).
+    #[must_use]
+    pub fn segment_count(&self) -> usize {
+        self.segments.len()
+    }
+
+    /// Empreinte de la forme compilée, UID mis à part : égale pour deux
+    /// calendriers de même forme ([`Self::same_working_time`]), elle range
+    /// les candidats avant la comparaison complète (placement, une échelle
+    /// par forme). Déterministe, calculée à l'assemblage : (total, nombre
+    /// de segments, mélange des segments et du nombre de motifs).
+    #[must_use]
+    pub const fn shape_fingerprint(&self) -> (i64, usize, u64) {
+        (self.total, self.segments.len(), self.fingerprint)
     }
 
     /// Vrai si le calendrier a au moins une minute ouvrée sur le domaine.
@@ -406,18 +544,63 @@ impl CompiledCalendar {
         Minutes::new(self.total)
     }
 
+    /// R-172 : intersection, ouvrée à l'instant t si et seulement si `self`
+    /// et `other` le sont (calendrier effectif d'une affectation, R-171).
+    /// Le résultat porte l'UID de `self`. Coût linéaire en nombre de
+    /// segments des deux calendriers (module `combine`).
+    ///
+    /// # Errors
+    ///
+    /// [`CalendarError::TooManySegments`] si le résultat dépasse le plafond
+    /// de segments ou de motifs ; [`CalendarError::Inconsistent`] si un
+    /// invariant interne est violé (jamais attendu).
+    pub fn intersect(&self, other: &Self) -> Result<Self, CalendarError> {
+        combine(self, other, Op::Intersect)
+    }
+
+    /// R-172 : union, ouvrée à l'instant t si et seulement si `self` ou
+    /// `other` l'est (mesure de la durée d'une feuille affectée, R-173). Le
+    /// résultat porte l'UID de `self`.
+    ///
+    /// # Errors
+    ///
+    /// Comme [`CompiledCalendar::intersect`].
+    pub fn union(&self, other: &Self) -> Result<Self, CalendarError> {
+        combine(self, other, Op::Union)
+    }
+
     /// Erreur d'invariant interne.
-    const fn inconsistent(&self) -> CalendarError {
+    pub(super) const fn inconsistent(&self) -> CalendarError {
         CalendarError::Inconsistent { calendar: self.uid }
+    }
+
+    /// Indice du segment qui contient le jour `day` : bloc de `day`, puis
+    /// dichotomie entre le segment du début du bloc et celui du bloc suivant
+    /// (inclus).
+    #[inline]
+    fn segment_index(&self, day: i32) -> Option<usize> {
+        if self.segments.len() <= FEW_SEGMENTS {
+            return self
+                .segments
+                .partition_point(|s| s.first_day <= day)
+                .checked_sub(1);
+        }
+        if day < 0 {
+            return None;
+        }
+        let b = usize::try_from(day >> BLOCK_SHIFT).ok()?;
+        let lo = usize::try_from(*self.blocks.get(b)?).ok()?;
+        let hi = match self.blocks.get(b.checked_add(1)?) {
+            Some(&next) => usize::try_from(next).ok()?.checked_add(1)?,
+            None => self.segments.len(),
+        };
+        let window = self.segments.get(lo..hi.min(self.segments.len()))?;
+        lo.checked_add(window.partition_point(|s| s.first_day <= day).checked_sub(1)?)
     }
 
     /// Segment qui contient le jour `day`.
     fn segment(&self, day: i32) -> Option<&Segment> {
-        let i = self
-            .segments
-            .partition_point(|s| s.first_day <= day)
-            .checked_sub(1)?;
-        self.segments.get(i)
+        self.segments.get(self.segment_index(day)?)
     }
 
     fn day_pattern(&self, i: u32) -> Option<&DayPattern> {
@@ -429,6 +612,7 @@ impl CompiledCalendar {
     }
 
     /// Motif du jour `day` (dans un segment donné).
+    #[inline]
     fn pattern_of_day(&self, seg: &Segment, day: i32) -> Option<&DayPattern> {
         match seg.rule {
             SegmentRule::Daily(p) => self.day_pattern(p),
@@ -438,12 +622,19 @@ impl CompiledCalendar {
 
     /// W(t), en minutes depuis 1984-01-01 00:00 (`0..=MAX`).
     fn cumulative(&self, t: i64) -> Option<i64> {
+        self.cumulative_at(t).map(|(w, _)| w)
+    }
+
+    /// W(t) et l'indice du segment de `t` (le dernier pour `Moment::MAX`),
+    /// point de départ d'une recherche galopante ([`Self::reach_from`]).
+    fn cumulative_at(&self, t: i64) -> Option<(i64, usize)> {
         if t >= Moment::MAX.minutes() {
-            return Some(self.total);
+            return Some((self.total, self.segments.len().checked_sub(1)?));
         }
         let day = i32::try_from(t.checked_div_euclid(MINUTES_PER_DAY)?).ok()?;
         let minute = t.checked_rem_euclid(MINUTES_PER_DAY)?;
-        let seg = self.segment(day)?;
+        let index = self.segment_index(day)?;
+        let seg = self.segments.get(index)?;
         let dp = self.pattern_of_day(seg, day)?;
         let before_day = match seg.rule {
             SegmentRule::Weekly(w) => {
@@ -452,9 +643,11 @@ impl CompiledCalendar {
             }
             SegmentRule::Daily(_) => i64::from(day.checked_sub(seg.first_day)?).checked_mul(dp.total)?,
         };
-        seg.cum_start
+        let w = seg
+            .cum_start
             .checked_add(before_day)?
-            .checked_add(dp.within(minute)?)
+            .checked_add(dp.within(minute)?);
+        Some((w?, index))
     }
 
     /// Plus petit t tel que W(t) >= v (`1 <= v <= total`) : la fin de la
@@ -469,6 +662,61 @@ impl CompiledCalendar {
             .segments
             .partition_point(|s| s.cum_start < target)
             .checked_sub(1)?;
+        self.first_reach_in(target, index)
+    }
+
+    /// [`Self::first_reach`] par une recherche galopante depuis le segment
+    /// `hint` (même résultat : dernier segment dont le cumul de début est
+    /// < target, les cumuls étant croissants au sens large) ; rend aussi
+    /// l'indice du segment trouvé.
+    fn first_reach_near(&self, target: i64, hint: usize) -> Option<(i64, usize)> {
+        if target < 1 || target > self.total {
+            return None;
+        }
+        let segs = &self.segments;
+        if segs.len() <= FEW_SEGMENTS {
+            let index = segs.partition_point(|s| s.cum_start < target).checked_sub(1)?;
+            return Some((self.first_reach_in(target, index)?, index));
+        }
+        let below = |i: usize| segs.get(i).is_some_and(|s| s.cum_start < target);
+        let hint = hint.min(segs.len().checked_sub(1)?);
+        // Fenêtre [lo, hi) : below(lo) vrai, below(hi) faux (ou hi = len).
+        let (lo, hi) = if below(hint) {
+            let mut lo = hint;
+            let mut step = 1usize;
+            loop {
+                let probe = lo.saturating_add(step);
+                if probe >= segs.len() || !below(probe) {
+                    break (lo, probe.min(segs.len()));
+                }
+                lo = probe;
+                step = step.saturating_mul(2);
+            }
+        } else {
+            let mut hi = hint;
+            let mut step = 1usize;
+            loop {
+                // `segments[0].cum_start == 0 < target` : la descente
+                // s'arrête au plus tard en 0.
+                let probe = hi.saturating_sub(step);
+                if below(probe) {
+                    break (probe, hi);
+                }
+                if probe == 0 {
+                    return None;
+                }
+                hi = probe;
+                step = step.saturating_mul(2);
+            }
+        };
+        let window = segs.get(lo..hi)?;
+        let index = lo.checked_add(window.partition_point(|s| s.cum_start < target).checked_sub(1)?)?;
+        Some((self.first_reach_in(target, index)?, index))
+    }
+
+    /// Fin de la `target`-ième minute ouvrée, dans le segment `index` qui la
+    /// contient.
+    fn first_reach_in(&self, target: i64, index: usize) -> Option<i64> {
         let seg = self.segments.get(index)?;
         let rest = target.checked_sub(seg.cum_start)?;
         let (day, within, pattern) = match seg.rule {
@@ -509,6 +757,93 @@ impl CompiledCalendar {
             .and_then(|m| m.checked_add(shift))
             .and_then(|m| Moment::from_minutes(m).ok())
             .ok_or_else(|| self.inconsistent())
+    }
+
+    /// [`Self::reach`] depuis le segment `hint` ; rend aussi le segment
+    /// trouvé.
+    fn reach_from(&self, v: i64, shift: i64, hint: usize) -> Result<(Moment, usize), CalendarError> {
+        self.first_reach_near(v, hint)
+            .and_then(|(m, i)| Some((Moment::from_minutes(m.checked_add(shift)?).ok()?, i)))
+            .ok_or_else(|| self.inconsistent())
+    }
+
+    /// W(t) et le segment de `t`, avec l'erreur d'invariant.
+    fn w_at(&self, t: Moment) -> Result<(i64, usize), CalendarError> {
+        self.cumulative_at(t.minutes()).ok_or_else(|| self.inconsistent())
+    }
+
+    /// R-030 (passe avant d'une durée `d > 0`, `TimeScale::forward_span`) :
+    /// `start = next_working_moment(from)`, `finish = add_working(start,
+    /// d)`, mêmes résultats et mêmes erreurs, en une seule évaluation de W :
+    /// W(start) = W(from), aucune minute ouvrée ne les séparant.
+    pub(super) fn span_after(&self, from: Moment, d: i64) -> Result<(Moment, Moment), CalendarError> {
+        if self.total == 0 {
+            return Err(self.no_working_time());
+        }
+        let (v, seg) = self.w_at(from)?;
+        if v >= self.total {
+            return Err(self.out_of_domain(Direction::After));
+        }
+        let (start, seg) = self.reach_from(v.saturating_add(1), -1, seg)?;
+        let finish = match v.checked_add(d) {
+            Some(target) if target <= self.total => self.reach_from(target, 0, seg)?.0,
+            _ => return Err(self.out_of_domain(Direction::After)),
+        };
+        Ok((start, finish))
+    }
+
+    /// R-030 (passe arrière d'une durée `d > 0`,
+    /// `TimeScale::backward_span`) : `finish = previous_working_moment(to)`,
+    /// `start = add_working(finish, −d)`, mêmes résultats et mêmes erreurs,
+    /// en une seule évaluation de W : W(finish) = W(to).
+    pub(super) fn span_before(&self, to: Moment, d: i64) -> Result<(Moment, Moment), CalendarError> {
+        if self.total == 0 {
+            return Err(self.no_working_time());
+        }
+        let (v, seg) = self.w_at(to)?;
+        if v == 0 {
+            return Err(self.out_of_domain(Direction::Before));
+        }
+        let (finish, seg) = self.reach_from(v, 0, seg)?;
+        if d > v {
+            return Err(self.out_of_domain(Direction::Before));
+        }
+        let target = v
+            .checked_sub(d)
+            .and_then(|x| x.checked_add(1))
+            .ok_or_else(|| self.inconsistent())?;
+        let start = self.reach_from(target, -1, seg)?.0;
+        Ok((start, finish))
+    }
+
+    /// W(t) et le segment de `t`, pour [`Self::next_of`] et
+    /// [`Self::previous_of`] : instant ouvré suivant et précédent de `t`
+    /// (R-024, R-025) sur une seule évaluation de W.
+    pub(super) fn probe(&self, t: Moment) -> Result<Probe, CalendarError> {
+        let (v, seg) = self.w_at(t)?;
+        Ok(Probe { v, seg })
+    }
+
+    /// `next_working_moment(t)` depuis la sonde de `t` (mêmes erreurs).
+    pub(super) fn next_of(&self, p: Probe) -> Converted {
+        if self.total == 0 {
+            return Err(self.no_working_time());
+        }
+        if p.v >= self.total {
+            return Err(self.out_of_domain(Direction::After));
+        }
+        self.reach_from(p.v.saturating_add(1), -1, p.seg).map(|(m, _)| m)
+    }
+
+    /// `previous_working_moment(t)` depuis la sonde de `t` (mêmes erreurs).
+    pub(super) fn previous_of(&self, p: Probe) -> Converted {
+        if self.total == 0 {
+            return Err(self.no_working_time());
+        }
+        if p.v == 0 {
+            return Err(self.out_of_domain(Direction::Before));
+        }
+        self.reach_from(p.v, 0, p.seg).map(|(m, _)| m)
     }
 
     /// Erreur « aucun temps ouvré ».
@@ -1005,5 +1340,100 @@ mod tests {
             compile_diagnostic(uid(1), &CompiledCalendar::compile(&a, uid(1))),
             None
         );
+    }
+
+    /// Index de blocs et recherches galopantes (optimisation du 2026-10-19) :
+    /// mêmes résultats que la dichotomie et que les conversions séparées,
+    /// sur un calendrier dense en exceptions (blocs à nombreux segments),
+    /// sur tout le domaine, bornes comprises.
+    #[test]
+    fn fast_paths_match_reference() {
+        let mut cal = standard(uid(1), "Standard".to_owned());
+        // Un jour chômé sur trois pendant deux ans, puis des séries isolées.
+        let first = day("2026-01-01").index();
+        for k in (0..730).step_by(3) {
+            let d = Day::new(first + k).unwrap();
+            let e = CalendarException {
+                name: String::new(),
+                period: DayRange::new(d, d).unwrap(),
+                setting: DaySetting::NonWorking,
+                recurrence: Recurrence::Period,
+                occurrences: None,
+            };
+            cal.add_exception(e).unwrap();
+        }
+        cal.add_exception(holiday("1984-01-02", "1984-01-20")).unwrap();
+        cal.add_exception(holiday("2149-12-01", "2149-12-31")).unwrap();
+        let cc = compile(cal);
+        assert!(cc.segments.len() > 400, "{}", cc.segments.len());
+        // Segment d'un jour : bloc puis dichotomie = dichotomie seule.
+        for d in 0..super::DAY_COUNT {
+            let reference = cc.segments.partition_point(|s| s.first_day <= d) - 1;
+            assert_eq!(cc.segment_index(d), Some(reference), "jour {d}");
+        }
+        // Recherche galopante depuis toute indication = dichotomie.
+        let mut seed: u64 = 2026;
+        let mut next = |hi: i64| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            i64::try_from((seed >> 33) % u64::try_from(hi).unwrap()).unwrap()
+        };
+        let total = cc.total;
+        let n = i64::try_from(cc.segments.len()).unwrap();
+        let mut targets: Vec<i64> = (0..20_000).map(|_| next(total) + 1).collect();
+        targets.extend([1, 2, total - 1, total]);
+        for t in targets {
+            let hint = usize::try_from(next(n)).unwrap();
+            let reference = cc.first_reach(t).unwrap();
+            assert_eq!(
+                cc.first_reach_near(t, hint).map(|r| r.0),
+                Some(reference),
+                "{t} {hint}"
+            );
+        }
+        // Conversions fusionnées = conversions séparées (mêmes erreurs).
+        let max = Moment::MAX.minutes();
+        let mut moments: Vec<i64> = (0..20_000).map(|_| next(max + 1)).collect();
+        moments.extend([0, 1, max - 1, max]);
+        for t in moments {
+            let t = Moment::from_minutes(t).unwrap();
+            let d = next(20_000) + 1;
+            let after = cc
+                .next_working_moment(t)
+                .and_then(|s| Ok((s, cc.add_working(s, Minutes::new(d))?)));
+            assert_eq!(cc.span_after(t, d), after, "{t} {d}");
+            let before = cc
+                .previous_working_moment(t)
+                .and_then(|f| Ok((cc.add_working(f, Minutes::new(-d))?, f)));
+            assert_eq!(cc.span_before(t, d), before, "{t} {d}");
+            let probe = cc.probe(t).unwrap();
+            assert_eq!(cc.next_of(probe), cc.next_working_moment(t), "{t}");
+            assert_eq!(cc.previous_of(probe), cc.previous_working_moment(t), "{t}");
+        }
+    }
+
+    #[test]
+    fn same_working_time_ignores_uid_only() {
+        // Calendrier de ressource dérivé sans exception propre : même forme
+        // compilée que sa base (réutilisé comme une seule échelle par le
+        // placement) ; avec un congé propre, différente.
+        let base = standard(uid(1), "Standard".to_owned());
+        let derived = Calendar::new_derived(uid(2), "R".to_owned(), uid(1));
+        let mut leave = Calendar::new_derived(uid(3), "L".to_owned(), uid(1));
+        leave.add_exception(holiday("2026-11-23", "2026-11-24")).unwrap();
+        let arena = Arena::try_from(vec![base, derived, leave]).unwrap();
+        let b = CompiledCalendar::compile(&arena, uid(1)).unwrap();
+        let d = CompiledCalendar::compile(&arena, uid(2)).unwrap();
+        let l = CompiledCalendar::compile(&arena, uid(3)).unwrap();
+        assert_ne!(b, d);
+        assert!(b.same_working_time(&d));
+        assert!(!b.same_working_time(&l));
+        assert!(b.intersect(&d).unwrap().same_working_time(&b));
+        // Même forme ⇒ même empreinte ; formes différentes : empreintes
+        // différentes ici (condition non garantie en général).
+        assert_eq!(b.shape_fingerprint(), d.shape_fingerprint());
+        assert_ne!(b.shape_fingerprint(), l.shape_fingerprint());
+        assert!(l.segment_count() > b.segment_count());
     }
 }

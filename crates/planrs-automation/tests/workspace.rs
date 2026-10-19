@@ -405,9 +405,10 @@ fn list_pagination_cursor_stable() {
     let err = ws.call("task.list", json!({ "cursor": 999_999 })).unwrap_err();
     assert_eq!(err.code, codes::TASK_NOT_FOUND);
     assert_eq!(err.field.as_deref(), Some("cursor"));
-    // Ressource : réservée à J5.
-    let err = ws.call("task.list", json!({ "resource": 1 })).unwrap_err();
-    assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE);
+    // Ressource inconnue : refusée (J5, lot L8).
+    let err = ws.call("task.list", json!({ "resource": 999_999 })).unwrap_err();
+    assert_eq!(err.code, codes::RESOURCE_NOT_FOUND);
+    assert_eq!(err.field.as_deref(), Some("resource"));
 }
 
 #[test]
@@ -715,20 +716,21 @@ fn workspace_import_csv_roundtrip() {
 #[test]
 fn workspace_batch_version_checked_before_ops() {
     // ADR-0012 L3 (4) : un lot d'un format futur est refusé comme tel, même
-    // si ses opérations sont inconnues de cette version.
+    // si ses opérations sont inconnues de cette version (`progress.update`,
+    // J6 ; `resource.add` est connue depuis le contrat J5).
     let mut ws = fresh(Language::Fr);
     let err = ws
         .call(
             "batch.apply",
-            json!({ "format_version": 2, "ops": [{ "op": "resource.add", "name": "R" }] }),
+            json!({ "format_version": 2, "ops": [{ "op": "progress.update", "uid": 1 }] }),
         )
         .unwrap_err();
     assert_eq!(err.code, codes::BATCH_UNSUPPORTED_VERSION);
     assert_eq!(err.field.as_deref(), Some("format_version"));
     // Version 1 ou absente : l'opération inconnue est un défaut de forme.
     for batch in [
-        json!({ "format_version": 1, "ops": [{ "op": "resource.add", "name": "R" }] }),
-        json!({ "ops": [{ "op": "resource.add", "name": "R" }] }),
+        json!({ "format_version": 1, "ops": [{ "op": "progress.update", "uid": 1 }] }),
+        json!({ "ops": [{ "op": "progress.update", "uid": 1 }] }),
     ] {
         let err = ws.call("batch.apply", batch).unwrap_err();
         assert_eq!(err.code, codes::PARAM_INVALID);

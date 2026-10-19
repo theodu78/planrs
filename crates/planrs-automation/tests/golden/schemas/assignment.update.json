@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`assignment.update` (R-196).",
+  "properties": {
+    "delay": {
+      "additionalProperties": false,
+      "description": "Retard d'affectation.",
+      "properties": {
+        "elapsed": {
+          "description": "Durée écoulée (« 5ej »).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "estimated": {
+          "description": "Durée estimée (« 5j? »).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "minutes": {
+          "description": "Minutes (ouvrées, ou écoulées si `elapsed`).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "text": {
+          "description": "Texte à la manière de MS Project (« 5j », « 2d? »).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "description": "Unité d'une durée en JSON.",
+              "oneOf": [
+                {
+                  "const": "minute",
+                  "description": "Minute.",
+                  "type": "string"
+                },
+                {
+                  "const": "hour",
+                  "description": "Heure.",
+                  "type": "string"
+                },
+                {
+                  "const": "day",
+                  "description": "Jour.",
+                  "type": "string"
+                },
+                {
+                  "const": "week",
+                  "description": "Semaine.",
+                  "type": "string"
+                },
+                {
+                  "const": "month",
+                  "description": "Mois.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Unité d'affichage."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "quantity": {
+      "additionalProperties": false,
+      "description": "Quantité (ressource matérielle).",
+      "properties": {
+        "text": {
+          "description": "Pourcentage en texte (`\"50%\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "Valeur en 1/10 000 (10 000 = 100 %).",
+          "format": "int64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "resource": {
+      "description": "Ressource.",
+      "oneOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        }
+      ]
+    },
+    "task": {
+      "description": "Tâche.",
+      "oneOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        }
+      ]
+    },
+    "units": {
+      "additionalProperties": false,
+      "description": "Unités.",
+      "properties": {
+        "text": {
+          "description": "Pourcentage en texte (`\"50%\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "Valeur en 1/10 000 (10 000 = 100 %).",
+          "format": "int64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "work": {
+      "additionalProperties": false,
+      "description": "Travail.",
+      "properties": {
+        "elapsed": {
+          "description": "Durée écoulée (« 5ej »).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "estimated": {
+          "description": "Durée estimée (« 5j? »).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "minutes": {
+          "description": "Minutes (ouvrées, ou écoulées si `elapsed`).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "text": {
+          "description": "Texte à la manière de MS Project (« 5j », « 2d? »).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "description": "Unité d'une durée en JSON.",
+              "oneOf": [
+                {
+                  "const": "minute",
+                  "description": "Minute.",
+                  "type": "string"
+                },
+                {
+                  "const": "hour",
+                  "description": "Heure.",
+                  "type": "string"
+                },
+                {
+                  "const": "day",
+                  "description": "Jour.",
+                  "type": "string"
+                },
+                {
+                  "const": "week",
+                  "description": "Semaine.",
+                  "type": "string"
+                },
+                {
+                  "const": "month",
+                  "description": "Mois.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Unité d'affichage."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "task",
+    "resource"
+  ],
+  "title": "AssignmentUpdate",
+  "type": "object"
+}

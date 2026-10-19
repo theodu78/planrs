@@ -48,3 +48,12 @@ Le rapport est écrit dans `target/tmp/corpus-report.md` et `target/tmp/corpus-r
 ## Aller-retour MSPDI (P25)
 
 Le harnais relit aussi chaque fichier présent après une écriture par planrs (profil observé, R-121) : lecture → écriture → relecture. Le projet relu doit égaler `planrs_mspdi::normalize(projet lu)` (R-133) avec les valeurs relues écrites (`Computed::Recorded`) comme avec celles du moteur (`Computed::Schedule`), le planning enregistré relu doit égaler celui du fichier, et les éléments réécrits de chaque entité doivent suivre l'ordre source. Le rapport publie, par fichier, ces quatre verdicts, le nombre d'`Extras` par entité, les calculés non recalculés écartés (par nom), les enfants perdus et les diagnostics d'écriture. Un fichier `producer = msproject` qui n'est pas identique fait échouer le verdict. « Relu identique » par planrs n'est pas une vérification par MS Project.
+
+## Ressources (J5)
+
+`corpus_resource_floor` compare, à compteur séparé des cas de tâches (`planrs_core::parity::CORPUS_RESOURCE_FLOOR`, hors `FLOOR`, planchers par fichier dans `resources.rs`) :
+
+- **cas de tâche** : tâche automatique, active, planifiée, qui porte du travail ou une affectation à une vraie ressource ; `Work` de la tâche (R-184) et `Start`/`Finish` de chaque affectation hors fictive −65 535 (R-173 pour une feuille ; R-179 pour une récapitulative, comparées depuis la correction de la durée des affectations de récapitulatives à durée fixe : A4 et A6 identiques, cas et planchers inchangés) ;
+- **cas de ressource** : ressource (UID 0 exclu) dont le fichier enregistre `Work` ou `OverAllocated` (R-184, R-186) ; `OverAllocated` de A7 indicatif (O31).
+
+Divergences listées par le test (`--nocapture`) et dans `target/tmp/corpus-resources.json` (UID seulement, aucun nom).

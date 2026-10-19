@@ -13,6 +13,7 @@
 pub mod compare;
 pub mod manifest;
 pub mod report;
+pub mod resources;
 pub mod roundtrip;
 pub mod verdict;
 
@@ -22,6 +23,7 @@ use planrs_mspdi::{MspdiDocument, ReadOptions};
 
 use crate::corpus::compare::FileComparison;
 use crate::corpus::manifest::Entry;
+use crate::corpus::resources::ResourceComparison;
 use crate::corpus::verdict::{AbsentReason, FileResult, FileStatus};
 
 /// « Maintenant » injecté à la lecture (règle 5), utilisé seulement si un
@@ -41,6 +43,8 @@ pub struct FileRun {
     pub engine_diagnostics: Vec<String>,
     /// Comparaison (fichier comparé).
     pub comparison: Option<FileComparison>,
+    /// Comparaison des ressources (fichier comparé, J5 lot L9).
+    pub resources: Option<ResourceComparison>,
 }
 
 impl FileRun {
@@ -70,6 +74,7 @@ fn absent(entry: &Entry, reason: AbsentReason) -> FileRun {
         document: None,
         engine_diagnostics: Vec::new(),
         comparison: None,
+        resources: None,
     }
 }
 
@@ -99,11 +104,13 @@ pub fn run_bytes(entry: &Entry, bytes: &[u8]) -> FileRun {
                 document: None,
                 engine_diagnostics: Vec::new(),
                 comparison: None,
+                resources: None,
             };
         }
     };
     let schedule = planrs_core::schedule(&document.project);
     let comparison = compare::compare(&document, &schedule);
+    let resources = resources::compare(&document, &schedule);
     let engine_diagnostics = schedule.diagnostics.iter().map(|d| d.code().to_owned()).collect();
     FileRun {
         entry: entry.clone(),
@@ -115,5 +122,6 @@ pub fn run_bytes(entry: &Entry, bytes: &[u8]) -> FileRun {
         document: Some(document),
         engine_diagnostics,
         comparison: Some(comparison),
+        resources: Some(resources),
     }
 }

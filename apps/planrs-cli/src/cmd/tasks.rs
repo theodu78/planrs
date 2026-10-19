@@ -1,5 +1,8 @@
 //! `planrs tasks <plan> [--critical] [--late] [--from D] [--to D]
-//! [--limit N] [--json]` : liste des tâches (`task.list`).
+//! [--resource N] [--limit N] [--json]` : liste des tâches (`task.list`).
+//!
+//! `--resource N` : tâches affectées à la ressource d'ID `N` (colonne ID
+//! de `planrs resources`), convertie en UID par sa position (J5).
 //!
 //! Sans `--limit`, toutes les pages sont lues et réunies en une seule vue
 //! `ListView` (sans `next_cursor`) ; avec `--limit N`, une seule page de
@@ -13,7 +16,7 @@ use planrs_automation::Workspace;
 use planrs_core::Day;
 use serde_json::{Map, Value, json};
 
-use super::{Ctx, Run, duration_text, finish, open, out, out_json, report, s};
+use super::{Ctx, Run, duration_text, finish, open, out, out_json, report, resources, s};
 
 /// Taille de page lue quand toutes les tâches sont demandées (borne du
 /// registre).
@@ -39,6 +42,9 @@ pub struct TasksArgs {
     /// Tâches qui commencent ce jour ou avant (`AAAA-MM-JJ`).
     #[arg(long, value_name = "AAAA-MM-JJ", value_parser = parse_day)]
     pub to: Option<Day>,
+    /// Tâches affectées à cette ressource (ID de `planrs resources`).
+    #[arg(long, value_name = "ID")]
+    pub resource: Option<u32>,
     /// Une seule page de N tâches au plus (1 à 500). Hors plage : erreur
     /// d'usage (code 2), avant toute lecture du plan.
     #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..=500))]
@@ -77,6 +83,10 @@ fn tasks(ctx: &Ctx, args: &TasksArgs) -> Run {
     }
     if let Some(d) = args.to {
         filter.insert("to".to_owned(), Value::String(d.to_string()));
+    }
+    if let Some(id) = args.resource {
+        let uid = resources::uid_of_id(&mut ws, id).map_err(|e| report(&e, args.json))?;
+        filter.insert("resource".to_owned(), json!(uid));
     }
     let v = match args.limit {
         Some(limit) => {

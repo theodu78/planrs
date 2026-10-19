@@ -15,6 +15,7 @@
     clippy::panic,
     clippy::indexing_slicing,
     clippy::missing_panics_doc,
+    clippy::arithmetic_side_effects,
     reason = "tests : un échec doit s'arrêter net"
 )]
 
@@ -36,8 +37,12 @@ use tokio::task::JoinHandle;
 
 const SCENARIO: &str = "build_30";
 
-/// Budget du rejeu complet en debug (vérification 5).
-const BUDGET: Duration = Duration::from_secs(2);
+/// Budget du rejeu complet en debug (vérification 5). Temps réel mesuré
+/// pendant que les autres rejeux tournent en parallèle sur les runners de la
+/// CI (2 à 4 cœurs) : 10 s, qui attrape une explosion de complexité sans
+/// dépendre de la charge (0,2 à 0,5 s par rejeu en local, 2,3 s observé sur
+/// la CI Linux le 2026-10-19 avec huit rejeux simultanés).
+const BUDGET: Duration = Duration::from_secs(10);
 
 fn root() -> std::path::PathBuf {
     repo_root(env!("CARGO_MANIFEST_DIR"))
@@ -140,6 +145,178 @@ async fn replay_build_30_memory() {
     replay_memory(SCENARIO, Some("build_30.xml")).await;
 }
 
+/// Scénario J5 (lot L9, `docs/plans/j5.md`) : ressources, affectations,
+/// types de tâche, pilotage par l'effort, surutilisation, rejoué en mémoire ;
+/// MSPDI exporté égal à l'attendu par `normalize`.
+///
+/// Vérifications du cahier, sur les résultats attendus : `dry_run` sans
+/// effet et même diff que l'appel validé ; surutilisation signalée par
+/// `diff.overallocated` à l'affectation à 150 %, visible par semaine dans
+/// `resource_usage`, résolue par `update_assignment` ; `delete_resource`
+/// sans `cascade` refusé ; réouverture du MSPDI exporté : mêmes tâches
+/// (durées comprises), mêmes ressources, même résumé (hors chemin, état
+/// modifié, historique).
+#[tokio::test]
+async fn replay_resources_j5_memory() {
+    let s = replay_memory("resources_j5", Some("resources_j5.xml")).await;
+    if replay::blessing() {
+        return;
+    }
+    let at = |tool: &str, params: &Value| index_of(&s, tool, params);
+    let ok = |i: usize| ok_at(&s, i);
+    assert!(
+        s.calls
+            .iter()
+            .filter(|c| c.tool != "delete_resource")
+            .all(|c| error_code(c.expected.as_ref().unwrap()).is_none())
+    );
+    // Quatre ressources, un calendrier propre pour chaque ressource de travail.
+    let added: Vec<&Value> = (0..s.calls.len())
+        .filter(|&i| s.calls[i].tool == "add_resource")
+        .map(|i| &ok(i)["side_effects"])
+        .collect();
+    assert_eq!(
+        added,
+        [
+            &json!([{ "calendar_created": 4 }]),
+            &json!([{ "calendar_created": 5 }]),
+            &json!([]),
+            &json!([])
+        ]
+    );
+    // Électricien ajouté à une tâche pilotée par l'effort : dry_run puis
+    // validé, même diff ; 48 h gardées, 24 h chacun (3 j par affectation) ;
+    // durée de la tâche = union des parts, 5 j du lun 23 au ven 27/11 (la
+    // part de l'Électricien décalée par son congé, R-173, S14).
+    let dry = at(
+        "assign_resource",
+        &json!({ "task": 4, "resource": 2, "dry_run": true }),
+    );
+    assert_eq!(ok(dry)["committed"], json!(false));
+    assert_eq!(ok(dry)["diff"], ok(dry + 1)["diff"]);
+    assert_eq!(ok(dry + 1)["committed"], json!(true));
+    let reseaux = ok(at("get_task", &json!({ "uid": 4 })));
+    assert_eq!(
+        (&reseaux["work"]["text"], &reseaux["duration"]["text"]),
+        (&json!("48h"), &json!("5j"))
+    );
+    // Durée fixe : unités à 50 % ⇒ travail 16 h ; travail fixe : 8 j ⇒ 50 %.
+    let charpente = ok(at("get_task", &json!({ "uid": 3 })));
+    assert_eq!(charpente["work"]["text"], json!("16h"));
+    let enduits = ok(at("get_task", &json!({ "uid": 6 })));
+    assert_eq!(
+        (
+            &enduits["work"]["text"],
+            &enduits["resources"][0]["units"]["text"]
+        ),
+        (&json!("32h"), &json!("50%"))
+    );
+    // Béton (matériel, UID 3) quantité 12 sur Dalle (UID 7) : la quantité
+    // rendue est celle saisie (portée par le travail, 12 h, O30), relisible
+    // comme `quantity`, dans les vues des tâches et des ressources.
+    let last = |tool: &str| s.calls.iter().rposition(|c| c.tool == tool).unwrap();
+    let listed = ok(last("list_resources"));
+    let beton = listed["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["uid"] == json!(3))
+        .unwrap();
+    let twelve = json!({ "text": "12", "value": 120_000 });
+    assert_eq!(beton["assignments"][0]["units"], twelve, "{beton}");
+    assert_eq!(beton["assignments"][0]["effective_units"], twelve, "{beton}");
+    let tasks = ok(last("list_tasks"));
+    let dalle = tasks["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["uid"] == json!(7))
+        .unwrap();
+    let on_dalle = dalle["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["uid"] == json!(3))
+        .unwrap();
+    assert_eq!(on_dalle["units"], twelve, "{dalle}");
+    // Surutilisation du Maçon (UID 1).
+    let over = at(
+        "assign_resource",
+        &json!({ "task": 7, "resource": 1, "units": { "text": "150%" } }),
+    );
+    assert_eq!(
+        ok(over)["diff"]["overallocated"],
+        json!({ "new": [1], "resolved": [] })
+    );
+    let usage = ok(over + 1);
+    assert_eq!(s.calls[over + 1].tool, "resource_usage");
+    assert_eq!(
+        usage["rows"][0]["overallocated"],
+        json!([false, true, false, false])
+    );
+    let fix = at(
+        "update_assignment",
+        &json!({ "task": 7, "resource": 1, "units": { "text": "100%" } }),
+    );
+    assert_eq!(
+        ok(fix)["diff"]["overallocated"],
+        json!({ "new": [], "resolved": [1] })
+    );
+    let refused = s.calls.iter().find(|c| c.tool == "delete_resource").unwrap();
+    assert_eq!(
+        error_code(refused.expected.as_ref().unwrap()),
+        Some("resource.has_assignments")
+    );
+    assert_reopened(&s);
+}
+
+/// Index du premier appel `tool` de paramètres `params`.
+fn index_of(s: &Scenario, tool: &str, params: &Value) -> usize {
+    s.calls
+        .iter()
+        .position(|c| c.tool == tool && &c.params == params)
+        .unwrap_or_else(|| panic!("{tool} {params} absent du scénario"))
+}
+
+/// Résultat `ok` attendu de l'appel `i`.
+fn ok_at(s: &Scenario, i: usize) -> &Value {
+    let r = s.calls[i].expected.as_ref().unwrap();
+    r.get("ok").unwrap_or_else(|| panic!("appel {} : {r}", i + 1))
+}
+
+/// `resources_j5` : la réouverture du MSPDI exporté redonne le projet.
+fn assert_reopened(s: &Scenario) {
+    let at = |tool: &str, params: &Value| index_of(s, tool, params);
+    let ok = |i: usize| ok_at(s, i);
+    // Réouverture : mêmes tâches (dates, durées, travail, marges), mêmes
+    // ressources. La durée d'une feuille placée par plusieurs parts est la
+    // même en session et relue : l'union des parts (Réseaux, UID 4 : 5 j,
+    // du lun 23 au ven 27/11), reportée dans le modèle après chaque recalcul
+    // (R-173) et écrite par l'écrivain MSPDI (R-199).
+    let opened = at("open_project", &json!({ "path": "$TMP/resources_j5.xml" }));
+    let before = opened - 4;
+    assert_eq!(s.calls[before].tool, "list_tasks");
+    assert_eq!(s.calls[opened + 1].tool, "list_tasks");
+    let reseaux = ok(before)["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["uid"] == json!(4))
+        .unwrap();
+    assert_eq!(reseaux["duration"]["minutes"], json!(2400), "{reseaux}");
+    assert_eq!(ok(opened + 1), ok(before));
+    assert_eq!(s.calls[opened + 2].tool, "list_resources");
+    assert_eq!(ok(opened + 2), ok(before + 1));
+    let strip = |v: &Value| {
+        let mut v = v.clone();
+        for k in ["dirty", "path", "history_len"] {
+            v.as_object_mut().unwrap().remove(k);
+        }
+        v
+    };
+    assert_eq!(strip(ok(opened + 3)), strip(ok(before + 2)));
+}
+
 /// Essai réel avec Claude du 2026-10-19 (`docs/features/mcp.md` § 6) :
 /// journal de `claude -p` versionné, chemins ramenés à `$TMP`, rejoué tel
 /// quel. Six appels, aucune erreur ; un lot atomique de 75 opérations.
@@ -187,6 +364,79 @@ async fn replay_claude_run_1() {
             &json!(1)
         )
     );
+}
+
+/// Essai réel n° 2 avec Claude du 2026-10-19 (`docs/features/mcp.md` § 6,
+/// ressources J5) : journal de `claude -p` versionné, chemins ramenés à
+/// `$TMP`, rejoué tel quel. Seize appels, aucune erreur ; trois
+/// `apply_batch` en `dry_run` comparés avant d'appliquer ; six artisans,
+/// surutilisation détectée (Maçon, Carreleur) puis résolue par des liens,
+/// aucune surcharge à la fin ; fin du projet mer 27/01/2027 17:00.
+#[tokio::test]
+async fn replay_claude_run_2() {
+    let s = replay_memory("claude_run_2", Some("renovation-maison.xml")).await;
+    if replay::blessing() {
+        return;
+    }
+    let tools: Vec<&str> = s.calls.iter().map(|c| c.tool.as_str()).collect();
+    assert_eq!(
+        tools,
+        [
+            "new_project",
+            "apply_batch",
+            "apply_batch",
+            "list_resources",
+            "resource_usage",
+            "list_tasks",
+            "critical_path",
+            "apply_batch",
+            "apply_batch",
+            "apply_batch",
+            "apply_batch",
+            "critical_path",
+            "resource_usage",
+            "list_resources",
+            "save_project",
+            "render_gantt"
+        ]
+    );
+    assert!(
+        s.calls
+            .iter()
+            .all(|c| error_code(c.expected.as_ref().unwrap()).is_none())
+    );
+    let ok = |i: usize| ok_at(&s, i);
+    // Surutilisation détectée : Maçon (UID 1) et Carreleur (UID 5).
+    let over: Vec<&Value> = ok(3)["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| &r["uid"])
+        .collect();
+    assert_eq!(over, [&json!(1), &json!(5)]);
+    // Trois essais en `dry_run`, rien d'appliqué ; le premier fait
+    // apparaître une surcharge du Plaquiste (UID 4).
+    for i in 7..=9 {
+        assert_eq!(s.calls[i].params["dry_run"], json!(true));
+        assert_eq!(ok(i)["committed"], json!(false));
+    }
+    assert_eq!(
+        ok(7)["diff"]["overallocated"],
+        json!({ "new": [4], "resolved": [1, 5] })
+    );
+    // Lot validé : surcharges résolues, aucune nouvelle.
+    assert_eq!(ok(10)["committed"], json!(true));
+    assert_eq!(
+        ok(10)["diff"]["overallocated"],
+        json!({ "new": [], "resolved": [1, 5] })
+    );
+    // Fin du projet et chemin critique après la résolution.
+    assert_eq!(ok(11)["project_finish"], json!("2027-01-27T17:00"));
+    assert_eq!(ok(11)["total"], json!(22));
+    // Six artisans, aucune surcharge restante.
+    let all = ok(13)["resources"].as_array().unwrap();
+    assert_eq!(all.len(), 6);
+    assert!(all.iter().all(|r| r["overallocated"] == json!(false)));
 }
 
 /// Vérification 2 : MSPDI enregistré relu, 30 tâches, `normalize` égal à

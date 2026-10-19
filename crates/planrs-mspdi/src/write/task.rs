@@ -9,7 +9,7 @@ use planrs_core::{
 use super::computed::{TaskValues, Values};
 use super::emit::Emitter;
 use super::{
-    NO_EXTRAS, OrderProfile, Planned, WriteCode, baseline, entity, max_len, percent, plan, unscoped,
+    NO_EXTRAS, OrderProfile, Planned, WriteCode, baseline, entity, leveling, max_len, percent, plan, unscoped,
 };
 use crate::codes;
 use crate::scalar::{format_bool, format_datetime, format_iso_duration};
@@ -147,6 +147,27 @@ pub(crate) fn remaining(t: &Task, summary: bool) -> (Minutes, Work) {
     (duration, t.work)
 }
 
+/// Durée écrite : calculée pour une feuille automatique affectée (R-199),
+/// sinon celle du modèle.
+fn duration_of(row: &Row<'_>) -> Duration {
+    row.values
+        .and_then(|v| v.leaf_duration)
+        .unwrap_or(row.task.duration)
+}
+
+/// Restes écrits (R-127), sur la durée écrite (R-199) : l'image relue reste
+/// celle de `normalize` appliquée à `schedule_image`.
+fn remaining_of(row: &Row<'_>) -> (Minutes, Work) {
+    match row.values.and_then(|v| v.leaf_duration) {
+        Some(d) => {
+            let mut t = row.task.clone();
+            t.duration = d;
+            remaining(&t, row.summary)
+        }
+        None => remaining(row.task, row.summary),
+    }
+}
+
 /// `DurationFormat` d'une durée.
 fn duration_format(d: &Duration) -> String {
     codes::duration_format_code(d.unit(), d.basis(), d.is_estimated()).to_string()
@@ -173,7 +194,8 @@ fn write(em: &mut Emitter, row: &Row<'_>, profile: OrderProfile) {
     };
     let numbers: Vec<u8> = t.baselines.keys().map(|n| n.get()).collect();
     let planned = plan(em, "Task", Parent::Task, &t.extras, &numbers, profile);
-    let top = unscoped(&planned);
+    let mut top = unscoped(&planned);
+    leveling::drop_legacy(&mut top, t.leveling_delay);
     entity(em, "Task", Parent::Task, profile, &top, |em, name| {
         field(em, name, row, manual, &planned, profile);
     });
@@ -211,10 +233,11 @@ fn field(
         "OutlineLevel" => em.leaf_int(name, i64::from(row.level)),
         "Priority" => em.leaf_int(name, i64::from(t.priority.get())),
         // Durée : entrée d'une feuille ou d'une tâche manuelle ; valeur
-        // calculée d'une récapitulative automatique (R-071, R-122).
+        // calculée d'une récapitulative automatique (R-071, R-122) et d'une
+        // feuille automatique affectée (R-199).
         "Duration" => {
             if !row.summary || manual.is_some() {
-                em.leaf_iso(name, t.duration.minutes().get());
+                em.leaf_iso(name, duration_of(row).minutes().get());
             } else {
                 em.opt_leaf(name, computed.and_then(|v| v.duration).map(format_iso_duration));
             }
@@ -248,7 +271,12 @@ fn field(
             }
         }
         "DurationFormat" => em.leaf(name, &duration_format(&t.duration)),
-        "Work" => em.leaf_iso(name, t.work.minutes().get()),
+        // R-199 : travail calculé d'une récapitulative et de l'UID 0 avec
+        // `Computed::Schedule` (R-184), sinon celui du modèle.
+        "Work" => em.leaf_iso(
+            name,
+            computed.and_then(|v| v.work).unwrap_or(t.work).minutes().get(),
+        ),
         "EffortDriven" => em.leaf(name, format_bool(t.effort_driven)),
         "Recurring" => em.leaf(name, format_bool(t.recurring)),
         "Estimated" => em.leaf(name, format_bool(t.duration.is_estimated())),
@@ -261,8 +289,8 @@ fn field(
         "ActualFinish" => em.opt_date(name, t.progress.actual_finish),
         "ActualDuration" => em.leaf_iso(name, t.progress.actual_duration.get()),
         "ActualWork" => em.leaf_iso(name, t.progress.actual_work.minutes().get()),
-        "RemainingDuration" => em.leaf_iso(name, remaining(t, row.summary).0.get()),
-        "RemainingWork" => em.leaf_iso(name, remaining(t, row.summary).1.minutes().get()),
+        "RemainingDuration" => em.leaf_iso(name, remaining_of(row).0.get()),
+        "RemainingWork" => em.leaf_iso(name, remaining_of(row).1.minutes().get()),
         "ConstraintType" => em.leaf_int(name, codes::constraint_code(t.constraint.kind())),
         "CalendarUID" => em.leaf(
             name,
@@ -273,6 +301,7 @@ fn field(
         "ConstraintDate" => em.opt_date(name, constraint_date(t.constraint)),
         "Deadline" => em.opt_date(name, t.deadline),
         "IgnoreResourceCalendar" => em.leaf(name, format_bool(t.ignore_resource_calendar)),
+        "LevelingDelay" | "LevelingDelayFormat" => leveling::write(em, name, t.leveling_delay),
         "Notes" => em.text(name, &t.notes, max_len(Parent::Task, name)),
         "PredecessorLink" => {
             for link in &t.predecessors {

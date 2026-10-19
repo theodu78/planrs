@@ -2,8 +2,9 @@
 //! des outils MCP, des commandes de la CLI, du canal et des raccourcis de
 //! l'interface.
 //!
-//! Entrées J4 (disponibles, listées) et entrées réservées aux jalons J5-J6
-//! (non listées, refusées `command.not_yet_available`). Le schéma de chaque
+//! Entrées disponibles (J4, et les huit entrées J5 activées par le lot L8)
+//! et entrées réservées au jalon J6 (non listées, refusées
+//! `command.not_yet_available`). Le schéma de chaque
 //! entrée est celui de ses paramètres (JSON Schema 2020-12, sous-schémas en
 //! ligne, sans `$ref`) ; les surfaces y ajoutent `dry_run` ou `detail`.
 //! Schémas de référence : `tests/golden/schemas/<id>.json`.
@@ -13,10 +14,11 @@ use schemars::{JsonSchema, Schema, json_schema};
 
 use crate::command::params::{
     ApplyBatchParams, ExportMspdiParams, ImportCsvParams, NewProjectParams, NoParams, OpenProjectParams,
-    RenderGanttParams, SaveProjectParams, TaskGetParams, TaskListParams,
+    RenderGanttParams, ResourceListParams, SaveProjectParams, TaskGetParams, TaskListParams, UsageParams,
 };
 use crate::command::{
-    AnchorSpec, CalendarException, CalendarExceptionKey, LinkKey, LinkSpec, ProjectInfoPatch, SetConstraint,
+    AnchorSpec, AssignmentAdd, AssignmentKey, AssignmentUpdate, CalendarException, CalendarExceptionKey,
+    LinkKey, LinkSpec, ProjectInfoPatch, ResourceAdd, ResourceDelete, ResourceUpdate, SetConstraint,
     SetDeadline, SetStatusDate, TaskAdd, TaskDelete, TaskMove, TaskOne, TaskUpdate,
 };
 use crate::text::Language;
@@ -99,7 +101,7 @@ pub fn schema_of<T: JsonSchema>() -> Schema {
         .into_root_schema_for::<T>()
 }
 
-/// Entrée disponible en J4.
+/// Entrée disponible.
 const fn now(
     id: &'static str,
     mcp_name: &'static str,
@@ -178,13 +180,13 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Explique la date d'une tâche.",
         "Explain a task date.",
     ),
-    reserved(
+    now(
         "analysis.resource_usage",
         "resource_usage",
         Kind::Analysis,
-        5,
-        "Charge des ressources.",
-        "Resource usage.",
+        schema_of::<UsageParams>,
+        "Utilisation des ressources : travail par période et surutilisation, calculés par le moteur.",
+        "Resource usage: work per period and overallocation, computed by the engine.",
     ),
     reserved(
         "analysis.what_if",
@@ -194,21 +196,29 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Simule un lot sans l'appliquer.",
         "Simulate a batch without applying it.",
     ),
-    reserved(
+    now(
         "assignment.add",
         "assign_resource",
         Kind::Write,
-        5,
-        "Affecte une ressource à une tâche.",
-        "Assign a resource to a task.",
+        schema_of::<AssignmentAdd>,
+        "Affecte une ressource à une tâche (unités, travail ou quantité, retard).",
+        "Assign a resource to a task (units, work or quantity, delay).",
     ),
-    reserved(
+    now(
+        "assignment.remove",
+        "unassign_resource",
+        Kind::Write,
+        schema_of::<AssignmentKey>,
+        "Retire une ressource d'une tâche.",
+        "Remove a resource from a task.",
+    ),
+    now(
         "assignment.update",
         "update_assignment",
         Kind::Write,
-        5,
-        "Modifie une affectation.",
-        "Update an assignment.",
+        schema_of::<AssignmentUpdate>,
+        "Modifie une affectation (unités, travail, quantité, retard).",
+        "Update an assignment (units, work, quantity, delay).",
     ),
     reserved(
         "baseline.set",
@@ -378,13 +388,37 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Diagramme de Gantt en SVG, avec plage, échelle et filtre.",
         "Gantt chart as SVG, with range, zoom and filter.",
     ),
-    reserved(
+    now(
         "resource.add",
         "add_resource",
         Kind::Write,
-        5,
-        "Ajoute une ressource.",
-        "Add a resource.",
+        schema_of::<ResourceAdd>,
+        "Ajoute une ressource (travail, matérielle ou coût ; calendrier propre par défaut).",
+        "Add a resource (work, material or cost; own calendar by default).",
+    ),
+    now(
+        "resource.delete",
+        "delete_resource",
+        Kind::Write,
+        schema_of::<ResourceDelete>,
+        "Supprime une ressource (cascade obligatoire si elle est affectée).",
+        "Delete a resource (cascade required if it is assigned).",
+    ),
+    now(
+        "resource.list",
+        "list_resources",
+        Kind::Read,
+        schema_of::<ResourceListParams>,
+        "Liste des ressources, avec travail et surutilisation, paginée.",
+        "List resources, with work and overallocation, paginated.",
+    ),
+    now(
+        "resource.update",
+        "update_resource",
+        Kind::Write,
+        schema_of::<ResourceUpdate>,
+        "Modifie une ressource (nom, capacité, calendrier, initiales, groupe…).",
+        "Update a resource (name, capacity, calendar, initials, group…).",
     ),
     now(
         "task.add",
@@ -407,8 +441,8 @@ pub static REGISTRY: &[CommandSpec] = &[
         "get_task",
         Kind::Read,
         schema_of::<TaskGetParams>,
-        "Détail d'une tâche : dates du moteur, marges, liens, contrainte.",
-        "Task details: engine dates, slack, links, constraint.",
+        "Détail d'une tâche : dates du moteur, marges, liens, contrainte, ressources, travail, type.",
+        "Task details: engine dates, slack, links, constraint, resources, work, task type.",
     ),
     now(
         "task.indent",
@@ -423,8 +457,8 @@ pub static REGISTRY: &[CommandSpec] = &[
         "list_tasks",
         Kind::Read,
         schema_of::<TaskListParams>,
-        "Liste des tâches, filtrée (critiques, en retard, plage de dates) et paginée.",
-        "List tasks, filtered (critical, late, date range) and paginated.",
+        "Liste des tâches, filtrée (critiques, en retard, plage de dates, ressource) et paginée.",
+        "List tasks, filtered (critical, late, date range, resource) and paginated.",
     ),
     now(
         "task.move",
@@ -463,8 +497,8 @@ pub static REGISTRY: &[CommandSpec] = &[
         "update_task",
         Kind::Write,
         schema_of::<TaskUpdate>,
-        "Modifie une tâche (nom, durée, jalon, notes, début ou fin saisis, active).",
-        "Update a task (name, duration, milestone, notes, entered start or finish, active).",
+        "Modifie une tâche (nom, durée, jalon, notes, début ou fin saisis, active, type, pilotage par l'effort, travail).",
+        "Update a task (name, duration, milestone, notes, entered start or finish, active, type, effort-driven, work).",
     ),
 ];
 

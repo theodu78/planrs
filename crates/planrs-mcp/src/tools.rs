@@ -2,7 +2,7 @@
 //! `dry_run` ou `detail`), annotations (lot L8).
 //!
 //! Seules les entrées disponibles (`Availability::Now`) sont listées ; une
-//! entrée réservée (J5-J6) reste appelable par son nom et répond
+//! entrée réservée (J6) reste appelable par son nom et répond
 //! `command.not_yet_available` (erreur structurée, C-MCP-05).
 
 use std::sync::Arc;
@@ -27,7 +27,7 @@ pub(crate) fn tool_for(spec: &CommandSpec, lang: Language) -> Tool {
         Kind::Read | Kind::Analysis => ToolAnnotations::new().read_only(true),
         Kind::Write | Kind::History | Kind::File => ToolAnnotations::new()
             .read_only(false)
-            .destructive(spec.id == "task.delete")
+            .destructive(is_destructive(spec.id))
             .idempotent(false)
             .open_world(false),
     };
@@ -37,6 +37,12 @@ pub(crate) fn tool_for(spec: &CommandSpec, lang: Language) -> Tool {
         Arc::new(input_schema(spec, lang)),
     )
     .with_annotations(annotations)
+}
+
+/// Suppression d'un élément du modèle : annotation `destructive_hint`
+/// (J5 : `delete_resource`).
+fn is_destructive(id: &str) -> bool {
+    matches!(id, "task.delete" | "resource.delete")
 }
 
 /// Schéma d'entrée : schéma des paramètres, plus `dry_run` et `detail`
@@ -107,6 +113,16 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(names.len(), before);
+    }
+
+    #[test]
+    fn tools_destructive_hint_on_deletions() {
+        for spec in REGISTRY.iter().filter(|s| s.is_listed()) {
+            let tool = tool_for(spec, Language::Fr);
+            let hint = tool.annotations.and_then(|a| a.destructive_hint);
+            let expected = matches!(spec.id, "task.delete" | "resource.delete");
+            assert_eq!(hint == Some(true), expected, "{}", spec.id);
+        }
     }
 
     #[test]

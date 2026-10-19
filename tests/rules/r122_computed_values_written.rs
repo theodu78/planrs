@@ -2,8 +2,9 @@
 //! `choose_computed`).
 
 use planrs_core::{
-    Assignment, AssignmentUid, CalendarUid, Duration, DurationUnit, ExtraEntry, Extras, Link, Minutes,
-    Percent, Resource, ResourceUid, ScheduleAnchor, SchedulingMode, Task, TaskUid, TimeBasis, schedule,
+    Assignment, AssignmentUid, CalendarUid, Duration, DurationUnit, ExtraEntry, Extras, LevelingDelay, Link,
+    Minutes, Percent, Resource, ResourceUid, ScheduleAnchor, SchedulingMode, Task, TaskUid, TimeBasis,
+    schedule,
 };
 use planrs_mspdi::write::{
     Computed, ScheduleGap, WriteCode, WriteOptions, choose_computed, schedule_gaps, write,
@@ -157,32 +158,45 @@ fn r122_policy_with_progress() {
 }
 
 #[test]
-fn r122_gaps_resource_calendars_and_leveling_delay() {
+fn r122_gaps_only_progress() {
+    // R-122 amendée (J5, R-199) : une ressource de travail dotée d'un
+    // calendrier sur une feuille automatique et un retard de nivellement
+    // (modèle ou `Extras` hérité) ne sont plus des manques ; seul
+    // l'avancement en reste un.
     let mut proj = new_project("2026-10-19T08:00");
     proj.tasks.push(task(&proj, 1, 2)).unwrap();
     let mut r = Resource::new(ResourceUid::new(1), "R".to_owned());
     r.calendar = Some(CalendarUid::new(1));
     proj.resources.push(r).unwrap();
-    proj.assignments
-        .push(Assignment::new(
-            AssignmentUid::new(1),
-            TaskUid::new(1),
-            Some(ResourceUid::new(1)),
-        ))
-        .unwrap();
-    assert_eq!(schedule_gaps(&proj), [ScheduleGap::ResourceCalendars]);
-    // Ignorer le calendrier des ressources : plus de manque.
-    proj.tasks
-        .get_mut(TaskUid::new(1))
-        .unwrap()
-        .ignore_resource_calendar = true;
+    let mut a = Assignment::new(AssignmentUid::new(1), TaskUid::new(1), Some(ResourceUid::new(1)));
+    a.leveling_delay = Some(LevelingDelay {
+        minutes: Minutes::new(480),
+        unit: DurationUnit::Day,
+        elapsed: false,
+    });
+    proj.assignments.push(a).unwrap();
+    {
+        let t = proj.tasks.get_mut(TaskUid::new(1)).unwrap();
+        t.leveling_delay = Some(LevelingDelay {
+            minutes: Minutes::new(4_320),
+            unit: DurationUnit::Day,
+            elapsed: true,
+        });
+        t.extras = Extras(vec![ExtraEntry {
+            origin: "mspdi".to_owned(),
+            key: "LevelingDelay".to_owned(),
+            payload: "<LevelingDelay>4800</LevelingDelay>".to_owned(),
+        }]);
+    }
     assert_eq!(schedule_gaps(&proj), []);
-    proj.tasks.get_mut(TaskUid::new(1)).unwrap().extras = Extras(vec![ExtraEntry {
-        origin: "mspdi".to_owned(),
-        key: "LevelingDelay".to_owned(),
-        payload: "<LevelingDelay>4800</LevelingDelay>".to_owned(),
-    }]);
-    assert_eq!(schedule_gaps(&proj), [ScheduleGap::LevelingDelay]);
+    let sched = schedule(&proj);
+    let (computed, diags) = choose_computed(&proj, &sched, None);
+    assert!(matches!(computed, Computed::Schedule(_)));
+    assert_eq!(diags, Vec::new());
+    // Avancement : seul manque restant.
+    proj.tasks.get_mut(TaskUid::new(1)).unwrap().progress.actual_start = Some(moment("2026-10-19T08:00"));
+    assert_eq!(schedule_gaps(&proj), [ScheduleGap::Progress]);
+    assert_eq!(ScheduleGap::Progress.code(), "progress");
 }
 
 #[test]
@@ -219,7 +233,8 @@ fn r122_start_slack_on_base_of_derived_project_calendar() {
     // de ressource, comme A4) d'une base lun-ven 09:00-13:00, 15:00-19:00 ;
     // `StartSlack`/`FinishSlack` mesurés sur la base, comme la marge du
     // moteur. A 1 j, C 3 j : TF(A) = 2 j = 960 → `StartSlack` 9 600.
-    use crate::r113_derived_project_calendar::net;
+    use crate::r113_derived_project_calendar::{DERIVED, net};
+    use crate::r171_assignment_effective_calendar::{assign, resource};
     let proj = net().task("A", 480).task("C", 1_440).build();
     let sched = schedule(&proj);
     let (computed, diags) = choose_computed(&proj, &sched, None);
@@ -232,12 +247,14 @@ fn r122_start_slack_on_base_of_derived_project_calendar() {
         a.contains("<StartSlack>9600</StartSlack><FinishSlack>9600</FinishSlack>"),
         "{a}"
     );
-    // A 4 h, C 1 j : ES lun 08:00, EF 12:00, LS 13:00, LF 17:00 (placement
-    // sur le dérivé). Sur la base : début 240 (09:00-13:00), fin 180
-    // (12:00-13:00, 15:00-17:00), TF = 180. Sur le dérivé, l'écrivain aurait trouvé
-    // 240/240, dont le minimum ne redonne pas la marge : valeurs omises
-    // avant l'amendement.
-    let proj = net().task("A", 240).task("C", 480).build();
+    // A 4 h, C 1 j, affectées à une ressource du calendrier dérivé (J5 :
+    // seule une ressource place sur le dérivé, R-171, R-175) : ES lun 08:00,
+    // EF 12:00, LS 13:00, LF 17:00 (placement sur le dérivé). Sur la base :
+    // début 240 (09:00-13:00), fin 180 (12:00-13:00, 15:00-17:00), TF = 180.
+    // Sur le dérivé, l'écrivain aurait trouvé 240/240, dont le minimum ne
+    // redonne pas la marge : valeurs omises avant l'amendement.
+    let assigned = resource(net().task("A", 240).task("C", 480), 1, Some(DERIVED));
+    let proj = assign(assign(assigned, 1, "A", 1, 240), 2, "C", 1, 480).build();
     let sched = schedule(&proj);
     assert_eq!(
         sched.scheduled(TaskUid::new(1)).unwrap().total_slack,

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`resource.delete` (R-195).",
+  "properties": {
+    "cascade": {
+      "default": false,
+      "description": "Retirer aussi ses affectations (obligatoire si elle en a :\n`resource.has_assignments`).",
+      "type": "boolean"
+    },
+    "uid": {
+      "description": "Ressource.",
+      "oneOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "required": [
+    "uid"
+  ],
+  "title": "ResourceDelete",
+  "type": "object"
+}

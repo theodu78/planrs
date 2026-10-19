@@ -26,6 +26,12 @@ struct Bounds {
     driver: Driver,
     degraded: bool,
     linked: bool,
+    /// Plus grande borne de début seule (début du projet, porte, FS, SS) et
+    /// son pilote : origine du retard de nivellement (R-178).
+    start_side: (Moment, Driver),
+    /// Plus grande borne de fin (FF, SF) convertie en début, et son pilote :
+    /// elle porte sur le début retardé (R-178).
+    finish_side: Option<(Moment, Driver)>,
 }
 
 /// Une borne candidate.
@@ -115,12 +121,14 @@ impl Calc<'_, '_> {
     /// `link.manual_not_honored` (R-063) et aucune conversion n'est faite.
     fn bounds(&mut self, v: NodeIx, fixed: Option<Span>) -> Result<Bounds, Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
-        let (place, duration, kind) = (node.place, node.duration, node.kind);
+        let (place, kind) = (node.place, node.kind);
         let mut b = Bounds {
             start: self.start,
             driver: Driver::ProjectStart,
             degraded: false,
             linked: false,
+            start_side: (self.start, Driver::ProjectStart),
+            finish_side: None,
         };
         let incoming = self
             .net
@@ -194,12 +202,20 @@ impl Calc<'_, '_> {
                     self.manual_bound(arc.link, cand, f, *scale)?;
                     continue;
                 }
-                // R-039, R-040 : borne de fin convertie en borne de début.
+                // R-039, R-040 : borne de fin convertie en borne de début
+                // (feuille affectée : min des débuts de ses parts, R-174).
                 (Candidate::Finish(x), None) if kind == NodeKind::Leaf => {
-                    scale.backward_span(x, duration)?.start
+                    self.placer(v)?.backward_span(x)?.start
                 }
                 (Candidate::Start(x) | Candidate::Finish(x), None) => x,
             };
+            match cand {
+                Candidate::Start(_) if start > b.start_side.0 => b.start_side = (start, driver),
+                Candidate::Finish(_) if b.finish_side.is_none_or(|(f, _)| start > f) => {
+                    b.finish_side = Some((start, driver));
+                }
+                Candidate::Start(_) | Candidate::Finish(_) => {}
+            }
             if start > b.start {
                 b.start = start;
                 b.driver = driver;
@@ -295,13 +311,20 @@ impl Calc<'_, '_> {
     /// l'affichage, R-062).
     fn leaf(&mut self, v: NodeIx) -> Result<(), Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
-        let (place, duration, constraint) = (node.place, node.duration, node.constraint);
+        let (place, constraint) = (node.place, node.constraint);
         let fixed = match node.fixed {
             Some(r) => Some(r?),
             None => None,
         };
         let mut b = self.bounds(v, fixed)?;
         let (pin, late) = self.state(v).map_or((None, None), |s| (s.pin, s.late));
+        // R-178 : retard de nivellement de la tâche (feuille automatique non
+        // épinglée).
+        let undelayed = if fixed.is_none() && pin.is_none() {
+            self.level(v, &mut b)?
+        } else {
+            None
+        };
         // R-110 (miroir de R-051) : à rebours, option « plusieurs chemins
         // critiques » active, une feuille automatique sans prédécesseur
         // effectif commence au plus tôt à son début au plus tard.
@@ -328,18 +351,59 @@ impl Calc<'_, '_> {
                 self.overrides(v, scale, p, c.kind, true)?;
                 (p, Driver::Constraint { kind: c.kind })
             } else {
-                let natural = scale.forward_span(b.start, duration)?;
+                // R-173 : feuille affectée placée par ses parts.
+                let natural = self.placer(v)?.forward_span(b.start)?;
                 self.constrain(v, scale, natural, b.driver)?
             }
         };
         let replay = self.role == PassRole::Replay;
         let s = self.state_mut(v).ok_or(Fail::Internal("nœud hors bornes"))?;
         s.early = Some(early);
+        s.undelayed = undelayed.map(|(u, _)| u.min(early.start));
+        s.held = undelayed.map(|(_, h)| h);
         s.driver = driver;
         // Repasse : les drapeaux posés par la passe arrière sont gardés.
         s.degraded = b.degraded || (replay && s.degraded);
         s.linked = b.linked;
         Ok(())
+    }
+
+    /// R-178 : retard de nivellement enregistré de la feuille `v`. Début
+    /// non retardé `ES` = plus grande borne de début (début du projet, porte,
+    /// FS, SS) ; début retardé `ES'` = `ES` + retard, écoulé ou ouvré sur
+    /// l'échelle de placement ; une borne de fin (FF, SF), convertie en
+    /// début, porte sur `ES'` (A6 UID 20, O27). Rend `ES` recalé sur le
+    /// placement (début au plus tôt affiché) et le placement sans retard
+    /// depuis toutes les bornes (plafond des prédécesseurs en passe arrière),
+    /// `None` sans retard.
+    fn level(&self, v: NodeIx, b: &mut Bounds) -> Result<Option<(Moment, Span)>, Fail> {
+        let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+        let Some(delay) = self
+            .project
+            .tasks
+            .at(node.task)
+            .and_then(|t| t.leveling_delay)
+            .filter(|l| l.minutes > crate::duration::Minutes::ZERO)
+        else {
+            return Ok(None);
+        };
+        let scale = if delay.elapsed {
+            TimeScale::Elapsed
+        } else {
+            *self
+                .net
+                .scale(node.place)
+                .ok_or(Fail::Internal("échelle hors bornes"))?
+        };
+        let placer = self.placer(v)?;
+        let held = placer.forward_span(b.start)?;
+        let (es, es_driver) = b.start_side;
+        let delayed = scale.add(es, delay.minutes)?;
+        (b.start, b.driver) = match b.finish_side {
+            Some((f, d)) if f > delayed => (f, d),
+            _ => (delayed, es_driver),
+        };
+        Ok(Some((placer.forward_span(es)?.start, held)))
     }
 
     /// Contrainte d'une feuille automatique en passe avant (ADR-0010), sur

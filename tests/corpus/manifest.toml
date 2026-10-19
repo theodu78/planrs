@@ -67,8 +67,8 @@ size = 274759
 sha256 = "1c6fc94d87808dc1b925438db7db9f309ff1ce67ebcf504259b295b8935c6772"
 producer = "msproject"
 save_version = 14
-note = "36 tâches, FF/SS, 12 liens touchant une récapitulative, 2 LevelingDelay, 1 FNET, calendrier du projet ouvré le samedi, noms UTF-8."
-floor = 0
+note = "36 tâches, FF/SS, 12 liens touchant une récapitulative, 2 LevelingDelay, 1 FNET, calendrier du projet ouvré le samedi, noms UTF-8. J5 L4a : 4/37 (placement par affectation, R-173, R-175). J5 L4b : 34/37 (retards de nivellement, R-178). Restent UID 24, 26 et 42 : marge libre 0 contre 480, dernière feuille d'une récapitulative, finie un samedi, dont les seuls successeurs sont hérités de la récapitulative (cause non établie, R-049)."
+floor = 34
 
 [[file]]
 name = "projinteg.xml"

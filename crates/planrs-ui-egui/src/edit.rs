@@ -213,6 +213,9 @@ const fn update(uid: TaskUid) -> TaskUpdate {
         start: Patch::Keep,
         finish: Patch::Keep,
         active: Patch::Keep,
+        task_type: Patch::Keep,
+        effort_driven: Patch::Keep,
+        work: Patch::Keep,
     }
 }
 

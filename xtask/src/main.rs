@@ -12,10 +12,14 @@
 //! - `panics` : complète clippy pour la règle 10 (ne jamais planter). Refuse
 //!   hors du code de test les `allow`/`expect` qui lèvent un interdit de la
 //!   règle 10 et la famille `assert!`, qu'aucune lint clippy ne refuse.
+//! - `rules` : vérifie la règle 4. Chaque fiche `R-xxx` active de
+//!   `docs/scheduling-rules.md` a une ligne « Tests » et au moins une
+//!   fonction `fn rxxx_` dans `tests/` ou `crates/`.
 
 mod corpus;
 mod layers;
 mod panics;
+mod rules;
 mod schema;
 
 use std::process::ExitCode;
@@ -25,6 +29,7 @@ const USAGE: &str = "usage : cargo xtask <tâche>
 tâches :
   layers   vérifie les couches (règle 9)
   panics   vérifie les interdits de la règle 10 que clippy ne couvre pas
+  rules    vérifie que chaque règle R-xxx a ses tests (règle 4)
   corpus fetch
            télécharge le corpus public (tests/corpus/files, sha256 vérifié)
   schema fetch
@@ -35,6 +40,7 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("layers") => layers::run(),
         Some("panics") => panics::run(),
+        Some("rules") => rules::run(),
         Some("corpus") => corpus::run(args.get(1..).unwrap_or_default()),
         Some("schema") => schema::run(args.get(1..).unwrap_or_default()),
         _ => {

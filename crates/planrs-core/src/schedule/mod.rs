@@ -29,8 +29,11 @@
 mod backward;
 mod constraint;
 mod forward;
+mod image;
+pub(crate) mod load;
 mod network;
 mod order;
+mod placement;
 mod rollup;
 mod slack;
 mod transfer;
@@ -39,7 +42,11 @@ mod types;
 use std::collections::BTreeMap;
 
 pub use crate::diagnostic::Pass;
-pub use types::{Driver, Exclusion, LateDriver, Schedule, TaskOutcome, TaskRole, TaskSchedule};
+pub use image::{assigned_leaf_duration, placed_by_assignments, sync_assigned_durations};
+pub use types::{
+    AssignmentRole, AssignmentSchedule, Driver, EffectiveCalendar, Exclusion, LateDriver, MAX_OVERLOADS,
+    Overload, ResourceLoad, Schedule, TaskOutcome, TaskRole, TaskSchedule,
+};
 
 use crate::arena::Arena;
 use crate::calendar::{CalendarKind, CalendarSet, CompiledCalendar, Span, builtin};
@@ -65,7 +72,15 @@ const PERCENT_LAG_FROM_SUMMARY: &str = "lag.percent_of_summary_from_finish";
 struct NodeState {
     /// Dates au plus tôt ; porte : `(G, G)` ; agrégat : (min ES, max EF),
     /// ou les dates saisies d'une récapitulative manuelle datée (R-064).
+    /// Feuille à retard de nivellement : dates retardées (R-178).
     early: Option<Span>,
+    /// Feuille à retard de nivellement : début au plus tôt non retardé,
+    /// affiché comme `early.start` (R-178, O27).
+    undelayed: Option<Moment>,
+    /// Feuille à retard de nivellement : placement sans le retard depuis
+    /// toutes ses bornes ; plafonne les dates au plus tard que la feuille
+    /// impose à ses prédécesseurs (R-178, A6 UID 21 → 36).
+    held: Option<Span>,
     /// Agrégat : (min ES, max EF) des enfants, même pour une récapitulative
     /// manuelle datée (début réel des sous-tâches, lu par la marge libre
     /// d'un lien vers sa porte).
@@ -108,6 +123,8 @@ struct NodeState {
 impl NodeState {
     const NEW: Self = Self {
         early: None,
+        undelayed: None,
+        held: None,
         children: None,
         late: None,
         driver: Driver::ProjectStart,
@@ -345,7 +362,7 @@ impl Calc<'_, '_> {
                 let e = self.state(v).and_then(|s| s.early).ok_or(missing)?;
                 let scale = self
                     .net
-                    .scale(self.net.measure(node.place))
+                    .scale(node.measure)
                     .ok_or(Fail::Internal("échelle hors bornes"))?;
                 Ok(scale.between(e.start, e.finish)?)
             }
@@ -362,12 +379,18 @@ pub struct Limits {
     /// arc par feuille), tous liens confondus ; au-delà, les liens restants
     /// sont ignorés avec `link.expansion_limit`.
     pub expanded_arcs: usize,
+    /// Segments des calendriers combinés (intersections et unions, R-172)
+    /// gardés par recalcul, tous confondus ; le travail des combinaisons
+    /// (segments lus) est borné à 8 fois cette valeur. Au-delà,
+    /// `calendar.too_many_segments` et repli (R-171, R-173).
+    pub combined_segments: usize,
 }
 
 impl Default for Limits {
     fn default() -> Self {
         Self {
             expanded_arcs: network::DEFAULT_EXPANDED_ARC_BUDGET,
+            combined_segments: placement::DEFAULT_COMBINED_SEGMENTS,
         }
     }
 }
@@ -444,16 +467,26 @@ fn run(project: &Project, limits: Limits, strategy: Strategy) -> Schedule {
     };
     // R-113 : le calendrier du projet est un calendrier de base. S'il en
     // désigne un dérivé (calendrier de ressource), sa base mesure durées des
-    // récapitulatives, marges et décalages ; le calendrier désigné place les
-    // tâches sans calendrier propre (substitut des calendriers de ressource,
-    // J5).
-    let (project_cal, designated) = match (&fallback, derived_base(project, &set)) {
-        (None, Some(base)) => (base, Some(project_cal)),
-        _ => (project_cal, None),
+    // récapitulatives, marges et décalages, et place les tâches sans
+    // affectation de travail ni calendrier propre (R-175) ; le calendrier
+    // désigné ne place que les tâches affectées à ses ressources (R-171).
+    let project_cal = match (&fallback, derived_base(project, &set)) {
+        (None, Some(base)) => base,
+        _ => project_cal,
     };
-    let sc = network::scales(project, &set, project_cal, designated, &mut diags);
+    let sc = network::scales(project, &set, project_cal, &mut diags);
+    // J5 : affectations résolues (calendriers effectifs, R-171 ; `d_a`,
+    // R-170), avant le réseau qui les place (R-173).
+    let resolved = placement::resolve(project, &set, project_cal, limits.combined_segments, &mut diags);
     // Étapes 1 à 5.
-    let Some(mut net) = network::build(project, sc, mode, limits.expanded_arcs, &mut diags) else {
+    let Some(mut net) = network::build(
+        project,
+        sc,
+        (&resolved, &set),
+        mode,
+        limits.expanded_arcs,
+        &mut diags,
+    ) else {
         return internal_failure(project, start, diags, "construction du réseau");
     };
     let Some(order) = order::order(&mut net, &mut diags) else {
@@ -503,7 +536,12 @@ fn run(project: &Project, limits: Limits, strategy: Strategy) -> Schedule {
     calc.summary_late();
     calc.slack();
     calc.check_constraints();
-    calc.output(&order)
+    let mut out = calc.output(&order);
+    // J5 (lot L5) : travail, débits, charges et surutilisation (R-184 à
+    // R-187).
+    // Intersections reprises de `resolved` (jamais recompilées).
+    load::apply(project, &net, (&set, project_cal, &resolved), &mut out);
+    out
 }
 
 /// R-113 : calendrier de base du calendrier du projet quand celui-ci est
@@ -605,6 +643,8 @@ fn internal_failure(project: &Project, start: Moment, mut diags: Diagnostics, de
         tasks,
         order: Vec::new(),
         diagnostics: diags.finish(),
+        assignments: BTreeMap::new(),
+        resources: BTreeMap::new(),
     }
 }
 

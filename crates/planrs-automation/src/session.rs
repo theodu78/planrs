@@ -156,6 +156,23 @@ impl Exec for Edit {
     }
 }
 
+/// Recalcul d'un lot (R-173 amendée) : la durée du modèle de chaque feuille
+/// placée par ses affectations prend la durée calculée (mesure de l'union
+/// des intervalles travaillés, S14), celle qu'écrit l'écrivain MSPDI : la
+/// session et le fichier relu portent la même durée, et les éditions
+/// suivantes (R-189 à R-194) partent de cette valeur. Hors durée fixe et
+/// unités nulles, la durée du modèle ne place pas la feuille (`d_a` = W ÷ U,
+/// R-170) : le second recalcul, quand une durée a changé, redonne les mêmes
+/// dates et garde le planning cohérent avec le modèle.
+fn synced_schedule(work: &mut Project) -> Schedule {
+    let schedule = planrs_core::schedule(work);
+    if planrs_core::schedule::sync_assigned_durations(work, &schedule).is_empty() {
+        schedule
+    } else {
+        planrs_core::schedule(work)
+    }
+}
+
 /// Erreur `batch.would_create_errors` (R-160) : `op_index` = plus petit des
 /// index imputés aux erreurs nouvelles (dernière opération qui a touché le
 /// sujet, sinon la dernière du lot).
@@ -242,14 +259,20 @@ impl Session {
         Self::from_parts(project, None, origin, now, lang)
     }
 
+    /// Session ouverte : la durée du modèle des feuilles placées par leurs
+    /// affectations est alignée sur l'union dès l'ouverture, comme après un
+    /// lot (R-173 amendée) ; une durée relue différente (fichier d'un autre
+    /// outil) n'attend pas le premier lot pour être corrigée, et ne
+    /// s'inscrit pas dans l'entrée d'historique d'une commande sans rapport.
+    /// Le document n'est pas marqué modifié.
     fn from_parts(
-        project: Project,
+        mut project: Project,
         recorded: Option<RecordedSchedule>,
         origin: DocOrigin,
         now: Moment,
         lang: Language,
     ) -> Self {
-        let schedule = planrs_core::schedule(&project);
+        let schedule = synced_schedule(&mut project);
         let diagnostics = state_diagnostics(&project, &schedule);
         let uids = UidAlloc::from_project(&project);
         Self {
@@ -358,6 +381,8 @@ impl Session {
         let mut effects = Vec::new();
         let mut touched = BTreeMap::new();
         let mut created = Vec::new();
+        let mut resource_labels = BTreeMap::new();
+        let mut created_resources = Vec::new();
         for (i, op) in ops.iter().enumerate() {
             let mut ctx = Ctx {
                 project: &mut work,
@@ -368,10 +393,12 @@ impl Session {
                 op_index: i,
                 text: &text,
                 created: &mut created,
+                resource_labels: &mut resource_labels,
+                created_resources: &mut created_resources,
             };
             op.exec(&mut ctx).map_err(|e| e.with_op_index(i))?;
         }
-        let schedule = planrs_core::schedule(&work);
+        let schedule = synced_schedule(&mut work);
         let diagnostics = state_diagnostics(&work, &schedule);
         let delta = diagnostics_delta(&self.diagnostics, &diagnostics);
         if !delta.errors.is_empty() {
@@ -392,6 +419,8 @@ impl Session {
                 warnings: delta.warnings,
                 side_effects: effects,
                 history_len: self.history.len(),
+                resource_labels,
+                created_resources,
             });
         }
         let entity_delta = diff_projects(&self.project, &work);
@@ -422,6 +451,8 @@ impl Session {
             warnings: delta.warnings,
             side_effects: effects,
             history_len: self.history.len(),
+            resource_labels,
+            created_resources,
         })
     }
 
@@ -435,6 +466,8 @@ impl Session {
             warnings: Vec::new(),
             side_effects: Vec::new(),
             history_len: self.history.len(),
+            resource_labels: BTreeMap::new(),
+            created_resources: Vec::new(),
         }
     }
 
@@ -472,6 +505,8 @@ impl Session {
             warnings,
             side_effects: Vec::new(),
             history_len: 0,
+            resource_labels: BTreeMap::new(),
+            created_resources: Vec::new(),
         }
     }
 

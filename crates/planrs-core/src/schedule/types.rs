@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::calendar::Span;
 use crate::diagnostic::Diagnostic;
-use crate::duration::Minutes;
-use crate::ids::TaskUid;
+use crate::duration::{Minutes, Work};
+use crate::ids::{AssignmentUid, CalendarUid, ResourceUid, TaskUid};
 use crate::model::{ConstraintKind, LinkType};
-use crate::quantity::Percent;
+use crate::quantity::{Percent, Units};
 use crate::time::Moment;
 
 /// Planning calculé d'un projet.
@@ -38,6 +38,14 @@ pub struct Schedule {
     /// Diagnostics (compilation des calendriers comprise), triés,
     /// dédoublonnés.
     pub diagnostics: Vec<Diagnostic>,
+    /// Affectations placées (J5, R-171 à R-183), par UID ; absent du JSON
+    /// quand vide.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub assignments: BTreeMap<AssignmentUid, AssignmentSchedule>,
+    /// Charge des ressources (J5, R-184 à R-187), par UID ; absent du JSON
+    /// quand vide.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub resources: BTreeMap<ResourceUid, ResourceLoad>,
 }
 
 impl Schedule {
@@ -142,6 +150,122 @@ pub struct TaskSchedule {
     pub late_driver: LateDriver,
     /// Dates de repli : une conversion a échoué ici ou en amont (R-069).
     pub degraded: bool,
+    /// Travail calculé (J5, R-184) : feuille, somme des affectations de
+    /// travail ; récapitulative, somme des enfants et de ses affectations.
+    /// Absent du JSON quand nul.
+    #[serde(default, skip_serializing_if = "is_zero_work")]
+    pub work: Work,
+}
+
+/// Vrai pour un travail nul (champ omis du JSON).
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "signature imposée par `skip_serializing_if`"
+)]
+fn is_zero_work(w: &Work) -> bool {
+    *w == Work::ZERO
+}
+
+/// Nombre maximal d'intervalles de surutilisation gardés par ressource
+/// ([`ResourceLoad::overloads`], règle 10) ; au-delà, `truncated`.
+pub const MAX_OVERLOADS: usize = 1_000;
+
+/// Affectation placée par le moteur (ADR-0013 D1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssignmentSchedule {
+    /// Tâche affectée.
+    pub task: TaskUid,
+    /// Ressource ; `None` pour une affectation sans ressource (fictive
+    /// −65 535 relue, O24).
+    pub resource: Option<ResourceUid>,
+    /// Rôle dans le placement de la tâche (R-176, R-179, R-183).
+    pub role: AssignmentRole,
+    /// Dates planifiées de l'affectation (`s_a`, `f_a`, R-173) : placement
+    /// depuis le début planifié de la tâche, au plus tôt depuis le début, au
+    /// plus tard à rebours (R-112).
+    pub span: Span,
+    /// Dates au plus tard (R-174) ; `None` si la passe arrière ne les donne
+    /// pas.
+    pub late: Option<Span>,
+    /// Durée de l'affectation `d_a`, en minutes du calendrier effectif
+    /// (R-170).
+    pub duration: Minutes,
+    /// Travail de l'affectation.
+    pub work: Work,
+    /// Unités effectives (débit : travail ÷ temps ouvré de l'intervalle,
+    /// R-186 ; 1/10 000).
+    pub effective_units: Units,
+    /// Calendrier qui place l'affectation (R-171).
+    pub calendar: EffectiveCalendar,
+}
+
+/// Rôle d'une affectation dans le calcul.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssignmentRole {
+    /// Ressource de travail sur une feuille automatique : place la tâche
+    /// (R-173).
+    Work,
+    /// Sans effet sur les dates : affectation fictive −65 535, ressource
+    /// matérielle ou de coût, ressource inconnue (R-176).
+    Neutral,
+    /// Affectation d'une récapitulative (R-179).
+    Summary,
+    /// Affectation d'une tâche manuelle (R-183).
+    Manual,
+}
+
+/// Calendrier effectif d'une affectation (R-171).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EffectiveCalendar {
+    /// Calendrier de la tâche seul (la tâche ignore les calendriers de
+    /// ressource, S48).
+    Task(CalendarUid),
+    /// Calendrier de la ressource seul (tâche sans calendrier propre).
+    Resource(CalendarUid),
+    /// Intersection du calendrier de la tâche et de celui de la ressource
+    /// (R-172).
+    Intersection {
+        /// Calendrier de la tâche.
+        task: CalendarUid,
+        /// Calendrier de la ressource.
+        resource: CalendarUid,
+    },
+    /// Calendrier du projet (ni la tâche ni la ressource n'en ont).
+    Project(CalendarUid),
+    /// Temps écoulé (tâche à durée écoulée, R-182).
+    Elapsed,
+}
+
+/// Charge calculée d'une ressource (R-184, R-186, R-187).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceLoad {
+    /// Travail total de ses affectations.
+    pub work: Work,
+    /// Pic d'unités effectives sur les intervalles travaillés (1/10 000).
+    pub peak: Units,
+    /// Surutilisée : un intervalle dépasse sa capacité (`max_units`).
+    pub overallocated: bool,
+    /// Intervalles de surutilisation, dans l'ordre (au plus
+    /// [`MAX_OVERLOADS`]).
+    pub overloads: Vec<Overload>,
+    /// Vrai si `overloads` est coupé.
+    pub truncated: bool,
+}
+
+/// Intervalle de surutilisation d'une ressource.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Overload {
+    /// Début.
+    pub from: Moment,
+    /// Fin.
+    pub to: Moment,
+    /// Pic d'unités effectives sur l'intervalle (1/10 000).
+    pub peak: Units,
 }
 
 /// Rôle d'une tâche dans la hiérarchie (R-052).

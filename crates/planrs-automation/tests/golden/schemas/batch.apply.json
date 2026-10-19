@@ -383,6 +383,13 @@
                   "null"
                 ]
               },
+              "effort_driven": {
+                "description": "Pilotée par l'effort (R-190 à R-193, R-197 ; J5, refusé jusqu'au lot\nL7).",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
               "finish": {
                 "description": "Fin saisie (R-158).",
                 "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
@@ -424,6 +431,34 @@
                   "null"
                 ]
               },
+              "type": {
+                "anyOf": [
+                  {
+                    "description": "Type de tâche en JSON (S41).",
+                    "oneOf": [
+                      {
+                        "const": "fixed_units",
+                        "description": "Unités fixes.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "fixed_duration",
+                        "description": "Durée fixe.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "fixed_work",
+                        "description": "Travail fixe (toujours piloté par l'effort).",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Type de tâche (R-189, R-197 ; J5, refusé `command.not_yet_available`\njusqu'au lot L7)."
+              },
               "uid": {
                 "description": "Tâche.",
                 "oneOf": [
@@ -436,6 +471,83 @@
                     "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
                     "type": "string"
                   }
+                ]
+              },
+              "work": {
+                "additionalProperties": false,
+                "description": "Travail total (R-189, R-197 ; `param.conflict` avec `duration` ; J5,\nrefusé jusqu'au lot L7).",
+                "properties": {
+                  "elapsed": {
+                    "description": "Durée écoulée (« 5ej »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "estimated": {
+                    "description": "Durée estimée (« 5j? »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "minutes": {
+                    "description": "Minutes (ouvrées, ou écoulées si `elapsed`).",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "description": "Texte à la manière de MS Project (« 5j », « 2d? »).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "unit": {
+                    "anyOf": [
+                      {
+                        "description": "Unité d'une durée en JSON.",
+                        "oneOf": [
+                          {
+                            "const": "minute",
+                            "description": "Minute.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "hour",
+                            "description": "Heure.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "day",
+                            "description": "Jour.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "week",
+                            "description": "Semaine.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "month",
+                            "description": "Mois.",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Unité d'affichage."
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
                 ]
               }
             },
@@ -1172,6 +1284,34 @@
                   "null"
                 ]
               },
+              "default_task_type": {
+                "anyOf": [
+                  {
+                    "description": "Type de tâche en JSON (S41).",
+                    "oneOf": [
+                      {
+                        "const": "fixed_units",
+                        "description": "Unités fixes.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "fixed_duration",
+                        "description": "Durée fixe.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "fixed_work",
+                        "description": "Travail fixe (toujours piloté par l'effort).",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Type des nouvelles tâches (S2 `DefaultTaskType`, R-197 ; J5, refusé\n`command.not_yet_available` jusqu'au lot L7)."
+              },
               "manager": {
                 "description": "Responsable.",
                 "type": [
@@ -1183,6 +1323,13 @@
                 "description": "Nom.",
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "new_tasks_effort_driven": {
+                "description": "Nouvelles tâches pilotées par l'effort (S2 `NewTasksEffortDriven`,\nR-197 ; J5, refusé jusqu'au lot L7).",
+                "type": [
+                  "boolean",
                   "null"
                 ]
               },
@@ -1348,6 +1495,843 @@
               "op",
               "cal",
               "from"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Ajoute une ressource (R-195).",
+            "properties": {
+              "as": {
+                "description": "Étiquette `$x` de la ressource créée, pour la suite du lot.",
+                "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "calendar": {
+                "anyOf": [
+                  {
+                    "oneOf": [
+                      {
+                        "maximum": 4294967295,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "enum": [
+                          "own",
+                          "project"
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Calendrier (défaut : calendrier propre, O34)."
+              },
+              "group": {
+                "description": "Groupe.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "initials": {
+                "description": "Initiales.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "anyOf": [
+                  {
+                    "description": "Type de ressource en JSON.",
+                    "oneOf": [
+                      {
+                        "const": "work",
+                        "description": "Travail (personne, machine).",
+                        "type": "string"
+                      },
+                      {
+                        "const": "material",
+                        "description": "Matérielle (consommée en quantité, étiquette d'unité).",
+                        "type": "string"
+                      },
+                      {
+                        "const": "cost",
+                        "description": "Coût.",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Type (défaut : travail)."
+              },
+              "material_label": {
+                "description": "Étiquette d'unité d'une ressource matérielle (« m³ »).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "max_units": {
+                "additionalProperties": false,
+                "description": "Capacité maximale (défaut 100 %, S47).",
+                "properties": {
+                  "text": {
+                    "description": "Pourcentage en texte (`\"50%\"`).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "value": {
+                    "description": "Valeur en 1/10 000 (10 000 = 100 %).",
+                    "format": "int64",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "Nom.",
+                "type": "string"
+              },
+              "op": {
+                "const": "resource.add",
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "name"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Modifie une ressource (R-195).",
+            "properties": {
+              "calendar": {
+                "description": "Calendrier (`null` : aucun, calendrier de la tâche ou du projet).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "group": {
+                "description": "Groupe.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "inactive": {
+                "description": "Ressource inactive.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "initials": {
+                "description": "Initiales.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "anyOf": [
+                  {
+                    "description": "Type de ressource en JSON.",
+                    "oneOf": [
+                      {
+                        "const": "work",
+                        "description": "Travail (personne, machine).",
+                        "type": "string"
+                      },
+                      {
+                        "const": "material",
+                        "description": "Matérielle (consommée en quantité, étiquette d'unité).",
+                        "type": "string"
+                      },
+                      {
+                        "const": "cost",
+                        "description": "Coût.",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Type (`null` refusé ; refusé `resource.has_assignments` si la\nressource est affectée ; ajout du lot L7 au contrat L0)."
+              },
+              "material_label": {
+                "description": "Étiquette d'unité d'une ressource matérielle (ajout du lot L7).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "max_units": {
+                "additionalProperties": false,
+                "description": "Capacité maximale (`null` refusé).",
+                "properties": {
+                  "text": {
+                    "description": "Pourcentage en texte (`\"50%\"`).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "value": {
+                    "description": "Valeur en 1/10 000 (10 000 = 100 %).",
+                    "format": "int64",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "Nom (`null` refusé).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "notes": {
+                "description": "Notes.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "op": {
+                "const": "resource.update",
+                "type": "string"
+              },
+              "uid": {
+                "description": "Ressource.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "uid"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Supprime une ressource (R-195).",
+            "properties": {
+              "cascade": {
+                "default": false,
+                "description": "Retirer aussi ses affectations (obligatoire si elle en a :\n`resource.has_assignments`).",
+                "type": "boolean"
+              },
+              "op": {
+                "const": "resource.delete",
+                "type": "string"
+              },
+              "uid": {
+                "description": "Ressource.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "uid"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Affecte une ressource à une tâche (R-196).",
+            "properties": {
+              "delay": {
+                "additionalProperties": false,
+                "description": "Retard d'affectation (`Delay`, R-177).",
+                "properties": {
+                  "elapsed": {
+                    "description": "Durée écoulée (« 5ej »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "estimated": {
+                    "description": "Durée estimée (« 5j? »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "minutes": {
+                    "description": "Minutes (ouvrées, ou écoulées si `elapsed`).",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "description": "Texte à la manière de MS Project (« 5j », « 2d? »).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "unit": {
+                    "anyOf": [
+                      {
+                        "description": "Unité d'une durée en JSON.",
+                        "oneOf": [
+                          {
+                            "const": "minute",
+                            "description": "Minute.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "hour",
+                            "description": "Heure.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "day",
+                            "description": "Jour.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "week",
+                            "description": "Semaine.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "month",
+                            "description": "Mois.",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Unité d'affichage."
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "op": {
+                "const": "assignment.add",
+                "type": "string"
+              },
+              "quantity": {
+                "additionalProperties": false,
+                "description": "Quantité (ressource matérielle).",
+                "properties": {
+                  "text": {
+                    "description": "Pourcentage en texte (`\"50%\"`).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "value": {
+                    "description": "Valeur en 1/10 000 (10 000 = 100 %).",
+                    "format": "int64",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "resource": {
+                "description": "Ressource.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "task": {
+                "description": "Tâche.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "units": {
+                "additionalProperties": false,
+                "description": "Unités (ressource de travail ; défaut 100 %).",
+                "properties": {
+                  "text": {
+                    "description": "Pourcentage en texte (`\"50%\"`).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "value": {
+                    "description": "Valeur en 1/10 000 (10 000 = 100 %).",
+                    "format": "int64",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "work": {
+                "additionalProperties": false,
+                "description": "Travail de l'affectation (ressource de travail).",
+                "properties": {
+                  "elapsed": {
+                    "description": "Durée écoulée (« 5ej »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "estimated": {
+                    "description": "Durée estimée (« 5j? »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "minutes": {
+                    "description": "Minutes (ouvrées, ou écoulées si `elapsed`).",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "description": "Texte à la manière de MS Project (« 5j », « 2d? »).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "unit": {
+                    "anyOf": [
+                      {
+                        "description": "Unité d'une durée en JSON.",
+                        "oneOf": [
+                          {
+                            "const": "minute",
+                            "description": "Minute.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "hour",
+                            "description": "Heure.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "day",
+                            "description": "Jour.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "week",
+                            "description": "Semaine.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "month",
+                            "description": "Mois.",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Unité d'affichage."
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "task",
+              "resource"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Modifie une affectation (R-196).",
+            "properties": {
+              "delay": {
+                "additionalProperties": false,
+                "description": "Retard d'affectation.",
+                "properties": {
+                  "elapsed": {
+                    "description": "Durée écoulée (« 5ej »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "estimated": {
+                    "description": "Durée estimée (« 5j? »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "minutes": {
+                    "description": "Minutes (ouvrées, ou écoulées si `elapsed`).",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "description": "Texte à la manière de MS Project (« 5j », « 2d? »).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "unit": {
+                    "anyOf": [
+                      {
+                        "description": "Unité d'une durée en JSON.",
+                        "oneOf": [
+                          {
+                            "const": "minute",
+                            "description": "Minute.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "hour",
+                            "description": "Heure.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "day",
+                            "description": "Jour.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "week",
+                            "description": "Semaine.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "month",
+                            "description": "Mois.",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Unité d'affichage."
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "op": {
+                "const": "assignment.update",
+                "type": "string"
+              },
+              "quantity": {
+                "additionalProperties": false,
+                "description": "Quantité (ressource matérielle).",
+                "properties": {
+                  "text": {
+                    "description": "Pourcentage en texte (`\"50%\"`).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "value": {
+                    "description": "Valeur en 1/10 000 (10 000 = 100 %).",
+                    "format": "int64",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "resource": {
+                "description": "Ressource.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "task": {
+                "description": "Tâche.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "units": {
+                "additionalProperties": false,
+                "description": "Unités.",
+                "properties": {
+                  "text": {
+                    "description": "Pourcentage en texte (`\"50%\"`).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "value": {
+                    "description": "Valeur en 1/10 000 (10 000 = 100 %).",
+                    "format": "int64",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "work": {
+                "additionalProperties": false,
+                "description": "Travail.",
+                "properties": {
+                  "elapsed": {
+                    "description": "Durée écoulée (« 5ej »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "estimated": {
+                    "description": "Durée estimée (« 5j? »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "minutes": {
+                    "description": "Minutes (ouvrées, ou écoulées si `elapsed`).",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "description": "Texte à la manière de MS Project (« 5j », « 2d? »).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "unit": {
+                    "anyOf": [
+                      {
+                        "description": "Unité d'une durée en JSON.",
+                        "oneOf": [
+                          {
+                            "const": "minute",
+                            "description": "Minute.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "hour",
+                            "description": "Heure.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "day",
+                            "description": "Jour.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "week",
+                            "description": "Semaine.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "month",
+                            "description": "Mois.",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Unité d'affichage."
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "task",
+              "resource"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Retire une affectation (R-196).",
+            "properties": {
+              "op": {
+                "const": "assignment.remove",
+                "type": "string"
+              },
+              "resource": {
+                "description": "Ressource.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "task": {
+                "description": "Tâche.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "task",
+              "resource"
             ],
             "type": "object"
           }

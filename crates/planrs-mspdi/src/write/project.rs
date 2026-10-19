@@ -102,15 +102,13 @@ pub(crate) fn write(em: &mut Emitter, p: &Project, values: Option<&Values>, opti
             }
             "Resources" if !p.resources.is_empty() => {
                 em.open(name);
-                for (position, r) in p.resources.iter().enumerate() {
-                    resource::write(em, r, position, &p.options.factors, profile);
-                }
+                resource::write_all(em, p, values, profile);
                 em.close();
             }
             "Assignments" if !p.assignments.is_empty() => {
                 em.open(name);
                 for a in &p.assignments {
-                    assignment::write(em, a, profile);
+                    assignment::write(em, a, values, profile);
                 }
                 em.close();
             }

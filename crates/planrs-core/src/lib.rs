@@ -29,6 +29,8 @@
 //!   lignes de base), sérialisation validée (R-032 à R-034) ;
 //! - [`schedule`] : moteur de planification (chemin critique, liens,
 //!   décalages, marges ; R-035 à R-069, J2) ;
+//! - [`resource`] : équilibrage durée, travail, unités à l'édition et
+//!   utilisation par période (R-188 à R-194, J5) ;
 //! - [`diagnostic`] : diagnostics typés, gravité et sujet déduits ;
 //! - [`error`] : erreurs typées, codes stables.
 
@@ -49,6 +51,7 @@ pub mod ids;
 pub mod model;
 pub mod parity;
 pub mod quantity;
+pub mod resource;
 pub mod schedule;
 pub mod time;
 
@@ -65,15 +68,15 @@ pub use error::{
 pub use fixed::{Decimal, round_div};
 pub use ids::{AssignmentUid, BaselineNumber, CalendarUid, EntityUid, Guid, ResourceUid, TaskId, TaskUid};
 pub use model::{
-    Assignment, AssignmentBaseline, Constraint, ConstraintKind, ExtraEntry, Extras, Link, LinkType,
-    OutlineLevel, Priority, Progress, Project, ProjectInfo, ProjectInit, ProjectOptions, Resource,
+    Assignment, AssignmentBaseline, Constraint, ConstraintKind, ExtraEntry, Extras, LevelingDelay, Link,
+    LinkType, OutlineLevel, Priority, Progress, Project, ProjectInfo, ProjectInit, ProjectOptions, Resource,
     ResourceBaseline, ResourceKind, ScheduleAnchor, SchedulingMode, Task, TaskBaseline, TaskType,
-    WorkContour,
+    WorkContour, resource_id,
 };
 pub use quantity::{Money, Percent, Rate, RateUnit, SignedPercent, Units};
 pub use schedule::{
-    Driver, Exclusion, LateDriver, Limits, Schedule, TaskOutcome, TaskRole, TaskSchedule, schedule,
-    schedule_with,
+    AssignmentRole, AssignmentSchedule, Driver, EffectiveCalendar, Exclusion, LateDriver, Limits, Overload,
+    ResourceLoad, Schedule, TaskOutcome, TaskRole, TaskSchedule, schedule, schedule_with,
 };
 pub use time::{Day, DayRange, Moment, Month, TimeOfDay, Week, Weekday};
 

@@ -1,5 +1,5 @@
-//! Rejeu du scénario `build_30` sur le vrai binaire (lot L18,
-//! vérification 4) : `planrs --now 2026-10-19T08:00 --lang fr mcp
+//! Rejeu des scénarios `build_30` et `resources_j5` (J5, lot L9) sur le
+//! vrai binaire (lot L18, vérification 4) : `planrs --now 2026-10-19T08:00 --lang fr mcp
 //! --headless --journal J` lancé en processus fils, client rmcp sur ses
 //! tubes (stdio). Mêmes résultats que le rejeu en mémoire
 //! (`crates/planrs-mcp/tests/replay.rs`), journal produit égal au scénario
@@ -27,8 +27,19 @@ use serde_json::Value;
 
 #[tokio::test]
 async fn replay_build_30_stdio_binary() {
+    replay_stdio("build_30").await;
+}
+
+/// Scénario J5 (lot L9) : ressources, affectations, surutilisation.
+#[tokio::test]
+async fn replay_resources_j5_stdio() {
+    replay_stdio("resources_j5").await;
+}
+
+/// Rejoue le scénario `name` sur le binaire, en stdio.
+async fn replay_stdio(name: &str) {
     let root = repo_root(env!("CARGO_MANIFEST_DIR"));
-    let scenario = Scenario::load(&root, "build_30");
+    let scenario = Scenario::load(&root, name);
     let tmp = TempDir::new("stdio");
     let journal = tmp.path().join("run.jsonl");
     let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_planrs"))

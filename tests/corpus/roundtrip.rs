@@ -4,14 +4,18 @@
 //! relecture. Avec les valeurs relues (`Computed::Recorded`), le projet relu
 //! doit égaler `normalize(projet lu)` et le planning enregistré relu égaler
 //! celui du fichier ; avec les valeurs du moteur (`Computed::Schedule`), le
-//! projet relu doit égaler `normalize(projet lu)` ; l'ordre réécrit des
+//! projet relu doit égaler `normalize(schedule_image(projet lu))` (R-199 :
+//! travail des récapitulatives, durée des feuilles affectées, répartitions
+//! dont le placement a changé ; le rapport compte ces écarts au fichier) et
+//! le planning relu doit redonner les dates des affectations placées par le
+//! moteur ; l'ordre réécrit des
 //! enfants de chaque entité doit suivre l'ordre source. Verdict en échec si
 //! un fichier `msproject` n'est pas identique avec ses valeurs relues.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use planrs_mspdi::write::{Computed, WriteOptions, write};
+use planrs_mspdi::write::{Computed, WriteCode, WriteOptions, schedule_image, write};
 use planrs_mspdi::{MspdiDocument, ReadOptions, normalize};
 use serde::Serialize;
 
@@ -33,9 +37,14 @@ pub struct RoundTrip {
     pub project_identical_recorded: bool,
     /// Planning enregistré relu identique, valeurs relues écrites.
     pub recorded_identical: bool,
-    /// Projet relu identique à `normalize(projet)`, valeurs du moteur
-    /// écrites.
+    /// Projet relu identique à `normalize(schedule_image(projet))`, valeurs
+    /// du moteur écrites, et dates des affectations relues égales au
+    /// placement du moteur (R-199).
     pub project_identical_schedule: bool,
+    /// Valeurs du moteur écrites à la place de celles du fichier (R-199) :
+    /// travail des récapitulatives, durée des feuilles affectées,
+    /// affectations dont la répartition est jetée.
+    pub schedule_overrides: BTreeMap<&'static str, usize>,
     /// Pour chaque entité, éléments réécrits dans l'ordre source.
     pub order_preserved: bool,
     /// `Extras` par entité (`project`, `calendar`, `task`, `resource`,
@@ -75,7 +84,36 @@ pub fn round_trip(entry: &Entry, doc: &MspdiDocument, source: &str) -> RoundTrip
     let written = write(&doc.project, Computed::Recorded(&doc.recorded), &options);
     let back = reread(&written.xml);
     let schedule = planrs_core::schedule(&doc.project);
-    let with_schedule = reread(&write(&doc.project, Computed::Schedule(&schedule), &options).xml);
+    let by_engine = write(&doc.project, Computed::Schedule(&schedule), &options);
+    let with_schedule = reread(&by_engine.xml);
+    let image = schedule_image(&doc.project, &schedule);
+    let expected_schedule = normalize(&image, &options);
+    let dates_agree = schedule.assignments.iter().all(|(uid, a)| {
+        with_schedule
+            .recorded
+            .assignments
+            .get(uid)
+            .is_some_and(|r| r.start == Some(a.span.start) && r.finish == Some(a.span.finish))
+    });
+    let mut schedule_overrides = BTreeMap::new();
+    let changed_tasks = |f: &dyn Fn(&planrs_core::Task, &planrs_core::Task) -> bool| {
+        doc.project
+            .tasks
+            .iter()
+            .zip(image.tasks.iter())
+            .filter(|(a, b)| f(a, b))
+            .count()
+    };
+    schedule_overrides.insert("work", changed_tasks(&|a, b| a.work != b.work));
+    schedule_overrides.insert("duration", changed_tasks(&|a, b| a.duration != b.duration));
+    schedule_overrides.insert(
+        "timephased",
+        by_engine
+            .diagnostics
+            .iter()
+            .filter(|d| matches!(d.code, WriteCode::TimephasedDropped { .. }))
+            .count(),
+    );
     let text = String::from_utf8_lossy(&written.xml);
     let before = entity_children(source.trim_start_matches('\u{feff}'));
     let after = entity_children(&text);
@@ -123,7 +161,8 @@ pub fn round_trip(entry: &Entry, doc: &MspdiDocument, source: &str) -> RoundTrip
         msproject: entry.producer == Producer::Msproject,
         project_identical_recorded: back.project == expected,
         recorded_identical: back.recorded == doc.recorded,
-        project_identical_schedule: with_schedule.project == expected,
+        project_identical_schedule: with_schedule.project == expected_schedule && dates_agree,
+        schedule_overrides,
         order_preserved,
         extras,
         dropped_computed: doc.source.dropped_computed.clone(),
@@ -154,13 +193,13 @@ pub fn markdown(rows: &[RoundTrip]) -> String {
     let _ = writeln!(s, "\n## Aller-retour MSPDI\n");
     let _ = writeln!(
         s,
-        "Lecture → écriture (profil observé) → relecture (P25, R-133). « Projet » : projet relu = `normalize(projet lu)` ; « planning » : planning enregistré relu identique ; « ordre » : éléments réécrits dans l'ordre source. Relu identique par planrs n'est pas une vérification par MS Project.\n"
+        "Lecture → écriture (profil observé) → relecture (P25, R-133). « Projet » : projet relu = `normalize(projet lu)` (valeurs du moteur : `normalize(schedule_image(projet lu))`, dates des affectations relues = placement du moteur, R-199) ; « planning » : planning enregistré relu identique ; « ordre » : éléments réécrits dans l'ordre source ; « moteur » : valeurs du moteur écrites à la place de celles du fichier (travail de récapitulatives, durée de feuilles affectées, affectations dont la répartition est jetée). Relu identique par planrs n'est pas une vérification par MS Project.\n"
     );
     let _ = writeln!(
         s,
-        "| Fichier | Projet (valeurs relues) | Planning enregistré | Projet (valeurs du moteur) | Ordre | Extras (projet, calendriers, tâches, ressources, affectations) | Calculés écartés | Perdus | Diagnostics d'écriture |"
+        "| Fichier | Projet (valeurs relues) | Planning enregistré | Projet (valeurs du moteur) | Moteur (travail, durée, répartitions) | Ordre | Extras (projet, calendriers, tâches, ressources, affectations) | Calculés écartés | Perdus | Diagnostics d'écriture |"
     );
-    let _ = writeln!(s, "|---|---|---|---|---|---|---|---|---|");
+    let _ = writeln!(s, "|---|---|---|---|---|---|---|---|---|---|");
     for r in rows {
         let ex = |k: &str| r.extras.get(k).copied().unwrap_or(0);
         let dropped: Vec<String> = r
@@ -175,11 +214,14 @@ pub fn markdown(rows: &[RoundTrip]) -> String {
             .collect();
         let _ = writeln!(
             s,
-            "| {} | {} | {} | {} | {} | {}, {}, {}, {}, {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {}, {}, {} | {} | {}, {}, {}, {}, {} | {} | {} | {} |",
             r.file,
             yes(r.project_identical_recorded),
             yes(r.recorded_identical),
             yes(r.project_identical_schedule),
+            r.schedule_overrides.get("work").copied().unwrap_or(0),
+            r.schedule_overrides.get("duration").copied().unwrap_or(0),
+            r.schedule_overrides.get("timephased").copied().unwrap_or(0),
             yes(r.order_preserved),
             ex("project"),
             ex("calendar"),

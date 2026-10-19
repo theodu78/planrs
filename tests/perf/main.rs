@@ -6,7 +6,11 @@
 //! d'échéances) et `5000_from_finish` (planification à rebours, mêmes
 //! proportions) : 3 exécutions de chauffe, puis médiane de 15.
 //! Échec au-delà de 50 ms, avertissement au-delà de 25 ms ; cible locale
-//! ≤ 10 ms. Hiérarchie profonde hostile (ADR-0012, lot L15) : 256 niveaux
+//! ≤ 10 ms. J5 : `5000_assigned` (10 000 affectations, ADR-0013), même
+//! budget de 50 ms ; `5000_assigned_leaves` (1 000 ressources ayant chacune
+//! ses congés, 10 % de feuilles à calendrier propre), garde-fou provisoire
+//! de 250 ms ; projets hostiles (calendriers combinés, 100 000 parts) en
+//! temps borné. Hiérarchie profonde hostile (ADR-0012, lot L15) : 256 niveaux
 //! de récapitulatives imbriquées, 5 000 tâches, 10 000 liens dont des FS,
 //! SS et FF depuis chaque récapitulative ; budget 30 ms de médiane.
 //! Mesure seulement en release, par le job CI `perf` :
@@ -31,7 +35,10 @@ use planrs_core::{
     OutlineLevel, Percent, Project, ProjectInit, ScheduleAnchor, Severity, Task, TaskOutcome, TaskRole,
     TaskUid, TimeBasis, schedule,
 };
-use planrs_tests::generate::{constrained_network, from_finish_network, large_network};
+use planrs_tests::generate::{
+    assigned_leaves_network, assigned_network, constrained_network, from_finish_network,
+    hostile_combined_calendars, hostile_parts, large_network,
+};
 
 /// Seuil d'échec de la médiane.
 const BUDGET: Duration = Duration::from_millis(50);
@@ -157,6 +164,150 @@ fn schedule_budget_5000_constrained() {
 #[ignore = "budget mesuré en release, job CI perf"]
 fn schedule_budget_5000_from_finish() {
     budget("5000_from_finish", &from_finish_network(2026));
+}
+
+/// Le réseau affecté (J5, ADR-0013) a la forme annoncée : 10 000
+/// affectations de travail placées, aucune erreur ni tâche dégradée,
+/// charges calculées pour les 20 ressources ; déterministe.
+#[test]
+fn assigned_network_shape() {
+    let p = assigned_network(2026);
+    assert_eq!(p.tasks.len(), 5_000);
+    assert_eq!(p.assignments.len(), 10_000);
+    assert_eq!(p.resources.len(), 20);
+    let s = schedule(&p);
+    assert!(
+        s.tasks
+            .values()
+            .all(|o| matches!(o, TaskOutcome::Scheduled(ts) if !ts.degraded))
+    );
+    let errors: Vec<&Diagnostic> = s
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity() == Severity::Error)
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(s.resources.len(), 20);
+    assert_eq!(s.assignments.len(), 10_000);
+    assert_eq!(assigned_network(2026), p);
+}
+
+/// Budget J5 (ADR-0013) : 5 000 tâches, 10 000 liens, 10 000 affectations
+/// (placement par affectation, cumuls et surutilisation compris), 50 ms.
+#[test]
+#[ignore = "budget mesuré en release, job CI perf"]
+fn perf_5000_assigned() {
+    budget("5000_assigned", &assigned_network(2026));
+}
+
+/// Variante de la relecture finale J5 : chaque ressource a ses congés
+/// (1 000 calendriers de ressource distincts), 10 % des feuilles sur un
+/// calendrier propre : placement par parts sur deux échelles, unions et
+/// intersections compilées ; mêmes formes que `5000_assigned`, aucune
+/// erreur, aucune tâche dégradée, aucun calendrier combiné refusé.
+#[test]
+fn assigned_leaves_network_shape() {
+    let p = assigned_leaves_network(2026);
+    assert_eq!(p.tasks.len(), 5_000);
+    assert_eq!(p.assignments.len(), 10_000);
+    assert_eq!(p.resources.len(), 1_000);
+    let s = schedule(&p);
+    assert!(
+        s.tasks
+            .values()
+            .all(|o| matches!(o, TaskOutcome::Scheduled(ts) if !ts.degraded))
+    );
+    let refused: Vec<&Diagnostic> = s
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity() == Severity::Error || d.code() == "calendar.too_many_segments")
+        .collect();
+    assert!(refused.is_empty(), "{refused:?}");
+    assert_eq!(s.resources.len(), 1_000);
+    assert_eq!(s.assignments.len(), 10_000);
+    assert_eq!(assigned_leaves_network(2026), p);
+}
+
+/// Garde-fou provisoire de `5000_assigned_leaves` (relecture finale J5) :
+/// la cible de 50 ms d'ADR-0013 n'est pas tenue (médiane locale 158 ms :
+/// compilation des 1 011 calendriers, environ 50 ms ; 5 000 unions et
+/// 1 000 intersections, environ 40 ms ; placement par parts sur deux
+/// échelles, environ 65 ms). Seuil bloquant de 250 ms en attendant
+/// l'arbitrage (`docs/decisions.md`, correctifs de la relecture finale
+/// (11)) : il rattrape une régression quadratique (O(S²) sur les échelles,
+/// O(P²) sur les parts), pas une dérive de quelques pour cent.
+const LEAVES_BUDGET: Duration = Duration::from_millis(250);
+
+/// Budget de `5000_assigned_leaves` : [`LEAVES_BUDGET`].
+#[test]
+#[ignore = "budget mesuré en release, job CI perf"]
+fn perf_5000_assigned_leaves() {
+    budget_of(
+        "5000_assigned_leaves",
+        &assigned_leaves_network(2026),
+        LEAVES_BUDGET,
+    );
+}
+
+/// Un calcul chronométré ; échec au-delà de `limit`.
+fn once(name: &str, p: &Project, limit: Duration) -> planrs_core::Schedule {
+    let t = Instant::now();
+    let s = schedule(p);
+    let took = t.elapsed();
+    eprintln!("schedule ({name}) : {took:?}");
+    assert!(took <= limit, "{name} : {took:?} au-delà de {limit:?}");
+    s
+}
+
+/// Adversaire F2 de la relecture finale J5 : 1 000 paires (tâche,
+/// ressource) de calendriers à 60 000 segments. Le budget des calendriers
+/// combinés (`Limits::combined_segments`, 4 M segments gardés, 32 M lus)
+/// refuse les intersections au-delà : `calendar.too_many_segments`, repli
+/// sur le calendrier de la tâche, mémoire bornée (environ 128 Mo de
+/// segments combinés au lieu de 4 Go), calcul fini.
+#[test]
+#[ignore = "projet hostile, mesuré en release, job CI perf"]
+fn hostile_combined_calendars_bounded() {
+    let s = once(
+        "calendriers combinés hostiles",
+        &hostile_combined_calendars(),
+        Duration::from_secs(10),
+    );
+    assert!(
+        s.diagnostics
+            .iter()
+            .any(|d| d.code() == "calendar.too_many_segments"),
+        "budget jamais atteint"
+    );
+    assert_eq!(s.assignments.len(), 1_000);
+}
+
+/// Adversaire F1 de la relecture finale J5 : 100 000 affectations
+/// distinctes sur une seule feuille. Mesure exacte de l'union bornée à
+/// 1 000 parts (`assignment.too_many_parts`, durée = plus grand `d_a`) ;
+/// le reste du calcul est linéaire en parts.
+#[test]
+#[ignore = "projet hostile, mesuré en release, job CI perf"]
+fn hostile_parts_bounded() {
+    let s = once("100 000 parts", &hostile_parts(100_000), Duration::from_secs(5));
+    assert!(
+        s.diagnostics
+            .iter()
+            .any(|d| d.code() == "assignment.too_many_parts")
+    );
+    // 1 000 parts : sous le plafond, mesure exacte par balayage
+    // (O(P log P)) ; la plus décalée finit 999 min après la première.
+    let s = once("1 000 parts", &hostile_parts(1_000), Duration::from_millis(500));
+    assert!(
+        !s.diagnostics
+            .iter()
+            .any(|d| d.code() == "assignment.too_many_parts")
+    );
+    let duration = match s.tasks.get(&TaskUid::new(1)) {
+        Some(TaskOutcome::Scheduled(a)) => Some(a.duration),
+        _ => None,
+    };
+    assert_eq!(duration, Some(Minutes::new(480 + 999)));
 }
 
 /// Profondeur de la hiérarchie hostile.

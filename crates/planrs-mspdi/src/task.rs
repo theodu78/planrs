@@ -1,12 +1,13 @@
 //! Import des tâches, des liens et des valeurs enregistrées (R-071, R-074,
-//! R-076, R-083 à R-085).
+//! R-076, R-083 à R-085) ; retards de nivellement (R-198) ; travail fixe
+//! toujours piloté par l'effort (R-193).
 
 use std::collections::BTreeSet;
 
 use planrs_core::{
-    CalendarUid, Constraint, Decimal, Duration, DurationUnit, Lag, LagValue, Link, LinkType, Minutes, Moment,
-    OutlineLevel, Percent, Priority, Project, ProjectOptions, SchedulingMode, SignedPercent, Subject, Task,
-    TaskUid, TimeBasis, Work,
+    CalendarUid, Constraint, Decimal, Diagnostic, Duration, DurationUnit, Lag, LagValue, LevelingDelay, Link,
+    LinkType, Minutes, Moment, OutlineLevel, Percent, Priority, Project, ProjectOptions, SchedulingMode,
+    SignedPercent, Subject, Task, TaskType, TaskUid, TimeBasis, Work,
 };
 
 use crate::baseline;
@@ -114,6 +115,9 @@ pub(crate) fn import(
             f.missing("Duration", sink);
         }
         row.task.predecessors = links(uid, &row.element.children, &known, &options, sink);
+        if !is_summary {
+            force_effort_driven(&mut row.task, &f, sink);
+        }
     }
     if let Some(summary) = &mut project.summary_task {
         summary.duration = computed_zero(summary.duration);
@@ -152,20 +156,6 @@ fn task_uid(f: &Fields<'_>, sink: &mut Sink<'_>) -> Option<TaskUid> {
 /// R-083 : valeurs calculées enregistrées.
 fn recorded_task(f: &Fields<'_>, sink: &mut Sink<'_>) -> RecordedTask {
     let tenths = |name: &str, sink: &mut Sink<'_>| f.int(name, sink).map(|(v, _)| Tenths(v));
-    let leveling_delay = tenths("LevelingDelay", sink);
-    if let Some(Tenths(v)) = leveling_delay
-        && v != 0
-    {
-        f.report(
-            ImportCode::Unsupported {
-                what: "leveling_delay".to_owned(),
-            },
-            "LevelingDelay",
-            f.at(),
-            Some(&v.to_string()),
-            sink,
-        );
-    }
     RecordedTask {
         start: f.datetime("Start", sink),
         finish: f.datetime("Finish", sink),
@@ -180,7 +170,6 @@ fn recorded_task(f: &Fields<'_>, sink: &mut Sink<'_>) -> RecordedTask {
         critical: f.bool("Critical", sink),
         summary: f.bool("Summary", sink),
         duration: f.duration("Duration", sink).map(|(d, _)| Minutes::new(d.minutes)),
-        leveling_delay,
         assignments: 0,
     }
 }
@@ -213,6 +202,7 @@ fn task(
     t.deadline = f.datetime("Deadline", sink);
     t.calendar = task_calendar(f, sink);
     t.ignore_resource_calendar = f.bool("IgnoreResourceCalendar", sink).unwrap_or(false);
+    t.leveling_delay = leveling_delay(f, TASK_DELAY_ELAPSED, sink);
     t.priority = priority(f, sink);
     t.progress.percent_complete = percent(f, "PercentComplete", sink);
     t.progress.percent_work_complete = percent(f, "PercentWorkComplete", sink);
@@ -229,6 +219,103 @@ fn task(
     t.recurring = f.bool("Recurring", sink).unwrap_or(false);
     t.created = f.datetime("CreateDate", sink);
     (t, duration)
+}
+
+/// Format par défaut du retard de nivellement d'une tâche, si
+/// `LevelingDelayFormat` manque ou ne convient pas : jours écoulés (8),
+/// format de toutes les tâches du corpus (hypothèse, R-198).
+pub(crate) const TASK_DELAY_ELAPSED: bool = true;
+
+/// R-198 : retard de nivellement (`LevelingDelay` en dixièmes de minute,
+/// `LevelingDelayFormat` en codes S3) d'une tâche ou d'une affectation ;
+/// absent ou 0 → `None` ; reste arrondi (R-001) → `mspdi.rounded` ;
+/// négatif ou hors du domaine des durées (R-002) → `mspdi.invalid_value`,
+/// `None`. Format absent, inconnu (`mspdi.unknown_code`), en pourcentage
+/// ou nul (`mspdi.invalid_value`) : jours, écoulés selon
+/// `default_elapsed`.
+pub(crate) fn leveling_delay(
+    f: &Fields<'_>,
+    default_elapsed: bool,
+    sink: &mut Sink<'_>,
+) -> Option<LevelingDelay> {
+    let (tenths, at) = f.int("LevelingDelay", sink)?;
+    if tenths == 0 {
+        return None;
+    }
+    let format = f.int("LevelingDelayFormat", sink);
+    if let Some((code, code_at)) = format
+        && codes::leveling_delay_format(code).is_none()
+    {
+        if codes::duration_format(code).is_none() {
+            f.report(
+                ImportCode::UnknownCode { code },
+                "LevelingDelayFormat",
+                code_at,
+                None,
+                sink,
+            );
+        } else {
+            f.invalid("LevelingDelayFormat", code_at, &code.to_string(), sink);
+        }
+    }
+    let (minutes, rounded) = tenths_to_minutes(tenths);
+    if minutes.is_negative() || minutes.get() > Duration::MAX_MINUTES {
+        f.invalid("LevelingDelay", at, &tenths.to_string(), sink);
+        return None;
+    }
+    if rounded {
+        f.report(
+            ImportCode::Rounded,
+            "LevelingDelay",
+            at,
+            Some(&tenths.to_string()),
+            sink,
+        );
+    }
+    delay_value(tenths, format.map(|(c, _)| c), default_elapsed)
+}
+
+/// R-198, sans diagnostic : retard de `tenths` dixièmes de minute au
+/// format `format` (relecture d'un `Extras` hérité, `normalize`) ; nul
+/// après l'arrondi → `None` ; négatif ou hors du domaine des durées →
+/// `None`.
+pub(crate) fn delay_value(tenths: i64, format: Option<i64>, default_elapsed: bool) -> Option<LevelingDelay> {
+    let (minutes, _) = tenths_to_minutes(tenths);
+    if minutes.get() == 0 {
+        return None;
+    }
+    let (unit, elapsed) = format
+        .and_then(codes::leveling_delay_format)
+        .unwrap_or((DurationUnit::Day, default_elapsed));
+    let basis = if elapsed {
+        TimeBasis::Elapsed
+    } else {
+        TimeBasis::Working
+    };
+    Duration::new(minutes, unit, basis, false)
+        .ok()
+        .and_then(|_| LevelingDelay::new(minutes, unit, elapsed))
+}
+
+/// R-193 (import) : une feuille à travail fixe est toujours pilotée par
+/// l'effort (S41) ; lue non pilotée (`EffortDriven` 0, ou défaut du projet),
+/// elle le devient, avec `task.fixed_work_effort_driven`. Une récapitulative
+/// n'est jamais pilotée : elle n'est pas touchée.
+fn force_effort_driven(task: &mut Task, f: &Fields<'_>, sink: &mut Sink<'_>) {
+    if task.task_type != TaskType::FixedWork || task.effort_driven || task.is_null {
+        return;
+    }
+    task.effort_driven = true;
+    let (at, value) = f
+        .scalar("EffortDriven", sink)
+        .map_or((f.at(), None), |(t, at)| (at, Some(t)));
+    f.report(
+        ImportCode::Core(Diagnostic::TaskFixedWorkEffortDriven { task: task.uid() }),
+        "EffortDriven",
+        at,
+        value,
+        sink,
+    );
 }
 
 /// R-084 : `ID` comparé à la position (UID 0 : ID 0).

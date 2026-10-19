@@ -165,6 +165,37 @@ mod r162_recorded_discarded;
 mod r163_schedule_diff;
 mod r164_history;
 mod r165_calendar_exceptions;
+mod r170_engine_assignment_duration;
+mod r170_work_equals_duration_times_units;
+mod r171_assignment_effective_calendar;
+mod r172_calendar_intersection_union;
+mod r173_assigned_leaf_placement;
+mod r174_assigned_backward_constraints;
+mod r175_unassigned_on_project_calendar;
+mod r176_neutral_assignments;
+mod r177_assignment_delay;
+mod r178_leveling_delays;
+mod r179_summary_assignments;
+mod r180_work_contours;
+mod r181_zero_units_and_bounds;
+mod r182_elapsed_assigned;
+mod r183_manual_inactive_assigned;
+mod r184_work_rollups;
+mod r185_material_cost_resources;
+mod r186_overallocation;
+mod r187_overallocation_scope;
+mod r188_usage_by_period;
+mod r189_task_type_matrix;
+mod r190_add_effort_driven;
+mod r191_remove_effort_driven;
+mod r192_add_remove_not_effort_driven;
+mod r193_fixed_work_and_summary;
+mod r194_work_on_several_assignments;
+mod r195_resource_commands;
+mod r196_assignment_commands;
+mod r197_task_update_extended;
+mod r198_mspdi_resource_read;
+mod r199_mspdi_resource_write;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

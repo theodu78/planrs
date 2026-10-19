@@ -98,19 +98,18 @@ impl TimeScale<'_> {
                 finish: civil(from, d)?,
             }),
             Self::Working(c) if d == Minutes::ZERO => {
-                let t = if c.previous_working_moment(from) == Ok(from) {
+                let probe = c.probe(from)?;
+                let t = if c.previous_of(probe) == Ok(from) {
                     from
                 } else {
-                    c.next_working_moment(from)?
+                    c.next_of(probe)?
                 };
                 Ok(Span { start: t, finish: t })
             }
             Self::Working(c) => {
-                let start = c.next_working_moment(from)?;
-                Ok(Span {
-                    start,
-                    finish: c.add_working(start, d)?,
-                })
+                // `next_working_moment` puis `add_working`, fusionnés.
+                let (start, finish) = c.span_after(from, d.get())?;
+                Ok(Span { start, finish })
             }
         }
     }
@@ -140,10 +139,11 @@ impl TimeScale<'_> {
             return Err(CalendarError::NegativeSpan);
         }
         let Self::Working(c) = self else { return Ok(y) };
-        if c.next_working_moment(y) == Ok(y) {
+        let probe = c.probe(y)?;
+        if c.next_of(probe) == Ok(y) {
             return Ok(y);
         }
-        let previous = c.previous_working_moment(y)?;
+        let previous = c.previous_of(probe)?;
         if d == Minutes::ZERO {
             return Ok(previous);
         }
@@ -177,19 +177,18 @@ impl TimeScale<'_> {
                 finish: to,
             }),
             Self::Working(c) if d == Minutes::ZERO => {
-                let t = if c.next_working_moment(to) == Ok(to) {
+                let probe = c.probe(to)?;
+                let t = if c.next_of(probe) == Ok(to) {
                     to
                 } else {
-                    c.previous_working_moment(to)?
+                    c.previous_of(probe)?
                 };
                 Ok(Span { start: t, finish: t })
             }
             Self::Working(c) => {
-                let finish = c.previous_working_moment(to)?;
-                Ok(Span {
-                    start: c.add_working(finish, back)?,
-                    finish,
-                })
+                // `previous_working_moment` puis `add_working(−d)`, fusionnés.
+                let (start, finish) = c.span_before(to, d.get())?;
+                Ok(Span { start, finish })
             }
         }
     }

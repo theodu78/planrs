@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use planrs_core::calendar::{CalendarSet, CompiledCalendar, TimeScale, standard};
 use planrs_core::schedule::measure_calendar_in;
 use planrs_core::{
-    Arena, Exclusion, Minutes, Moment, Project, ResourceKind, Schedule, SchedulingMode, Task, TaskOutcome,
-    TaskSchedule, TaskUid, TimeBasis,
+    Arena, AssignmentUid, Duration, Exclusion, Minutes, Moment, Project, ResourceUid, Schedule, Task,
+    TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis, Work,
 };
 
 use super::WriteDiagnostic;
@@ -29,26 +29,21 @@ pub enum Computed<'a> {
 }
 
 /// Ce que le planning de planrs ne calcule pas encore (R-122) : l'écrire
-/// donnerait des dates fausses.
+/// donnerait des dates fausses. R-122 amendée (J5, R-199) : calendriers de
+/// ressource et retards de nivellement sont calculés (R-171, R-178), seuls
+/// restent les manques d'avancement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ScheduleGap {
     /// Avancement saisi (% achevé, date ou durée réelle) : J6.
     Progress,
-    /// Ressource de travail dotée d'un calendrier affectée à une feuille
-    /// automatique active qui ne l'ignore pas : J5.
-    ResourceCalendars,
-    /// Retard de nivellement non nul (`LevelingDelay` conservé) : J5.
-    LevelingDelay,
 }
 
 impl ScheduleGap {
-    /// Code stable (`progress`…).
+    /// Code stable (`progress`).
     #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
             Self::Progress => "progress",
-            Self::ResourceCalendars => "resource_calendars",
-            Self::LevelingDelay => "leveling_delay",
         }
     }
 }
@@ -68,60 +63,14 @@ pub fn schedule_gaps(project: &Project) -> Vec<ScheduleGap> {
     }) {
         gaps.insert(ScheduleGap::Progress);
     }
-    let leaves = automatic_active_leaves(project);
-    let calendar_resources: BTreeSet<_> = project
-        .resources
-        .iter()
-        .filter(|r| r.kind == ResourceKind::Work && r.calendar.is_some())
-        .map(planrs_core::Resource::uid)
-        .collect();
-    if project.assignments.iter().any(|a| {
-        a.resource.is_some_and(|r| calendar_resources.contains(&r))
-            && leaves.contains(&a.task)
-            && project
-                .tasks
-                .get(a.task)
-                .is_some_and(|t| !t.ignore_resource_calendar)
-    }) {
-        gaps.insert(ScheduleGap::ResourceCalendars);
-    }
-    let delayed = |extras: &planrs_core::Extras| {
-        extras.0.iter().any(|e| {
-            e.origin == ORIGIN
-                && e.key == "LevelingDelay"
-                && leveling_delay(&e.payload).is_some_and(|v| v != 0)
-        })
-    };
-    if tasks().any(|t| delayed(&t.extras)) || project.assignments.iter().any(|a| delayed(&a.extras)) {
-        gaps.insert(ScheduleGap::LevelingDelay);
-    }
     gaps.into_iter().collect()
 }
 
 /// Valeur entière d'une charge `<LevelingDelay>n</LevelingDelay>`.
-fn leveling_delay(payload: &str) -> Option<i64> {
+pub(crate) fn leveling_delay(payload: &str) -> Option<i64> {
     let start = payload.find('>')?.checked_add(1)?;
     let end = payload.rfind("</")?;
     parse_int(payload.get(start..end)?)
-}
-
-/// Feuilles automatiques actives (R-052 : une feuille n'a pas de tâche non
-/// vide de niveau supérieur juste après elle).
-fn automatic_active_leaves(project: &Project) -> BTreeSet<TaskUid> {
-    let mut out = BTreeSet::new();
-    let mut next: Option<u16> = None;
-    for t in project.tasks.iter().rev() {
-        if t.is_null {
-            continue;
-        }
-        let level = t.outline_level.get();
-        let leaf = next.is_none_or(|n| n <= level);
-        next = Some(level);
-        if leaf && t.active && matches!(t.mode, SchedulingMode::Auto) {
-            out.insert(t.uid());
-        }
-    }
-    out
 }
 
 /// R-122 : `Schedule` si le planning de planrs est complet pour ce projet ;
@@ -165,12 +114,38 @@ pub(crate) struct TaskValues {
     pub(crate) critical: Option<bool>,
     /// Durée calculée d'une récapitulative automatique, en minutes.
     pub(crate) duration: Option<i64>,
+    /// R-199 : travail calculé d'une récapitulative et de l'UID 0 (R-184),
+    /// avec `Computed::Schedule` seulement.
+    pub(crate) work: Option<Work>,
+    /// R-199 : durée calculée d'une feuille automatique affectée (R-173),
+    /// avec `Computed::Schedule` seulement (voir [`assigned_leaf_duration`]).
+    pub(crate) leaf_duration: Option<Duration>,
+}
+
+/// Valeurs calculées d'une affectation, prêtes à écrire (R-198, R-199).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct AssignmentValues {
+    pub(crate) start: Option<Moment>,
+    pub(crate) finish: Option<Moment>,
+    /// R-199 : `TimephasedData` propres à jeter (placement changé).
+    pub(crate) drop_timephased: bool,
+}
+
+/// Valeurs calculées d'une ressource, prêtes à écrire (R-198, R-199).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ResourceValues {
+    pub(crate) work: Option<Work>,
+    pub(crate) overallocated: Option<bool>,
 }
 
 /// Valeurs calculées de tout le projet.
 #[derive(Debug, Default)]
 pub(crate) struct Values {
     pub(crate) tasks: BTreeMap<TaskUid, TaskValues>,
+    /// Affectations : relues, ou placées par le moteur (R-199).
+    pub(crate) assignments: BTreeMap<AssignmentUid, AssignmentValues>,
+    /// Ressources : relues, ou charges du moteur (R-199).
+    pub(crate) resources: BTreeMap<ResourceUid, ResourceValues>,
     pub(crate) project_start: Option<Moment>,
     pub(crate) project_finish: Option<Moment>,
 }
@@ -256,18 +231,38 @@ fn from_task_schedule(s: &TaskSchedule, scale: Option<TimeScale<'_>>, summary: b
         finish_slack,
         critical: Some(s.critical),
         duration: (summary && !s.manual).then_some(s.duration.get()),
+        work: summary.then_some(s.work),
+        leaf_duration: None,
     }
+}
+
+/// R-199 : durée écrite d'une feuille automatique placée par ses
+/// affectations de travail : la durée calculée du moteur (mesure de l'union
+/// des intervalles travaillés, R-173), la même que celle que la session
+/// reporte dans le modèle (`planrs_core::schedule::assigned_leaf_duration`,
+/// règle et exclusions : durée fixe, S41 ; unités nulles, R-181). `None` :
+/// la durée du modèle est écrite.
+pub(crate) fn assigned_leaf_duration(
+    task: &Task,
+    s: &TaskSchedule,
+    placed: &BTreeSet<TaskUid>,
+) -> Option<Duration> {
+    planrs_core::schedule::assigned_leaf_duration(task, s, placed)
 }
 
 /// Valeurs depuis le `Schedule` (R-122).
 pub(crate) fn from_schedule(project: &Project, schedule: &Schedule) -> Values {
     let scales = Scales::new(project);
+    let placed = planrs_core::schedule::placed_by_assignments(project, schedule);
     let mut tasks = BTreeMap::new();
     for t in &project.tasks {
         let values = match schedule.get(t.uid()) {
             Some(TaskOutcome::Scheduled(s)) => {
-                let summary = s.role == planrs_core::TaskRole::Summary;
-                from_task_schedule(s, scales.of(t, summary), summary)
+                let summary = s.role == TaskRole::Summary;
+                TaskValues {
+                    leaf_duration: assigned_leaf_duration(t, s, &placed),
+                    ..from_task_schedule(s, scales.of(t, summary), summary)
+                }
             }
             Some(TaskOutcome::Excluded {
                 reason: Exclusion::Inactive,
@@ -287,11 +282,86 @@ pub(crate) fn from_schedule(project: &Project, schedule: &Schedule) -> Values {
             from_task_schedule(s, scales.of(summary, true), true),
         );
     }
+    // R-199 : `Start`/`Finish` de chaque affectation placée ; répartition
+    // gardée seulement si son placement est celui du moteur.
+    let assignments = project
+        .assignments
+        .iter()
+        .map(|a| {
+            let placed = schedule.assignments.get(&a.uid());
+            let values = AssignmentValues {
+                start: placed.map(|p| p.span.start),
+                finish: placed.map(|p| p.span.finish),
+                drop_timephased: super::timephased::stale(a, placed),
+            };
+            (a.uid(), values)
+        })
+        .collect();
+    // R-199 : travail et surutilisation de chaque ressource chargée
+    // (`PeakUnits` jamais écrit, O31).
+    let resources = schedule
+        .resources
+        .iter()
+        .map(|(uid, load)| {
+            (
+                *uid,
+                ResourceValues {
+                    work: Some(load.work),
+                    overallocated: Some(load.overallocated),
+                },
+            )
+        })
+        .collect();
     Values {
         tasks,
+        assignments,
+        resources,
         project_start: Some(schedule.project_start),
         project_finish: Some(schedule.project_finish),
     }
+}
+
+/// R-199 : image du projet par une écriture avec `Computed::Schedule` (à
+/// composer avec [`crate::normalize`] pour l'aller-retour) : les champs du
+/// modèle que l'écrivain remplace par des valeurs du moteur. Travail d'une
+/// récapitulative planifiée et de l'UID 0 ← R-184 ; durée d'une feuille
+/// automatique affectée ← durée calculée (R-173, voir
+/// [`assigned_leaf_duration`]) ; `TimephasedData` d'une affectation dont le
+/// placement a changé retirées. Un `Schedule` d'un autre projet ne change
+/// rien (`mspdi.write.schedule_mismatch`, aucune valeur écrite).
+#[must_use]
+pub fn schedule_image(project: &Project, schedule: &Schedule) -> Project {
+    let mut p = project.clone();
+    if !matches(project, schedule) {
+        return p;
+    }
+    let placed = planrs_core::schedule::placed_by_assignments(project, schedule);
+    let uids: Vec<TaskUid> = p.tasks.iter().map(Task::uid).collect();
+    for uid in uids {
+        let (Some(t), Some(TaskOutcome::Scheduled(s))) = (p.tasks.get_mut(uid), schedule.get(uid)) else {
+            continue;
+        };
+        if s.role == TaskRole::Summary {
+            t.work = s.work;
+        } else if let Some(d) = assigned_leaf_duration(t, s, &placed) {
+            t.duration = d;
+        }
+    }
+    if let (Some(t), Some(s)) = (&mut p.summary_task, &schedule.project_summary) {
+        t.work = s.work;
+    }
+    let auids: Vec<AssignmentUid> = p.assignments.iter().map(planrs_core::Assignment::uid).collect();
+    for uid in auids {
+        let Some(a) = p.assignments.get_mut(uid) else {
+            continue;
+        };
+        if super::timephased::stale(a, schedule.assignments.get(&uid)) {
+            a.extras.0.retain(|e| {
+                !(e.origin == ORIGIN && super::timephased::is_scheduled_work(&e.key, &e.payload))
+            });
+        }
+    }
+    p
 }
 
 /// Valeurs relues, telles quelles (R-122).
@@ -301,8 +371,37 @@ pub(crate) fn from_recorded(recorded: &RecordedSchedule) -> Values {
         .iter()
         .map(|(uid, r)| (*uid, recorded_values(r)))
         .collect();
+    let assignments = recorded
+        .assignments
+        .iter()
+        .map(|(uid, r)| {
+            (
+                *uid,
+                AssignmentValues {
+                    start: r.start,
+                    finish: r.finish,
+                    drop_timephased: false,
+                },
+            )
+        })
+        .collect();
+    let resources = recorded
+        .resources
+        .iter()
+        .map(|(uid, r)| {
+            (
+                *uid,
+                ResourceValues {
+                    work: r.work,
+                    overallocated: r.overallocated,
+                },
+            )
+        })
+        .collect();
     Values {
         tasks,
+        assignments,
+        resources,
         project_start: recorded.project_start,
         project_finish: recorded.project_finish,
     }
@@ -323,6 +422,7 @@ fn recorded_values(r: &RecordedTask) -> TaskValues {
         finish_slack: t(r.finish_slack),
         critical: r.critical,
         duration: r.duration.map(Minutes::get),
+        ..TaskValues::default()
     }
 }
 

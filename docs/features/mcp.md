@@ -11,16 +11,18 @@
 
 ## 2. Outils
 
-Générés depuis `planrs_automation::REGISTRY` (`tools.rs`, sans macro `#[tool]`) : nom MCP, description dans la langue du serveur, schéma d'entrée du registre (objet au sommet, sans `$ref`), plus `dry_run` et `detail` pour une écriture ; annotations `readOnlyHint` (lecture, analyse), `destructiveHint` (`delete_task` seul).
+Générés depuis `planrs_automation::REGISTRY` (`tools.rs`, sans macro `#[tool]`) : nom MCP, description dans la langue du serveur, schéma d'entrée du registre (objet au sommet, sans `$ref`), plus `dry_run` et `detail` pour une écriture ; annotations `readOnlyHint` (lecture, analyse), `destructiveHint` (`delete_task`, `delete_resource`).
 
-| Genre | Outils (30 listés) |
+| Genre | Outils (38 listés) |
 |---|---|
 | Fichiers | `new_project`, `open_project`, `import_csv`, `save_project`, `export_mspdi` |
-| Lecture | `project_summary`, `list_tasks` (paginé : 50, au plus 500), `get_task`, `critical_path`, `render_gantt` |
-| Écriture (`dry_run`, `detail`) | `add_task`, `update_task`, `delete_task`, `move_task`, `indent_task`, `outdent_task`, `add_link`, `update_link`, `remove_link`, `set_constraint`, `set_deadline`, `set_project_start`, `set_project_info`, `set_status_date`, `edit_calendar`, `remove_calendar_exception`, `apply_batch` |
+| Lecture | `project_summary`, `list_tasks` (paginé : 50, au plus 500 ; filtre `resource`), `get_task`, `critical_path`, `render_gantt`, `list_resources` (paginé : 50, au plus 500 ; filtre `overallocated`) |
+| Analyse | `resource_usage` |
+| Écriture (`dry_run`, `detail`) | `add_task`, `update_task`, `delete_task`, `move_task`, `indent_task`, `outdent_task`, `add_link`, `update_link`, `remove_link`, `set_constraint`, `set_deadline`, `set_project_start`, `set_project_info`, `set_status_date`, `edit_calendar`, `remove_calendar_exception`, `add_resource`, `update_resource`, `delete_resource`, `assign_resource`, `update_assignment`, `unassign_resource`, `apply_batch` |
 | Historique | `undo`, `redo`, `history` |
 
-- Réservés (J5, J6), non listés mais appelables : `explain_date`, `what_if`, `resource_usage`, `baseline_variance`, `add_resource`, `assign_resource`, `update_assignment`, `update_progress`, `set_baseline` → `command.not_yet_available` en erreur structurée.
+- Réservés (J6), non listés mais appelables : `explain_date`, `what_if`, `baseline_variance`, `update_progress`, `set_baseline` → `command.not_yet_available` en erreur structurée.
+- Ressources (J5, lot L8, ADR-0013 D9) : les six écritures `resource.*` et `assignment.*` entrent aussi dans `apply_batch` (étiquettes `"as":"$x"` des ressources, espace de noms distinct de celui des tâches ; résultat `resource_labels` et `created_resources`, absents quand vides). Vues : `ResourceView { uid, id, name, kind, material_label?, max_units, calendar, initials, group, work, peak, overallocated, inactive, assignments (≤ 100), assignments_total }`, `AssignmentView { uid, task, resource, units, work, delay?, start, finish, effective_units }`, `UsageView { by, periods, rows: [{uid, name, work[], overallocated[]}], truncated }` ; unités en `{value (1/10 000), text "50%"}` (quantité « 3 » d'une ressource matérielle, dérivée du travail de l'affectation, PT3H = 3, O30, et relisible comme `quantity` ; `units` et `effective_units` d'une affectation matérielle valent cette quantité, jamais les 100 % du modèle), travail en heures. `TaskView` gagne `resources: [{uid, name, units}]` (≤ 100, `MAX_TASK_RESOURCES`, avec `resources_total` quand la liste est coupée, C-MCP-03) et `work`, omis quand vides ou nuls ; `get_task` gagne `scheduling { type, effort_driven }`, omis s'ils valent les défauts du projet ou pour une récapitulative. Le diff (`DiffView`) gagne `overallocated { new, resolved }` (UID des ressources surutilisées après et pas avant, et l'inverse ; omis si vides), signalé dès un `dry_run`. Ressource UID 0 des fichiers MS Project (O34) cachée : ni listée ni comptée par défaut ; `ResourceView.id` est l'ID de MS Project (UID 0 : ID 0, non compté ; les autres 1, 2… dans l'ordre), le même que l'écrivain MSPDI, et non position + 1, décalé d'un cran sur un fichier MS Project. `resource_usage` : `from`/`to` par défaut les dates du projet, `by` semaine par défaut, au plus 20 000 cellules (périodes × ressources, `limit.exceeded`) en plus des bornes du cœur (R-188). Test : `mcp_resource_usage_structured`.
 - `render_gantt` : contenu texte = résumé (« N tâches, M critiques, fin … », plus les lignes non affichées), puis le SVG, puis le rapport en JSON (comme le recommande la spécification MCP : un client sans `structuredContent` voit aussi `truncated_days` et `truncated_bytes`) ; contenu structuré = rapport du rendu sans le SVG (`shown`, `hidden`, `truncated_days`, `truncated_bytes`, `bytes`).
 - Les autres outils : contenu structuré = la vue JSON, contenu texte = le même JSON (clients sans `structuredContent`).
 
@@ -47,16 +49,17 @@ Deux lignes `planrs_automation::journal::Entry` par appel, de même `seq` (1 au 
 - **Scénario** : `new_project` « Rénovation maison », début lun 02/11/2026 08:00 ; 30 `add_task` : 4 récapitulatives (Préparation, Gros œuvre, Second œuvre, Finitions), sous-tâches placées par `last_child_of`, 3 jalons (durée « 0j », `milestone:true`) ; 25 `add_link` (FS ×19 dont deux vers une récapitulative, SS ×3, FF ×2, SF ×1 ; décalages « +2j », « -1j », « 50% », « +1ej ») ; 2 `set_constraint` (SNET 14/12/2026 sur Menuiseries extérieures, FNLT 30/04/2027 sur la réception) ; 1 `edit_calendar` (11/11/2026 chômé) ; 1 `apply_batch` en `dry_run` (deux opérations) suivi de `history` (58 entrées, inchangé) ; 1 `add_link` refusé (21 → 10, cycle : `batch.would_create_errors`, `link.cycle`, `op_index` 0) ; 3 `undo` puis 3 `redo` ; `list_tasks` en 2 pages de 20 ; `critical_path` ; `render_gantt` ; `save_project` sous `$TMP/build_30.xml`. Résultat : fin du projet mar 09/02/2027 17:00, 18 feuilles critiques.
 - **Jeton `$TMP`** : remplacé par le dossier temporaire du rejeu avant l'appel, remis à sa place dans les résultats et le journal produit (séparateur `\` de Windows ramené à `/`).
 - **Vérifications** (harnais partagé `crates/planrs-mcp/tests/common/replay.rs`) :
-  1. `replay_build_30_memory` (`crates/planrs-mcp/tests/replay.rs`) : `serve_on` + `tokio::io::duplex`, chaque résultat égal à l'attendu, journal produit égal au scénario octet pour octet, rejeu < 2 s (mesuré en local : 0,2 s en debug) ;
+  1. `replay_build_30_memory` (`crates/planrs-mcp/tests/replay.rs`) : `serve_on` + `tokio::io::duplex`, chaque résultat égal à l'attendu, journal produit égal au scénario octet pour octet, rejeu < 10 s (mesuré en local : 0,2 à 0,5 s en debug ; temps réel, les rejeux tournent en parallèle sur la CI) ;
   2. `replay_build_30_saved_mspdi_matches` : le MSPDI enregistré relu par `planrs_mspdi::read` a 30 tâches, aucun diagnostic de gravité erreur (import et planning recalculé), `normalize` égal à celui de `tests/mcp/expected/build_30.xml` relu ;
   3. `replay_build_30_undo_to_empty` : `undo` répété jusqu'à `history.empty` (58 annulations), `list_tasks` vide, MSPDI exporté identique octet pour octet à celui du projet juste après `new_project` (P30 de bout en bout) ;
   4. `replay_build_30_stdio_binary` (`apps/planrs-cli/tests/mcp_replay.rs`) : vrai binaire `planrs --now … --lang fr mcp --headless --journal J` en processus fils, client rmcp sur ses tubes, mêmes résultats, journal produit égal au scénario, sortie 0 à la fermeture de l'entrée ;
-  5. le budget de 2 s est vérifié par le test 1 ;
+  5. le budget de 10 s est vérifié par le test 1 ;
   6. `replay_build_30_http` (`crates/planrs-mcp/tests/replay_http.rs`, feature `http`) : même rejeu en HTTP sur `127.0.0.1:0`, `--root` = dossier du rejeu, mêmes résultats et même journal.
 - **Régénération** : `PLANRS_BLESS=1 cargo test -p planrs-mcp --test replay replay_build_30_memory` réécrit le scénario (requêtes gardées, résultats recalculés) et `tests/mcp/expected/build_30.xml` ; relire le diff avant de versionner (le rejeu fige le comportement du moteur, il ne le vérifie pas contre MS Project).
 - **CI** : job `mcp` (`.github/workflows/ci.yml`) ; les mêmes tests tournent aussi dans `checks`, macOS et Windows (`cargo test --workspace`).
+- **J5** : le scénario `resources_j5.jsonl` (ressources, affectations, types de tâche, surutilisation) suit le même harnais, en mémoire, en stdio et en HTTP (`replay_resources_j5_*`) ; contenu et vérifications dans [`resources.md`](resources.md) § 4.
 
-## 6. Essai réel avec Claude (une fois, local, hors CI)
+## 6. Essais réels avec Claude (local, hors CI)
 
 Fait le 2026-10-19 sur serveurdvp, sur validation du propriétaire. Procédure suivie :
 
@@ -73,6 +76,19 @@ Résultat :
 - Planning obtenu : 35 tâches dont 5 phases (récapitulatives) et 4 jalons, 40 liens, fin mer 10/03/2027 17:00 (93 jours ouvrés), 21 tâches critiques ; une entrée d'historique.
 - Règle 3 tenue : la seule date fournie par l'agent est le début du projet ; toutes les dates, durées calculées et marges de sa réponse finale viennent des résultats du moteur. L'agent a signalé de lui-même les limites du modèle (aucun jour chômé posé, durées estimées, pas de ressources).
 - Rejeu en CI : `replay_claude_run_1` (`crates/planrs-mcp/tests/replay.rs`, job `mcp`) rejoue le journal en mémoire, compare chaque résultat et le journal produit au scénario, et le MSPDI enregistré à l'attendu (`normalize`).
+
+### Essai n° 2 (ressources J5, 2026-10-19)
+
+Même procédure (binaire `planrs` du lot L9 de J5, conversation neuve, `claude -p`, `--strict-mcp-config`, planrs seul outil, autres outils interdits), serveur `planrs --now 2026-10-19T08:00 --lang fr mcp --headless --journal run.jsonl`. Consigne figée, envoyée telle quelle :
+
+> Construis le planning de rénovation d'une maison en 30 tâches avec phases, jalons et dépendances, affecte les artisans (maçon, plombier, électricien, plaquiste, carreleur, peintre) en tenant compte de leurs disponibilités, signale les surcharges et résous-les, puis montre-moi le chemin critique et la charge de chaque artisan.
+
+Résultat :
+
+- 16 appels, 0 erreur : `new_project` (début lun 02/11/2026 08:00) ; un `apply_batch` de 107 opérations (35 `task.add`, 39 `link.add`, 6 `resource.add`, 25 `assignment.add`, 2 `calendar.set_exception` du chantier : 11/11 férié, fermeture du 24/12 au 01/01) ; un `apply_batch` de 6 indisponibilités d'artisans (`calendar.set_exception` sur leurs calendriers propres) ; `list_resources overallocated`, `resource_usage` par semaine, `list_tasks`, `critical_path` ; **trois `apply_batch` en `dry_run`** comparés avant d'appliquer (option A : surcharges du Maçon et du Carreleur résolues mais une nouvelle sur le Plaquiste, `diff.overallocated.new` = [4] ; option B : 4 jours de plus sur la fin ; option A complétée), puis le lot retenu validé (4 `link.add`, `resolved` = [1, 5]) ; `critical_path`, `resource_usage`, `list_resources`, `save_project`, `render_gantt`.
+- Planning obtenu : 35 tâches dont 5 phases et 5 jalons, 43 liens (39 + 4 ; la réponse finale de l'agent en annonce 42 : écart de recopie de l'agent, les charges par artisan de sa réponse sont celles du moteur), 6 artisans, surutilisation détectée par le moteur (Maçon à 300 %, Carreleur à 200 %) puis aucune surcharge restante ; fin mer 27/01/2027 17:00, 22 tâches critiques.
+- Règle 3 tenue : l'agent n'a fourni que le début du projet et des jours chômés (indisponibilités qu'il a inventées et signalées comme telles) ; dates, marges, charges et surcharges de sa réponse viennent des résultats du moteur, et il a comparé les options par `dry_run` au lieu de les estimer.
+- Versionné : `tests/mcp/scenarios/claude_run_2.jsonl` (chemins absolus remplacés par `$TMP`), MSPDI attendu `tests/mcp/expected/claude_run_2.xml`, rejoué par `replay_claude_run_2` (mêmes vérifications que l'essai n° 1, plus les faits clés ci-dessus). Diff de `PLANRS_BLESS=1` relu : hors chemins, seuls changent les `RemainingWork` des 25 affectations (0 dans le fichier de l'essai, égaux au travail depuis le correctif de la relecture finale, R-199) et la taille de l'enregistrement (`bytes` 81 062 → 81 085) ; aucun résultat du moteur ne change (dates, durées, marges, charges, surcharges, chemin critique).
 
 ## 7. Limites
 

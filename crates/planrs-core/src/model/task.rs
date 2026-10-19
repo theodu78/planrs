@@ -15,6 +15,7 @@ use crate::error::ModelError;
 use crate::ids::{BaselineNumber, CalendarUid, Guid, TaskUid};
 use crate::model::Extras;
 use crate::model::baseline::TaskBaseline;
+use crate::model::leveling::LevelingDelay;
 use crate::model::link::Link;
 use crate::model::options::ProjectOptions;
 use crate::quantity::Percent;
@@ -358,6 +359,10 @@ pub struct Task {
     pub ignore_resource_calendar: bool,
     /// Priorité.
     pub priority: Priority,
+    /// Retard de nivellement enregistré (lu, jamais calculé : ADR-0013 D4,
+    /// R-178) ; absent du JSON quand il n'y en a pas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leveling_delay: Option<LevelingDelay>,
     /// Avancement saisi.
     pub progress: Progress,
     /// Liens vers les prédécesseurs, portés par le successeur, ordre MSPDI
@@ -419,6 +424,7 @@ impl Task {
             calendar: None,
             ignore_resource_calendar: false,
             priority: Priority::DEFAULT,
+            leveling_delay: None,
             progress: Progress::default(),
             predecessors: Vec::new(),
             notes: String::new(),

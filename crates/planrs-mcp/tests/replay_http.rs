@@ -1,4 +1,4 @@
-//! Rejeu du scénario `build_30` en MCP HTTP (feature `http`, lot L18,
+//! Rejeu des scénarios `build_30` et `resources_j5` (J5, lot L9) en MCP HTTP (feature `http`, lot L18,
 //! vérification 6) : serveur sur `127.0.0.1:0`, `--root` = dossier
 //! temporaire du rejeu, client HTTP/1.1 minimal (hyper). Mêmes résultats et
 //! même journal que le rejeu en mémoire.
@@ -146,8 +146,19 @@ impl Session {
 
 #[tokio::test]
 async fn replay_build_30_http() {
+    replay_http("build_30").await;
+}
+
+/// Scénario J5 (lot L9) : ressources, affectations, surutilisation.
+#[tokio::test]
+async fn replay_resources_j5_http() {
+    replay_http("resources_j5").await;
+}
+
+/// Rejoue le scénario `name` en MCP HTTP.
+async fn replay_http(name: &str) {
     let root = repo_root(env!("CARGO_MANIFEST_DIR"));
-    let scenario = Scenario::load(&root, "build_30");
+    let scenario = Scenario::load(&root, name);
     let tmp = TempDir::new("http");
     // Journal hors de la racine confinée : il n'est pas un fichier du projet.
     let journal_dir = TempDir::new("http-journal");

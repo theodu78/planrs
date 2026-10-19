@@ -131,13 +131,20 @@ pub const fn baseline_parent(parent: Parent) -> Option<Parent> {
 }
 
 /// Le nom est-il un élément du schéma de `parent` qu'un `Extras` peut
-/// porter : classe P, ou `PredecessorLink` (lien vers un autre projet,
-/// conservé entier, R-087) ?
+/// porter : classe P, `PredecessorLink` (lien vers un autre projet,
+/// conservé entier, R-087), ou `LevelingDelay`/`LevelingDelayFormat` d'une
+/// tâche ou d'une affectation (modélisés depuis J5, R-198 ; un `Extras`
+/// hérité d'un projet enregistré avant J5 reste réécrit tant que le modèle
+/// n'a pas de retard) ?
 #[must_use]
 pub fn is_preserved_name(parent: Parent, name: &str) -> bool {
     match sequence(parent).class(name) {
         Some(Class::Preserved) => true,
-        Some(_) => parent == Parent::Task && name == "PredecessorLink",
+        Some(_) => {
+            (parent == Parent::Task && name == "PredecessorLink")
+                || (matches!(parent, Parent::Task | Parent::Assignment)
+                    && matches!(name, "LevelingDelay" | "LevelingDelayFormat"))
+        }
         None => false,
     }
 }

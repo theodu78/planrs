@@ -15,7 +15,7 @@ use super::network::{NodeIx, NodeKind, PROJECT, Role, Status, TaskInfo, pos};
 use super::{Calc, Driver, Exclusion, LateDriver, Schedule, TaskOutcome, TaskRole, TaskSchedule};
 use crate::calendar::Span;
 use crate::diagnostic::Diagnostic;
-use crate::duration::Minutes;
+use crate::duration::{Minutes, Work};
 use crate::fixed::round_div;
 use crate::ids::TaskUid;
 use crate::model::Task;
@@ -26,6 +26,9 @@ impl Calc<'_, '_> {
     /// topologique des tâches planifiées, les diagnostics triés.
     pub(super) fn output(mut self, order: &[NodeIx]) -> Schedule {
         self.empty_summary_links();
+        // J5 : affectations placées et durée calculée des feuilles à parts
+        // (R-173).
+        let (assignments, durations) = self.place_assignments();
         let sums = match self.strategy {
             super::Strategy::Fast => self.percent_sums(),
             super::Strategy::Reference => None,
@@ -33,7 +36,7 @@ impl Calc<'_, '_> {
         let mut tasks: BTreeMap<TaskUid, TaskOutcome> = BTreeMap::new();
         for (p, task) in self.project.tasks.iter().enumerate() {
             let outcome = if let Some(info) = self.net.task(p).cloned() {
-                self.outcome(p, task, &info, sums.as_deref())
+                self.outcome(p, task, &info, (sums.as_deref(), durations.get(&p).copied()))
             } else {
                 self.diags.push(Diagnostic::ScheduleInternal {
                     detail: format!("tâche {} non classée", task.uid()),
@@ -61,6 +64,8 @@ impl Calc<'_, '_> {
             tasks,
             order: sorted,
             diagnostics: self.diags.finish(),
+            assignments,
+            resources: BTreeMap::new(),
         }
     }
 
@@ -134,6 +139,7 @@ impl Calc<'_, '_> {
             driver: Driver::Rollup,
             late_driver: LateDriver::Rollup,
             degraded,
+            work: Work::ZERO,
         })
     }
 
@@ -164,7 +170,14 @@ impl Calc<'_, '_> {
     }
 
     /// Résultat de la tâche en position `p`.
-    fn outcome(&mut self, p: usize, task: &Task, info: &TaskInfo, sums: Option<&[LeafSums]>) -> TaskOutcome {
+    /// `measured` : durée calculée d'une feuille à parts (R-173).
+    fn outcome(
+        &mut self,
+        p: usize,
+        task: &Task,
+        info: &TaskInfo,
+        (sums, measured): (Option<&[LeafSums]>, Option<Minutes>),
+    ) -> TaskOutcome {
         let excluded = |reason| TaskOutcome::Excluded {
             reason,
             display: None,
@@ -229,6 +242,12 @@ impl Calc<'_, '_> {
             Mode::FromStart => early,
             Mode::FromFinish => late,
         };
+        // R-178 : le retard de nivellement d'une feuille décale son début
+        // planifié, pas son début au plus tôt (O27).
+        let early = Span {
+            start: state.undelayed.unwrap_or(early.start),
+            ..early
+        };
         let (role, manual, duration, percent_complete) = if info.role == Role::Summary {
             // R-054, mesurée sur les dates planifiées (R-112) ; récapitulative
             // manuelle datée : durée utilisée (R-064).
@@ -237,7 +256,7 @@ impl Calc<'_, '_> {
             } else {
                 // R-113 : mesurée sur le calendrier du projet (de base) pour
                 // une récapitulative sans calendrier propre.
-                node.and_then(|n| self.net.scale(self.net.measure(n.place)))
+                node.and_then(|n| self.net.scale(n.measure))
                     .and_then(|s| s.between(planned.start, planned.finish).ok())
             };
             if duration.is_none() {
@@ -253,7 +272,7 @@ impl Calc<'_, '_> {
             (
                 TaskRole::Leaf,
                 fixed,
-                node.map_or(task.duration.minutes(), |n| n.duration),
+                measured.unwrap_or_else(|| node.map_or(task.duration.minutes(), |n| n.duration)),
                 task.progress.percent_complete,
             )
         };
@@ -272,6 +291,7 @@ impl Calc<'_, '_> {
             driver: state.driver,
             late_driver,
             degraded,
+            work: Work::ZERO,
         })
     }
 

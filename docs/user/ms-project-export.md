@@ -38,9 +38,9 @@ Si MS Project refuse d'ouvrir le fichier, vérifier **Fichier › Options › Ce
 
 ## 4. Ce qui est recalculé ou perdu
 
-**Recalculé par MS Project à l'ouverture** (planrs ne les écrit pas) : coûts, valeur acquise, écarts, surutilisation des ressources, travail des ressources, début et fin des affectations, répartition du travail planifié d'une affectation (`TimephasedData` de type 1, écartée à la lecture sauf si le profil de travail a été modifié à la main).
+**Recalculé par MS Project à l'ouverture** (planrs ne les écrit pas) : coûts, valeur acquise, écarts, pic d'unités des ressources, répartition du travail planifié d'une affectation (`TimephasedData` de type 1, écartée à la lecture sauf si le profil de travail a été modifié à la main ; gardée alors seulement tant que l'affectation n'a pas bougé).
 
-**Dates calculées.** planrs écrit ses propres dates (au plus tôt, au plus tard, marges, critique) quand son moteur sait tout calculer. Si le projet contient de l'avancement, des calendriers de ressource ou un retard de nivellement (pas encore calculés par planrs), il réécrit à la place les dates que MS Project avait enregistrées si le projet n'a pas été modifié ; sinon il n'écrit aucune date calculée et MS Project les recalcule à l'ouverture.
+**Dates calculées.** planrs écrit ses propres dates (au plus tôt, au plus tard, marges, critique), le début et la fin des affectations (et leur travail restant, égal à leur travail tant qu'aucun travail réel n'est saisi), le travail et la surutilisation des ressources, le travail des récapitulatives et la durée des tâches placées par leurs ressources, quand son moteur sait tout calculer. Si le projet contient de l'avancement (pas encore calculé par planrs), il réécrit à la place les dates que MS Project avait enregistrées si le projet n'a pas été modifié ; sinon il n'écrit aucune date calculée et MS Project les recalcule à l'ouverture.
 
 **Perdu à l'aller-retour** :
 - la forme ancienne des exceptions de calendrier (`WeekDay` de `DayType 0`, que MS Project écrit en plus de la forme `Exceptions`) : planrs n'écrit que la forme `Exceptions`, que MS Project 2007 et suivants lisent ; qu'il régénère l'ancienne à l'enregistrement est une hypothèse, non vérifiée faute de licence ;

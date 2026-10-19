@@ -1,5 +1,7 @@
 //! Import des affectations (R-088, R-125) : tâche, ressource, unités,
-//! travail, retard, profil, lignes de base ; le reste en `Extras` (R-087),
+//! travail, retard, retard de nivellement (R-198), profil, lignes de base ;
+//! dates et travail enregistrés dans `RecordedSchedule` (R-198) ; le reste
+//! en `Extras` (R-087),
 //! sauf la répartition calculée (`TimephasedData` de type 1, travail
 //! restant planifié) quand le profil n'est pas modifié à la main.
 
@@ -17,9 +19,11 @@ use crate::diag::{ImportCode, Sink};
 use crate::extras;
 use crate::fields::Fields;
 use crate::project::{code, guid};
+use crate::recorded::RecordedAssignment;
 use crate::resource::units;
 use crate::scalar::tenths_to_minutes;
 use crate::schema::Parent;
+use crate::task::leveling_delay;
 use crate::xml::Element;
 
 /// Chemin d'une affectation.
@@ -29,11 +33,18 @@ const ASSIGNMENT: &str = "Assignments/Assignment";
 /// planifié de l'affectation (S37).
 const TIMEPHASED_SCHEDULED_WORK: i64 = 1;
 
+/// Format par défaut du retard de nivellement d'une affectation, si
+/// `LevelingDelayFormat` manque ou ne convient pas : jours ouvrés (7),
+/// format le plus fréquent du corpus (hypothèse, R-198).
+pub(crate) const ASSIGNMENT_DELAY_ELAPSED: bool = false;
+
 /// Importe les affectations ; `tasks` : UID des tâches lues (UID 0
-/// compris). Rend aussi le nombre de répartitions calculées écartées.
+/// compris) ; valeurs enregistrées dans `recorded` (R-198). Rend aussi le
+/// nombre de répartitions calculées écartées.
 pub(crate) fn import(
     elements: &[Element<'_>],
     tasks: &BTreeSet<TaskUid>,
+    recorded: &mut BTreeMap<AssignmentUid, RecordedAssignment>,
     sink: &mut Sink<'_>,
 ) -> (Arena<AssignmentUid, Assignment>, u64) {
     let mut out = Arena::new();
@@ -61,10 +72,20 @@ pub(crate) fn import(
         let mut a = Assignment::new(uid, task, resource_uid(&f, sink));
         a.guid = guid(&f, "GUID", sink);
         a.units = units(&f, "Units", sink).unwrap_or(planrs_core::Units::FULL);
-        a.work = baseline::work(&f, "Work", sink).unwrap_or(Work::ZERO);
+        let work = baseline::work(&f, "Work", sink);
+        a.work = work.unwrap_or(Work::ZERO);
         a.actual_work = baseline::work(&f, "ActualWork", sink).unwrap_or(Work::ZERO);
         a.remaining_work = baseline::work(&f, "RemainingWork", sink).unwrap_or(Work::ZERO);
         a.delay = delay(&f, sink);
+        a.leveling_delay = leveling_delay(&f, ASSIGNMENT_DELAY_ELAPSED, sink);
+        recorded.insert(
+            uid,
+            RecordedAssignment {
+                start: f.datetime("Start", sink),
+                finish: f.datetime("Finish", sink),
+                work,
+            },
+        );
         a.contour = code(&f, "WorkContour", codes::work_contour, sink).unwrap_or(WorkContour::Flat);
         let baselines = baseline::assignment(&element.children, f.subject(), sink);
         a.baselines = baselines.map;

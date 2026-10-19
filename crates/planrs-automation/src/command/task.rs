@@ -1,5 +1,6 @@
 //! Exécution des commandes de tâches (R-152 à R-155, R-157, R-158, R-161 ;
-//! lot L4).
+//! lot L4) ; `task.update` étendu au type, au pilotage par l'effort et au
+//! travail (R-197, lot J5 L7).
 //!
 //! Chaque commande travaille sur le clone du lot (`Ctx::project`) : un
 //! refus interrompt le lot sans rien laisser (le pipeline jette le clone).
@@ -9,11 +10,14 @@
 
 use std::collections::BTreeSet;
 
+use planrs_core::resource::Edit;
+use planrs_core::resource::edit::effective_effort_driven;
 use planrs_core::{
     Assignment, Constraint, ModelError, Moment, OutlineLevel, ScheduleAnchor, SchedulingMode, Subject, Task,
-    TaskUid,
+    TaskType, TaskUid, TimeBasis, Work,
 };
 
+use super::assignment::{Balance, balance_of};
 use super::exec::Ctx;
 use super::extras_invalidation::TaskChange;
 use super::outline::{
@@ -241,6 +245,9 @@ pub(super) fn add(op: &TaskAdd, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
         ctx.define_label(label, uid)?;
     }
     let mut task = Task::new(uid, op.name.clone(), &ctx.project.options);
+    // R-193, R-197 : une tâche créée à travail fixe est pilotée par l'effort,
+    // même si l'option du projet ne l'est pas.
+    task.effort_driven = effective_effort_driven(task.task_type, task.effort_driven);
     task.outline_level = outline(slot.level)?;
     task.constraint = Constraint::default_for(&ctx.project.anchor);
     if let Some(d) = duration {
@@ -324,6 +331,13 @@ pub(super) fn update(op: &TaskUpdate, ctx: &mut Ctx<'_>) -> Result<(), CommandEr
         Patch::Clear => return Err(invalid("duration", "durée attendue (la durée ne s'efface pas)")),
     };
     let entered = entered_date(&op.start, &op.finish)?;
+    let balance = j5_balance(
+        op,
+        ctx,
+        uid,
+        summary,
+        duration.as_ref().map(planrs_core::Duration::minutes),
+    )?;
 
     let Some(t) = ctx.project.tasks.get_mut(uid) else {
         return Err(CommandError::new(
@@ -377,10 +391,17 @@ pub(super) fn update(op: &TaskUpdate, ctx: &mut Ctx<'_>) -> Result<(), CommandEr
         t.active = a;
         changes.push(TaskChange::Active);
     }
+    if let Some(b) = &balance {
+        set_scheduling(t, b, !op.work.is_keep(), &mut changes);
+    }
     if let Some((side, date)) = entered
         && set_entered(ctx, uid, side, date)
     {
         changes.push(TaskChange::Constraint);
+    }
+    if let Some(b) = &balance {
+        // Durée, travail et affectations équilibrés (R-189 à R-194).
+        b.commit(ctx)?;
     }
     touch(ctx, uid);
     for c in &changes {
@@ -390,6 +411,110 @@ pub(super) fn update(op: &TaskUpdate, ctx: &mut Ctx<'_>) -> Result<(), CommandEr
         ctx.drop_assignment_extras(uid);
     }
     Ok(())
+}
+
+/// R-197 : type et pilotage équilibrés posés sur la tâche ; changements
+/// notés (le travail l'est par l'équilibrage, s'il a été saisi).
+fn set_scheduling(t: &mut Task, b: &Balance, work_entered: bool, changes: &mut Vec<TaskChange>) {
+    if t.task_type != b.side.task_type {
+        t.task_type = b.side.task_type;
+        changes.push(TaskChange::Type);
+    }
+    if t.effort_driven != b.side.effort_driven {
+        t.effort_driven = b.side.effort_driven;
+        changes.push(TaskChange::EffortDriven);
+    }
+    if work_entered && t.work != b.side.work {
+        changes.push(TaskChange::Work);
+    }
+}
+
+/// `param.conflict` entre `a` et `b`, sur `b`.
+fn conflict(a: &'static str, b: &'static str) -> CommandError {
+    CommandError::new(codes::PARAM_CONFLICT, CommandErrorKind::ParamConflict(a, b)).with_field(b)
+}
+
+/// R-197 : contrôles et équilibrage des champs J5 de `task.update` (`type`,
+/// `effort_driven`, `work`) et de la durée d'une feuille affectée (R-189
+/// « durée »), avant toute modification. `None` si rien n'est à équilibrer
+/// (aucun champ J5, durée sur une tâche sans affectation de travail).
+fn j5_balance(
+    op: &TaskUpdate,
+    ctx: &Ctx<'_>,
+    uid: TaskUid,
+    summary: bool,
+    duration: Option<planrs_core::Minutes>,
+) -> Result<Option<Balance>, CommandError> {
+    if !op.duration.is_keep() && !op.work.is_keep() {
+        return Err(conflict("duration", "work"));
+    }
+    let fields = [
+        ("type", !op.task_type.is_keep()),
+        ("effort_driven", !op.effort_driven.is_keep()),
+        ("work", !op.work.is_keep()),
+    ];
+    let j5 = fields.iter().any(|(_, set)| *set);
+    if summary && let Some((field, _)) = fields.iter().find(|(_, set)| *set) {
+        // R-197 : type, pilotage et travail d'une récapitulative sont
+        // calculés (jamais pilotée, R-193).
+        return Err(
+            CommandError::new(codes::TASK_COMPUTED_FIELD, CommandErrorKind::ComputedField)
+                .with_field(field)
+                .with_subject(Subject::Task(uid)),
+        );
+    }
+    let task_type = match &op.task_type {
+        Patch::Keep => None,
+        Patch::Set(t) => Some(TaskType::from(*t)),
+        Patch::Clear => return Err(invalid("type", "type attendu (il ne s'efface pas)")),
+    };
+    let effort = match op.effort_driven {
+        Patch::Keep => None,
+        Patch::Set(e) => Some(e),
+        Patch::Clear => return Err(invalid("effort_driven", "booléen attendu")),
+    };
+    let work = match &op.work {
+        Patch::Keep => None,
+        Patch::Set(w) => {
+            let d = ctx.duration(w, "work")?;
+            if d.basis() == TimeBasis::Elapsed {
+                return Err(invalid(
+                    "work",
+                    "travail en temps ouvré attendu (durée écoulée refusée)",
+                ));
+            }
+            Some(Work::new(d.minutes()).map_err(|_| invalid("work", "travail hors des bornes"))?)
+        }
+        Patch::Clear => return Err(invalid("work", "travail attendu (il ne s'efface pas)")),
+    };
+    if !j5 && (duration.is_none() || summary) {
+        return Ok(None);
+    }
+    let mut b = balance_of(ctx, uid, &BTreeSet::new())?;
+    if !j5 && b.parts.is_empty() {
+        return Ok(None);
+    }
+    if let Some(t) = task_type {
+        b.set_type(t, "type")?;
+    }
+    if let Some(e) = effort {
+        b.set_effort_driven(e, "effort_driven")?;
+    }
+    if let Some(d) = duration
+        && !b.parts.is_empty()
+    {
+        b.edit(&Edit::Duration(d), "duration")?;
+    }
+    if let Some(w) = work {
+        if b.parts.is_empty() {
+            return Err(invalid(
+                "work",
+                "travail saisi sur une tâche sans affectation de ressource de travail",
+            ));
+        }
+        b.edit(&Edit::Work(w), "work")?;
+    }
+    Ok(Some(b))
 }
 
 /// R-155 : `task.delete`.

@@ -216,6 +216,9 @@ pub(crate) fn runs_overlap(a: &[DayRange], b: &[DayRange]) -> bool {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DayClaims<T> {
     runs: BTreeMap<i32, (i32, T)>,
+    /// Tampon des jours libres d'une attribution, réutilisé (aucune
+    /// allocation par série une fois la capacité atteinte).
+    gaps: Vec<(i32, i32)>,
 }
 
 impl<T: Copy + PartialEq> DayClaims<T> {
@@ -223,6 +226,7 @@ impl<T: Copy + PartialEq> DayClaims<T> {
     pub(crate) const fn new() -> Self {
         Self {
             runs: BTreeMap::new(),
+            gaps: Vec::new(),
         }
     }
 
@@ -236,15 +240,11 @@ impl<T: Copy + PartialEq> DayClaims<T> {
             .next_back()
             .filter(|(_, (l, _))| *l >= first)
             .map_or(first, |(f, _)| *f);
-        let taken: Vec<(i32, i32, T)> = self
-            .runs
-            .range(start..=last)
-            .map(|(f, (l, o))| (*f, *l, *o))
-            .collect();
         let mut conflicts: Vec<T> = Vec::new();
-        let mut gaps: Vec<(i32, i32)> = Vec::new();
+        let gaps = &mut self.gaps;
+        gaps.clear();
         let mut cursor = first;
-        for (f, l, o) in taken {
+        for (&f, &(l, o)) in self.runs.range(start..=last) {
             if f > cursor {
                 gaps.push((cursor, f.saturating_sub(1)));
             }
@@ -256,7 +256,7 @@ impl<T: Copy + PartialEq> DayClaims<T> {
         if cursor <= last {
             gaps.push((cursor, last));
         }
-        for (a, b) in gaps {
+        for &(a, b) in gaps.iter() {
             self.runs.insert(a, (b, owner));
         }
         conflicts

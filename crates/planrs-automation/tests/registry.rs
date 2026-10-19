@@ -121,22 +121,41 @@ fn registry_reserved_not_listed() {
     let expected: BTreeSet<&str> = [
         "analysis.baseline_variance",
         "analysis.explain_date",
-        "analysis.resource_usage",
         "analysis.what_if",
-        "assignment.add",
-        "assignment.update",
         "baseline.set",
         "progress.update",
-        "resource.add",
     ]
     .into_iter()
     .collect();
     assert_eq!(reserved, expected);
     for spec in REGISTRY.iter().filter(|s| !s.is_listed()) {
-        assert!(matches!(spec.available, Availability::Milestone(5 | 6)));
+        assert_eq!(spec.available, Availability::Milestone(6));
     }
     assert!(listed().all(|s| s.available == Availability::Now));
     assert_eq!(listed().count(), REGISTRY.len() - expected.len());
+}
+
+/// Lot L8 (ADR-0013 D9) : les huit outils J5 sont listés, 38 outils en
+/// tout ; `delete_resource` est la seule écriture J5 destructive.
+#[test]
+fn registry_j5_tools_listed() {
+    for name in [
+        "add_resource",
+        "update_resource",
+        "delete_resource",
+        "list_resources",
+        "assign_resource",
+        "update_assignment",
+        "unassign_resource",
+        "resource_usage",
+    ] {
+        let spec = by_mcp_name(name).unwrap();
+        assert!(spec.is_listed(), "{name}");
+        assert_eq!(spec.available, Availability::Now, "{name}");
+    }
+    assert_eq!(listed().count(), 38);
+    assert_eq!(by_mcp_name("list_resources").unwrap().kind, Kind::Read);
+    assert_eq!(by_mcp_name("resource_usage").unwrap().kind, Kind::Analysis);
 }
 
 /// Chaque commande d'écriture d'un lot a son entrée, de même id, listée et
@@ -159,10 +178,16 @@ fn registry_write_commands_match_batch_ops() {
         {"op":"project.set_anchor","finish":"2026-12-18T17:00"},
         {"op":"project.set_status_date"},
         {"op":"calendar.set_exception","cal":1,"from":"2026-11-11","to":"2026-11-11"},
-        {"op":"calendar.remove_exception","cal":"project","from":"2026-11-11"}
+        {"op":"calendar.remove_exception","cal":"project","from":"2026-11-11"},
+        {"op":"resource.add","name":"R","as":"$r"},
+        {"op":"resource.update","uid":"$r","name":"S"},
+        {"op":"resource.delete","uid":1},
+        {"op":"assignment.add","task":1,"resource":"$r"},
+        {"op":"assignment.update","task":1,"resource":1},
+        {"op":"assignment.remove","task":1,"resource":1}
     ]}"#;
     let batch = Batch::from_json_str(json).unwrap();
-    assert_eq!(batch.ops.len(), 16);
+    assert_eq!(batch.ops.len(), 22);
     for op in &batch.ops {
         let spec = lookup(op.id()).unwrap();
         assert!(spec.is_listed() && spec.undoable, "{}", op.id());

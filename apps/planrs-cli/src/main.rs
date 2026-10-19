@@ -1,7 +1,8 @@
 //! Binaire `planrs` en ligne de commande.
 //!
 //! Il expose les mêmes opérations que le serveur MCP (`summary`, `tasks`,
-//! `apply`, `render`, `import-csv`, `mcp`, `explain`), toutes via le
+//! `resources`, `usage`, `apply`, `render`, `import-csv`, `mcp`,
+//! `explain`), toutes via le
 //! `Workspace` de `planrs-automation` : mêmes JSON que le MCP (ADR-0012 D1).
 //! Codes de sortie (C-MCP-08) dans [`exit`] ; « maintenant » et langue dans
 //! [`now`] (seule lecture de l'horloge). Détail : `docs/features/cli.md`.
@@ -47,6 +48,10 @@ enum Command {
     Summary(cmd::summary::SummaryArgs),
     /// Liste des tâches.
     Tasks(cmd::tasks::TasksArgs),
+    /// Liste des ressources (travail, pic, surutilisation).
+    Resources(cmd::resources::ResourcesArgs),
+    /// Utilisation des ressources par période.
+    Usage(cmd::usage::UsageArgs),
     /// Applique un lot de commandes.
     Apply(cmd::apply::ApplyArgs),
     /// Gantt en SVG.
@@ -83,6 +88,8 @@ fn main() -> ExitCode {
     match cli.command {
         Command::Summary(a) => cmd::summary::run(&ctx, &a),
         Command::Tasks(a) => cmd::tasks::run(&ctx, &a),
+        Command::Resources(a) => cmd::resources::run(&ctx, &a),
+        Command::Usage(a) => cmd::usage::run(&ctx, &a),
         Command::Apply(a) => cmd::apply::run(&ctx, &a),
         Command::Render(a) => cmd::render::run(&ctx, &a),
         Command::ImportCsv(a) => cmd::import_csv::run(&ctx, &a),

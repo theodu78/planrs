@@ -8,6 +8,7 @@ use crate::arena::HasUid;
 use crate::duration::{Minutes, Work};
 use crate::ids::{AssignmentUid, BaselineNumber, Guid, ResourceUid, TaskUid};
 use crate::model::Extras;
+use crate::model::LevelingDelay;
 use crate::model::baseline::AssignmentBaseline;
 use crate::quantity::Units;
 
@@ -58,6 +59,10 @@ pub struct Assignment {
     pub remaining_work: Work,
     /// Retard d'affectation (>= 0 attendu).
     pub delay: Minutes,
+    /// Retard de nivellement enregistré (lu, jamais calculé : ADR-0013 D4,
+    /// R-178) ; absent du JSON quand il n'y en a pas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leveling_delay: Option<LevelingDelay>,
     /// Profil (stocké ; `Flat` seul calculé en V1).
     pub contour: WorkContour,
     /// Lignes de base 0 à 10.
@@ -87,6 +92,7 @@ impl Assignment {
             actual_work: Work::ZERO,
             remaining_work: Work::ZERO,
             delay: Minutes::ZERO,
+            leveling_delay: None,
             contour: WorkContour::Flat,
             baselines: BTreeMap::new(),
             extras: Extras::new(),

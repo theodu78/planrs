@@ -23,6 +23,7 @@ pub mod corpus;
 pub mod generate;
 pub mod mspdi;
 pub mod net;
+pub mod resource_edit;
 pub mod session;
 pub mod task_edit;
 

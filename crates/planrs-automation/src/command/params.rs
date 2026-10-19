@@ -12,7 +12,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{Batch, Command};
-use crate::json::{DaySchema, MomentSchema};
+use crate::json::{DaySchema, GranularityJson, MomentSchema};
 use crate::text::Language;
 
 /// Paramètres vides (`project.summary`, `analysis.critical_path`,
@@ -83,9 +83,47 @@ pub struct TaskListParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1, max = 500))]
     pub limit: Option<u32>,
-    /// Tâches affectées à cette ressource (UID) : réservé (J5).
+    /// Tâches affectées à cette ressource (UID, J5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource: Option<u32>,
+}
+
+/// `resource.list` (J5, R-195) : ressources dans l'ordre des UID, filtrées
+/// et paginées comme `task.list`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceListParams {
+    /// Ressources surutilisées seulement (R-186).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub overallocated: bool,
+    /// Reprise après la ressource de cet UID (curseur `next_cursor`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<u32>,
+    /// Taille de la page (défaut 50, au plus 500).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 500))]
+    pub limit: Option<u32>,
+}
+
+/// `analysis.resource_usage` (J5, R-188) : travail par période et par
+/// ressource, calculé par le moteur à la demande.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UsageParams {
+    /// Début de la plage (défaut : début du projet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<MomentSchema>")]
+    pub from: Option<Moment>,
+    /// Fin de la plage, exclue (défaut : fin du projet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<MomentSchema>")]
+    pub to: Option<Moment>,
+    /// Granularité des périodes (défaut : semaine).
+    #[serde(default)]
+    pub by: GranularityJson,
+    /// Ressources (UID) ; vide : toutes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<u32>,
 }
 
 /// `task.get` : une tâche.

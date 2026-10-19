@@ -34,6 +34,8 @@ fn r125_assignments_are_written() {
     a.delay = Minutes::new(420);
     a.work = Work::new(Minutes::new(960)).unwrap();
     a.contour = WorkContour::Bell;
+    // Reste sans avancement = travail : écrit tel quel (dérivé, R-199).
+    a.remaining_work = a.work;
     proj.assignments.push(a).unwrap();
     proj.assignments
         .push(Assignment::new(AssignmentUid::new(2), TaskUid::new(1), None))
@@ -47,4 +49,33 @@ fn r125_assignments_are_written() {
     assert!(xml.contains("<Work>PT16H0M0S</Work>"));
     let back = reread(&out.xml).project;
     assert_eq!(back.assignments, proj.assignments);
+}
+
+#[test]
+fn r125_assignment_start_finish_written() {
+    // R-125 amendée (J5, R-199) : `Start`/`Finish` d'affectation écrits
+    // depuis le placement du moteur ; omis sans valeurs calculées.
+    use planrs_core::{Assignment, Resource, ResourceUid, Task, TaskUid, Work, schedule};
+    use planrs_mspdi::write::{Computed, WriteOptions, write};
+    use planrs_tests::mspdi::{compact, new_project, text};
+    let mut proj = new_project("2026-10-19T08:00");
+    proj.tasks
+        .push(Task::new(TaskUid::new(1), "A".to_owned(), &proj.options))
+        .unwrap();
+    proj.resources
+        .push(Resource::new(ResourceUid::new(1), "R".to_owned()))
+        .unwrap();
+    let mut a = Assignment::new(AssignmentUid::new(1), TaskUid::new(1), Some(ResourceUid::new(1)));
+    a.work = Work::new(Minutes::new(960)).unwrap();
+    proj.assignments.push(a).unwrap();
+    let sched = schedule(&proj);
+    let xml = compact(&text(&write(
+        &proj,
+        Computed::Schedule(&sched),
+        &WriteOptions::default(),
+    )));
+    assert!(xml.contains("<Start>2026-10-19T08:00:00</Start><Finish>2026-10-20T17:00:00</Finish>"));
+    let omitted = compact(&text(&write(&proj, Computed::Omit, &WriteOptions::default())));
+    let a = omitted.get(omitted.find("<Assignment>").unwrap()..).unwrap();
+    assert!(!a.contains("<Start>"), "{a}");
 }

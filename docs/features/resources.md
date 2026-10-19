@@ -43,7 +43,7 @@
 
 Tests : `replay_resources_j5_memory` (`crates/planrs-mcp/tests/replay.rs`, avec les vérifications ci-dessus), `replay_resources_j5_http` (`replay_http.rs`), `replay_resources_j5_stdio` (`apps/planrs-cli/tests/mcp_replay.rs`) ; job CI `mcp`. Régénération : `PLANRS_BLESS=1 cargo test -p planrs-mcp --test replay replay_resources_j5_memory`, diff à relire.
 
-**Réouverture identique** (depuis le 2026-10-19) : la durée d'une feuille placée par plusieurs parts est l'union de leurs intervalles (Réseaux : 5 j, du lun 23 au ven 27/11) en session comme relue ; la session la reporte dans `Task::duration` après chaque recalcul (R-173), l'écrivain MSPDI écrit la même valeur (R-199). Le test compare `list_tasks` avant et après la réouverture sans exception (il consignait l'écart 3 j / 5 j auparavant).
+**Réouverture identique** (depuis le 2026-10-19) : la durée d'une feuille placée par plusieurs parts est l'union de leurs intervalles (Réseaux : 5 j, du lun 23 au ven 27/11) en session comme relue ; la session la reporte dans `Task::duration` après chaque recalcul et dès l'ouverture (R-173), l'écrivain MSPDI écrit la même valeur (R-199). Le test compare `list_tasks` avant et après la réouverture sans exception (il consignait l'écart 3 j / 5 j auparavant).
 
 ## 5. Vérification
 
@@ -59,3 +59,4 @@ Tests : `replay_resources_j5_memory` (`crates/planrs-mcp/tests/replay.rs`, avec 
 3. Débit et seuil instantané de la surutilisation (R-186) : A7 reste indicatif tant que la base « jour par jour » de MS Project n'est pas établie.
 4. Budget de 50 ms : médiane locale ramenée de 48 ms à 33 ms. Le bench a des calendriers de ressource dérivés sans exception propre, de même forme que le Standard : environ un tiers du gain (5 ms sur 15) vient de leur réutilisation comme une seule échelle (37,8 ms sans elle) ; un projet dont chaque ressource a ses congés paie le placement par parts (à mesurer par une variante du bench si on veut le borner).
 5. ~~Affectations d'un projet planifié à rebours~~ : corrigé le 2026-10-19 (relecture finale, R-173 amendée) : `AssignmentSchedule::span` suit les dates planifiées de la tâche, au plus tard à rebours (il restait au plus tôt) ; les dates écrites des affectations, la surutilisation et l'utilisation par période en découlent (`r174_from_finish_assignments_on_planned_dates`, `r199_from_finish_assignment_dates_written`).
+6. ~~Durée relue différente de l'union~~ : corrigé le 2026-10-19 (relecture finale) : l'ouverture d'une session reporte aussi l'union dans `Task::duration` (fichier d'un autre outil ou écrit avant l'amendement de R-173) ; elle n'attend plus le premier lot, qui l'inscrivait dans l'entrée d'historique d'une commande sans rapport (`r173_open_syncs_recorded_duration`).

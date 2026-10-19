@@ -259,14 +259,20 @@ impl Session {
         Self::from_parts(project, None, origin, now, lang)
     }
 
+    /// Session ouverte : la durée du modèle des feuilles placées par leurs
+    /// affectations est alignée sur l'union dès l'ouverture, comme après un
+    /// lot (R-173 amendée) ; une durée relue différente (fichier d'un autre
+    /// outil) n'attend pas le premier lot pour être corrigée, et ne
+    /// s'inscrit pas dans l'entrée d'historique d'une commande sans rapport.
+    /// Le document n'est pas marqué modifié.
     fn from_parts(
-        project: Project,
+        mut project: Project,
         recorded: Option<RecordedSchedule>,
         origin: DocOrigin,
         now: Moment,
         lang: Language,
     ) -> Self {
-        let schedule = planrs_core::schedule(&project);
+        let schedule = synced_schedule(&mut project);
         let diagnostics = state_diagnostics(&project, &schedule);
         let uids = UidAlloc::from_project(&project);
         Self {

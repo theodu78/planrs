@@ -156,6 +156,49 @@ fn r173_session_duration_is_union_and_reread_identical() {
 }
 
 #[test]
+fn r173_open_syncs_recorded_duration() {
+    // Fichier dont la durée enregistrée de A (3 j, le plus grand des `d_a`)
+    // n'est pas l'union (4 j) : dès l'ouverture, la durée du modèle est
+    // l'union, document non modifié ; un lot sans rapport (renommage) ne
+    // change plus la durée de A.
+    use planrs_tests::resource_edit::duration;
+    use planrs_tests::task_edit::apply;
+    use serde_json::json;
+    let s = two_parts_session();
+    let xml = String::from_utf8(s.save_bytes(&planrs_mspdi::write::WriteOptions::default()).xml).unwrap();
+    let union = "<Duration>PT32H0M0S</Duration>";
+    assert!(xml.contains(union), "{xml}");
+    let legacy = xml.replacen(union, "<Duration>PT24H0M0S</Duration>", 1);
+    let origin = planrs_automation::DocOrigin {
+        name: "p.xml".to_owned(),
+        path: None,
+    };
+    let (mut r, _) = planrs_automation::Session::open_bytes(
+        legacy.as_bytes(),
+        origin,
+        moment("2026-10-19T08:00"),
+        planrs_automation::text::Language::Fr,
+    )
+    .unwrap();
+    assert_eq!(duration(&r, 1), 1_920);
+    assert!(!r.is_dirty());
+    let before = r
+        .project()
+        .tasks
+        .get(planrs_core::TaskUid::new(1))
+        .unwrap()
+        .duration;
+    apply(&mut r, json!([{ "op": "task.update", "uid": 1, "name": "A2" }]));
+    let after = r
+        .project()
+        .tasks
+        .get(planrs_core::TaskUid::new(1))
+        .unwrap()
+        .duration;
+    assert_eq!(before, after);
+}
+
+#[test]
 fn r173_session_duration_follows_later_edits() {
     // Les éditions suivantes partent de l'union, en session comme après la
     // réouverture : même résultat des deux côtés.

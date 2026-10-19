@@ -156,6 +156,23 @@ impl Exec for Edit {
     }
 }
 
+/// Recalcul d'un lot (R-173 amendée) : la durée du modèle de chaque feuille
+/// placée par ses affectations prend la durée calculée (mesure de l'union
+/// des intervalles travaillés, S14), celle qu'écrit l'écrivain MSPDI : la
+/// session et le fichier relu portent la même durée, et les éditions
+/// suivantes (R-189 à R-194) partent de cette valeur. Hors durée fixe et
+/// unités nulles, la durée du modèle ne place pas la feuille (`d_a` = W ÷ U,
+/// R-170) : le second recalcul, quand une durée a changé, redonne les mêmes
+/// dates et garde le planning cohérent avec le modèle.
+fn synced_schedule(work: &mut Project) -> Schedule {
+    let schedule = planrs_core::schedule(work);
+    if planrs_core::schedule::sync_assigned_durations(work, &schedule).is_empty() {
+        schedule
+    } else {
+        planrs_core::schedule(work)
+    }
+}
+
 /// Erreur `batch.would_create_errors` (R-160) : `op_index` = plus petit des
 /// index imputés aux erreurs nouvelles (dernière opération qui a touché le
 /// sujet, sinon la dernière du lot).
@@ -375,7 +392,7 @@ impl Session {
             };
             op.exec(&mut ctx).map_err(|e| e.with_op_index(i))?;
         }
-        let schedule = planrs_core::schedule(&work);
+        let schedule = synced_schedule(&mut work);
         let diagnostics = state_diagnostics(&work, &schedule);
         let delta = diagnostics_delta(&self.diagnostics, &diagnostics);
         if !delta.errors.is_empty() {

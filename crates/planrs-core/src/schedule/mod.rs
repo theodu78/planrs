@@ -29,6 +29,7 @@
 mod backward;
 mod constraint;
 mod forward;
+mod image;
 pub(crate) mod load;
 mod network;
 mod order;
@@ -41,6 +42,7 @@ mod types;
 use std::collections::BTreeMap;
 
 pub use crate::diagnostic::Pass;
+pub use image::{assigned_leaf_duration, placed_by_assignments, sync_assigned_durations};
 pub use types::{
     AssignmentRole, AssignmentSchedule, Driver, EffectiveCalendar, Exclusion, LateDriver, MAX_OVERLOADS,
     Overload, ResourceLoad, Schedule, TaskOutcome, TaskRole, TaskSchedule,

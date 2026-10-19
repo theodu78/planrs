@@ -1,0 +1,89 @@
+{
+  "by": "day",
+  "periods": [
+    "2026-10-19T00:00",
+    "2026-10-20T00:00",
+    "2026-10-21T00:00",
+    "2026-10-22T00:00",
+    "2026-10-23T00:00"
+  ],
+  "rows": [
+    {
+      "name": "Maçon",
+      "overallocated": [
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "uid": 1,
+      "work": [
+        {
+          "minutes": 480,
+          "text": "8h",
+          "unit": "hour"
+        },
+        {
+          "minutes": 480,
+          "text": "8h",
+          "unit": "hour"
+        },
+        {
+          "minutes": 480,
+          "text": "8h",
+          "unit": "hour"
+        },
+        {
+          "minutes": 480,
+          "text": "8h",
+          "unit": "hour"
+        },
+        {
+          "minutes": 480,
+          "text": "8h",
+          "unit": "hour"
+        }
+      ]
+    },
+    {
+      "name": "Électricien",
+      "overallocated": [
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "uid": 2,
+      "work": [
+        {
+          "minutes": 240,
+          "text": "4h",
+          "unit": "hour"
+        },
+        {
+          "minutes": 240,
+          "text": "4h",
+          "unit": "hour"
+        },
+        {
+          "minutes": 240,
+          "text": "4h",
+          "unit": "hour"
+        },
+        {
+          "minutes": 240,
+          "text": "4h",
+          "unit": "hour"
+        },
+        {
+          "minutes": 240,
+          "text": "4h",
+          "unit": "hour"
+        }
+      ]
+    }
+  ],
+  "truncated": false
+}

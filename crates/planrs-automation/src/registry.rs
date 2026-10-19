@@ -2,10 +2,9 @@
 //! des outils MCP, des commandes de la CLI, du canal et des raccourcis de
 //! l'interface.
 //!
-//! Entrées J4 (disponibles, listées) et entrées réservées aux jalons J5-J6
-//! (non listées, refusées `command.not_yet_available`). Les huit entrées
-//! J5 portent déjà le schéma de leur contrat (lot L0) ; le lot L8 les
-//! active. Le schéma de chaque
+//! Entrées disponibles (J4, et les huit entrées J5 activées par le lot L8)
+//! et entrées réservées au jalon J6 (non listées, refusées
+//! `command.not_yet_available`). Le schéma de chaque
 //! entrée est celui de ses paramètres (JSON Schema 2020-12, sous-schémas en
 //! ligne, sans `$ref`) ; les surfaces y ajoutent `dry_run` ou `detail`.
 //! Schémas de référence : `tests/golden/schemas/<id>.json`.
@@ -102,7 +101,7 @@ pub fn schema_of<T: JsonSchema>() -> Schema {
         .into_root_schema_for::<T>()
 }
 
-/// Entrée disponible en J4.
+/// Entrée disponible.
 const fn now(
     id: &'static str,
     mcp_name: &'static str,
@@ -155,21 +154,6 @@ const fn reserved(
     }
 }
 
-/// Entrée réservée (non listée) dont le schéma est déjà fixé par le
-/// contrat (J5, lot L0) : activée par le lot L8.
-const fn reserved_typed(
-    id: &'static str,
-    mcp_name: &'static str,
-    kind: Kind,
-    schema: fn() -> Schema,
-    summary_fr: &'static str,
-    summary_en: &'static str,
-) -> CommandSpec {
-    let mut spec = reserved(id, mcp_name, kind, 5, summary_fr, summary_en);
-    spec.schema = schema;
-    spec
-}
-
 /// Registre, trié par id (vérifié par test).
 pub static REGISTRY: &[CommandSpec] = &[
     reserved(
@@ -196,7 +180,7 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Explique la date d'une tâche.",
         "Explain a task date.",
     ),
-    reserved_typed(
+    now(
         "analysis.resource_usage",
         "resource_usage",
         Kind::Analysis,
@@ -212,7 +196,7 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Simule un lot sans l'appliquer.",
         "Simulate a batch without applying it.",
     ),
-    reserved_typed(
+    now(
         "assignment.add",
         "assign_resource",
         Kind::Write,
@@ -220,7 +204,7 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Affecte une ressource à une tâche (unités, travail ou quantité, retard).",
         "Assign a resource to a task (units, work or quantity, delay).",
     ),
-    reserved_typed(
+    now(
         "assignment.remove",
         "unassign_resource",
         Kind::Write,
@@ -228,7 +212,7 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Retire une ressource d'une tâche.",
         "Remove a resource from a task.",
     ),
-    reserved_typed(
+    now(
         "assignment.update",
         "update_assignment",
         Kind::Write,
@@ -404,7 +388,7 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Diagramme de Gantt en SVG, avec plage, échelle et filtre.",
         "Gantt chart as SVG, with range, zoom and filter.",
     ),
-    reserved_typed(
+    now(
         "resource.add",
         "add_resource",
         Kind::Write,
@@ -412,7 +396,7 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Ajoute une ressource (travail, matérielle ou coût ; calendrier propre par défaut).",
         "Add a resource (work, material or cost; own calendar by default).",
     ),
-    reserved_typed(
+    now(
         "resource.delete",
         "delete_resource",
         Kind::Write,
@@ -420,7 +404,7 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Supprime une ressource (cascade obligatoire si elle est affectée).",
         "Delete a resource (cascade required if it is assigned).",
     ),
-    reserved_typed(
+    now(
         "resource.list",
         "list_resources",
         Kind::Read,
@@ -428,7 +412,7 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Liste des ressources, avec travail et surutilisation, paginée.",
         "List resources, with work and overallocation, paginated.",
     ),
-    reserved_typed(
+    now(
         "resource.update",
         "update_resource",
         Kind::Write,
@@ -457,8 +441,8 @@ pub static REGISTRY: &[CommandSpec] = &[
         "get_task",
         Kind::Read,
         schema_of::<TaskGetParams>,
-        "Détail d'une tâche : dates du moteur, marges, liens, contrainte.",
-        "Task details: engine dates, slack, links, constraint.",
+        "Détail d'une tâche : dates du moteur, marges, liens, contrainte, ressources, travail, type.",
+        "Task details: engine dates, slack, links, constraint, resources, work, task type.",
     ),
     now(
         "task.indent",
@@ -473,8 +457,8 @@ pub static REGISTRY: &[CommandSpec] = &[
         "list_tasks",
         Kind::Read,
         schema_of::<TaskListParams>,
-        "Liste des tâches, filtrée (critiques, en retard, plage de dates) et paginée.",
-        "List tasks, filtered (critical, late, date range) and paginated.",
+        "Liste des tâches, filtrée (critiques, en retard, plage de dates, ressource) et paginée.",
+        "List tasks, filtered (critical, late, date range, resource) and paginated.",
     ),
     now(
         "task.move",
@@ -513,8 +497,8 @@ pub static REGISTRY: &[CommandSpec] = &[
         "update_task",
         Kind::Write,
         schema_of::<TaskUpdate>,
-        "Modifie une tâche (nom, durée, jalon, notes, début ou fin saisis, active).",
-        "Update a task (name, duration, milestone, notes, entered start or finish, active).",
+        "Modifie une tâche (nom, durée, jalon, notes, début ou fin saisis, active, type, pilotage par l'effort, travail).",
+        "Update a task (name, duration, milestone, notes, entered start or finish, active, type, effort-driven, work).",
     ),
 ];
 

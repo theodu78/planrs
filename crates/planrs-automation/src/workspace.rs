@@ -18,7 +18,8 @@ use serde_json::{Map, Value};
 
 use crate::command::params::{
     ApplyBatchParams, ExportMspdiParams, ImportCsvParams, NewProjectParams, NoParams, OpenProjectParams,
-    RenderGanttParams, SaveProjectParams, TaskGetParams, TaskListParams, ZoomJson,
+    RenderGanttParams, ResourceListParams, SaveProjectParams, TaskGetParams, TaskListParams, UsageParams,
+    ZoomJson,
 };
 use crate::command::{AnchorSpec, Batch, Command, parse_params};
 use crate::error::{CommandError, CommandErrorKind, HistoryError, codes};
@@ -274,16 +275,21 @@ impl Workspace {
                 let p = parse_params::<TaskGetParams>(params).map_err(cmd)?;
                 let s = self.current()?;
                 let uid = TaskUid::new(p.uid);
-                let v = ViewCtx::new(s)
-                    .task(uid)
-                    .filter(|_| s.project().tasks.get(uid).is_some_and(|t| !t.is_null))
-                    .ok_or_else(|| {
-                        cmd(
-                            CommandError::new(codes::TASK_NOT_FOUND, CommandErrorKind::UnknownTask(uid))
-                                .with_field("uid"),
-                        )
-                    })?;
+                let v = ViewCtx::new(s).task_detail(uid).ok_or_else(|| {
+                    cmd(
+                        CommandError::new(codes::TASK_NOT_FOUND, CommandErrorKind::UnknownTask(uid))
+                            .with_field("uid"),
+                    )
+                })?;
                 to_value(&v)
+            }
+            "resource.list" => {
+                let p = parse_params::<ResourceListParams>(params).map_err(cmd)?;
+                to_value(&view::list_resources(self.current()?, &p).map_err(cmd)?)
+            }
+            "analysis.resource_usage" => {
+                let p = parse_params::<UsageParams>(params).map_err(cmd)?;
+                to_value(&view::resource_usage(self.current()?, &p).map_err(cmd)?)
             }
             "analysis.critical_path" => {
                 parse_params::<NoParams>(params).map_err(cmd)?;

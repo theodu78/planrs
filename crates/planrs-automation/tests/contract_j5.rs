@@ -1,9 +1,8 @@
 //! Contrat J5 (lot L0, ADR-0013) : types, squelettes et registre. Les
 //! commandes nouvelles se lisent et se relisent ; exécutées dans un lot
-//! depuis le lot L7 (R-195 à R-197), elles restent refusées
-//! `command.not_yet_available` par l'espace de travail tant que les huit
-//! entrées J5 du registre sont réservées et non listées (lot L8) ; les
-//! types du cœur se construisent et répondent sans paniquer.
+//! depuis le lot L7 (R-195 à R-197), elles sont listées et appelables par
+//! l'espace de travail depuis le lot L8 (huit entrées J5 du registre) ;
+//! les types du cœur se construisent et répondent sans paniquer.
 
 #![allow(
     clippy::unwrap_used,
@@ -159,11 +158,12 @@ fn contract_compiles() {
 
     core_contract(&s);
 
-    // Surfaces : les entrées réservées sont refusées par l'espace de travail.
+    // Surfaces (lot L8) : entrées activées, refusées sans projet ouvert
+    // comme toute commande sur la session.
     let mut ws = Workspace::new(now(), Language::Fr);
     for (id, _) in J5_ENTRIES {
         let err = ws.call(id, json!({})).unwrap_err();
-        assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{id}");
+        assert_ne!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{id}");
     }
 }
 
@@ -225,20 +225,22 @@ fn registry_sorted_and_unique() {
     }
 }
 
+/// Lot L8 : les huit entrées J5 sont disponibles et listées ; les six
+/// commandes d'écriture entrent dans le schéma des lots.
 #[test]
-fn registry_reserved_not_listed() {
+fn registry_j5_entries_listed() {
     for (id, _) in J5_ENTRIES {
         let spec = lookup(id).unwrap();
-        assert_eq!(spec.available, Availability::Milestone(5), "{id}");
-        assert!(!spec.is_listed(), "{id}");
-        assert!(listed().all(|s| s.id != id), "{id} listé");
+        assert_eq!(spec.available, Availability::Now, "{id}");
+        assert!(spec.is_listed(), "{id}");
+        assert!(listed().any(|s| s.id == id), "{id} non listé");
     }
-    // Les commandes nouvelles restent hors du schéma des lots tant que leurs
-    // outils sont réservés.
     let batch = serde_json::to_string(&(lookup("batch.apply").unwrap().schema)()).unwrap();
     for (id, _) in J5_ENTRIES {
-        assert!(
-            !batch.contains(&format!("\"const\":\"{id}\"")),
+        let write = lookup(id).unwrap().kind == Kind::Write;
+        assert_eq!(
+            batch.contains(&format!("\"const\":\"{id}\"")),
+            write,
             "{id} dans batch.apply"
         );
     }

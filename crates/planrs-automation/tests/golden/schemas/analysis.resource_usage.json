@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`analysis.resource_usage` (J5, R-188) : travail par période et par\nressource, calculé par le moteur à la demande.",
+  "properties": {
+    "by": {
+      "default": "week",
+      "description": "Granularité des périodes (défaut : semaine).",
+      "oneOf": [
+        {
+          "const": "day",
+          "description": "Jour.",
+          "type": "string"
+        },
+        {
+          "const": "week",
+          "description": "Semaine (défaut).",
+          "type": "string"
+        },
+        {
+          "const": "month",
+          "description": "Mois.",
+          "type": "string"
+        }
+      ]
+    },
+    "from": {
+      "description": "Début de la plage (défaut : début du projet).",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "resources": {
+      "description": "Ressources (UID) ; vide : toutes.",
+      "items": {
+        "format": "uint32",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "array"
+    },
+    "to": {
+      "description": "Fin de la plage, exclue (défaut : fin du projet).",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "UsageParams",
+  "type": "object"
+}

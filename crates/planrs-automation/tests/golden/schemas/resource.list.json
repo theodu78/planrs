@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`resource.list` (J5, R-195) : ressources dans l'ordre des UID, filtrées\net paginées comme `task.list`.",
+  "properties": {
+    "cursor": {
+      "description": "Reprise après la ressource de cet UID (curseur `next_cursor`).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "limit": {
+      "description": "Taille de la page (défaut 50, au plus 500).",
+      "format": "uint32",
+      "maximum": 500,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "overallocated": {
+      "description": "Ressources surutilisées seulement (R-186).",
+      "type": "boolean"
+    }
+  },
+  "title": "ResourceListParams",
+  "type": "object"
+}

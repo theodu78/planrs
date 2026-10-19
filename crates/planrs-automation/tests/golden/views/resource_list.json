@@ -1,0 +1,100 @@
+{
+  "next_cursor": null,
+  "resources": [
+    {
+      "assignments": [
+        {
+          "effective_units": {
+            "text": "100%",
+            "value": 10000
+          },
+          "finish": "2026-10-23T17:00",
+          "resource": 1,
+          "start": "2026-10-19T08:00",
+          "task": 1,
+          "uid": 1,
+          "units": {
+            "text": "100%",
+            "value": 10000
+          },
+          "work": {
+            "minutes": 2400,
+            "text": "40h",
+            "unit": "hour"
+          }
+        }
+      ],
+      "assignments_total": 1,
+      "calendar": 4,
+      "group": "",
+      "id": 1,
+      "inactive": false,
+      "initials": "M",
+      "kind": "work",
+      "max_units": {
+        "text": "100%",
+        "value": 10000
+      },
+      "name": "Maçon",
+      "overallocated": false,
+      "peak": {
+        "text": "100%",
+        "value": 10000
+      },
+      "uid": 1,
+      "work": {
+        "minutes": 2400,
+        "text": "40h",
+        "unit": "hour"
+      }
+    },
+    {
+      "assignments": [
+        {
+          "effective_units": {
+            "text": "50%",
+            "value": 5000
+          },
+          "finish": "2026-10-23T17:00",
+          "resource": 2,
+          "start": "2026-10-19T08:00",
+          "task": 2,
+          "uid": 2,
+          "units": {
+            "text": "50%",
+            "value": 5000
+          },
+          "work": {
+            "minutes": 1200,
+            "text": "20h",
+            "unit": "hour"
+          }
+        }
+      ],
+      "assignments_total": 1,
+      "calendar": 5,
+      "group": "",
+      "id": 2,
+      "inactive": false,
+      "initials": "",
+      "kind": "work",
+      "max_units": {
+        "text": "100%",
+        "value": 10000
+      },
+      "name": "Électricien",
+      "overallocated": false,
+      "peak": {
+        "text": "50%",
+        "value": 5000
+      },
+      "uid": 2,
+      "work": {
+        "minutes": 1200,
+        "text": "20h",
+        "unit": "hour"
+      }
+    }
+  ],
+  "total": 2
+}

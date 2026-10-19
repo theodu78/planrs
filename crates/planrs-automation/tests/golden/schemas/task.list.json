@@ -49,7 +49,7 @@
       ]
     },
     "resource": {
-      "description": "Tâches affectées à cette ressource (UID) : réservé (J5).",
+      "description": "Tâches affectées à cette ressource (UID, J5).",
       "format": "uint32",
       "minimum": 0,
       "type": [

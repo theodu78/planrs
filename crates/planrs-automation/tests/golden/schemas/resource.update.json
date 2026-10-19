@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`resource.update` (R-195).",
+  "properties": {
+    "calendar": {
+      "description": "Calendrier (`null` : aucun, calendrier de la tâche ou du projet).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "group": {
+      "description": "Groupe.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "inactive": {
+      "description": "Ressource inactive.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "initials": {
+      "description": "Initiales.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "kind": {
+      "anyOf": [
+        {
+          "description": "Type de ressource en JSON.",
+          "oneOf": [
+            {
+              "const": "work",
+              "description": "Travail (personne, machine).",
+              "type": "string"
+            },
+            {
+              "const": "material",
+              "description": "Matérielle (consommée en quantité, étiquette d'unité).",
+              "type": "string"
+            },
+            {
+              "const": "cost",
+              "description": "Coût.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Type (`null` refusé ; refusé `resource.has_assignments` si la\nressource est affectée ; ajout du lot L7 au contrat L0)."
+    },
+    "material_label": {
+      "description": "Étiquette d'unité d'une ressource matérielle (ajout du lot L7).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "max_units": {
+      "additionalProperties": false,
+      "description": "Capacité maximale (`null` refusé).",
+      "properties": {
+        "text": {
+          "description": "Pourcentage en texte (`\"50%\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "Valeur en 1/10 000 (10 000 = 100 %).",
+          "format": "int64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "name": {
+      "description": "Nom (`null` refusé).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "notes": {
+      "description": "Notes.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "uid": {
+      "description": "Ressource.",
+      "oneOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "required": [
+    "uid"
+  ],
+  "title": "ResourceUpdate",
+  "type": "object"
+}

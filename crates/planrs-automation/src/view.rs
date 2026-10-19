@@ -11,7 +11,15 @@
 //!   `tests/golden/views/*.json` (vues résumées) ;
 //! - **C-MCP-03** : sortie bornée : [`MAX_LIST_TASKS`] tâches par page,
 //!   [`MAX_DIFF_TASKS`] tâches de diff, [`MAX_VIEW_DIAGNOSTICS`]
-//!   diagnostics, messages d'au plus [`MAX_MESSAGE_CHARS`] caractères.
+//!   diagnostics, messages d'au plus [`MAX_MESSAGE_CHARS`] caractères ;
+//!   J5 : [`MAX_LIST_RESOURCES`] ressources par page,
+//!   [`MAX_RESOURCE_ASSIGNMENTS`] affectations par ressource,
+//!   [`MAX_USAGE_CELLS`] cellules d'utilisation.
+//!
+//! Ressources (J5, lot L8) : travail, pic, surutilisation, dates et unités
+//! effectives des affectations viennent du `Schedule` (R-184 à R-188) ;
+//! unités en [`UnitsJson`] (`value` en 1/10 000, `text` « 50% », ou la
+//! quantité « 3 » d'une ressource matérielle), travail en heures.
 //!
 //! Durées : la forme unique `{"minutes","unit","text"}` de [`DurationJson`]
 //! (une durée de sortie est une entrée valide) ; une marge négative a des
@@ -20,21 +28,25 @@
 use std::collections::BTreeMap;
 
 use planrs_core::calendar::CompiledCalendar;
+use planrs_core::resource::{UsageError, usage as core_usage};
 use planrs_core::{
-    Diagnostic, Duration, DurationUnit, LagValue, Minutes, Moment, Project, Schedule, Severity, Subject,
-    Task, TaskRole, TaskSchedule, TaskUid, TimeBasis,
+    Assignment, Decimal, Diagnostic, Duration, DurationUnit, HasUid, LagValue, Minutes,
+    Moment, Project, Resource, ResourceKind, ResourceUid, Schedule, Severity, Subject, Task, TaskRole,
+    TaskSchedule, TaskUid, TimeBasis, Units, Work,
 };
 use serde::Serialize;
 
-use crate::command::params::TaskListParams;
+use crate::command::params::{ResourceListParams, TaskListParams, UsageParams};
 use crate::diff::{ScheduleDiff, TaskChange};
 use crate::error::{CommandError, CommandErrorKind, MAX_MESSAGE_CHARS, codes};
 use crate::json::{
-    ConstraintKindJson, DurationJson, GranularityJson, LagJson, LinkTypeJson, ResourceKindJson, UnitsJson,
+    ConstraintKindJson, DurationJson, GranularityJson, LagJson, LinkTypeJson, ResourceKindJson, TaskTypeJson,
+    UnitsJson,
 };
 use crate::outcome::{ApplyOutcome, SideEffect};
 use crate::session::Session;
 use crate::text::TextContext;
+use crate::text::lex::format_decimal;
 
 /// Tâches d'une page de `task.list` au plus (C-MCP-03).
 pub const MAX_LIST_TASKS: usize = 500;
@@ -44,6 +56,17 @@ pub const DEFAULT_LIST_TASKS: usize = 50;
 pub const MAX_DIFF_TASKS: usize = 1_000;
 /// Diagnostics d'une vue au plus (C-MCP-03) ; le total reste compté.
 pub const MAX_VIEW_DIAGNOSTICS: usize = 100;
+/// Ressources d'une page de `resource.list` au plus (C-MCP-03, J5).
+pub const MAX_LIST_RESOURCES: usize = 500;
+/// Ressources d'une page de `resource.list` par défaut.
+pub const DEFAULT_LIST_RESOURCES: usize = 50;
+/// Affectations détaillées par ressource au plus (C-MCP-03, J5) ; le total
+/// reste compté (`assignments_total`).
+pub const MAX_RESOURCE_ASSIGNMENTS: usize = 100;
+/// Cellules (périodes × ressources) d'un rapport d'utilisation au plus
+/// (C-MCP-03, J5) : borne de surface, plus serrée que celle du cœur
+/// (1 000 × 1 000, R-188).
+pub const MAX_USAGE_CELLS: usize = 20_000;
 
 /// Tâche, telle que le moteur l'a planifiée.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -80,6 +103,49 @@ pub struct TaskView {
     pub predecessors: Vec<LinkOut>,
     /// Codes des diagnostics de la tâche.
     pub diagnostics: Vec<String>,
+    /// Ressources affectées (J5), dans l'ordre des affectations ; absent du
+    /// JSON quand vide (affectation fictive −65 535 exclue).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<TaskResourceOut>,
+    /// Travail calculé par le moteur (R-184), en heures ; absent du JSON
+    /// quand nul.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work: Option<DurationJson>,
+}
+
+/// Ressource affectée à une tâche, dans [`TaskView`] (J5).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TaskResourceOut {
+    /// UID de la ressource.
+    pub uid: u32,
+    /// Nom.
+    pub name: String,
+    /// Unités de l'affectation (quantité pour une ressource matérielle).
+    pub units: UnitsJson,
+}
+
+/// Détail d'une tâche (`task.get`) : la [`TaskView`], plus le type et le
+/// pilotage par l'effort quand ils diffèrent des défauts du projet (J5).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TaskDetailView {
+    /// Vue de la tâche (champs à plat).
+    #[serde(flatten)]
+    pub task: TaskView,
+    /// Type et pilotage par l'effort ; absent quand ils valent
+    /// `default_task_type` et `new_tasks_effort_driven` du projet, et pour
+    /// une récapitulative (jamais pilotée, R-193).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheduling: Option<SchedulingOut>,
+}
+
+/// Type de tâche et pilotage par l'effort (S41, R-189, R-193).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct SchedulingOut {
+    /// Type de tâche.
+    #[serde(rename = "type")]
+    pub task_type: TaskTypeJson,
+    /// Pilotée par l'effort.
+    pub effort_driven: bool,
 }
 
 /// Contrainte de date d'une tâche.
@@ -180,6 +246,14 @@ pub struct OutcomeView {
     pub side_effects: Vec<SideEffect>,
     /// Entrées d'historique après l'opération.
     pub history_len: usize,
+    /// Étiquettes `$x` des ressources créées → UID (J5) ; absent du JSON
+    /// quand vide.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub resource_labels: BTreeMap<String, u32>,
+    /// UID des ressources créées, dans l'ordre (J5) ; absent du JSON quand
+    /// vide.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub created_resources: Vec<u32>,
 }
 
 /// Diff de planning (R-163), dates en ISO local.
@@ -229,17 +303,19 @@ impl OverallocationView {
     }
 }
 
-/// Ressource, telle que planifiée (J5, `resource.list` ; rempli par le lot
-/// L8).
+/// Ressource, telle que planifiée (J5, `resource.list`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ResourceView {
     /// UID.
     pub uid: u32,
+    /// ID (position + 1, comme l'écrivain MSPDI ; change avec l'ordre).
+    pub id: u32,
     /// Nom.
     pub name: String,
     /// Type.
     pub kind: ResourceKindJson,
-    /// Étiquette d'unité (ressource matérielle).
+    /// Étiquette d'unité (ressource matérielle) ; absente sinon.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub material_label: Option<String>,
     /// Capacité maximale.
     pub max_units: UnitsJson,
@@ -249,12 +325,46 @@ pub struct ResourceView {
     pub initials: String,
     /// Groupe.
     pub group: String,
-    /// Travail total calculé par le moteur (R-184).
+    /// Travail total calculé par le moteur (R-184), en heures (quantité
+    /// × 60 min pour une ressource matérielle, R-185).
     pub work: DurationJson,
+    /// Pic d'unités effectives (R-186).
+    pub peak: UnitsJson,
     /// Surutilisée (R-186).
     pub overallocated: bool,
     /// Inactive.
     pub inactive: bool,
+    /// Affectations, dans l'ordre du modèle, au plus
+    /// [`MAX_RESOURCE_ASSIGNMENTS`].
+    pub assignments: Vec<AssignmentView>,
+    /// Affectations en tout.
+    pub assignments_total: usize,
+}
+
+/// Affectation, telle que planifiée (J5).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AssignmentView {
+    /// UID.
+    pub uid: u32,
+    /// UID de la tâche.
+    pub task: u32,
+    /// UID de la ressource ; absent pour l'affectation fictive −65 535.
+    pub resource: Option<u32>,
+    /// Unités saisies (quantité pour une ressource matérielle).
+    pub units: UnitsJson,
+    /// Travail, en heures.
+    pub work: DurationJson,
+    /// Retard d'affectation (R-177), dans l'unité par défaut du projet ;
+    /// absent quand nul.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delay: Option<DurationJson>,
+    /// Début placé par le moteur (ISO local) ; absent si la tâche n'est pas
+    /// planifiée.
+    pub start: Option<String>,
+    /// Fin placée par le moteur.
+    pub finish: Option<String>,
+    /// Unités effectives (débit, R-186).
+    pub effective_units: Option<UnitsJson>,
 }
 
 /// Page de `resource.list` (J5).
@@ -268,8 +378,7 @@ pub struct ResourceListView {
     pub total: usize,
 }
 
-/// Utilisation par période (J5, `analysis.resource_usage`, R-188 ; rempli
-/// par le lot L8).
+/// Utilisation par période (J5, `analysis.resource_usage`, R-188).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct UsageView {
     /// Granularité.
@@ -370,6 +479,46 @@ pub fn signed_minutes(minutes: Minutes, unit: DurationUnit, ctx: &TextContext) -
     out
 }
 
+/// Unités de sortie (J5) : `value` en 1/10 000 et `text` en pourcentage
+/// (« 50% », « 12,5% »), relisible par [`UnitsJson::to_units`].
+#[must_use]
+pub fn units_out(u: Units, ctx: &TextContext) -> UnitsJson {
+    UnitsJson {
+        value: Some(u.get()),
+        text: Decimal::new(u.get(), 2)
+            .ok()
+            .map(|d| format!("{}%", format_decimal(d, ctx.decimal))),
+    }
+}
+
+/// Quantité de sortie d'une ressource matérielle (J5) : `value` en
+/// 1/10 000 et `text` en nombre (« 3 », « 1,5 »), relisible par
+/// [`UnitsJson::to_quantity`].
+#[must_use]
+pub fn quantity_out(u: Units, ctx: &TextContext) -> UnitsJson {
+    UnitsJson {
+        value: Some(u.get()),
+        text: Decimal::new(u.get(), 4)
+            .ok()
+            .map(|d| format_decimal(d, ctx.decimal)),
+    }
+}
+
+/// Travail de sortie, en heures (J5).
+#[must_use]
+pub fn work_out(w: Work, ctx: &TextContext) -> DurationJson {
+    signed_minutes(w.minutes(), DurationUnit::Hour, ctx)
+}
+
+/// Type de ressource en JSON.
+const fn kind_json(k: &ResourceKind) -> ResourceKindJson {
+    match k {
+        ResourceKind::Work => ResourceKindJson::Work,
+        ResourceKind::Material { .. } => ResourceKindJson::Material,
+        ResourceKind::Cost => ResourceKindJson::Cost,
+    }
+}
+
 /// Coupe `s` à [`MAX_MESSAGE_CHARS`] caractères (C-MCP-03).
 fn bounded(s: String) -> String {
     if s.chars().count() <= MAX_MESSAGE_CHARS {
@@ -419,6 +568,8 @@ pub struct ViewCtx<'a> {
     text: TextContext,
     /// Codes des diagnostics par tâche (dédoublonnés, triés).
     task_diags: BTreeMap<TaskUid, Vec<String>>,
+    /// Affectations par tâche, dans l'ordre du modèle (J5).
+    by_task: BTreeMap<TaskUid, Vec<&'a Assignment>>,
 }
 
 impl<'a> ViewCtx<'a> {
@@ -438,12 +589,149 @@ impl<'a> ViewCtx<'a> {
         for codes in task_diags.values_mut() {
             codes.sort_unstable();
         }
+        let project = session.project();
+        let mut by_task: BTreeMap<TaskUid, Vec<&'a Assignment>> = BTreeMap::new();
+        for a in project.assignments.iter() {
+            by_task.entry(a.task).or_default().push(a);
+        }
         Self {
-            project: session.project(),
+            project,
             schedule: session.schedule(),
             text: session.text_context(),
             task_diags,
+            by_task,
         }
+    }
+
+    /// Vrai si une affectation de la tâche `task` désigne `resource`.
+    fn task_has_resource(&self, task: TaskUid, resource: ResourceUid) -> bool {
+        self.by_task
+            .get(&task)
+            .is_some_and(|v| v.iter().any(|a| a.resource == Some(resource)))
+    }
+
+    /// Unités d'une affectation : quantité pour une ressource matérielle,
+    /// pourcentage sinon.
+    fn assignment_units(&self, a: &Assignment) -> UnitsJson {
+        let material = a
+            .resource
+            .and_then(|r| self.project.resources.get(r))
+            .is_some_and(|r| matches!(r.kind, ResourceKind::Material { .. }));
+        if material {
+            quantity_out(a.units, &self.text)
+        } else {
+            units_out(a.units, &self.text)
+        }
+    }
+
+    /// Ressources affectées à une tâche (affectation fictive exclue).
+    fn task_resources(&self, task: TaskUid) -> Vec<TaskResourceOut> {
+        let Some(list) = self.by_task.get(&task) else {
+            return Vec::new();
+        };
+        list.iter()
+            .filter_map(|a| {
+                let r = a.resource?;
+                Some(TaskResourceOut {
+                    uid: r.get(),
+                    name: self
+                        .project
+                        .resources
+                        .get(r)
+                        .map(|r| r.name.clone())
+                        .unwrap_or_default(),
+                    units: self.assignment_units(a),
+                })
+            })
+            .collect()
+    }
+
+    /// Vue d'une affectation : dates et unités effectives du moteur.
+    #[must_use]
+    pub fn assignment(&self, a: &Assignment) -> AssignmentView {
+        let placed = self.schedule.assignments.get(&a.uid());
+        let delay = (a.delay != Minutes::ZERO)
+            .then(|| signed_minutes(a.delay, self.project.options.default_duration_unit, &self.text));
+        let material = a
+            .resource
+            .and_then(|r| self.project.resources.get(r))
+            .is_some_and(|r| matches!(r.kind, ResourceKind::Material { .. }));
+        AssignmentView {
+            uid: a.uid().get(),
+            task: a.task.get(),
+            resource: a.resource.map(ResourceUid::get),
+            units: self.assignment_units(a),
+            work: work_out(placed.map_or(a.work, |p| p.work), &self.text),
+            delay,
+            start: placed.map(|p| iso(p.span.start)),
+            finish: placed.map(|p| iso(p.span.finish)),
+            effective_units: placed.map(|p| {
+                if material {
+                    quantity_out(p.effective_units, &self.text)
+                } else {
+                    units_out(p.effective_units, &self.text)
+                }
+            }),
+        }
+    }
+
+    /// Vue d'une ressource à la position `pos` : travail, pic et
+    /// surutilisation du moteur (R-184 à R-186), affectations bornées.
+    #[must_use]
+    pub fn resource_at(&self, pos: usize, r: &Resource) -> ResourceView {
+        let uid = r.uid();
+        let load = self.schedule.resources.get(&uid);
+        let id = pos
+            .checked_add(1)
+            .and_then(|n| u32::try_from(n).ok())
+            .unwrap_or(u32::MAX);
+        let mut assignments = Vec::new();
+        let mut total = 0usize;
+        for a in self.project.assignments.iter().filter(|a| a.resource == Some(uid)) {
+            total = total.saturating_add(1);
+            if assignments.len() < MAX_RESOURCE_ASSIGNMENTS {
+                assignments.push(self.assignment(a));
+            }
+        }
+        ResourceView {
+            uid: uid.get(),
+            id,
+            name: r.name.clone(),
+            kind: kind_json(&r.kind),
+            material_label: match &r.kind {
+                ResourceKind::Material { label } => Some(label.clone()),
+                _ => None,
+            },
+            max_units: units_out(r.max_units, &self.text),
+            calendar: r.calendar.map(planrs_core::CalendarUid::get),
+            initials: r.initials.clone(),
+            group: r.group.clone(),
+            work: work_out(load.map_or(Work::ZERO, |l| l.work), &self.text),
+            peak: units_out(load.map_or(Units::ZERO, |l| l.peak), &self.text),
+            overallocated: load.is_some_and(|l| l.overallocated),
+            inactive: r.is_inactive,
+            assignments,
+            assignments_total: total,
+        }
+    }
+
+    /// Détail de la tâche `uid` (`task.get`), lignes vides exclues.
+    #[must_use]
+    pub fn task_detail(&self, uid: TaskUid) -> Option<TaskDetailView> {
+        let pos = self.project.tasks.position(uid)?;
+        let task = self.project.tasks.at(pos).filter(|t| !t.is_null)?;
+        let view = self.task_at(pos, task);
+        let options = &self.project.options;
+        let defaults =
+            task.task_type == options.default_task_type && task.effort_driven == options.new_tasks_effort_driven;
+        let scheduling = (!view.summary && !defaults).then(|| SchedulingOut {
+            task_type: task.task_type.into(),
+            effort_driven: task.effort_driven,
+        });
+        Some(TaskDetailView {
+            task: view,
+            scheduling,
+        })
     }
 
     /// Contexte du texte (langue de la session).
@@ -502,6 +790,11 @@ impl<'a> ViewCtx<'a> {
                 })
                 .collect(),
             diagnostics: self.task_diags.get(&uid).cloned().unwrap_or_default(),
+            resources: self.task_resources(uid),
+            work: scheduled
+                .map(|s| s.work)
+                .filter(|w| *w != Work::ZERO)
+                .map(|w| work_out(w, &self.text)),
         }
     }
 
@@ -579,7 +872,10 @@ impl<'a> ViewCtx<'a> {
             changed_total: d.changed_total,
             truncated: d.truncated || changed.len() < d.changed.len(),
             changed,
-            overallocated: OverallocationView::default(),
+            overallocated: OverallocationView {
+                new: d.overallocated_new.iter().map(|u| u.get()).collect(),
+                resolved: d.overallocated_resolved.iter().map(|u| u.get()).collect(),
+            },
         }
     }
 
@@ -601,6 +897,12 @@ impl<'a> ViewCtx<'a> {
             warnings: DiagView::list(&o.warnings),
             side_effects: o.side_effects.clone(),
             history_len: o.history_len,
+            resource_labels: o
+                .resource_labels
+                .iter()
+                .map(|(k, v)| (k.clone(), v.get()))
+                .collect(),
+            created_resources: o.created_resources.iter().map(|u| u.get()).collect(),
         }
     }
 
@@ -741,11 +1043,13 @@ fn invalid(field: &str, why: &str) -> CommandError {
 /// `limit.exceeded` au-delà de [`MAX_LIST_TASKS`] ; `param.invalid` pour
 /// `limit` 0, `outline_max` 0, `from` après `to` ; `task.not_found`
 /// (champ `cursor`) si le curseur ne désigne aucune tâche ;
-/// `command.not_yet_available` (J5) pour `resource`.
+/// `resource.not_found` (champ `resource`) si `resource` ne désigne
+/// aucune ressource.
 pub fn list(session: &Session, p: &TaskListParams) -> Result<ListView, CommandError> {
-    if p.resource.is_some() {
-        return Err(CommandError::not_yet(5).with_field("resource"));
-    }
+    let resource = match p.resource {
+        None => None,
+        Some(r) => Some(known_resource(session.project(), r, "resource")?),
+    };
     let limit = match p.limit {
         None => DEFAULT_LIST_TASKS,
         Some(0) => return Err(invalid("limit", "« limit » doit valoir au moins 1")),
@@ -795,7 +1099,8 @@ pub fn list(session: &Session, p: &TaskListParams) -> Result<ListView, CommandEr
             .is_none_or(|from| s.is_some_and(|s| s.finish.day() >= from));
         let to_ok = p.to.is_none_or(|to| s.is_some_and(|s| s.start.day() <= to));
         let outline_ok = p.outline_max.is_none_or(|m| t.outline_level.get() <= m);
-        if !(critical_ok && late_ok && from_ok && to_ok && outline_ok) {
+        let resource_ok = resource.is_none_or(|r| ctx.task_has_resource(t.uid(), r));
+        if !(critical_ok && late_ok && from_ok && to_ok && outline_ok && resource_ok) {
             return false;
         }
         p.summary.is_none_or(|want| ctx.is_summary_at(pos) == want)
@@ -821,5 +1126,175 @@ pub fn list(session: &Session, p: &TaskListParams) -> Result<ListView, CommandEr
         tasks,
         next_cursor,
         total,
+    })
+}
+
+/// Ressource `uid` du projet, sinon `resource.not_found` sur `field`.
+fn known_resource(project: &Project, uid: u32, field: &str) -> Result<ResourceUid, CommandError> {
+    let uid = ResourceUid::new(uid);
+    if project.resources.contains(uid) {
+        Ok(uid)
+    } else {
+        Err(
+            CommandError::new(codes::RESOURCE_NOT_FOUND, CommandErrorKind::UnknownResource(uid))
+                .with_field(field),
+        )
+    }
+}
+
+/// Erreur `limit.exceeded` sur le champ `field`.
+fn limit(what: &'static str, max: usize, field: &str) -> CommandError {
+    CommandError::new(
+        codes::LIMIT_EXCEEDED,
+        CommandErrorKind::Limit {
+            what,
+            max: u64::try_from(max).unwrap_or(u64::MAX),
+        },
+    )
+    .with_field(field)
+}
+
+/// Vrai pour la ressource UID 0 des fichiers MS Project (O34), cachée
+/// comme dans MS Project : jamais listée ni comptée par défaut.
+fn is_hidden_resource(r: &Resource) -> bool {
+    r.uid().get() == 0
+}
+
+/// Page de `resource.list` (J5) : ressources dans l'ordre des UID
+/// (ressource UID 0 exclue, O34), filtrées puis coupées après le curseur.
+///
+/// # Errors
+///
+/// `limit.exceeded` au-delà de [`MAX_LIST_RESOURCES`] ; `param.invalid`
+/// pour `limit` 0 ; `resource.not_found` (champ `cursor`) si le curseur ne
+/// désigne aucune ressource.
+pub fn list_resources(session: &Session, p: &ResourceListParams) -> Result<ResourceListView, CommandError> {
+    let limit_n = match p.limit {
+        None => DEFAULT_LIST_RESOURCES,
+        Some(0) => return Err(invalid("limit", "« limit » doit valoir au moins 1")),
+        Some(n) => {
+            let n = usize::try_from(n).unwrap_or(usize::MAX);
+            if n > MAX_LIST_RESOURCES {
+                return Err(limit("limit", MAX_LIST_RESOURCES, "limit"));
+            }
+            n
+        }
+    };
+    let project = session.project();
+    let after = match p.cursor {
+        None => None,
+        Some(c) => Some(known_resource(project, c, "cursor")?),
+    };
+    let ctx = ViewCtx::new(session);
+    let schedule = session.schedule();
+    let mut rows: Vec<(usize, &Resource)> = project
+        .resources
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| !is_hidden_resource(r))
+        .filter(|(_, r)| {
+            !p.overallocated
+                || schedule
+                    .resources
+                    .get(&r.uid())
+                    .is_some_and(|l| l.overallocated)
+        })
+        .collect();
+    rows.sort_by_key(|(_, r)| r.uid());
+    let total = rows.len();
+    let mut resources = Vec::new();
+    let mut next_cursor = None;
+    for (pos, r) in rows {
+        if after.is_some_and(|a| r.uid() <= a) {
+            continue;
+        }
+        if resources.len() < limit_n {
+            resources.push(ctx.resource_at(pos, r));
+        } else {
+            next_cursor = resources.last().map(|v: &ResourceView| v.uid);
+            break;
+        }
+    }
+    Ok(ResourceListView {
+        resources,
+        next_cursor,
+        total,
+    })
+}
+
+/// Utilisation des ressources par période (`analysis.resource_usage`,
+/// R-188) : calculée par le cœur à la demande sur `[from, to)` (défaut :
+/// dates du projet), lignes dans l'ordre demandé (doublons retirés) ou,
+/// sans liste, toutes les ressources dans l'ordre des UID (UID 0 exclue).
+///
+/// # Errors
+///
+/// `param.invalid` si `from` est après `to` ; `resource.not_found` (champ
+/// `resources`) ; `limit.exceeded` au-delà des bornes du cœur ou de
+/// [`MAX_USAGE_CELLS`] cellules.
+pub fn resource_usage(session: &Session, p: &UsageParams) -> Result<UsageView, CommandError> {
+    let project = session.project();
+    let schedule = session.schedule();
+    let from = p.from.unwrap_or(schedule.project_start);
+    let to = p.to.unwrap_or(schedule.project_finish);
+    if from > to {
+        return Err(invalid("from", "« from » est après « to »"));
+    }
+    let resources: Vec<ResourceUid> = if p.resources.is_empty() {
+        let mut all: Vec<ResourceUid> = project
+            .resources
+            .iter()
+            .filter(|r| !is_hidden_resource(r))
+            .map(HasUid::uid)
+            .collect();
+        all.sort_unstable();
+        all
+    } else {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut out = Vec::with_capacity(p.resources.len());
+        for r in &p.resources {
+            let uid = known_resource(project, *r, "resources")?;
+            if seen.insert(uid) {
+                out.push(uid);
+            }
+        }
+        out
+    };
+    let report = core_usage(project, schedule, from, to, p.by.into(), &resources).map_err(|e| match e {
+        UsageError::Limit {
+            periods,
+            resources: max_resources,
+        } => {
+            if resources.len() > max_resources {
+                limit("resources", max_resources, "resources")
+            } else {
+                limit("periods", periods, "by")
+            }
+        }
+    })?;
+    let cells = report.periods.len().saturating_mul(report.rows.len());
+    if cells > MAX_USAGE_CELLS {
+        return Err(limit("periods × resources", MAX_USAGE_CELLS, "by"));
+    }
+    let text = session.text_context();
+    let rows = report
+        .rows
+        .iter()
+        .map(|row| UsageRowView {
+            uid: row.resource.get(),
+            name: project
+                .resources
+                .get(row.resource)
+                .map(|r| r.name.clone())
+                .unwrap_or_default(),
+            work: row.work.iter().map(|w| work_out(*w, &text)).collect(),
+            overallocated: row.overallocated.clone(),
+        })
+        .collect();
+    Ok(UsageView {
+        by: p.by,
+        periods: report.periods.iter().map(|m| iso(*m)).collect(),
+        rows,
+        truncated: report.truncated,
     })
 }

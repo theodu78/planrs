@@ -1,9 +1,17 @@
 //! Fichiers : lecture bornée, écriture atomique, confinement (hors wasm ;
 //! lot L6).
+//!
+//! Seul module d'`automation` qui touche au système de fichiers (avec
+//! `control`) ; `Workspace` passe par lui pour ouvrir, enregistrer et
+//! importer.
 
-use std::path::{Path, PathBuf};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
+use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::codes;
+use crate::text::Language;
 
 /// Erreur de fichier.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -51,45 +59,154 @@ impl FileError {
             Self::OutsideRoot { .. } => codes::FILE_OUTSIDE_ROOT,
         }
     }
+
+    /// Message pour l'utilisateur, en français ou en anglais (la cause
+    /// système reste celle du système d'exploitation).
+    #[must_use]
+    pub fn message(&self, lang: Language) -> String {
+        match lang {
+            Language::Fr => self.to_string(),
+            Language::En => match self {
+                Self::Read { path, message } => format!("cannot read {path} ({message})"),
+                Self::Write { path, message } => format!("cannot write {path} ({message})"),
+                Self::TooLarge { path, max } => format!("file too large: {path} (at most {max} bytes)"),
+                Self::OutsideRoot { path } => format!("path outside the allowed root: {path}"),
+            },
+        }
+    }
+
+    fn read(p: &Path, e: &io::Error) -> Self {
+        Self::Read {
+            path: p.display().to_string(),
+            message: e.to_string(),
+        }
+    }
+
+    fn write(p: &Path, e: &io::Error) -> Self {
+        Self::Write {
+            path: p.display().to_string(),
+            message: e.to_string(),
+        }
+    }
 }
 
-const NOT_YET: &str = "pas encore disponible (J4, L6)";
-
-/// Lit au plus `max` octets. Squelette L0.
+/// Lit au plus `max` octets : au-delà, [`FileError::TooLarge`] sans lire la
+/// suite (la taille annoncée n'est pas crue : la lecture s'arrête à
+/// `max + 1` octets).
 ///
 /// # Errors
 ///
-/// [`FileError`] ; en L0, toujours [`FileError::Read`].
+/// [`FileError::Read`] (fichier absent, illisible, dossier) ou
+/// [`FileError::TooLarge`].
 pub fn read_path(p: &Path, max: u64) -> Result<Vec<u8>, FileError> {
-    let _ = max;
-    Err(FileError::Read {
+    let file = File::open(p).map_err(|e| FileError::read(p, &e))?;
+    let meta = file.metadata().map_err(|e| FileError::read(p, &e))?;
+    if meta.is_dir() {
+        return Err(FileError::read(p, &io::Error::other("c'est un dossier")));
+    }
+    let too_large = || FileError::TooLarge {
         path: p.display().to_string(),
-        message: NOT_YET.to_owned(),
-    })
+        max,
+    };
+    if meta.len() > max {
+        return Err(too_large());
+    }
+    let mut bytes = Vec::new();
+    file.take(max.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|e| FileError::read(p, &e))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max {
+        return Err(too_large());
+    }
+    Ok(bytes)
 }
 
-/// Écrit atomiquement (fichier temporaire du même dossier, fsync, rename).
-/// Squelette L0.
+/// Compteur des fichiers temporaires du processus (noms uniques).
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Écrit atomiquement : fichier temporaire du même dossier (créé, jamais
+/// écrasé), écriture complète, `fsync`, renommage sur `p`, puis `fsync` du
+/// dossier (au mieux). Un lecteur voit l'ancien contenu ou le nouveau,
+/// jamais un mélange ; en cas d'échec, `p` est intact et le temporaire
+/// retiré. Les droits d'un fichier existant sont repris (au mieux).
 ///
 /// # Errors
 ///
-/// [`FileError`] ; en L0, toujours [`FileError::Write`].
+/// [`FileError::Write`] (dossier absent, droits, disque plein…).
 pub fn write_atomic(p: &Path, bytes: &[u8]) -> Result<(), FileError> {
-    let _ = bytes;
-    Err(FileError::Write {
-        path: p.display().to_string(),
-        message: NOT_YET.to_owned(),
-    })
+    let Some(name) = p.file_name() else {
+        return Err(FileError::write(p, &io::Error::other("nom de fichier attendu")));
+    };
+    let dir = match p.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let mut tmp_name = std::ffi::OsString::from(".");
+    tmp_name.push(name);
+    tmp_name.push(format!(".planrs-tmp-{}-{seq}", std::process::id()));
+    let tmp = dir.join(tmp_name);
+    let result = write_then_rename(&tmp, p, bytes);
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result.map_err(|e| FileError::write(p, &e))?;
+    // Le renommage est durable une fois le dossier synchronisé ; un échec
+    // ici (système de fichiers qui refuse d'ouvrir un dossier) n'annule pas
+    // l'écriture faite.
+    if let Ok(d) = File::open(&dir) {
+        let _ = d.sync_all();
+    }
+    Ok(())
 }
 
-/// Chemin canonique de `p`, refusé hors de `root`. Squelette L0.
+fn write_then_rename(tmp: &Path, p: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = OpenOptions::new().write(true).create_new(true).open(tmp)?;
+    if let Ok(meta) = fs::metadata(p) {
+        let _ = fs::set_permissions(tmp, meta.permissions());
+    }
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(tmp, p)
+}
+
+/// Chemin canonique de `p`, refusé hors de `root` (MCP HTTP). Un chemin
+/// relatif se lit depuis `root`. Un fichier qui n'existe pas encore
+/// (enregistrement) est accepté si son dossier existe dans la racine et que
+/// son nom est un nom simple. Les liens symboliques sont résolus : un lien
+/// qui sort de la racine est refusé.
 ///
 /// # Errors
 ///
-/// [`FileError`] ; en L0, toujours [`FileError::OutsideRoot`].
+/// [`FileError::OutsideRoot`] hors de la racine (ou chemin qui ne s'y
+/// résout pas) ; [`FileError::Read`] si la racine elle-même est
+/// introuvable.
 pub fn confine(root: &Path, p: &Path) -> Result<PathBuf, FileError> {
-    let _ = root;
-    Err(FileError::OutsideRoot {
+    let root = fs::canonicalize(root).map_err(|e| FileError::read(root, &e))?;
+    let outside = || FileError::OutsideRoot {
         path: p.display().to_string(),
-    })
+    };
+    let joined = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        root.join(p)
+    };
+    let resolved = if let Ok(c) = fs::canonicalize(&joined) {
+        c
+    } else {
+        // Fichier à créer : dossier existant, nom simple.
+        let (Some(parent), Some(name)) = (joined.parent(), joined.file_name()) else {
+            return Err(outside());
+        };
+        if !matches!(Path::new(name).components().next(), Some(Component::Normal(_))) {
+            return Err(outside());
+        }
+        fs::canonicalize(parent).map_err(|_| outside())?.join(name)
+    };
+    if resolved.starts_with(&root) {
+        Ok(resolved)
+    } else {
+        Err(outside())
+    }
 }

@@ -3,8 +3,8 @@
 //! ouvertures asynchrones.
 //!
 //! Une image : relève des `OpenEvent` → synchronisation du thème et de la
-//! langue → dessin des vues (qui poussent des actions) → réducteur → titre
-//! de la fenêtre. `App` se
+//! langue → raccourcis clavier ([`crate::keymap::KEYMAP`]) → dessin des vues
+//! (qui poussent des actions) → réducteur → titre de la fenêtre. `App` se
 //! construit sans `Frame` ni stockage : les tests kittest l'utilisent telle
 //! quelle avec [`Env::fixed`].
 //!
@@ -794,6 +794,9 @@ impl App {
         let palette = Palette::for_theme(ctx.theme());
         let metrics = Metrics::default();
         let mut actions = std::mem::take(&mut self.actions);
+        // Raccourcis avant le dessin : la touche consommée n'atteint aucun
+        // widget.
+        crate::keymap::dispatch(&ctx, self.document.is_some(), &mut actions);
         let mut stats = FrameStats::default();
         {
             // Champs disjoints : le contexte d'image emprunte l'état en

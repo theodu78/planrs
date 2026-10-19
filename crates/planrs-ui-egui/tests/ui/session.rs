@@ -1,13 +1,15 @@
 //! Document sur une session d'édition (lot L11, ADR-0012 D11) : lots de
-//! commandes, annuler/rétablir, rafraîchissement, refus traduits.
+//! commandes, annuler/rétablir, rafraîchissement, raccourcis vérifiés
+//! contre le registre, refus traduits.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use planrs_automation::Batch;
+use planrs_automation::{Batch, REGISTRY, registry};
 use planrs_core::TaskUid;
 use planrs_ui_egui::column::Column;
 use planrs_ui_egui::i18n::{Arg, Language, TextId, Texts, error_key, error_text_id};
+use planrs_ui_egui::keymap::{Binding, KEYMAP, KeyContext, UiBinding};
 use planrs_ui_egui::rows::RowKind;
 use planrs_ui_egui::{
     Action, App, DocumentObserver, EditOrigin, Env, LanguagePref, OpenDocument, ThemePref, UiState,
@@ -16,7 +18,7 @@ use planrs_ui_egui::{
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable as _;
 
-use crate::{fr, harness, harness_for, now, open_demo};
+use crate::{Reply, fr, harness, harness_for, now, open_demo, scripted};
 
 /// Lot lu depuis son JSON (format versionné, ADR-0012 D6).
 fn batch(json: &str) -> Batch {
@@ -146,6 +148,96 @@ fn ui_refresh_keeps_selection_by_uid() {
     );
     assert_eq!(harness.state().selection, None);
     assert_eq!(harness.state().rows().unwrap().index_of(uid), None);
+}
+
+#[test]
+fn ui_keymap_commands_exist_in_registry() {
+    let mut commands = 0;
+    for (_, shortcut, binding) in KEYMAP {
+        if let Binding::Command(id) = binding {
+            commands += 1;
+            let spec =
+                registry::lookup(id).unwrap_or_else(|| panic!("{shortcut:?} : « {id} » absent du registre"));
+            assert!(spec.is_listed(), "« {id} » réservé à un jalon ultérieur");
+            assert!(REGISTRY.iter().any(|entry| entry.id == *id));
+        }
+    }
+    assert!(commands > 0);
+}
+
+/// Appuie sur le raccourci de l'entrée `i` de [`KEYMAP`].
+fn press(harness: &mut Harness<'static, App>, i: usize) {
+    let (_, shortcut, _) = KEYMAP[i];
+    harness.key_press_modifiers(shortcut.modifiers, shortcut.logical_key);
+    harness.run();
+}
+
+/// Vérifie que l'entrée `i` de [`KEYMAP`] déclenche son action, et qu'une
+/// entrée de contexte `Document` est sans effet sans document.
+fn check_keymap_entry(i: usize) {
+    let (context, _, binding) = KEYMAP[i];
+    if context == KeyContext::Document {
+        let mut harness = harness();
+        harness.run();
+        press(&mut harness, i);
+        assert!(harness.state().document.is_none());
+        assert!(
+            harness.state().messages().is_empty(),
+            "{:?}",
+            harness.state().messages()
+        );
+    }
+    match binding {
+        Binding::Command("history.undo") => {
+            let mut harness = harness();
+            demo_with_one_edit(&mut harness);
+            press(&mut harness, i);
+            assert_eq!(history_len(harness.state()), (0, 1));
+        }
+        Binding::Command("history.redo") => {
+            let mut harness = harness();
+            demo_with_one_edit(&mut harness);
+            harness.state_mut().dispatch(Action::Undo);
+            harness.run();
+            press(&mut harness, i);
+            assert_eq!(history_len(harness.state()), (1, 0));
+        }
+        Binding::Ui(UiBinding::OpenFile) => {
+            let (mut harness, _held) = scripted(&[Reply::Demo]);
+            harness.run();
+            press(&mut harness, i);
+            assert!(
+                harness.state().document.is_some(),
+                "{:?}",
+                harness.state().messages()
+            );
+        }
+        other => panic!("entrée {i} sans vérification : {other:?}"),
+    }
+}
+
+/// Un test par entrée de [`KEYMAP`] (le nombre d'entrées est vérifié).
+macro_rules! keymap_entry_tests {
+    ($($name:ident => $i:literal),* $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                check_keymap_entry($i);
+            }
+        )*
+
+        #[test]
+        fn ui_keymap_each_shortcut_dispatches_covers_all() {
+            assert_eq!(KEYMAP.len(), [$($i),*].len(), "ajouter un test par entrée de KEYMAP");
+        }
+    };
+}
+
+keymap_entry_tests! {
+    ui_keymap_each_shortcut_dispatches_0 => 0,
+    ui_keymap_each_shortcut_dispatches_1 => 1,
+    ui_keymap_each_shortcut_dispatches_2 => 2,
+    ui_keymap_each_shortcut_dispatches_3 => 3,
 }
 
 /// Lot refusé : UID absent.

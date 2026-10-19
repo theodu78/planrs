@@ -18,6 +18,7 @@ pub mod format;
 pub mod geom;
 pub mod i18n;
 pub mod io;
+pub mod keymap;
 pub mod rows;
 pub mod shell;
 pub mod state;

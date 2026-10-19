@@ -21,7 +21,7 @@ Générés depuis `planrs_automation::REGISTRY` (`tools.rs`, sans macro `#[tool]
 | Historique | `undo`, `redo`, `history` |
 
 - Réservés (J5, J6), non listés mais appelables : `explain_date`, `what_if`, `resource_usage`, `baseline_variance`, `add_resource`, `assign_resource`, `update_assignment`, `update_progress`, `set_baseline` → `command.not_yet_available` en erreur structurée.
-- `render_gantt` : contenu texte = résumé (« N tâches, M critiques, fin … », plus les lignes non affichées) puis le SVG ; contenu structuré = rapport du rendu sans le SVG (`shown`, `hidden`, `truncated_days`, `truncated_bytes`, `bytes`).
+- `render_gantt` : contenu texte = résumé (« N tâches, M critiques, fin … », plus les lignes non affichées), puis le SVG, puis le rapport en JSON (comme le recommande la spécification MCP : un client sans `structuredContent` voit aussi `truncated_days` et `truncated_bytes`) ; contenu structuré = rapport du rendu sans le SVG (`shown`, `hidden`, `truncated_days`, `truncated_bytes`, `bytes`).
 - Les autres outils : contenu structuré = la vue JSON, contenu texte = le même JSON (clients sans `structuredContent`).
 
 ## 3. Contrats de surface et tests

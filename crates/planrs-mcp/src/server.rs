@@ -257,7 +257,7 @@ fn render_result(value: Value, ws: &Workspace, lang: Language) -> CallToolResult
         Some(Value::String(s)) => s,
         _ => String::new(),
     };
-    let mut content = Vec::with_capacity(2);
+    let mut content = Vec::with_capacity(3);
     if let Some(s) = ws.session() {
         let summary = view::summary(s);
         let finish = format_date(
@@ -285,8 +285,13 @@ fn render_result(value: Value, ws: &Workspace, lang: Language) -> CallToolResult
         content.push(ContentBlock::text(text));
     }
     content.push(ContentBlock::text(svg));
+    // Spécification MCP : le contenu structuré est aussi rendu en texte
+    // (clients sans `structuredContent` : `truncated_days`,
+    // `truncated_bytes` visibles).
+    let report = Value::Object(report);
+    content.push(ContentBlock::text(report.to_string()));
     let mut result = CallToolResult::success(content);
-    result.structured_content = Some(Value::Object(report));
+    result.structured_content = Some(report);
     result
 }
 

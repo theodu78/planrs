@@ -357,6 +357,10 @@ async fn mcp_render_gantt_bounded() {
         svg.chars().take(40).collect::<String>()
     );
     assert_eq!(report["bytes"].as_u64(), Some(svg.len() as u64));
+    // Troisième bloc : le rapport structuré en JSON (spécification MCP).
+    assert_eq!(r.content.len(), 3);
+    let text: Value = serde_json::from_str(&r.content[2].as_text().unwrap().text).unwrap();
+    assert_eq!(text, report);
     let e = refused(&client, "render_gantt", json!({ "max_rows": 201 })).await;
     assert_eq!(e["code"], json!("limit.exceeded"));
     client.cancel().await.unwrap();

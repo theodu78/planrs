@@ -312,7 +312,8 @@ fn centered_row(ui: &mut egui::Ui, labels: &[String], add_contents: impl FnOnce(
     });
 }
 
-/// Barre d'état (nom, nombre de tâches, plage, diagnostics) et bandeau des
+/// Barre d'état (nom précédé de « * » si le document est modifié, nombre de
+/// tâches, plage, diagnostics) et bandeau des
 /// messages (sous la barre d'outils).
 pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMessage]) {
     let texts = fc.texts;
@@ -322,7 +323,9 @@ pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
                 ui.label(texts.get(TextId::StatusNoDocument));
                 return;
             };
-            ui.strong(doc.origin.name.as_str());
+            // « * » si modifié, comme le titre de la fenêtre : sur le web,
+            // seul indicateur visible dans la page (relecture finale J4, F4).
+            ui.strong(crate::app::document_label(doc));
             ui.separator();
             let count = fc
                 .rows

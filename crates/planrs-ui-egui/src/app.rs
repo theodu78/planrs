@@ -490,13 +490,7 @@ impl App {
     /// modifié, puis nom du produit.
     #[must_use]
     pub fn window_title(&self) -> String {
-        match &self.document {
-            None => PRODUCT_NAME.to_owned(),
-            Some(document) => {
-                let star = if document.is_dirty() { "*" } else { "" };
-                format!("{star}{} \u{2014} {PRODUCT_NAME}", document.origin.name)
-            }
-        }
+        window_title_for(self.document.as_ref())
     }
 
     /// Crée un projet vide (R-032) : nom traduit « Projet1 », planifié
@@ -1243,6 +1237,25 @@ impl App {
             self.sent_title = title;
         }
     }
+}
+
+/// Titre de la fenêtre pour `document` (voir [`App::window_title`]). Le web
+/// le pose aussi sur l'onglet (`document.title`) depuis son observateur :
+/// eframe web ignore `ViewportCommand::Title`.
+#[must_use]
+pub fn window_title_for(document: Option<&OpenDocument>) -> String {
+    match document {
+        None => PRODUCT_NAME.to_owned(),
+        Some(document) => format!("{} \u{2014} {PRODUCT_NAME}", document_label(document)),
+    }
+}
+
+/// Nom du document précédé de « * » s'il est modifié (titre de la fenêtre
+/// et barre d'état).
+#[must_use]
+pub fn document_label(document: &OpenDocument) -> String {
+    let star = if document.is_dirty() { "*" } else { "" };
+    format!("{star}{}", document.origin.name)
 }
 
 /// Début d'un projet neuf : le lundi strictement après le jour de `now`,

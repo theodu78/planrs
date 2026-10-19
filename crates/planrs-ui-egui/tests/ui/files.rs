@@ -567,3 +567,26 @@ fn ui_quit_during_save_waits_for_success() {
     s.harness.step();
     assert!(viewport_commands(&s.harness).contains(&ViewportCommand::Close));
 }
+
+/// Relecture finale J4, F4 : la barre d'état marque le document modifié
+/// d'un « * » (seul indicateur dans la page sur le web, qui ignore le
+/// titre de la fenêtre), retiré après l'enregistrement.
+#[test]
+fn ui_status_bar_shows_dirty_star() {
+    let mut s = sim(SaveReply::Ok);
+    open_demo(&mut s.harness);
+    let name = s.harness.state().document.as_ref().unwrap().origin.name.clone();
+    let starred = format!("*{name}");
+    assert!(s.harness.query_by_label(&name).is_some());
+    assert!(s.harness.query_by_label(&starred).is_none());
+    edit_first_leaf(&mut s.harness, "17j");
+    assert!(s.harness.query_by_label(&starred).is_some());
+    assert_eq!(
+        s.harness.state().window_title(),
+        planrs_ui_egui::app::window_title_for(s.harness.state().document.as_ref())
+    );
+    press_save(&mut s.harness);
+    let name = s.harness.state().document.as_ref().unwrap().origin.name.clone();
+    assert!(s.harness.query_by_label(&format!("*{name}")).is_none());
+    assert!(s.harness.query_by_label(&name).is_some());
+}

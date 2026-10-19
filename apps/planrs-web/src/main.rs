@@ -8,6 +8,10 @@
 //! `trunk build` attend le packaging web. « Maintenant » vient de la date du
 //! navigateur et la langue de `navigator.language`, injectés par `Env`.
 //!
+//! L'onglet porte le titre de la fenêtre desktop (« *nom — planrs » si le
+//! document est modifié) : eframe web ignore `ViewportCommand::Title`, un
+//! observateur du document ([`web::TabObserver`]) pose `document.title`.
+//!
 //! Compilée pour une cible native (ce que fait `cargo check --workspace`), le
 //! binaire se contente d'indiquer qu'il faut passer par trunk.
 
@@ -15,10 +19,24 @@
 mod web {
     use eframe::wasm_bindgen::{JsCast as _, JsValue};
     use planrs_core::Moment;
-    use planrs_ui_egui::{Env, Language, PlanrsApp, RfdFileService};
+    use planrs_ui_egui::app::window_title_for;
+    use planrs_ui_egui::{DocumentObserver, Env, Language, OpenDocument, PlanrsApp, RfdFileService};
 
     /// Identifiant du canevas déclaré dans `index.html`.
     const CANVAS_ID: &str = "planrs_canvas";
+
+    /// Observateur du document : titre de l'onglet tenu à jour (ouverture,
+    /// édition, enregistrement, fermeture).
+    pub struct TabObserver {
+        /// Document HTML de la page.
+        document: web_sys::Document,
+    }
+
+    impl DocumentObserver for TabObserver {
+        fn document_changed(&mut self, document: Option<&OpenDocument>) {
+            self.document.set_title(&window_title_for(document));
+        }
+    }
 
     /// Point d'entrée appelé par la colle wasm-bindgen au chargement.
     pub fn main() {
@@ -61,6 +79,9 @@ mod web {
             .and_then(|window| window.document())
             .ok_or_else(|| JsValue::from_str("document introuvable"))?;
         document.set_title(planrs_core::PRODUCT_NAME);
+        let tab = TabObserver {
+            document: document.clone(),
+        };
         let canvas = document
             .get_element_by_id(CANVAS_ID)
             .ok_or_else(|| JsValue::from_str("canevas introuvable"))?
@@ -76,7 +97,9 @@ mod web {
                         system_language: Language::from_system(),
                         files: Box::new(RfdFileService),
                     };
-                    Ok(Box::new(PlanrsApp::new(cc, env)))
+                    let mut app = PlanrsApp::new(cc, env);
+                    app.app_mut().set_observer(Box::new(tab));
+                    Ok(Box::new(app))
                 }),
             )
             .await

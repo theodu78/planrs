@@ -17,7 +17,8 @@ path = "src/main.rs"
 chrono = { workspace = true, features = ["clock"] }
 planrs-core.workspace = true
 planrs-automation.workspace = true
-planrs-mcp.workspace = true
+# `http` : `planrs mcp --http` (lot L17).
+planrs-mcp = { workspace = true, features = ["http"] }
 planrs-mspdi.workspace = true
 planrs-render.workspace = true
 clap.workspace = true

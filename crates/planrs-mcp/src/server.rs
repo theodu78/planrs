@@ -7,7 +7,7 @@
 //! (C-MCP-05) ; seul un nom inconnu est refusé en `invalid_params`.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use planrs_automation::error::codes;
 use planrs_automation::registry::by_mcp_name;
@@ -77,6 +77,22 @@ impl PlanrsServer {
     #[must_use]
     pub fn with_control_dir(mut self, dir: Option<PathBuf>) -> Self {
         self.control_dir = dir;
+        self
+    }
+
+    /// Confine tous les chemins de fichiers à `root` (MCP HTTP, `--root`) :
+    /// un chemin qui en sort est refusé `file.outside_root`. À appeler
+    /// avant [`Self::open_initial`] pour que `--open` soit confiné aussi.
+    #[must_use]
+    pub fn with_root(self, root: PathBuf) -> Self {
+        {
+            // Aucun appel n'a encore eu lieu : un verrou empoisonné est
+            // impossible ici ; s'il l'était, la racine est posée quand même.
+            let mut ws = self.ws.lock().unwrap_or_else(PoisonError::into_inner);
+            let fresh = Workspace::new(ws.now(), ws.lang());
+            let current = std::mem::replace(&mut *ws, fresh);
+            *ws = current.with_root(root);
+        }
         self
     }
 

@@ -135,21 +135,68 @@ fn json_escaped(s: &str) -> String {
     quoted[1..quoted.len() - 1].to_owned()
 }
 
-/// Remplace `$TMP` par `tmp` dans toutes les chaînes de `v`.
+/// Remplace `$TMP` par `tmp` dans toutes les chaînes de `v` ; les `/` qui
+/// suivent le jeton dans la même chaîne deviennent le séparateur natif.
+///
+/// Sous Windows, `tmp` est canonique, donc verbatim (`\\?\C:\…`) : dans ce
+/// préfixe, `/` n'est pas un séparateur (`$TMP/build_30.xml` désignerait un
+/// dossier inexistant, os error 3). Le dossier reste verbatim : c'est la
+/// forme que renvoie un serveur confiné (`--root`, `files::confine`).
 pub fn substitute(v: &Value, tmp: &Path) -> Value {
-    let text = serde_json::to_string(v).unwrap();
-    let dir = json_escaped(&tmp.display().to_string());
-    serde_json::from_str(&text.replace(TMP_TOKEN, &dir)).unwrap()
+    substitute_with(v, &tmp.display().to_string(), std::path::MAIN_SEPARATOR)
+}
+
+fn substitute_with(v: &Value, dir: &str, sep: char) -> Value {
+    match v {
+        Value::String(s) => Value::String(match s.split_once(TMP_TOKEN) {
+            Some((head, tail)) => format!("{head}{dir}{}", tail.replace('/', &sep.to_string())),
+            None => s.clone(),
+        }),
+        Value::Array(a) => Value::Array(a.iter().map(|x| substitute_with(x, dir, sep)).collect()),
+        Value::Object(o) => Value::Object(
+            o.iter()
+                .map(|(k, x)| (k.clone(), substitute_with(x, dir, sep)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 /// Remet le jeton `$TMP` à la place du dossier `tmp` dans un texte JSON
-/// (journal produit) ; un séparateur `\` qui suit le jeton devient `/`
-/// (Windows).
+/// (journal produit) ; dans la suite du chemin, jusqu'à la fin de la chaîne
+/// JSON, le séparateur natif redevient `/` (inverse de [`substitute`]).
 pub fn unsubstitute(text: &str, tmp: &Path) -> String {
-    let dir = json_escaped(&tmp.display().to_string());
-    text.replace('\r', "")
-        .replace(&dir, TMP_TOKEN)
-        .replace(&format!("{TMP_TOKEN}\\\\"), &format!("{TMP_TOKEN}/"))
+    unsubstitute_with(text, &tmp.display().to_string(), std::path::MAIN_SEPARATOR)
+}
+
+fn unsubstitute_with(text: &str, dir: &str, sep: char) -> String {
+    let text = text.replace('\r', "").replace(&json_escaped(dir), TMP_TOKEN);
+    if sep == '/' {
+        return text;
+    }
+    let sep = json_escaped(&sep.to_string());
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text.as_str();
+    while let Some(i) = rest.find(TMP_TOKEN) {
+        let (before, after) = rest.split_at(i + TMP_TOKEN.len());
+        out.push_str(before);
+        // Fin de la chaîne JSON : premier `"` non échappé.
+        let mut end = after.len();
+        let mut chars = after.char_indices();
+        while let Some((j, c)) = chars.next() {
+            if c == '"' {
+                end = j;
+                break;
+            }
+            if c == '\\' {
+                chars.next();
+            }
+        }
+        out.push_str(&after[..end].replace(&sep, "/"));
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Résultat d'un appel tel que le journal l'écrit.
@@ -240,5 +287,40 @@ impl TempDir {
 impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Forme Windows simulée : dossier verbatim, séparateur `\`.
+    #[test]
+    fn substitute_round_trip_windows_verbatim() {
+        let dir = r"\\?\C:\Users\RUNNER\Temp\planrs-replay-stdio-1-0";
+        let params = json!({ "path": "$TMP/build_30.xml", "n": 1, "list": ["$TMP/a/b.xml", "x/y"] });
+        let got = substitute_with(&params, dir, '\\');
+        assert_eq!(got["path"], format!(r"{dir}\build_30.xml"));
+        assert_eq!(got["list"][0], format!(r"{dir}\a\b.xml"));
+        assert_eq!(got["list"][1], "x/y");
+        let text = serde_json::to_string(&got).unwrap();
+        assert_eq!(
+            unsubstitute_with(&text, dir, '\\'),
+            serde_json::to_string(&params).unwrap()
+        );
+    }
+
+    /// Forme Unix : rien ne change hors du jeton.
+    #[test]
+    fn substitute_round_trip_unix() {
+        let dir = "/tmp/planrs-replay-stdio-1-0";
+        let params = json!({ "path": "$TMP/build_30.xml" });
+        let got = substitute_with(&params, dir, '/');
+        assert_eq!(got["path"], "/tmp/planrs-replay-stdio-1-0/build_30.xml");
+        let text = serde_json::to_string(&got).unwrap();
+        assert_eq!(
+            unsubstitute_with(&text, dir, '/'),
+            serde_json::to_string(&params).unwrap()
+        );
     }
 }

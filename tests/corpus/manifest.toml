@@ -67,8 +67,8 @@ size = 274759
 sha256 = "1c6fc94d87808dc1b925438db7db9f309ff1ce67ebcf504259b295b8935c6772"
 producer = "msproject"
 save_version = 14
-note = "36 tâches, FF/SS, 12 liens touchant une récapitulative, 2 LevelingDelay, 1 FNET, calendrier du projet ouvré le samedi, noms UTF-8."
-floor = 0
+note = "36 tâches, FF/SS, 12 liens touchant une récapitulative, 2 LevelingDelay, 1 FNET, calendrier du projet ouvré le samedi, noms UTF-8. J5 L4a : 4/37 (placement par affectation, R-173, R-175)."
+floor = 4
 
 [[file]]
 name = "projinteg.xml"

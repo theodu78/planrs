@@ -1090,6 +1090,17 @@ impl App {
             Action::DismissMessage => self.messages.clear(),
             // Le refus est affiché par `execute` ; rien d'autre à faire ici.
             Action::Exec(batch) => drop(self.execute(&batch, EditOrigin::User)),
+            Action::ExecOn { opening, batch } => {
+                if self
+                    .document
+                    .as_ref()
+                    .is_some_and(|document| document.opening == opening)
+                {
+                    drop(self.execute(&batch, EditOrigin::User));
+                } else {
+                    log::warn!("saisie abandonnée : le document visé n'est plus ouvert");
+                }
+            }
             Action::Undo => drop(self.undo()),
             Action::Redo => drop(self.redo()),
             Action::SelectWith { uid, mode } => {
@@ -1203,9 +1214,18 @@ impl App {
         }
         self.last_frame = stats;
         // Les actions sont appliquées après le dessin : une image de plus
-        // montre leur effet (langue, zoom, document…).
+        // montre leur effet (langue, zoom, document…). Les lots d'édition
+        // d'abord (partition stable) : une saisie validée par la perte du
+        // focus arrive après le bouton cliqué dans la même image (barre
+        // d'outils, menus et bandeau sont dessinés avant la table) ; elle
+        // doit modifier le document **avant** qu'une ouverture, un « Nouveau »
+        // ou une réponse au bandeau le remplace, pour que la confirmation la
+        // voie (relecture finale J4, F2).
         let applied = !actions.is_empty();
-        for action in actions {
+        let (edits, others): (Vec<Action>, Vec<Action>) = actions
+            .into_iter()
+            .partition(|action| matches!(action, Action::Exec(_) | Action::ExecOn { .. }));
+        for action in edits.into_iter().chain(others) {
             self.apply(action, &ctx);
         }
         self.sync_selection();
@@ -1433,6 +1453,30 @@ mod tests {
                 "{now}"
             );
         }
+    }
+
+    /// Relecture finale J4, F2 : un lot visant un autre document (numéro
+    /// d'ouverture différent) est abandonné ; le bon numéro l'applique.
+    #[test]
+    fn exec_on_other_opening_is_dropped() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        app.open_demo();
+        let opening = app.document.as_ref().unwrap().opening;
+        let batch = planrs_automation::Batch::from_json_str(
+            r#"{"format_version":1,"ops":[{"op":"task.update","uid":3,"name":"X"}]}"#,
+        )
+        .unwrap();
+        app.dispatch(Action::ExecOn {
+            opening: opening.saturating_add(1),
+            batch: batch.clone(),
+        });
+        frame(&ctx, &mut app);
+        assert_eq!(app.document.as_ref().unwrap().generation(), 0);
+        assert!(app.messages().is_empty(), "{:?}", app.messages());
+        app.dispatch(Action::ExecOn { opening, batch });
+        frame(&ctx, &mut app);
+        assert_eq!(app.document.as_ref().unwrap().generation(), 1);
     }
 
     #[test]

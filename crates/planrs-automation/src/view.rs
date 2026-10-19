@@ -63,6 +63,9 @@ pub const DEFAULT_LIST_RESOURCES: usize = 50;
 /// Affectations détaillées par ressource au plus (C-MCP-03, J5) ; le total
 /// reste compté (`assignments_total`).
 pub const MAX_RESOURCE_ASSIGNMENTS: usize = 100;
+/// Ressources détaillées par tâche (`TaskView.resources`) au plus (C-MCP-03,
+/// J5) ; le total est alors donné (`resources_total`).
+pub const MAX_TASK_RESOURCES: usize = 100;
 /// Cellules (périodes × ressources) d'un rapport d'utilisation au plus
 /// (C-MCP-03, J5) : borne de surface, plus serrée que celle du cœur
 /// (1 000 × 1 000, R-188).
@@ -105,8 +108,13 @@ pub struct TaskView {
     pub diagnostics: Vec<String>,
     /// Ressources affectées (J5), dans l'ordre des affectations ; absent du
     /// JSON quand vide (affectation fictive −65 535 exclue).
+    /// Au plus [`MAX_TASK_RESOURCES`] (C-MCP-03).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub resources: Vec<TaskResourceOut>,
+    /// Nombre total de ressources affectées quand `resources` est coupée à
+    /// [`MAX_TASK_RESOURCES`] (C-MCP-03) ; absent sinon.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resources_total: Option<usize>,
     /// Travail calculé par le moteur (R-184), en heures ; absent du JSON
     /// quand nul.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -641,15 +649,21 @@ impl<'a> ViewCtx<'a> {
         }
     }
 
-    /// Ressources affectées à une tâche (affectation fictive exclue).
-    fn task_resources(&self, task: TaskUid) -> Vec<TaskResourceOut> {
+    /// Ressources affectées à une tâche (affectation fictive exclue), au
+    /// plus [`MAX_TASK_RESOURCES`], et leur nombre total s'il est dépassé.
+    fn task_resources(&self, task: TaskUid) -> (Vec<TaskResourceOut>, Option<usize>) {
         let Some(list) = self.by_task.get(&task) else {
-            return Vec::new();
+            return (Vec::new(), None);
         };
-        list.iter()
-            .filter_map(|a| {
-                let r = a.resource?;
-                Some(TaskResourceOut {
+        let mut out = Vec::new();
+        let mut total = 0usize;
+        for a in list {
+            let Some(r) = a.resource else {
+                continue;
+            };
+            total = total.saturating_add(1);
+            if out.len() < MAX_TASK_RESOURCES {
+                out.push(TaskResourceOut {
                     uid: r.get(),
                     name: self
                         .project
@@ -658,9 +672,11 @@ impl<'a> ViewCtx<'a> {
                         .map(|r| r.name.clone())
                         .unwrap_or_default(),
                     units: self.assignment_units(a),
-                })
-            })
-            .collect()
+                });
+            }
+        }
+        let truncated = total > out.len();
+        (out, truncated.then_some(total))
     }
 
     /// Vue d'une affectation : dates et unités effectives du moteur.
@@ -782,6 +798,7 @@ impl<'a> ViewCtx<'a> {
             .and_then(|n| u32::try_from(n).ok())
             .unwrap_or(u32::MAX);
         let slack_unit = self.project.options.default_duration_unit;
+        let (resources, resources_total) = self.task_resources(uid);
         TaskView {
             uid: uid.get(),
             id,
@@ -807,7 +824,8 @@ impl<'a> ViewCtx<'a> {
                 })
                 .collect(),
             diagnostics: self.task_diags.get(&uid).cloned().unwrap_or_default(),
-            resources: self.task_resources(uid),
+            resources,
+            resources_total,
             work: scheduled
                 .map(|s| s.work)
                 .filter(|w| *w != Work::ZERO)

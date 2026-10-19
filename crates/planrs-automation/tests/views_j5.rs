@@ -267,3 +267,59 @@ fn resource_ids_follow_ms_project() {
         .collect();
     assert_eq!(ids, [(1, 1), (2, 2)]);
 }
+
+#[test]
+fn task_resources_bounded() {
+    // Tâche à 150 affectations (fichier hostile) : `resources` coupée à 100
+    // (C-MCP-03), `resources_total` = 150 ; absent sous la borne.
+    use planrs_core::{Assignment, AssignmentUid, Resource, ResourceUid, Task, TaskUid};
+    let mut p = planrs_core::Project::new(planrs_core::ProjectInit {
+        name: "P".to_owned(),
+        anchor: planrs_core::ScheduleAnchor::FromStart(now()),
+        current_date: now(),
+        calendar_names: planrs_core::BuiltinCalendarNames::default(),
+    });
+    for uid in 1..=2 {
+        let t = Task::new(TaskUid::new(uid), format!("T{uid}"), &p.options);
+        p.tasks.push(t).unwrap();
+    }
+    for uid in 1..=150 {
+        p.resources
+            .push(Resource::new(ResourceUid::new(uid), format!("R{uid}")))
+            .unwrap();
+        p.assignments
+            .push(Assignment::new(
+                AssignmentUid::new(uid),
+                TaskUid::new(1),
+                Some(ResourceUid::new(uid)),
+            ))
+            .unwrap();
+    }
+    p.assignments
+        .push(Assignment::new(
+            AssignmentUid::new(151),
+            TaskUid::new(2),
+            Some(ResourceUid::new(1)),
+        ))
+        .unwrap();
+    let session = planrs_automation::Session::from_project(
+        p,
+        planrs_automation::DocOrigin {
+            name: "p.xml".to_owned(),
+            path: None,
+        },
+        now(),
+        Language::Fr,
+    );
+    let mut ws = Workspace::new(now(), Language::Fr);
+    ws.set_session(session);
+    let big = ws.call("task.get", json!({ "uid": 1 })).unwrap();
+    assert_eq!(
+        big["resources"].as_array().unwrap().len(),
+        planrs_automation::view::MAX_TASK_RESOURCES
+    );
+    assert_eq!(big["resources_total"], json!(150));
+    let small = ws.call("task.get", json!({ "uid": 2 })).unwrap();
+    assert_eq!(small["resources"].as_array().unwrap().len(), 1);
+    assert!(small.get("resources_total").is_none());
+}

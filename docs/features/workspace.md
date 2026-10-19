@@ -56,5 +56,5 @@ Une ligne JSON compacte par entrée `{v, seq, tool, params, result?}` (`deny_unk
 
 - **C-MCP-01** (dates du moteur) : `view_task_dates_from_engine` compare chaque date et marge de `task.list`/`task.get` à `Schedule::scheduled`, et les dates du résumé et du chemin critique.
 - **C-MCP-02** (forme figée) : `tests/golden/views/*.json` (`view_golden_summary_house`, `view_golden_outcome_add_task`), régénérés par `PLANRS_BLESS=1`.
-- **C-MCP-03** (sortie bornée) : 500 tâches par page (`list_limit_over_500_refused`), 1 000 tâches de diff, 100 diagnostics par vue, messages ≤ 2 000 caractères, 200 lignes de rendu.
+- **C-MCP-03** (sortie bornée) : 500 tâches par page (`list_limit_over_500_refused`), 1 000 tâches de diff, 100 diagnostics par vue, 100 affectations par ressource et 100 ressources par tâche (J5, totaux `assignments_total`, `resources_total`), messages ≤ 2 000 caractères, 200 lignes de rendu.
 - Critère de fin du lot : `workspace_open_save_reopen_equal` (`house.xml` ouvert, modifié, enregistré, relu : projets égaux par `normalize`, R-133).

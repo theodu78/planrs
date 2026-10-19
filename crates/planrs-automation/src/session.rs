@@ -358,6 +358,8 @@ impl Session {
         let mut effects = Vec::new();
         let mut touched = BTreeMap::new();
         let mut created = Vec::new();
+        let mut resource_labels = BTreeMap::new();
+        let mut created_resources = Vec::new();
         for (i, op) in ops.iter().enumerate() {
             let mut ctx = Ctx {
                 project: &mut work,
@@ -368,6 +370,8 @@ impl Session {
                 op_index: i,
                 text: &text,
                 created: &mut created,
+                resource_labels: &mut resource_labels,
+                created_resources: &mut created_resources,
             };
             op.exec(&mut ctx).map_err(|e| e.with_op_index(i))?;
         }
@@ -392,8 +396,8 @@ impl Session {
                 warnings: delta.warnings,
                 side_effects: effects,
                 history_len: self.history.len(),
-                resource_labels: BTreeMap::new(),
-                created_resources: Vec::new(),
+                resource_labels,
+                created_resources,
             });
         }
         let entity_delta = diff_projects(&self.project, &work);
@@ -424,8 +428,8 @@ impl Session {
             warnings: delta.warnings,
             side_effects: effects,
             history_len: self.history.len(),
-            resource_labels: BTreeMap::new(),
-            created_resources: Vec::new(),
+            resource_labels,
+            created_resources,
         })
     }
 

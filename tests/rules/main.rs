@@ -186,6 +186,9 @@ mod r191_remove_effort_driven;
 mod r192_add_remove_not_effort_driven;
 mod r193_fixed_work_and_summary;
 mod r194_work_on_several_assignments;
+mod r195_resource_commands;
+mod r196_assignment_commands;
+mod r197_task_update_extended;
 mod r198_mspdi_resource_read;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention

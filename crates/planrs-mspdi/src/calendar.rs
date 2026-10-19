@@ -43,7 +43,8 @@ enum Kind {
 }
 
 /// Importe les calendriers dans l'ordre du document ; `project_calendar` sert
-/// de base aux dérivés sans base valide (R-079).
+/// de base aux dérivés sans `BaseCalendarUID`, le calendrier de base d'UID
+/// minimal à ceux dont la base est négative (R-079 amendée).
 pub(crate) fn import(
     elements: &[Element<'_>],
     project_calendar: CalendarUid,
@@ -145,15 +146,30 @@ fn kind(
             }
             Kind::Derived(base)
         }
-        other => {
-            // Base négative (−1, −65 533, −65 535) ou absente : dérivé du
-            // calendrier du projet s'il est de base et différent, sinon base.
-            let (value, at) = other.map_or((None, f.at()), |(b, at)| (Some(b.to_string()), at));
+        Some((b, at)) => {
+            // R-079 amendée (O29) : base négative (−1, −65 533, −65 535) →
+            // dérivé du calendrier de base d'UID minimal (autre que lui),
+            // sinon base.
             f.report(
                 ImportCode::DanglingReference,
                 "BaseCalendarUID",
                 at,
-                value.as_deref(),
+                Some(&b.to_string()),
+                sink,
+            );
+            declared_base
+                .iter()
+                .find(|(uid, is_base)| **is_base && **uid != h.uid)
+                .map_or(Kind::Base, |(uid, _)| Kind::Derived(*uid))
+        }
+        None => {
+            // Base absente : dérivé du calendrier du projet s'il est de base
+            // et différent, sinon base.
+            f.report(
+                ImportCode::DanglingReference,
+                "BaseCalendarUID",
+                f.at(),
+                None,
                 sink,
             );
             if project_calendar != h.uid && declared_base.get(&project_calendar).copied() == Some(true) {

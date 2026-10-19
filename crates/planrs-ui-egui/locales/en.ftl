@@ -198,6 +198,23 @@ menu-edit = Edit
 menu-undo = Undo
 menu-redo = Redo
 
+## Structure (menu contextuel, confirmation de suppression)
+
+structure-insert = Insert Task
+structure-delete = Delete Task
+structure-indent = Indent
+structure-outdent = Outdent
+structure-link = Link Tasks
+structure-unlink = Unlink Tasks
+confirm-delete-title = Delete a summary task
+confirm-delete-text =
+    { $count ->
+        [one] The task will be deleted.
+       *[other] The summary task and its subtasks will be deleted ({ $count } tasks).
+    }
+confirm-delete-yes = Delete
+confirm-delete-no = Cancel
+
 ## Refus de commande (une clé par code d'erreur du moteur, `error-<code>`)
 
 command-error-title = Change refused

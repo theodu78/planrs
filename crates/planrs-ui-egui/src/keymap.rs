@@ -16,6 +16,7 @@
 use egui::{Key, KeyboardShortcut, Modifiers};
 
 use crate::action::Action;
+use crate::structure::StructureOp;
 
 /// Combinaison de touches (`Modifiers::COMMAND` : Ctrl, ou Cmd sur macOS).
 pub type Shortcut = KeyboardShortcut;
@@ -51,6 +52,13 @@ const COMMAND_SHIFT: Modifiers = Modifiers {
     ..Modifiers::COMMAND
 };
 
+/// Alt + Maj.
+const ALT_SHIFT: Modifiers = Modifiers {
+    alt: true,
+    shift: true,
+    ..Modifiers::NONE
+};
+
 /// Table des raccourcis, la combinaison la plus précise d'une touche
 /// d'abord.
 pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
@@ -74,6 +82,37 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
         Shortcut::new(Modifiers::COMMAND, Key::O),
         Binding::Ui(UiBinding::OpenFile),
     ),
+    // Structure (lot L14), sur la sélection de la vue principale.
+    (
+        KeyContext::Document,
+        Shortcut::new(Modifiers::NONE, Key::Insert),
+        Binding::Command("task.add"),
+    ),
+    (
+        KeyContext::Document,
+        Shortcut::new(Modifiers::NONE, Key::Delete),
+        Binding::Command("task.delete"),
+    ),
+    (
+        KeyContext::Document,
+        Shortcut::new(ALT_SHIFT, Key::ArrowRight),
+        Binding::Command("task.indent"),
+    ),
+    (
+        KeyContext::Document,
+        Shortcut::new(ALT_SHIFT, Key::ArrowLeft),
+        Binding::Command("task.outdent"),
+    ),
+    (
+        KeyContext::Document,
+        Shortcut::new(COMMAND_SHIFT, Key::F2),
+        Binding::Command("link.remove"),
+    ),
+    (
+        KeyContext::Document,
+        Shortcut::new(Modifiers::COMMAND, Key::F2),
+        Binding::Command("link.add"),
+    ),
 ];
 
 /// Action de l'interface pour une liaison ; `None` pour un id du registre
@@ -84,6 +123,12 @@ pub fn binding_action(binding: Binding) -> Option<Action> {
     match binding {
         Binding::Command("history.undo") => Some(Action::Undo),
         Binding::Command("history.redo") => Some(Action::Redo),
+        Binding::Command("task.add") => Some(Action::Structure(StructureOp::InsertBefore)),
+        Binding::Command("task.delete") => Some(Action::Structure(StructureOp::Delete)),
+        Binding::Command("task.indent") => Some(Action::Structure(StructureOp::Indent)),
+        Binding::Command("task.outdent") => Some(Action::Structure(StructureOp::Outdent)),
+        Binding::Command("link.add") => Some(Action::Structure(StructureOp::Link)),
+        Binding::Command("link.remove") => Some(Action::Structure(StructureOp::Unlink)),
         Binding::Command(_) => None,
         Binding::Ui(UiBinding::OpenFile) => Some(Action::OpenDialog),
     }
@@ -166,6 +211,6 @@ mod tests {
         for (_, shortcut, binding) in KEYMAP {
             assert!(binding_action(*binding).is_some(), "{shortcut:?} → {binding:?}");
         }
-        assert!(binding_action(Binding::Command("task.add")).is_none());
+        assert!(binding_action(Binding::Command("task.move")).is_none());
     }
 }

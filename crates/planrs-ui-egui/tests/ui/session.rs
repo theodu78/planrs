@@ -212,6 +212,10 @@ fn check_keymap_entry(i: usize) {
                 harness.state().messages()
             );
         }
+        // Structure (lot L14) : vérifiées par `structure.rs`.
+        Binding::Command(id) if crate::structure::COMMANDS.contains(&id) => {
+            crate::structure::check_keymap_entry(id);
+        }
         other => panic!("entrée {i} sans vérification : {other:?}"),
     }
 }
@@ -238,6 +242,12 @@ keymap_entry_tests! {
     ui_keymap_each_shortcut_dispatches_1 => 1,
     ui_keymap_each_shortcut_dispatches_2 => 2,
     ui_keymap_each_shortcut_dispatches_3 => 3,
+    ui_keymap_each_shortcut_dispatches_4 => 4,
+    ui_keymap_each_shortcut_dispatches_5 => 5,
+    ui_keymap_each_shortcut_dispatches_6 => 6,
+    ui_keymap_each_shortcut_dispatches_7 => 7,
+    ui_keymap_each_shortcut_dispatches_8 => 8,
+    ui_keymap_each_shortcut_dispatches_9 => 9,
 }
 
 /// Lot refusé : UID absent.

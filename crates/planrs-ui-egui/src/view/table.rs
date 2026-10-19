@@ -209,7 +209,7 @@ pub fn paint_body(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, origin: Pos2, range:
         if !row_rect.is_finite() {
             continue;
         }
-        let selected = fc.selection == Some(row.uid);
+        let selected = fc.selected.contains(row.uid);
         if selected {
             painter.rect_filled(row_rect, 0.0, palette.selection);
             shapes = shapes.saturating_add(1);

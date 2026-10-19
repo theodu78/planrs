@@ -59,7 +59,7 @@ Deux lignes `planrs_automation::journal::Entry` par appel, de même `seq` (1 au 
 - **CI** : job `mcp` (`.github/workflows/ci.yml`) ; les mêmes tests tournent aussi dans `checks`, macOS et Windows (`cargo test --workspace`).
 - **J5** : le scénario `resources_j5.jsonl` (ressources, affectations, types de tâche, surutilisation) suit le même harnais, en mémoire, en stdio et en HTTP (`replay_resources_j5_*`) ; contenu et vérifications dans [`resources.md`](resources.md) § 4.
 
-## 6. Essai réel avec Claude (une fois, local, hors CI)
+## 6. Essais réels avec Claude (local, hors CI)
 
 Fait le 2026-10-19 sur serveurdvp, sur validation du propriétaire. Procédure suivie :
 
@@ -76,6 +76,19 @@ Résultat :
 - Planning obtenu : 35 tâches dont 5 phases (récapitulatives) et 4 jalons, 40 liens, fin mer 10/03/2027 17:00 (93 jours ouvrés), 21 tâches critiques ; une entrée d'historique.
 - Règle 3 tenue : la seule date fournie par l'agent est le début du projet ; toutes les dates, durées calculées et marges de sa réponse finale viennent des résultats du moteur. L'agent a signalé de lui-même les limites du modèle (aucun jour chômé posé, durées estimées, pas de ressources).
 - Rejeu en CI : `replay_claude_run_1` (`crates/planrs-mcp/tests/replay.rs`, job `mcp`) rejoue le journal en mémoire, compare chaque résultat et le journal produit au scénario, et le MSPDI enregistré à l'attendu (`normalize`).
+
+### Essai n° 2 (ressources J5, 2026-10-19)
+
+Même procédure (binaire `planrs` du lot L9 de J5, conversation neuve, `claude -p`, `--strict-mcp-config`, planrs seul outil, autres outils interdits), serveur `planrs --now 2026-10-19T08:00 --lang fr mcp --headless --journal run.jsonl`. Consigne figée, envoyée telle quelle :
+
+> Construis le planning de rénovation d'une maison en 30 tâches avec phases, jalons et dépendances, affecte les artisans (maçon, plombier, électricien, plaquiste, carreleur, peintre) en tenant compte de leurs disponibilités, signale les surcharges et résous-les, puis montre-moi le chemin critique et la charge de chaque artisan.
+
+Résultat :
+
+- 16 appels, 0 erreur : `new_project` (début lun 02/11/2026 08:00) ; un `apply_batch` de 107 opérations (35 `task.add`, 38 `link.add`, 6 `resource.add`, 25 `assignment.add`, 3 `calendar.set_exception` du chantier) ; un `apply_batch` de 6 indisponibilités d'artisans (`calendar.set_exception` sur leurs calendriers propres) ; `list_resources overallocated`, `resource_usage` par semaine, `list_tasks`, `critical_path` ; **trois `apply_batch` en `dry_run`** comparés avant d'appliquer (option A : surcharges du Maçon et du Carreleur résolues mais une nouvelle sur le Plaquiste, `diff.overallocated.new` = [4] ; option B : 4 jours de plus sur la fin ; option A complétée), puis le lot retenu validé (`resolved` = [1, 5]) ; `critical_path`, `resource_usage`, `list_resources`, `save_project`, `render_gantt`.
+- Planning obtenu : 35 tâches dont 5 phases et 5 jalons, 42 liens, 6 artisans, surutilisation détectée par le moteur (Maçon à 300 %, Carreleur à 200 %) puis aucune surcharge restante ; fin mer 27/01/2027 17:00, 22 tâches critiques.
+- Règle 3 tenue : l'agent n'a fourni que le début du projet et des jours chômés (indisponibilités qu'il a inventées et signalées comme telles) ; dates, marges, charges et surcharges de sa réponse viennent des résultats du moteur, et il a comparé les options par `dry_run` au lieu de les estimer.
+- Versionné : `tests/mcp/scenarios/claude_run_2.jsonl` (chemins absolus remplacés par `$TMP`), MSPDI attendu `tests/mcp/expected/claude_run_2.xml`, rejoué par `replay_claude_run_2` (mêmes vérifications que l'essai n° 1, plus les faits clés ci-dessus). Diff de `PLANRS_BLESS=1` relu : hors chemins, seuls changent les `RemainingWork` des 25 affectations (0 dans le fichier de l'essai, égaux au travail depuis le correctif de la relecture finale, R-199) et la taille de l'enregistrement (`bytes` 81 062 → 81 085) ; aucun résultat du moteur ne change (dates, durées, marges, charges, surcharges, chemin critique).
 
 ## 7. Limites
 

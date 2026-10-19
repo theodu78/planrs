@@ -32,7 +32,7 @@ use planrs_core::resource::{UsageError, usage as core_usage};
 use planrs_core::{
     Assignment, Decimal, Diagnostic, Duration, DurationUnit, HasUid, LagValue, Minutes, Moment, Project,
     Resource, ResourceKind, ResourceUid, Schedule, Severity, Subject, Task, TaskRole, TaskSchedule, TaskUid,
-    TimeBasis, Units, Work,
+    TimeBasis, Units, Work, round_div,
 };
 use serde::Serialize;
 
@@ -504,6 +504,20 @@ pub fn quantity_out(u: Units, ctx: &TextContext) -> UnitsJson {
     }
 }
 
+/// Quantité d'une affectation matérielle : son travail en heures (PT3H =
+/// 3, O30, R-185), en 1/10 000 arrondi (R-001) ; l'unité de l'affectation
+/// reste 100 % (R-196). Saturée au plafond des unités.
+#[must_use]
+pub fn material_quantity(w: Work) -> Units {
+    let q = i128::from(w.minutes().get())
+        .checked_mul(10_000)
+        .and_then(|n| round_div(n, 60))
+        .and_then(|n| i64::try_from(n).ok())
+        .unwrap_or(i64::MAX)
+        .clamp(Units::MIN, Units::MAX);
+    Units::new(q).unwrap_or(Units::ZERO)
+}
+
 /// Travail de sortie, en heures (J5).
 #[must_use]
 pub fn work_out(w: Work, ctx: &TextContext) -> DurationJson {
@@ -610,15 +624,18 @@ impl<'a> ViewCtx<'a> {
             .is_some_and(|v| v.iter().any(|a| a.resource == Some(resource)))
     }
 
-    /// Unités d'une affectation : quantité pour une ressource matérielle,
-    /// pourcentage sinon.
-    fn assignment_units(&self, a: &Assignment) -> UnitsJson {
-        let material = a
-            .resource
+    /// Vrai si l'affectation désigne une ressource matérielle.
+    fn is_material(&self, a: &Assignment) -> bool {
+        a.resource
             .and_then(|r| self.project.resources.get(r))
-            .is_some_and(|r| matches!(r.kind, ResourceKind::Material { .. }));
-        if material {
-            quantity_out(a.units, &self.text)
+            .is_some_and(|r| matches!(r.kind, ResourceKind::Material { .. }))
+    }
+
+    /// Unités d'une affectation : quantité pour une ressource matérielle
+    /// (portée par le travail, O30), pourcentage sinon.
+    fn assignment_units(&self, a: &Assignment) -> UnitsJson {
+        if self.is_material(a) {
+            quantity_out(material_quantity(a.work), &self.text)
         } else {
             units_out(a.units, &self.text)
         }
@@ -652,10 +669,7 @@ impl<'a> ViewCtx<'a> {
         let placed = self.schedule.assignments.get(&a.uid());
         let delay = (a.delay != Minutes::ZERO)
             .then(|| signed_minutes(a.delay, self.project.options.default_duration_unit, &self.text));
-        let material = a
-            .resource
-            .and_then(|r| self.project.resources.get(r))
-            .is_some_and(|r| matches!(r.kind, ResourceKind::Material { .. }));
+        let material = self.is_material(a);
         AssignmentView {
             uid: a.uid().get(),
             task: a.task.get(),
@@ -667,7 +681,7 @@ impl<'a> ViewCtx<'a> {
             finish: placed.map(|p| iso(p.span.finish)),
             effective_units: placed.map(|p| {
                 if material {
-                    quantity_out(p.effective_units, &self.text)
+                    quantity_out(material_quantity(p.work), &self.text)
                 } else {
                     units_out(p.effective_units, &self.text)
                 }

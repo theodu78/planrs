@@ -207,6 +207,34 @@ async fn replay_resources_j5_memory() {
         ),
         (&json!("32h"), &json!("50%"))
     );
+    // Béton (matériel, UID 3) quantité 12 sur Dalle (UID 7) : la quantité
+    // rendue est celle saisie (portée par le travail, 12 h, O30), relisible
+    // comme `quantity`, dans les vues des tâches et des ressources.
+    let last = |tool: &str| s.calls.iter().rposition(|c| c.tool == tool).unwrap();
+    let listed = ok(last("list_resources"));
+    let beton = listed["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["uid"] == json!(3))
+        .unwrap();
+    let twelve = json!({ "text": "12", "value": 120_000 });
+    assert_eq!(beton["assignments"][0]["units"], twelve, "{beton}");
+    assert_eq!(beton["assignments"][0]["effective_units"], twelve, "{beton}");
+    let tasks = ok(last("list_tasks"));
+    let dalle = tasks["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["uid"] == json!(7))
+        .unwrap();
+    let on_dalle = dalle["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["uid"] == json!(3))
+        .unwrap();
+    assert_eq!(on_dalle["units"], twelve, "{dalle}");
     // Surutilisation du Maçon (UID 1).
     let over = at(
         "assign_resource",

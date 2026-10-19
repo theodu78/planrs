@@ -11,10 +11,11 @@
 
 use std::collections::BTreeSet;
 
-use planrs_core::calendar::{BuiltinCalendarNames, CalendarException, DaySetting, Recurrence};
+use planrs_core::calendar::{BuiltinCalendarNames, Calendar, CalendarException, DaySetting, Recurrence};
 use planrs_core::{
-    CalendarUid, Constraint, Day, DayRange, Duration, DurationUnit, Lag, LagValue, Link, LinkType, Minutes,
-    Moment, OutlineLevel, Project, ProjectInit, ScheduleAnchor, SignedPercent, Task, TaskUid, TimeBasis,
+    Assignment, AssignmentUid, CalendarUid, Constraint, Day, DayRange, Duration, DurationUnit, Lag, LagValue,
+    Link, LinkType, Minutes, Moment, OutlineLevel, Project, ProjectInit, Resource, ResourceUid,
+    ScheduleAnchor, SignedPercent, Task, TaskUid, TimeBasis, Units, Work,
 };
 
 /// xorshift64*, déterministe sur toutes les plateformes.
@@ -253,6 +254,57 @@ pub fn constrained_network(seed: u64) -> Project {
         return p;
     };
     add_constraints(&mut p, seed, start, ScheduleAnchor::FromStart(start));
+    p
+}
+
+/// Grand réseau affecté (ADR-0013, cas `5000_assigned`) : le réseau de
+/// [`large_network`] dont chaque tâche reçoit deux affectations de travail
+/// à 100 % (10 000 au total), travail = durée de la tâche ; 20 ressources,
+/// une sur deux sur un calendrier propre dérivé du Standard ; une
+/// affectation sur dix décalée d'un jour (`Delay` 480 min). Les feuilles
+/// automatiques à deux calendriers effectifs sont placées par leurs parts
+/// (R-173).
+///
+/// # Panics
+///
+/// Jamais pour une graine quelconque (les valeurs sont toutes valides).
+#[must_use]
+pub fn assigned_network(seed: u64) -> Project {
+    let mut p = large_network(seed);
+    for k in 1..=20u32 {
+        let mut r = Resource::new(ResourceUid::new(k), format!("R{k}"));
+        if k % 2 == 0 {
+            let cal = CalendarUid::new(100 + k);
+            if let Err(e) = p
+                .calendars
+                .push(Calendar::new_derived(cal, format!("R{k}"), CalendarUid::new(1)))
+            {
+                panic!("calendrier généré invalide : {e}");
+            }
+            r.calendar = Some(cal);
+        }
+        if let Err(e) = p.resources.push(r) {
+            panic!("ressource générée invalide : {e}");
+        }
+    }
+    let tasks: Vec<_> = p.tasks.iter().map(|t| (t.uid(), t.duration.minutes())).collect();
+    let mut next = 1u32;
+    for (i, (task, d)) in tasks.into_iter().enumerate() {
+        for j in 0..2u32 {
+            let k = u32::try_from(i % 20).unwrap_or(0) + 1;
+            let res = ResourceUid::new((k + j * 7 - 1) % 20 + 1);
+            let mut a = Assignment::new(AssignmentUid::new(next), task, Some(res));
+            a.units = Units::FULL;
+            a.work = Work::new(d).unwrap_or(Work::ZERO);
+            if next.is_multiple_of(10) {
+                a.delay = Minutes::new(480);
+            }
+            if let Err(e) = p.assignments.push(a) {
+                panic!("affectation générée invalide : {e}");
+            }
+            next += 1;
+        }
+    }
     p
 }
 

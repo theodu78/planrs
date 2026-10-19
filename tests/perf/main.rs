@@ -6,7 +6,8 @@
 //! d'échéances) et `5000_from_finish` (planification à rebours, mêmes
 //! proportions) : 3 exécutions de chauffe, puis médiane de 15.
 //! Échec au-delà de 50 ms, avertissement au-delà de 25 ms ; cible locale
-//! ≤ 10 ms. Hiérarchie profonde hostile (ADR-0012, lot L15) : 256 niveaux
+//! ≤ 10 ms. J5 : `5000_assigned` (10 000 affectations, ADR-0013), même
+//! budget de 50 ms. Hiérarchie profonde hostile (ADR-0012, lot L15) : 256 niveaux
 //! de récapitulatives imbriquées, 5 000 tâches, 10 000 liens dont des FS,
 //! SS et FF depuis chaque récapitulative ; budget 30 ms de médiane.
 //! Mesure seulement en release, par le job CI `perf` :
@@ -31,7 +32,7 @@ use planrs_core::{
     OutlineLevel, Percent, Project, ProjectInit, ScheduleAnchor, Severity, Task, TaskOutcome, TaskRole,
     TaskUid, TimeBasis, schedule,
 };
-use planrs_tests::generate::{constrained_network, from_finish_network, large_network};
+use planrs_tests::generate::{assigned_network, constrained_network, from_finish_network, large_network};
 
 /// Seuil d'échec de la médiane.
 const BUDGET: Duration = Duration::from_millis(50);
@@ -157,6 +158,40 @@ fn schedule_budget_5000_constrained() {
 #[ignore = "budget mesuré en release, job CI perf"]
 fn schedule_budget_5000_from_finish() {
     budget("5000_from_finish", &from_finish_network(2026));
+}
+
+/// Le réseau affecté (J5, ADR-0013) a la forme annoncée : 10 000
+/// affectations de travail placées, aucune erreur ni tâche dégradée,
+/// charges calculées pour les 20 ressources ; déterministe.
+#[test]
+fn assigned_network_shape() {
+    let p = assigned_network(2026);
+    assert_eq!(p.tasks.len(), 5_000);
+    assert_eq!(p.assignments.len(), 10_000);
+    assert_eq!(p.resources.len(), 20);
+    let s = schedule(&p);
+    assert!(
+        s.tasks
+            .values()
+            .all(|o| matches!(o, TaskOutcome::Scheduled(ts) if !ts.degraded))
+    );
+    let errors: Vec<&Diagnostic> = s
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity() == Severity::Error)
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(s.resources.len(), 20);
+    assert_eq!(s.assignments.len(), 10_000);
+    assert_eq!(assigned_network(2026), p);
+}
+
+/// Budget J5 (ADR-0013) : 5 000 tâches, 10 000 liens, 10 000 affectations
+/// (placement par affectation, cumuls et surutilisation compris), 50 ms.
+#[test]
+#[ignore = "budget mesuré en release, job CI perf"]
+fn perf_5000_assigned() {
+    budget("5000_assigned", &assigned_network(2026));
 }
 
 /// Profondeur de la hiérarchie hostile.

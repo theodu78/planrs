@@ -128,10 +128,19 @@ fn usable(set: &CalendarSet, uid: CalendarUid) -> bool {
 }
 
 /// R-170 (moteur) : `d_a = round_div(W × 10 000, U)` pour les unités fixes
-/// et le travail fixe ; durée de la tâche pour la durée fixe et pour des
-/// unités nulles (R-181) ; hors du domaine des durées : échec (R-069).
-fn assignment_duration(task: &Task, work: Work, units: Units) -> Result<Minutes, &'static str> {
-    if task.task_type == TaskType::FixedDuration || units == Units::ZERO {
+/// et le travail fixe ; durée de la tâche pour une feuille à durée fixe et
+/// pour des unités nulles (R-181) ; hors du domaine des durées : échec
+/// (R-069). Une récapitulative (`summary`) n'a pas de durée tenue : son
+/// affectation dure W ÷ U quel que soit son type (R-179 ; toutes les
+/// récapitulatives du corpus sont à durée fixe, O32, de durée enregistrée
+/// nulle dans A6).
+fn assignment_duration(
+    task: &Task,
+    work: Work,
+    units: Units,
+    summary: bool,
+) -> Result<Minutes, &'static str> {
+    if (task.task_type == TaskType::FixedDuration && !summary) || units == Units::ZERO {
         return Ok(task.duration.minutes());
     }
     i128::from(work.minutes().get())
@@ -364,7 +373,9 @@ pub(super) fn resolve(
             cal,
             calendar,
             task_calendar,
-            duration: assignment_duration(task, a.work, a.units),
+            // Rôle de la tâche inconnu ici : une récapitulative est
+            // corrigée par `attach` (R-179).
+            duration: assignment_duration(task, a.work, a.units, false),
             delay: a.delay.max(Minutes::ZERO),
             leveling: a.leveling_delay.filter(|l| l.minutes > Minutes::ZERO),
             contour: a.contour,
@@ -561,6 +572,7 @@ pub(super) fn attach<'a>(
             }
             let mut part = None;
             let mut scale = None;
+            let mut resolution = *res;
             if by_parts && res.work_resource {
                 match res.duration {
                     Ok(d) => {
@@ -583,12 +595,17 @@ pub(super) fn attach<'a>(
                 // d'une récapitulative ou mesurer celle d'une manuelle.
                 scale = Some(scale_of(res.cal, scales)?);
                 let summary = info.role == Role::Summary && matches!(task.mode, SchedulingMode::Auto);
-                if summary && res.duration.is_err() {
-                    diags.push(Diagnostic::AssignmentDurationOutOfDomain { assignment: res.uid });
+                if summary {
+                    // R-179 : W ÷ U, même pour une récapitulative à durée
+                    // fixe.
+                    resolution.duration = assignment_duration(task, res.work, res.units, true);
+                    if resolution.duration.is_err() {
+                        diags.push(Diagnostic::AssignmentDurationOutOfDomain { assignment: res.uid });
+                    }
                 }
             }
             out.outputs.push(Output {
-                res: *res,
+                res: resolution,
                 part,
                 scale,
             });

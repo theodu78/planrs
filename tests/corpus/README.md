@@ -53,7 +53,7 @@ Le harnais relit aussi chaque fichier présent après une écriture par planrs (
 
 `corpus_resource_floor` compare, à compteur séparé des cas de tâches (`planrs_core::parity::CORPUS_RESOURCE_FLOOR`, hors `FLOOR`, planchers par fichier dans `resources.rs`) :
 
-- **cas de tâche** : tâche automatique, active, planifiée, qui porte du travail ou une affectation à une vraie ressource ; `Work` de la tâche (R-184) et, pour une feuille, `Start`/`Finish` de chaque affectation hors fictive −65 535 (R-173) ;
+- **cas de tâche** : tâche automatique, active, planifiée, qui porte du travail ou une affectation à une vraie ressource ; `Work` de la tâche (R-184) et `Start`/`Finish` de chaque affectation hors fictive −65 535 (R-173 pour une feuille ; R-179 pour une récapitulative, comparées depuis la correction de la durée des affectations de récapitulatives à durée fixe : A4 et A6 identiques, cas et planchers inchangés) ;
 - **cas de ressource** : ressource (UID 0 exclu) dont le fichier enregistre `Work` ou `OverAllocated` (R-184, R-186) ; `OverAllocated` de A7 indicatif (O31).
 
 Divergences listées par le test (`--nocapture`) et dans `target/tmp/corpus-resources.json` (UID seulement, aucun nom).

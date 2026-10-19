@@ -151,10 +151,14 @@ fn file_menu(harness: &mut Harness<'static, App>, item: TextId) {
     harness.run();
     let label = fr(item);
     let save_as = fr(TextId::MenuSaveAs);
+    // « Nouveau projet » de l'accueil commence aussi par « Nouveau ».
+    let welcome_new = fr(TextId::WelcomeNewProject);
     harness
         .get_by(|node| {
             node.label().is_some_and(|text| {
-                text.starts_with(&label) && (item == TextId::MenuSaveAs || !text.starts_with(&save_as))
+                text.starts_with(&label)
+                    && (item == TextId::MenuSaveAs || !text.starts_with(&save_as))
+                    && text != welcome_new
             })
         })
         .click();
@@ -167,7 +171,7 @@ fn confirm_title(name: &str) -> String {
 }
 
 /// Commandes de fenêtre émises par la dernière image.
-fn viewport_commands(harness: &Harness<'static, App>) -> Vec<ViewportCommand> {
+pub fn viewport_commands(harness: &Harness<'static, App>) -> Vec<ViewportCommand> {
     harness
         .output()
         .viewport_output
@@ -465,4 +469,124 @@ fn ui_new_project_name_translated() {
     s.harness.run();
     let doc = s.harness.state().document.as_ref().unwrap();
     assert_eq!(doc.origin.name, "Project1");
+}
+
+/// Appuie sur `shortcut` dans **une seule** image (événement posé
+/// directement dans l'entrée : `key_press_modifiers` étale ses événements
+/// sur plusieurs images, et seule la sortie de la dernière est lisible).
+fn press_in_one_frame(h: &mut Harness<'static, App>, shortcut: egui::KeyboardShortcut) {
+    h.input_mut().events.push(egui::Event::Key {
+        key: shortcut.logical_key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: shortcut.modifiers,
+    });
+    h.step();
+}
+
+/// Demande de fermeture de la fenêtre (bouton rouge) dans une image : rend
+/// vrai si elle est annulée (`CancelClose`).
+fn close_window_cancelled(h: &mut Harness<'static, App>) -> bool {
+    h.input_mut()
+        .viewports
+        .entry(ViewportId::ROOT)
+        .or_default()
+        .events
+        .push(ViewportEvent::Close);
+    h.step();
+    viewport_commands(h).contains(&ViewportCommand::CancelClose)
+}
+
+/// Ctrl/Cmd+Q (entrée `i` de `KEYMAP`) : document intact, la fenêtre se
+/// ferme ; modifié, bandeau d'abord, et rien n'est fermé avant la réponse.
+/// Relecture finale J4, F1 : sur macOS, Cmd+Q ne produisait aucun
+/// `close_requested` et quittait sans rien demander.
+pub fn check_quit_shortcut(i: usize) {
+    let (_, shortcut, _) = planrs_ui_egui::keymap::KEYMAP[i];
+    let mut s = sim(SaveReply::Ok);
+    let h = &mut s.harness;
+    open_demo(h);
+    press_in_one_frame(h, shortcut);
+    assert!(viewport_commands(h).contains(&ViewportCommand::Close));
+    assert!(!h.state().confirmation_pending());
+
+    let mut s = sim(SaveReply::Ok);
+    let h = &mut s.harness;
+    open_demo(h);
+    edit_first_leaf(h, "17j");
+    press_in_one_frame(h, shortcut);
+    assert!(!viewport_commands(h).contains(&ViewportCommand::Close));
+    assert!(h.state().confirmation_pending());
+    h.run();
+    let name = h.state().document.as_ref().unwrap().origin.name.clone();
+    assert!(h.query_by_label(&confirm_title(&name)).is_some());
+    // Pas encore de réponse : la fenêtre reste protégée.
+    assert!(close_window_cancelled(h));
+    h.state_mut()
+        .dispatch(Action::Confirm(planrs_ui_egui::action::ConfirmChoice::Discard));
+    h.step();
+    assert!(viewport_commands(h).contains(&ViewportCommand::Close));
+}
+
+/// Menu Fichier → Quitter : même garde que Ctrl/Cmd+Q ; « Enregistrer »
+/// écrit d'abord, puis la fermeture est acceptée.
+#[test]
+fn ui_quit_menu_asks_then_saves_and_closes() {
+    let mut s = sim(SaveReply::Ok);
+    let h = &mut s.harness;
+    open_demo(h);
+    edit_first_leaf(h, "17j");
+    file_menu(h, TextId::MenuQuit);
+    assert!(h.state().confirmation_pending());
+    assert!(s.requests.borrow().is_empty());
+    let h = &mut s.harness;
+    h.get_by_label(&fr(TextId::ConfirmSave)).click();
+    h.run();
+    assert_eq!(s.requests.borrow().len(), 1);
+    assert!(!s.harness.state().document.as_ref().unwrap().is_dirty());
+    // Fermeture acceptée (`quit_confirmed`) : plus d'annulation.
+    assert!(!close_window_cancelled(&mut s.harness));
+}
+
+/// Quitter pendant un enregistrement lent : rien ne se ferme avant son
+/// succès, puis la fenêtre se ferme.
+#[test]
+fn ui_quit_during_save_waits_for_success() {
+    let mut s = sim(SaveReply::Hold);
+    open_demo(&mut s.harness);
+    edit_first_leaf(&mut s.harness, "17j");
+    press_save(&mut s.harness);
+    s.harness.state_mut().dispatch(Action::Quit);
+    s.harness.step();
+    assert!(!viewport_commands(&s.harness).contains(&ViewportCommand::Close));
+    assert!(!s.harness.state().confirmation_pending());
+    let target = s.requests.borrow()[0].target.clone();
+    let tx = s.held.borrow_mut().pop().unwrap();
+    tx.send(saved_event(&target)).unwrap();
+    s.harness.step();
+    assert!(viewport_commands(&s.harness).contains(&ViewportCommand::Close));
+}
+
+/// Relecture finale J4, F4 : la barre d'état marque le document modifié
+/// d'un « * » (seul indicateur dans la page sur le web, qui ignore le
+/// titre de la fenêtre), retiré après l'enregistrement.
+#[test]
+fn ui_status_bar_shows_dirty_star() {
+    let mut s = sim(SaveReply::Ok);
+    open_demo(&mut s.harness);
+    let name = s.harness.state().document.as_ref().unwrap().origin.name.clone();
+    let starred = format!("*{name}");
+    assert!(s.harness.query_by_label(&name).is_some());
+    assert!(s.harness.query_by_label(&starred).is_none());
+    edit_first_leaf(&mut s.harness, "17j");
+    assert!(s.harness.query_by_label(&starred).is_some());
+    assert_eq!(
+        s.harness.state().window_title(),
+        planrs_ui_egui::app::window_title_for(s.harness.state().document.as_ref())
+    );
+    press_save(&mut s.harness);
+    let name = s.harness.state().document.as_ref().unwrap().origin.name.clone();
+    assert!(s.harness.query_by_label(&format!("*{name}")).is_none());
+    assert!(s.harness.query_by_label(&name).is_some());
 }

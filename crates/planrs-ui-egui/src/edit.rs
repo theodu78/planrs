@@ -8,7 +8,8 @@
 //! le registre ne connaît que des UID).
 //!
 //! [`commit_edit`] est pure (aucun egui) : la vue (`view::table`) l'appelle à
-//! la validation et pousse le lot rendu dans `Action::Exec`.
+//! la validation et pousse le lot rendu dans `Action::ExecOn` (document
+//! visé par son numéro d'ouverture).
 
 use std::collections::BTreeMap;
 

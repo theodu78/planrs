@@ -19,8 +19,8 @@
 //! hors de lui. Desktop : chemin connu → `planrs_automation::files::write_atomic`
 //! dans le fil `planrs-save` ; sinon `rfd::AsyncFileDialog::save_file` créé
 //! sur le fil d'interface et attendu dans ce même fil, qui écrit ensuite.
-//! Web : `save_file` (qui rend aussitôt un descripteur) puis
-//! `FileHandle::write` sur ce seul descripteur (téléchargement). Tout chemin
+//! Web : téléchargement direct par `web_sys` (`Blob`, URL d'objet, ancre
+//! `download`), sans la fenêtre de rfd. Tout chemin
 //! qui se termine envoie un [`SaveEvent`] ; l'application ne marque le
 //! document enregistré qu'à la réception de [`SaveEvent::Saved`].
 
@@ -303,42 +303,66 @@ impl FileService for RfdFileService {
 
     #[cfg(target_arch = "wasm32")]
     fn save(&mut self, ctx: &egui::Context, request: SaveRequest, tx: Sender<SaveEvent>) {
-        let ctx = ctx.clone();
         let SaveRequest { bytes, target, .. } = request;
         // Pas de chemin sur le web : un chemin connu (impossible ici) est
         // traité comme un téléchargement sous son nom.
-        let (name, title, filter) = match target {
-            SaveTarget::Path(path) => (path, String::new(), String::new()),
-            SaveTarget::Dialog {
-                suggested_name,
-                title,
-                filter,
-            } => (suggested_name, title, filter),
+        let name = match target {
+            SaveTarget::Path(path) => path,
+            SaveTarget::Dialog { suggested_name, .. } => suggested_name,
         };
-        let dialog = rfd::AsyncFileDialog::new()
-            .set_title(title)
-            .set_file_name(name)
-            .add_filter(filter, &["xml"]);
-        wasm_bindgen_futures::spawn_local(async move {
-            // `save_file` rend aussitôt un descripteur inscriptible ;
-            // `write` n'est appelé que sur lui (tout autre descripteur fait
-            // paniquer rfd). Limite connue : rfd ne distingue pas « Annuler »
-            // du téléchargement dans sa fenêtre (la promesse rejetée est
-            // avalée) ; l'un et l'autre rendent `Ok`, et le document est
-            // alors marqué enregistré.
-            let event = match dialog.save_file().await {
-                None => SaveEvent::Cancelled,
-                Some(handle) => match handle.write(&bytes).await {
-                    Ok(()) => SaveEvent::Saved {
-                        name: handle.file_name(),
-                        path: None,
-                    },
-                    Err(error) => SaveEvent::Failed(error.to_string()),
-                },
-            };
-            deliver(&tx, &ctx, event);
-        });
+        // Téléchargement direct (Blob + ancre `download`, relecture finale
+        // J4, F3) : rfd 0.17 affichait sa propre fenêtre, dont « Ok » et
+        // « Annuler » rendaient tous deux `Ok` sans rien télécharger, et le
+        // document passait à tort à « enregistré ».
+        let event = match download(&name, &bytes) {
+            Ok(()) => SaveEvent::Saved { name, path: None },
+            Err(detail) => SaveEvent::Failed(detail),
+        };
+        deliver(&tx, ctx, event);
     }
+}
+
+/// Remet `bytes` au navigateur comme téléchargement nommé `name` : `Blob`
+/// MSPDI, URL d'objet, clic sur une ancre `download` (rien n'est ajouté à
+/// la page), URL révoquée une minute plus tard. Aucun JavaScript écrit à la
+/// main (règle 8) : tout passe par `web_sys`. Une exception du navigateur
+/// devient le détail de l'erreur.
+#[cfg(target_arch = "wasm32")]
+fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
+    use wasm_bindgen_futures::wasm_bindgen::JsCast as _;
+    use wasm_bindgen_futures::wasm_bindgen::closure::Closure;
+
+    let window = web_sys::window().ok_or_else(|| "window introuvable".to_owned())?;
+    let document = window
+        .document()
+        .ok_or_else(|| "document introuvable".to_owned())?;
+    let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
+    let options = web_sys::BlobPropertyBag::new();
+    options.set_type("application/xml");
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options)
+        .map_err(|error| js_error_text(&error))?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(|error| js_error_text(&error))?;
+    let anchor = document
+        .create_element("a")
+        .map_err(|error| js_error_text(&error))?
+        .dyn_into::<web_sys::HtmlAnchorElement>()
+        .map_err(|_| "élément <a> inattendu".to_owned())?;
+    anchor.set_href(&url);
+    anchor.set_download(name);
+    anchor.click();
+    // Révoquée plus tard : certains navigateurs lisent l'URL après le clic.
+    let revoke = Closure::once_into_js(move || {
+        if web_sys::Url::revoke_object_url(&url).is_err() {
+            log::warn!("URL de téléchargement non révoquée");
+        }
+    });
+    if window
+        .set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), 60_000)
+        .is_err()
+    {
+        log::warn!("révocation de l'URL de téléchargement non planifiée");
+    }
+    Ok(())
 }
 
 /// Futur d'une boîte « Enregistrer sous » native, envoyé au fil

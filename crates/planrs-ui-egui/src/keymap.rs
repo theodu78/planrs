@@ -38,6 +38,10 @@ pub enum UiBinding {
     /// Enregistre sous un autre nom (`project.save` avec un chemin choisi
     /// dans la boîte de dialogue).
     SaveAs,
+    /// Quitte l'application (desktop), par le bandeau de confirmation si le
+    /// document est modifié. Sur macOS, Cmd+Q n'arrive ici que parce que
+    /// l'application retire le menu par défaut de winit (`apps/planrs`).
+    Quit,
 }
 
 /// Liaison d'un raccourci.
@@ -87,6 +91,11 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
     ),
     (
         KeyContext::Global,
+        Shortcut::new(Modifiers::COMMAND, Key::Q),
+        Binding::Ui(UiBinding::Quit),
+    ),
+    (
+        KeyContext::Global,
         Shortcut::new(Modifiers::COMMAND, Key::N),
         Binding::Command("project.new"),
     ),
@@ -109,6 +118,13 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
     (
         KeyContext::Document,
         Shortcut::new(Modifiers::NONE, Key::Delete),
+        Binding::Command("task.delete"),
+    ),
+    // Touche « delete » d'un clavier Mac (Retour arrière) : pas de Suppr
+    // sans fn. Après Suppr, qui reste le raccourci affiché.
+    (
+        KeyContext::Document,
+        Shortcut::new(Modifiers::NONE, Key::Backspace),
         Binding::Command("task.delete"),
     ),
     (
@@ -152,6 +168,7 @@ pub fn binding_action(binding: Binding) -> Option<Action> {
         Binding::Command(_) => None,
         Binding::Ui(UiBinding::OpenFile) => Some(Action::OpenDialog),
         Binding::Ui(UiBinding::SaveAs) => Some(Action::SaveAs),
+        Binding::Ui(UiBinding::Quit) => Some(Action::Quit),
     }
 }
 

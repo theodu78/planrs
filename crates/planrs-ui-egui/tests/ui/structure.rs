@@ -5,7 +5,7 @@
 
 use egui::Modifiers;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable as _;
+use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use planrs_core::{LinkType, Project, TaskUid};
 use planrs_ui_egui::column::Column;
 use planrs_ui_egui::i18n::{Arg, Language, TextId, Texts};
@@ -389,7 +389,11 @@ fn ui_context_menu_runs_structure() {
 
 /// Vérification d'une entrée de [`KEYMAP`] liée à une commande de structure
 /// (appelée par `session.rs`, un test par entrée).
-pub fn check_keymap_entry(id: &str) {
+pub fn check_keymap_entry(id: &str, shortcut: egui::KeyboardShortcut) {
+    let press = |harness: &mut Harness<'static, App>, _: &str| {
+        harness.key_press_modifiers(shortcut.modifiers, shortcut.logical_key);
+        harness.run();
+    };
     let mut harness = harness();
     open_demo(&mut harness);
     match id {
@@ -428,4 +432,57 @@ pub fn check_keymap_entry(id: &str) {
         other => panic!("« {other} » n'est pas une commande de structure"),
     }
     assert_no_message(harness.state());
+}
+
+/// Ouvre le menu Édition et clique l'entrée dont le libellé commence par
+/// `item` (le raccourci affiché suit le libellé).
+fn click_edit_menu(harness: &mut Harness<'static, App>, item: TextId) {
+    harness.get_by_label(&fr(TextId::MenuEdit)).click();
+    harness.run();
+    let label = fr(item);
+    harness
+        .get_by(|node| node.label().is_some_and(|text| text.starts_with(&label)))
+        .click();
+    harness.run();
+}
+
+/// Relecture finale J4, F5 : les six commandes de structure sont dans le
+/// menu Édition, grisées sans sélection (sauf l'insertion), et y
+/// déclenchent leur commande.
+#[test]
+fn ui_edit_menu_structure_entries() {
+    let mut harness = harness();
+    open_demo(&mut harness);
+    harness.get_by_label(&fr(TextId::MenuEdit)).click();
+    harness.run();
+    for (text, enabled) in [
+        (TextId::StructureInsert, true),
+        (TextId::StructureDelete, false),
+        (TextId::StructureIndent, false),
+        (TextId::StructureOutdent, false),
+        (TextId::StructureLink, false),
+        (TextId::StructureUnlink, false),
+    ] {
+        let label = fr(text);
+        let node = harness.get_by(|node| node.label().is_some_and(|l| l.starts_with(&label)));
+        assert_eq!(!node.accesskit_node().is_disabled(), enabled, "{label}");
+    }
+    harness.key_press(egui::Key::Escape);
+    harness.run();
+    click_row(&mut harness, uid(3), Modifiers::NONE);
+    click_edit_menu(&mut harness, TextId::StructureDelete);
+    assert!(!project(harness.state()).tasks.contains(uid(3)));
+    assert_no_message(harness.state());
+}
+
+/// Relecture finale J4, F5 : l'accueil propose « Nouveau projet » (Ctrl+N
+/// est pris par le navigateur sur le web).
+#[test]
+fn ui_welcome_new_project_button() {
+    let mut harness = harness();
+    harness.run();
+    harness.get_by_label(&fr(TextId::WelcomeNewProject)).click();
+    harness.run();
+    let doc = harness.state().document.as_ref().expect("projet créé");
+    assert_eq!(doc.project().tasks.len(), 0);
 }

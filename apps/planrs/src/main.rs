@@ -11,6 +11,14 @@
 //! publie son rendez-vous, pour que `planrs mcp` refuse d'écrire le même
 //! fichier (`file.open_in_app`). Le résumé servi par `query` est tenu à jour
 //! à chaque édition.
+//!
+//! macOS : le menu applicatif par défaut de winit est retiré
+//! ([`event_loop_hook`]). Son entrée « Quitter » (Cmd+Q) appelle
+//! `terminate:`, qui ferme la fenêtre sans `CloseRequested` : le garde des
+//! modifications non enregistrées ne la voyait pas. Sans ce menu, Cmd+Q
+//! arrive comme une touche et passe par le `KEYMAP` (confirmation). « Quitter »
+//! du Dock et la fermeture de session appellent toujours `terminate:` : non
+//! interceptables sans délégué Objective-C (limite, docs/features/ui.md § 5).
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -117,12 +125,36 @@ impl DocumentObserver for ControlRendezvous {
     }
 }
 
+/// Réglage de la boucle d'événements : sur macOS, pas de menu applicatif
+/// par défaut (voir l'en-tête du module) ; rien ailleurs.
+#[cfg_attr(
+    target_os = "macos",
+    allow(
+        clippy::unnecessary_wraps,
+        reason = "`None` hors macOS : même signature sur toutes les plateformes"
+    )
+)]
+fn event_loop_hook() -> Option<eframe::EventLoopBuilderHook> {
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::EventLoopBuilderExtMacOS as _;
+        Some(Box::new(|builder| {
+            builder.with_default_menu(false);
+        }))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
 fn main() -> ExitCode {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title(PRODUCT_NAME)
             .with_inner_size([1440.0, 900.0])
             .with_min_inner_size([800.0, 500.0]),
+        event_loop_builder: event_loop_hook(),
         ..Default::default()
     };
     let result = eframe::run_native(
@@ -161,6 +193,13 @@ mod tests {
     use planrs_ui_egui::{DocOrigin, DocumentObserver, OpenDocument};
 
     use super::ControlRendezvous;
+
+    /// macOS : le menu par défaut de winit (« Quitter » = `terminate:`, sans
+    /// `CloseRequested`) est retiré ; ailleurs, aucun réglage.
+    #[test]
+    fn desktop_event_loop_hook_only_on_macos() {
+        assert_eq!(super::event_loop_hook().is_some(), cfg!(target_os = "macos"));
+    }
 
     /// Document de l'exemple, ouvert depuis `path`.
     fn demo_at(path: &Path) -> OpenDocument {

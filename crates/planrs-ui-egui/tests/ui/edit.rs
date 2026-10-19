@@ -214,6 +214,30 @@ fn ui_edit_invalid_stays_in_edit() {
     assert_eq!(app.document.as_ref().unwrap().generation(), 0);
 }
 
+/// Relecture finale J4, F2 : saisie ouverte sur un document intact, puis
+/// clic sur « Ouvrir l'exemple » (barre d'outils, dessinée avant la table).
+/// La saisie, validée par la perte du focus dans la même image, modifie
+/// d'abord le document : le bandeau de confirmation s'affiche au lieu de
+/// remplacer le document et d'appliquer le lot au nouveau.
+#[test]
+fn ui_edit_focus_loss_commits_before_document_replaced() {
+    let (mut harness, _, uid) = demo_cell(Column::Duration);
+    assert!(!harness.state().document.as_ref().unwrap().is_dirty());
+    type_text(&mut harness, "10j");
+    assert!(harness.state().view().edit.editing.is_some());
+    harness.get_by_label(&fr(TextId::MenuOpenDemo)).click();
+    harness.run();
+    let app = harness.state();
+    assert!(
+        app.confirmation_pending(),
+        "la saisie doit rendre le document modifié"
+    );
+    let doc = app.document.as_ref().unwrap();
+    assert_eq!(doc.opening, 1, "le document ne doit pas être remplacé");
+    assert!(doc.is_dirty());
+    assert_eq!(schedule_of(app, uid).duration, Minutes::new(10 * 480));
+}
+
 #[test]
 fn ui_blank_row_creates_task() {
     let mut harness = harness();

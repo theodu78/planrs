@@ -490,13 +490,7 @@ impl App {
     /// modifié, puis nom du produit.
     #[must_use]
     pub fn window_title(&self) -> String {
-        match &self.document {
-            None => PRODUCT_NAME.to_owned(),
-            Some(document) => {
-                let star = if document.is_dirty() { "*" } else { "" };
-                format!("{star}{} \u{2014} {PRODUCT_NAME}", document.origin.name)
-            }
-        }
+        window_title_for(self.document.as_ref())
     }
 
     /// Crée un projet vide (R-032) : nom traduit « Projet1 », planifié
@@ -720,6 +714,24 @@ impl App {
         } else if self.document_dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirm = Some(Pending::Quit);
+        }
+    }
+
+    /// Quitter demandé par l'application (Ctrl/Cmd+Q, menu Fichier), et non
+    /// par la fenêtre : même garde que [`App::guard_close`]. Pendant un
+    /// enregistrement, la fermeture suit son succès ; document modifié :
+    /// bandeau ; sinon la fenêtre se ferme. Sans effet sur le web (une page
+    /// ne ferme pas son onglet).
+    fn request_quit(&mut self, ctx: &egui::Context) {
+        if cfg!(target_arch = "wasm32") {
+            return;
+        }
+        if let Some(job) = &mut self.saving {
+            if job.then.is_none() {
+                job.then = Some(Pending::Quit);
+            }
+        } else {
+            self.request(Pending::Quit, ctx);
         }
     }
 
@@ -1026,6 +1038,7 @@ impl App {
             Action::NewProject => self.request(Pending::NewProject, ctx),
             Action::Save => self.start_save(false, None, ctx),
             Action::SaveAs => self.start_save(true, None, ctx),
+            Action::Quit => self.request_quit(ctx),
             Action::Confirm(choice) => self.answer(choice, ctx),
             Action::Select(selection) => self.selection = selection,
             Action::SetLanguage(language) => {
@@ -1071,6 +1084,17 @@ impl App {
             Action::DismissMessage => self.messages.clear(),
             // Le refus est affiché par `execute` ; rien d'autre à faire ici.
             Action::Exec(batch) => drop(self.execute(&batch, EditOrigin::User)),
+            Action::ExecOn { opening, batch } => {
+                if self
+                    .document
+                    .as_ref()
+                    .is_some_and(|document| document.opening == opening)
+                {
+                    drop(self.execute(&batch, EditOrigin::User));
+                } else {
+                    log::warn!("saisie abandonnée : le document visé n'est plus ouvert");
+                }
+            }
             Action::Undo => drop(self.undo()),
             Action::Redo => drop(self.redo()),
             Action::SelectWith { uid, mode } => {
@@ -1184,9 +1208,18 @@ impl App {
         }
         self.last_frame = stats;
         // Les actions sont appliquées après le dessin : une image de plus
-        // montre leur effet (langue, zoom, document…).
+        // montre leur effet (langue, zoom, document…). Les lots d'édition
+        // d'abord (partition stable) : une saisie validée par la perte du
+        // focus arrive après le bouton cliqué dans la même image (barre
+        // d'outils, menus et bandeau sont dessinés avant la table) ; elle
+        // doit modifier le document **avant** qu'une ouverture, un « Nouveau »
+        // ou une réponse au bandeau le remplace, pour que la confirmation la
+        // voie (relecture finale J4, F2).
         let applied = !actions.is_empty();
-        for action in actions {
+        let (edits, others): (Vec<Action>, Vec<Action>) = actions
+            .into_iter()
+            .partition(|action| matches!(action, Action::Exec(_) | Action::ExecOn { .. }));
+        for action in edits.into_iter().chain(others) {
             self.apply(action, &ctx);
         }
         self.sync_selection();
@@ -1204,6 +1237,25 @@ impl App {
             self.sent_title = title;
         }
     }
+}
+
+/// Titre de la fenêtre pour `document` (voir [`App::window_title`]). Le web
+/// le pose aussi sur l'onglet (`document.title`) depuis son observateur :
+/// eframe web ignore `ViewportCommand::Title`.
+#[must_use]
+pub fn window_title_for(document: Option<&OpenDocument>) -> String {
+    match document {
+        None => PRODUCT_NAME.to_owned(),
+        Some(document) => format!("{} \u{2014} {PRODUCT_NAME}", document_label(document)),
+    }
+}
+
+/// Nom du document précédé de « * » s'il est modifié (titre de la fenêtre
+/// et barre d'état).
+#[must_use]
+pub fn document_label(document: &OpenDocument) -> String {
+    let star = if document.is_dirty() { "*" } else { "" };
+    format!("{star}{}", document.origin.name)
 }
 
 /// Début d'un projet neuf : le lundi strictement après le jour de `now`,
@@ -1414,6 +1466,30 @@ mod tests {
                 "{now}"
             );
         }
+    }
+
+    /// Relecture finale J4, F2 : un lot visant un autre document (numéro
+    /// d'ouverture différent) est abandonné ; le bon numéro l'applique.
+    #[test]
+    fn exec_on_other_opening_is_dropped() {
+        let ctx = egui::Context::default();
+        let mut app = test_app();
+        app.open_demo();
+        let opening = app.document.as_ref().unwrap().opening;
+        let batch = planrs_automation::Batch::from_json_str(
+            r#"{"format_version":1,"ops":[{"op":"task.update","uid":3,"name":"X"}]}"#,
+        )
+        .unwrap();
+        app.dispatch(Action::ExecOn {
+            opening: opening.saturating_add(1),
+            batch: batch.clone(),
+        });
+        frame(&ctx, &mut app);
+        assert_eq!(app.document.as_ref().unwrap().generation(), 0);
+        assert!(app.messages().is_empty(), "{:?}", app.messages());
+        app.dispatch(Action::ExecOn { opening, batch });
+        frame(&ctx, &mut app);
+        assert_eq!(app.document.as_ref().unwrap().generation(), 1);
     }
 
     #[test]

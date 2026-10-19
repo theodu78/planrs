@@ -71,8 +71,9 @@ pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
 }
 
 /// Menu Fichier : Nouveau, exemple, Ouvrir, Enregistrer, Enregistrer
-/// sous, Fermer ; raccourcis de [`crate::keymap::KEYMAP`] affichés.
-/// Enregistrer et Fermer demandent un document.
+/// sous, Fermer, Quitter (desktop) ; raccourcis de
+/// [`crate::keymap::KEYMAP`] affichés. Enregistrer et Fermer demandent un
+/// document.
 fn file_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let has_doc = fc.doc.is_some();
     let new = Binding::Command("project.new");
@@ -87,6 +88,12 @@ fn file_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     menu_item(ui, fc, TextId::MenuSaveAs, Some(save_as), has_doc, Action::SaveAs);
     ui.separator();
     menu_item(ui, fc, TextId::MenuClose, None, has_doc, Action::CloseDocument);
+    // Quitter : le navigateur ne laisse pas une page fermer son onglet.
+    if !cfg!(target_arch = "wasm32") {
+        ui.separator();
+        let quit = Binding::Ui(UiBinding::Quit);
+        menu_item(ui, fc, TextId::MenuQuit, Some(quit), true, Action::Quit);
+    }
 }
 
 /// Entrée de menu : libellé traduit, raccourci éventuel de la liaison,
@@ -109,7 +116,11 @@ fn menu_item(
 }
 
 /// Menu Édition : Annuler, Rétablir, actifs seulement s'il y a un lot à
-/// annuler ou à rétablir ; raccourci de [`crate::keymap::KEYMAP`] affiché.
+/// annuler ou à rétablir ; puis les six commandes de structure du menu
+/// contextuel (grisées sans document, et sans sélection sauf « Insérer une
+/// tâche ») ; raccourcis de [`crate::keymap::KEYMAP`] affichés. Rend la
+/// structure découvrable sans clic droit ni touche Inser (relecture finale
+/// J4, F5).
 fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let texts = fc.texts;
     let history = fc.doc.map(|doc| doc.session.history());
@@ -126,6 +137,19 @@ fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
         }
         if ui.add_enabled(enabled, button).clicked() {
             fc.actions.push(action);
+        }
+    }
+    ui.separator();
+    let has_doc = fc.doc.is_some();
+    let has_selection = fc.selection.is_some();
+    for (op, label, id, needs_selection) in super::main_view::CONTEXT_ENTRIES {
+        let mut button = egui::Button::new(texts.get(label));
+        if let Some(shortcut) = shortcut_for(Binding::Command(id)) {
+            button = button.shortcut_text(shortcut_text(ui.ctx(), shortcut));
+        }
+        let enabled = has_doc && (has_selection || !needs_selection);
+        if ui.add_enabled(enabled, button).clicked() {
+            fc.actions.push(Action::Structure(op));
         }
     }
 }
@@ -213,7 +237,8 @@ fn language_choices(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     }
 }
 
-/// Écran d'accueil (aucun document ouvert) : titre, boutons d'ouverture,
+/// Écran d'accueil (aucun document ouvert) : titre, boutons d'ouverture et
+/// de création,
 /// choix de la langue et du thème.
 pub fn welcome(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let texts = fc.texts;
@@ -240,6 +265,14 @@ pub fn welcome(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
             .clicked()
         {
             fc.actions.push(Action::OpenDialog);
+        }
+        // « Nouveau projet » : sur le web, Ctrl+N appartient au navigateur
+        // (relecture finale J4, F5).
+        if ui
+            .add(egui::Button::new(texts.get(TextId::WelcomeNewProject)).min_size(big))
+            .clicked()
+        {
+            fc.actions.push(Action::NewProject);
         }
         if cfg!(target_arch = "wasm32") {
             ui.label(texts.get(TextId::WelcomeWebNote));
@@ -279,7 +312,8 @@ fn centered_row(ui: &mut egui::Ui, labels: &[String], add_contents: impl FnOnce(
     });
 }
 
-/// Barre d'état (nom, nombre de tâches, plage, diagnostics) et bandeau des
+/// Barre d'état (nom précédé de « * » si le document est modifié, nombre de
+/// tâches, plage, diagnostics) et bandeau des
 /// messages (sous la barre d'outils).
 pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMessage]) {
     let texts = fc.texts;
@@ -289,7 +323,9 @@ pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
                 ui.label(texts.get(TextId::StatusNoDocument));
                 return;
             };
-            ui.strong(doc.origin.name.as_str());
+            // « * » si modifié, comme le titre de la fenêtre : sur le web,
+            // seul indicateur visible dans la page (relecture finale J4, F4).
+            ui.strong(crate::app::document_label(doc));
             ui.separator();
             let count = fc
                 .rows

@@ -466,7 +466,7 @@ fn finish_keys(ui: &egui::Ui) -> Option<Finish> {
 /// valide et passe à la cellule suivante, Échap abandonne ; un défilement
 /// ou la perte du focus valident sur place. Une saisie refusée
 /// ([`commit_edit`]) reste ouverte avec son message ; acceptée, son lot est
-/// poussé dans `Action::Exec` (refus du registre : bandeau).
+/// poussé dans `Action::ExecOn` (refus du registre : bandeau).
 fn edit_cells(
     ui: &mut egui::Ui,
     fc: &mut FrameCtx<'_>,
@@ -602,7 +602,10 @@ fn commit(ui: &egui::Ui, fc: &mut FrameCtx<'_>, rows: &RowModel, edit: &mut Tabl
     let uid = state.uid;
     close_editor(ui, edit);
     if !batch.ops.is_empty() {
-        fc.actions.push(Action::Exec(batch));
+        fc.actions.push(Action::ExecOn {
+            opening: doc.opening,
+            batch,
+        });
     }
     match motion {
         Move::Stay => {}

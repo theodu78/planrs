@@ -58,6 +58,15 @@ pub enum Action {
     /// Applique un lot de commandes à la session du document (toute
     /// édition passe par le registre). Sans effet jusqu'au lot L11.
     Exec(Batch),
+    /// Comme [`Action::Exec`], pour le document de numéro d'ouverture
+    /// `opening` seulement (saisie de cellule) : abandonné si un autre
+    /// document l'a remplacé entre-temps (relecture finale J4, F2).
+    ExecOn {
+        /// Numéro d'ouverture du document visé (`OpenDocument::opening`).
+        opening: u64,
+        /// Lot de commandes.
+        batch: Batch,
+    },
     /// Annule le dernier lot. Sans effet jusqu'au lot L11.
     Undo,
     /// Rétablit le dernier lot annulé. Sans effet jusqu'au lot L11.
@@ -70,6 +79,9 @@ pub enum Action {
     Save,
     /// Enregistre sous un autre nom (boîte de dialogue ou téléchargement).
     SaveAs,
+    /// Quitte l'application (desktop : Ctrl/Cmd+Q, menu Fichier), après
+    /// confirmation si le document est modifié ; sans effet sur le web.
+    Quit,
     /// Réponse au bandeau « Enregistrer les modifications ? ».
     Confirm(ConfirmChoice),
     /// Clic de sélection avec modificateur (Ctrl/Cmd : ajout ou retrait ;

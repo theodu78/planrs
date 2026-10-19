@@ -668,6 +668,15 @@ pub(super) fn attach<'a>(
 ) -> Option<Parts> {
     let mut index: BTreeMap<CalRef, u32> = BTreeMap::new();
     index.insert(CalRef::Project, PROJECT);
+    // Échelles déjà rangées par empreinte de forme : seules celles de même
+    // empreinte sont comparées en entier (O(S log S), et non O(S²) pour S
+    // calendriers distincts).
+    let mut shapes: BTreeMap<(i64, usize, u64), Vec<u32>> = BTreeMap::new();
+    for (i, s) in scales.iter().enumerate() {
+        if let (TimeScale::Working(c), Ok(i)) = (s, u32::try_from(i)) {
+            shapes.entry(c.shape_fingerprint()).or_default().push(i);
+        }
+    }
     // Un calendrier déjà rangé (calendrier du projet, calendrier d'une
     // tâche) garde son échelle : une affectation sur le calendrier de sa
     // tâche la place exactement comme sans affectation (P34).
@@ -685,14 +694,19 @@ pub(super) fn attach<'a>(
         // sans exception propre, intersection égale au calendrier de la
         // tâche) est réutilisée : mêmes conversions, et les parts qui la
         // partagent se placent comme une durée unique (`Placer::of`).
-        let known = scales.iter().position(
-            |s| matches!(s, TimeScale::Working(k) if std::ptr::eq(*k, c) || k.same_working_time(c)),
-        );
+        let key = c.shape_fingerprint();
+        let known = shapes.get(&key).and_then(|same| {
+            same.iter().copied().find(|&k| {
+                matches!(pos(k).and_then(|k| scales.get(k)),
+                    Some(TimeScale::Working(s)) if std::ptr::eq(*s, c) || s.same_working_time(c))
+            })
+        });
         let i = if let Some(k) = known {
-            ix(k)?
+            k
         } else {
             let i = ix(scales.len())?;
             scales.push(TimeScale::Working(c));
+            shapes.entry(key).or_default().push(i);
             i
         };
         index.insert(r, i);

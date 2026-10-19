@@ -7,7 +7,10 @@
 //! proportions) : 3 exécutions de chauffe, puis médiane de 15.
 //! Échec au-delà de 50 ms, avertissement au-delà de 25 ms ; cible locale
 //! ≤ 10 ms. J5 : `5000_assigned` (10 000 affectations, ADR-0013), même
-//! budget de 50 ms. Hiérarchie profonde hostile (ADR-0012, lot L15) : 256 niveaux
+//! budget de 50 ms ; `5000_assigned_leaves` (1 000 ressources ayant chacune
+//! ses congés, 10 % de feuilles à calendrier propre), garde-fou provisoire
+//! de 250 ms ; projets hostiles (calendriers combinés, 100 000 parts) en
+//! temps borné. Hiérarchie profonde hostile (ADR-0012, lot L15) : 256 niveaux
 //! de récapitulatives imbriquées, 5 000 tâches, 10 000 liens dont des FS,
 //! SS et FF depuis chaque récapitulative ; budget 30 ms de médiane.
 //! Mesure seulement en release, par le job CI `perf` :
@@ -33,8 +36,8 @@ use planrs_core::{
     TaskUid, TimeBasis, schedule,
 };
 use planrs_tests::generate::{
-    assigned_network, constrained_network, from_finish_network, hostile_combined_calendars, hostile_parts,
-    large_network,
+    assigned_leaves_network, assigned_network, constrained_network, from_finish_network,
+    hostile_combined_calendars, hostile_parts, large_network,
 };
 
 /// Seuil d'échec de la médiane.
@@ -195,6 +198,55 @@ fn assigned_network_shape() {
 #[ignore = "budget mesuré en release, job CI perf"]
 fn perf_5000_assigned() {
     budget("5000_assigned", &assigned_network(2026));
+}
+
+/// Variante de la relecture finale J5 : chaque ressource a ses congés
+/// (1 000 calendriers de ressource distincts), 10 % des feuilles sur un
+/// calendrier propre : placement par parts sur deux échelles, unions et
+/// intersections compilées ; mêmes formes que `5000_assigned`, aucune
+/// erreur, aucune tâche dégradée, aucun calendrier combiné refusé.
+#[test]
+fn assigned_leaves_network_shape() {
+    let p = assigned_leaves_network(2026);
+    assert_eq!(p.tasks.len(), 5_000);
+    assert_eq!(p.assignments.len(), 10_000);
+    assert_eq!(p.resources.len(), 1_000);
+    let s = schedule(&p);
+    assert!(
+        s.tasks
+            .values()
+            .all(|o| matches!(o, TaskOutcome::Scheduled(ts) if !ts.degraded))
+    );
+    let refused: Vec<&Diagnostic> = s
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity() == Severity::Error || d.code() == "calendar.too_many_segments")
+        .collect();
+    assert!(refused.is_empty(), "{refused:?}");
+    assert_eq!(s.resources.len(), 1_000);
+    assert_eq!(s.assignments.len(), 10_000);
+    assert_eq!(assigned_leaves_network(2026), p);
+}
+
+/// Garde-fou provisoire de `5000_assigned_leaves` (relecture finale J5) :
+/// la cible de 50 ms d'ADR-0013 n'est pas tenue (médiane locale 158 ms :
+/// compilation des 1 011 calendriers, environ 50 ms ; 5 000 unions et
+/// 1 000 intersections, environ 40 ms ; placement par parts sur deux
+/// échelles, environ 65 ms). Seuil bloquant de 250 ms en attendant
+/// l'arbitrage (`docs/decisions.md`, correctifs de la relecture finale
+/// (11)) : il rattrape une régression quadratique (O(S²) sur les échelles,
+/// O(P²) sur les parts), pas une dérive de quelques pour cent.
+const LEAVES_BUDGET: Duration = Duration::from_millis(250);
+
+/// Budget de `5000_assigned_leaves` : [`LEAVES_BUDGET`].
+#[test]
+#[ignore = "budget mesuré en release, job CI perf"]
+fn perf_5000_assigned_leaves() {
+    budget_of(
+        "5000_assigned_leaves",
+        &assigned_leaves_network(2026),
+        LEAVES_BUDGET,
+    );
 }
 
 /// Un calcul chronométré ; échec au-delà de `limit`.

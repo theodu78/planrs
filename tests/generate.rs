@@ -331,6 +331,84 @@ fn add_leave(p: &mut Project, cal: CalendarUid, offset: i64, name: &str) -> bool
     .is_ok()
 }
 
+/// Grand réseau affecté dont chaque ressource a ses congés (relecture
+/// finale J5, cas `5000_assigned_leaves`) : le réseau de [`large_network`],
+/// 1 000 ressources de travail, chacune sur un calendrier propre dérivé du
+/// Standard avec 10 jours de congé tirés sur 2026-2027 (aucune échelle de
+/// ressource n'a la forme d'une autre) ; deux affectations par tâche (10 000
+/// au total), travail = durée de la tâche, une sur dix décalée d'un jour ;
+/// 10 % des feuilles sur un des 10 calendriers de tâche dérivés du
+/// Standard, chacun avec 5 jours chômés propres (intersections tâche ∩
+/// ressource). Les feuilles sont placées par parts sur deux échelles
+/// différentes (R-173 : unions et mesure de l'union).
+///
+/// # Panics
+///
+/// Jamais pour une graine quelconque (les valeurs sont toutes valides).
+#[must_use]
+pub fn assigned_leaves_network(seed: u64) -> Project {
+    let mut p = large_network(seed);
+    let mut r = Rng::new(seed ^ 0x5eed);
+    for k in 1..=10u32 {
+        let cal = CalendarUid::new(5_000 + k);
+        if let Err(e) = p
+            .calendars
+            .push(Calendar::new_derived(cal, format!("T{k}"), CalendarUid::new(1)))
+        {
+            panic!("calendrier généré invalide : {e}");
+        }
+        let mut added = 0;
+        while added < 5 {
+            if add_leave(&mut p, cal, r.range(0, 729), &format!("Chômé {added}")) {
+                added += 1;
+            }
+        }
+    }
+    for k in 1..=1_000u32 {
+        let cal = CalendarUid::new(10_000 + k);
+        if let Err(e) = p
+            .calendars
+            .push(Calendar::new_derived(cal, format!("R{k}"), CalendarUid::new(1)))
+        {
+            panic!("calendrier généré invalide : {e}");
+        }
+        let mut added = 0;
+        while added < 10 {
+            if add_leave(&mut p, cal, r.range(0, 729), &format!("Congé {added}")) {
+                added += 1;
+            }
+        }
+        let mut res = Resource::new(ResourceUid::new(k), format!("R{k}"));
+        res.calendar = Some(cal);
+        if let Err(e) = p.resources.push(res) {
+            panic!("ressource générée invalide : {e}");
+        }
+    }
+    let tasks: Vec<_> = p.tasks.iter().map(|t| (t.uid(), t.duration.minutes())).collect();
+    let mut next = 1u32;
+    for (i, (task, d)) in tasks.into_iter().enumerate() {
+        if r.chance(10)
+            && let Some(t) = p.tasks.get_mut(task)
+        {
+            t.calendar = Some(CalendarUid::new(5_001 + u32::try_from(r.index(10)).unwrap_or(0)));
+        }
+        let i = u32::try_from(i).unwrap_or(0);
+        for res in [i % 1_000 + 1, (i * 7 + 3) % 1_000 + 1] {
+            let mut a = Assignment::new(AssignmentUid::new(next), task, Some(ResourceUid::new(res)));
+            a.units = Units::FULL;
+            a.work = Work::new(d).unwrap_or(Work::ZERO);
+            if next.is_multiple_of(10) {
+                a.delay = Minutes::new(480);
+            }
+            if let Err(e) = p.assignments.push(a) {
+                panic!("affectation générée invalide : {e}");
+            }
+            next += 1;
+        }
+    }
+    p
+}
+
 /// Projet hostile (relecture finale J5, adversaire F2) : 10 calendriers de
 /// tâche et 100 calendriers de ressource dérivés du Standard, chacun chômé
 /// un jour sur deux sur tout le domaine (environ 60 000 segments compilés)

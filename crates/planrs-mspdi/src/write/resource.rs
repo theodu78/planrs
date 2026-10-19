@@ -42,6 +42,25 @@ pub(crate) fn hourly_rate_text(rate: Rate, factors: &ConversionFactors) -> Strin
         .map_or_else(|| "0".to_owned(), format_decimal)
 }
 
+/// Écrit les ressources du projet, dans l'ordre de l'arène.
+pub(crate) fn write_all(
+    em: &mut Emitter,
+    p: &planrs_core::Project,
+    values: Option<&Values>,
+    profile: OrderProfile,
+) {
+    for (position, r) in p.resources.iter().enumerate() {
+        write(
+            em,
+            r,
+            (&p.resources, position),
+            &p.options.factors,
+            values,
+            profile,
+        );
+    }
+}
+
 /// Écrit une ressource ; `position` : rang dans `resources` (`ID` :
 /// [`planrs_core::resource_id`]) ;
 /// `values` : travail et surutilisation à écrire (R-198, R-122).

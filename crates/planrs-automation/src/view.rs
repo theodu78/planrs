@@ -520,7 +520,6 @@ pub fn material_quantity(w: Work) -> Units {
     let q = i128::from(w.minutes().get())
         .checked_mul(10_000)
         .and_then(|n| round_div(n, 60))
-        .and_then(|n| i64::try_from(n).ok())
         .unwrap_or(i64::MAX)
         .clamp(Units::MIN, Units::MAX);
     Units::new(q).unwrap_or(Units::ZERO)

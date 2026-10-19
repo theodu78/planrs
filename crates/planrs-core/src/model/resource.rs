@@ -119,6 +119,11 @@ pub fn resource_id(resources: &crate::arena::Arena<ResourceUid, Resource>, pos: 
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
+    )]
+
     use super::{Resource, resource_id};
     use crate::arena::Arena;
     use crate::ids::ResourceUid;

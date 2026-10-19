@@ -219,7 +219,8 @@ fn r122_start_slack_on_base_of_derived_project_calendar() {
     // de ressource, comme A4) d'une base lun-ven 09:00-13:00, 15:00-19:00 ;
     // `StartSlack`/`FinishSlack` mesurés sur la base, comme la marge du
     // moteur. A 1 j, C 3 j : TF(A) = 2 j = 960 → `StartSlack` 9 600.
-    use crate::r113_derived_project_calendar::net;
+    use crate::r113_derived_project_calendar::{DERIVED, net};
+    use crate::r171_assignment_effective_calendar::{assign, resource};
     let proj = net().task("A", 480).task("C", 1_440).build();
     let sched = schedule(&proj);
     let (computed, diags) = choose_computed(&proj, &sched, None);
@@ -232,12 +233,14 @@ fn r122_start_slack_on_base_of_derived_project_calendar() {
         a.contains("<StartSlack>9600</StartSlack><FinishSlack>9600</FinishSlack>"),
         "{a}"
     );
-    // A 4 h, C 1 j : ES lun 08:00, EF 12:00, LS 13:00, LF 17:00 (placement
-    // sur le dérivé). Sur la base : début 240 (09:00-13:00), fin 180
-    // (12:00-13:00, 15:00-17:00), TF = 180. Sur le dérivé, l'écrivain aurait trouvé
-    // 240/240, dont le minimum ne redonne pas la marge : valeurs omises
-    // avant l'amendement.
-    let proj = net().task("A", 240).task("C", 480).build();
+    // A 4 h, C 1 j, affectées à une ressource du calendrier dérivé (J5 :
+    // seule une ressource place sur le dérivé, R-171, R-175) : ES lun 08:00,
+    // EF 12:00, LS 13:00, LF 17:00 (placement sur le dérivé). Sur la base :
+    // début 240 (09:00-13:00), fin 180 (12:00-13:00, 15:00-17:00), TF = 180.
+    // Sur le dérivé, l'écrivain aurait trouvé 240/240, dont le minimum ne
+    // redonne pas la marge : valeurs omises avant l'amendement.
+    let assigned = resource(net().task("A", 240).task("C", 480), 1, Some(DERIVED));
+    let proj = assign(assign(assigned, 1, "A", 1, 240), 2, "C", 1, 480).build();
     let sched = schedule(&proj);
     assert_eq!(
         sched.scheduled(TaskUid::new(1)).unwrap().total_slack,

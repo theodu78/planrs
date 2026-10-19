@@ -350,7 +350,7 @@ impl Calc<'_, '_> {
                 let e = self.state(v).and_then(|s| s.early).ok_or(missing)?;
                 let scale = self
                     .net
-                    .scale(self.net.measure(node.place))
+                    .scale(node.measure)
                     .ok_or(Fail::Internal("échelle hors bornes"))?;
                 Ok(scale.between(e.start, e.finish)?)
             }
@@ -449,16 +449,26 @@ fn run(project: &Project, limits: Limits, strategy: Strategy) -> Schedule {
     };
     // R-113 : le calendrier du projet est un calendrier de base. S'il en
     // désigne un dérivé (calendrier de ressource), sa base mesure durées des
-    // récapitulatives, marges et décalages ; le calendrier désigné place les
-    // tâches sans calendrier propre (substitut des calendriers de ressource,
-    // J5).
-    let (project_cal, designated) = match (&fallback, derived_base(project, &set)) {
-        (None, Some(base)) => (base, Some(project_cal)),
-        _ => (project_cal, None),
+    // récapitulatives, marges et décalages, et place les tâches sans
+    // affectation de travail ni calendrier propre (R-175) ; le calendrier
+    // désigné ne place que les tâches affectées à ses ressources (R-171).
+    let project_cal = match (&fallback, derived_base(project, &set)) {
+        (None, Some(base)) => base,
+        _ => project_cal,
     };
-    let sc = network::scales(project, &set, project_cal, designated, &mut diags);
+    let sc = network::scales(project, &set, project_cal, &mut diags);
+    // J5 : affectations résolues (calendriers effectifs, R-171 ; `d_a`,
+    // R-170), avant le réseau qui les place (R-173).
+    let resolved = placement::resolve(project, &set, project_cal, &mut diags);
     // Étapes 1 à 5.
-    let Some(mut net) = network::build(project, sc, mode, limits.expanded_arcs, &mut diags) else {
+    let Some(mut net) = network::build(
+        project,
+        sc,
+        (&resolved, &set),
+        mode,
+        limits.expanded_arcs,
+        &mut diags,
+    ) else {
         return internal_failure(project, start, diags, "construction du réseau");
     };
     let Some(order) = order::order(&mut net, &mut diags) else {

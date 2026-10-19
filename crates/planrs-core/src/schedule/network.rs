@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 use super::constraint::{ConstraintRule, Mode, NodeConstraint, Side, anchor, derive};
+use super::placement::{Parts, Placer, Resolved};
 use crate::calendar::{CalendarSet, CompiledCalendar, Span, TimeScale};
 use crate::diagnostic::{Diagnostic, Diagnostics};
 use crate::duration::{LagValue, Minutes, TimeBasis};
@@ -31,9 +32,10 @@ pub(super) type NodeIx = u32;
 /// Indice de l'échelle « temps écoulé » dans [`Network::scales`].
 pub(super) const ELAPSED: u32 = 0;
 /// Indice de l'échelle du calendrier du projet dans [`Network::scales`] :
-/// toujours un calendrier de base (R-113), échelle de mesure des durées des
-/// récapitulatives, des marges et des décalages des tâches sans calendrier
-/// propre.
+/// toujours un calendrier de base (R-113), échelle de placement des tâches
+/// sans affectation de travail ni calendrier propre (R-175) et de mesure des
+/// durées des récapitulatives, des marges et des décalages des tâches sans
+/// calendrier propre.
 pub(super) const PROJECT: u32 = 1;
 
 /// Échec du calcul d'un nœud : conversion impossible (code stable de
@@ -135,9 +137,16 @@ pub(super) struct Node {
     pub uid: TaskUid,
     /// Tâche inactive (R-062) : placée pour l'affichage, sans influence.
     pub inactive: bool,
-    /// Feuille : échelle de placement `P(t)` (R-030, R-067) ; porte et
-    /// agrégat : calendrier de la récapitulative.
+    /// Feuille : échelle de placement `P(t)` (R-030, R-067 ; feuille
+    /// affectée : échelle de son unique affectation, ou union des échelles
+    /// de ses affectations, R-173) ; porte et agrégat : calendrier de la
+    /// récapitulative.
     pub place: u32,
+    /// Échelle de mesure `M` des marges (R-048, R-049), de la durée d'une
+    /// récapitulative (R-054) et de l'épingle (R-092) : le calendrier du
+    /// projet (de base) pour une tâche sans calendrier propre, R-113 ; une
+    /// feuille affectée se mesure comme si elle ne l'était pas (R-174).
+    pub measure: u32,
     /// Feuille : durée de la tâche ; feuille manuelle : durée utilisée
     /// (R-063) ; agrégat d'une récapitulative manuelle datée : durée
     /// utilisée (R-064) ; autre agrégat, porte : 0.
@@ -204,9 +213,6 @@ pub(super) struct Network<'a> {
     /// R-113), `[2]` calendrier dérivé désigné par le projet s'il y en a un,
     /// puis les calendriers de tâche utilisés, dans l'ordre des UID.
     pub scales: Vec<TimeScale<'a>>,
-    /// Échelle de placement d'une tâche sans calendrier propre : `PROJECT`,
-    /// ou le calendrier dérivé désigné par le projet (R-113).
-    pub default_place: u32,
     /// Classification, par position.
     pub tasks: Vec<TaskInfo>,
     /// Nœuds canoniques.
@@ -222,6 +228,8 @@ pub(super) struct Network<'a> {
     pub out_idx: Vec<u32>,
     /// Arcs coupés pour rompre un cycle (R-065).
     pub cut: Vec<bool>,
+    /// Parts des feuilles affectées (R-173) et affectations à ranger.
+    pub parts: Parts,
 }
 
 /// Indice `u32` d'une position (`None` au-delà de `u32::MAX`).
@@ -253,13 +261,6 @@ impl<'a> Network<'a> {
     /// Échelle `i`.
     pub fn scale(&self, i: u32) -> Option<&TimeScale<'a>> {
         self.scales.get(pos(i)?)
-    }
-
-    /// Échelle de mesure `M` d'une échelle de placement (R-048, R-049,
-    /// R-054, R-113) : le calendrier du projet (de base) pour le calendrier
-    /// dérivé qu'il désigne ; l'échelle elle-même sinon.
-    pub fn measure(&self, place: u32) -> u32 {
-        measure_of(self.default_place, place)
     }
 
     /// Classification de la tâche en position `p`.
@@ -303,38 +304,25 @@ pub(super) struct Scales<'a> {
     pub table: Vec<TimeScale<'a>>,
     /// Échelle ouvrée de chaque tâche, par position.
     pub task_cal: Vec<u32>,
-    /// Voir [`Network::default_place`].
-    pub default_place: u32,
-}
-
-/// Échelle de mesure d'une échelle de placement (voir [`Network::measure`]).
-fn measure_of(default_place: u32, place: u32) -> u32 {
-    if place == default_place { PROJECT } else { place }
 }
 
 /// Table des échelles : temps écoulé, calendrier du projet (déjà résolu,
-/// replis compris ; de base, R-113), le calendrier dérivé désigné par le
-/// projet (`designated`, R-113) s'il y en a un, puis un calendrier compilé
-/// par UID de tâche utilisé. Une tâche sans calendrier propre est placée sur
-/// le calendrier désigné s'il existe, sinon sur celui du projet ; un
-/// calendrier de tâche inutilisable (inconnu, en échec, sans temps ouvré) est
-/// remplacé de même, avec `task.calendar_fallback`.
+/// replis compris ; de base, R-113 : la base d'un calendrier du projet
+/// dérivé), puis un calendrier compilé par UID de tâche utilisé. Une tâche
+/// sans calendrier propre est placée et mesurée sur le calendrier du projet
+/// (R-175 : le calendrier dérivé désigné ne place plus rien ; ses ressources
+/// placent les tâches qui leur sont affectées, R-171) ; un calendrier de
+/// tâche inutilisable (inconnu, en échec, sans temps ouvré) est remplacé de
+/// même, avec `task.calendar_fallback`. Les calendriers effectifs des
+/// affectations s'ajoutent à la construction du réseau (`placement`).
 pub(super) fn scales<'a>(
     project: &Project,
     set: &'a CalendarSet,
     project_cal: &'a CompiledCalendar,
-    designated: Option<&'a CompiledCalendar>,
     diags: &mut Diagnostics,
 ) -> Scales<'a> {
     let mut scales = vec![TimeScale::Elapsed, TimeScale::Working(project_cal)];
-    let default_place = match designated {
-        Some(c) => {
-            let i = ix(scales.len()).unwrap_or(PROJECT);
-            scales.push(TimeScale::Working(c));
-            i
-        }
-        None => PROJECT,
-    };
+    let default_place = PROJECT;
     let mut index: BTreeMap<CalendarUid, Option<u32>> = BTreeMap::new();
     let mut task_cal = Vec::with_capacity(project.tasks.len());
     for task in &project.tasks {
@@ -365,7 +353,6 @@ pub(super) fn scales<'a>(
     Scales {
         table: scales,
         task_cal,
-        default_place,
     }
 }
 
@@ -515,17 +502,21 @@ pub(super) struct BuildCtx {
     pub honor: bool,
 }
 
-/// Contrainte d'une feuille automatique active de durée `d` sur son échelle
-/// de placement : règle dérivée (R-099) et ancrage R-090. `None` si la
-/// contrainte est sans effet (ASAP depuis le début).
-fn leaf_constraint(task: &Task, scale: TimeScale<'_>, d: Minutes, ctx: BuildCtx) -> Option<NodeConstraint> {
+/// Contrainte d'une feuille automatique active, placée par `placer` :
+/// règle dérivée (R-099) et ancrage R-090 (R-174 pour une feuille
+/// affectée). `None` si la contrainte est sans effet (ASAP depuis le début).
+fn leaf_constraint(
+    task: &Task,
+    placer: Result<Placer<'_, '_>, Fail>,
+    ctx: BuildCtx,
+) -> Option<NodeConstraint> {
     let kind = task.constraint.kind();
     let rule = derive(kind, ctx.mode, ctx.honor);
     if rule == ConstraintRule::None {
         return None;
     }
     let date = task.constraint.date();
-    let anchor = date.map(|date| anchor(scale, kind, date, d).map_err(Fail::from));
+    let anchor = date.map(|date| placer.and_then(|p| p.anchor(kind, date)));
     Some(NodeConstraint {
         kind,
         rule,
@@ -541,14 +532,23 @@ fn leaf_node(
     task: &Task,
     p: usize,
     info: &TaskInfo,
-    scales: &[TimeScale<'_>],
+    (scales, parts): (&[TimeScale<'_>], &Parts),
     ctx: BuildCtx,
     diags: &mut Diagnostics,
 ) -> Option<Node> {
-    let place = place_of(task, info.cal);
+    // R-173 : feuille affectée, placée par ses affectations ; mesurée comme
+    // si elle ne l'était pas (R-174).
+    let (place, measure) = if let Some(place) = parts.place(p) {
+        (place, info.cal)
+    } else {
+        let place = place_of(task, info.cal);
+        (place, place)
+    };
     let scale = *scales.get(pos(place)?)?;
     let (fixed, duration) = if info.inactive() {
         (None, task.duration.minutes())
+    } else if let Some(d) = parts.duration(p) {
+        (None, d)
     } else {
         manual_span(task, scale, diags)
     };
@@ -560,7 +560,11 @@ fn leaf_node(
         manual_ignored(task, ctx, diags);
         None
     } else {
-        leaf_constraint(task, scale, duration, ctx)
+        let placer = match parts.failure(p) {
+            Some(code) => Err(Fail::Conversion(code)),
+            None => Placer::of(scales, parts.of(p), place, duration),
+        };
+        leaf_constraint(task, placer, ctx)
     };
     let deadline = task.deadline.filter(|_| !info.inactive());
     Some(Node {
@@ -569,6 +573,7 @@ fn leaf_node(
         uid: info.uid,
         inactive: info.inactive(),
         place,
+        measure,
         duration,
         fixed,
         constraint,
@@ -675,7 +680,7 @@ fn manual_ignored(task: &Task, ctx: BuildCtx, diags: &mut Diagnostics) {
 fn number_nodes(
     project: &Project,
     tasks: &mut [TaskInfo],
-    scales: &[TimeScale<'_>],
+    (scales, parts): (&[TimeScale<'_>], &Parts),
     ctx: BuildCtx,
     diags: &mut Diagnostics,
 ) -> Option<Vec<Node>> {
@@ -693,6 +698,7 @@ fn number_nodes(
             uid: info.uid,
             inactive: info.inactive(),
             place: info.cal,
+            measure: info.cal,
             duration: o.duration,
             fixed: o.fixed,
             constraint: o.constraint,
@@ -742,6 +748,7 @@ fn number_nodes(
                 uid: info.uid,
                 inactive: info.inactive(),
                 place: info.cal,
+                measure: info.cal,
                 duration: Minutes::ZERO,
                 fixed: None,
                 constraint: gate,
@@ -758,7 +765,7 @@ fn number_nodes(
                 deadline,
             });
         } else {
-            nodes.push(leaf_node(task, p, info, scales, ctx, diags)?);
+            nodes.push(leaf_node(task, p, info, (scales, parts), ctx, diags)?);
             info.entry = Some(v);
             info.exit = Some(v);
         }
@@ -787,8 +794,6 @@ pub const DEFAULT_EXPANDED_ARC_BUDGET: usize = 4_000_000;
 struct ArcBuilder<'p> {
     project: &'p Project,
     mode: Mode,
-    /// Voir [`Network::default_place`].
-    default_place: u32,
     arcs: Vec<Arc>,
     /// Budget des arcs dépliés (R-058), voir [`DEFAULT_EXPANDED_ARC_BUDGET`].
     expansion_budget: usize,
@@ -921,7 +926,7 @@ impl ArcBuilder<'_> {
                     TimeBasis::Elapsed => ELAPSED,
                     // R-041 : calendrier de tâche du successeur, sinon le
                     // calendrier du projet (de base, R-113).
-                    TimeBasis::Working => measure_of(self.default_place, succ.cal),
+                    TimeBasis::Working => succ.cal,
                 };
                 let arc = |to: NodeIx, to_inactive: bool| Arc {
                     from,
@@ -1101,7 +1106,8 @@ fn csr(node_count: usize, mut arcs: Vec<Arc>) -> Option<Csr> {
 /// attendu) ; l'appelant le signale.
 pub(super) fn build<'a>(
     project: &Project,
-    sc: Scales<'a>,
+    mut sc: Scales<'a>,
+    (resolved, set): (&'a Resolved, &'a CalendarSet),
     mode: Mode,
     expanded_arc_budget: usize,
     diags: &mut Diagnostics,
@@ -1111,11 +1117,11 @@ pub(super) fn build<'a>(
         honor: project.options.honor_constraints,
     };
     let mut tasks = classify(project, &sc.task_cal, diags)?;
-    let nodes = number_nodes(project, &mut tasks, &sc.table, ctx, diags)?;
+    let parts = super::placement::attach(project, resolved, set, &mut sc.table, &tasks, diags)?;
+    let nodes = number_nodes(project, &mut tasks, (&sc.table, &parts), ctx, diags)?;
     let mut builder = ArcBuilder {
         project,
         mode,
-        default_place: sc.default_place,
         arcs: Vec::new(),
         expansion_budget: expanded_arc_budget,
         expansion_left: expanded_arc_budget,
@@ -1128,7 +1134,6 @@ pub(super) fn build<'a>(
     let c = csr(nodes.len(), builder.arcs)?;
     Some(Network {
         scales: sc.table,
-        default_place: sc.default_place,
         tasks,
         nodes,
         arcs: c.arcs,
@@ -1136,5 +1141,6 @@ pub(super) fn build<'a>(
         out_off: c.out_off,
         out_idx: c.out_idx,
         cut: vec![false; arc_count],
+        parts,
     })
 }

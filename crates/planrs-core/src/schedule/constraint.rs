@@ -180,7 +180,7 @@ impl Calc<'_, '_> {
             let Some(node) = self.net.node(v) else { continue };
             // Marge mesurée comme R-048 : échelle de mesure (calendrier de
             // base du projet pour une tâche sans calendrier propre, R-113).
-            let measure = self.net.measure(node.place);
+            let measure = node.measure;
             let (Some(c), Some(scale)) = (node.constraint, self.net.scale(measure).copied()) else {
                 continue;
             };

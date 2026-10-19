@@ -116,7 +116,11 @@ fn menu_item(
 }
 
 /// Menu Édition : Annuler, Rétablir, actifs seulement s'il y a un lot à
-/// annuler ou à rétablir ; raccourci de [`crate::keymap::KEYMAP`] affiché.
+/// annuler ou à rétablir ; puis les six commandes de structure du menu
+/// contextuel (grisées sans document, et sans sélection sauf « Insérer une
+/// tâche ») ; raccourcis de [`crate::keymap::KEYMAP`] affichés. Rend la
+/// structure découvrable sans clic droit ni touche Inser (relecture finale
+/// J4, F5).
 fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let texts = fc.texts;
     let history = fc.doc.map(|doc| doc.session.history());
@@ -133,6 +137,19 @@ fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
         }
         if ui.add_enabled(enabled, button).clicked() {
             fc.actions.push(action);
+        }
+    }
+    ui.separator();
+    let has_doc = fc.doc.is_some();
+    let has_selection = fc.selection.is_some();
+    for (op, label, id, needs_selection) in super::main_view::CONTEXT_ENTRIES {
+        let mut button = egui::Button::new(texts.get(label));
+        if let Some(shortcut) = shortcut_for(Binding::Command(id)) {
+            button = button.shortcut_text(shortcut_text(ui.ctx(), shortcut));
+        }
+        let enabled = has_doc && (has_selection || !needs_selection);
+        if ui.add_enabled(enabled, button).clicked() {
+            fc.actions.push(Action::Structure(op));
         }
     }
 }
@@ -220,7 +237,8 @@ fn language_choices(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     }
 }
 
-/// Écran d'accueil (aucun document ouvert) : titre, boutons d'ouverture,
+/// Écran d'accueil (aucun document ouvert) : titre, boutons d'ouverture et
+/// de création,
 /// choix de la langue et du thème.
 pub fn welcome(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let texts = fc.texts;
@@ -247,6 +265,14 @@ pub fn welcome(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
             .clicked()
         {
             fc.actions.push(Action::OpenDialog);
+        }
+        // « Nouveau projet » : sur le web, Ctrl+N appartient au navigateur
+        // (relecture finale J4, F5).
+        if ui
+            .add(egui::Button::new(texts.get(TextId::WelcomeNewProject)).min_size(big))
+            .clicked()
+        {
+            fc.actions.push(Action::NewProject);
         }
         if cfg!(target_arch = "wasm32") {
             ui.label(texts.get(TextId::WelcomeWebNote));

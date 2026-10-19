@@ -241,7 +241,7 @@ fn check_keymap_entry(i: usize) {
         Binding::Ui(UiBinding::Quit) => crate::files::check_quit_shortcut(i),
         // Structure (lot L14) : vérifiées par `structure.rs`.
         Binding::Command(id) if crate::structure::COMMANDS.contains(&id) => {
-            crate::structure::check_keymap_entry(id);
+            crate::structure::check_keymap_entry(id, KEYMAP[i].1);
         }
         other => panic!("entrée {i} sans vérification : {other:?}"),
     }
@@ -279,6 +279,7 @@ keymap_entry_tests! {
     ui_keymap_each_shortcut_dispatches_11 => 11,
     ui_keymap_each_shortcut_dispatches_12 => 12,
     ui_keymap_each_shortcut_dispatches_13 => 13,
+    ui_keymap_each_shortcut_dispatches_14 => 14,
 }
 
 /// Lot refusé : UID absent.

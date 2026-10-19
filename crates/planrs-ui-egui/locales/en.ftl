@@ -10,6 +10,7 @@ welcome-title = Welcome to { $product }
 welcome-subtitle = Free MS Project clone — read-only for now
 welcome-open-demo = Open the sample: house construction
 welcome-open-file = Open an MSPDI file (.xml)…
+welcome-new-project = New project
 welcome-web-note = The file stays in your browser; nothing is uploaded.
 welcome-language = Language
 welcome-theme = Theme

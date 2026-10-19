@@ -124,6 +124,7 @@ text_ids! {
     WelcomeSubtitle => "welcome-subtitle",
     WelcomeOpenDemo => "welcome-open-demo",
     WelcomeOpenFile => "welcome-open-file",
+    WelcomeNewProject => "welcome-new-project",
     WelcomeWebNote => "welcome-web-note",
     WelcomeLanguage => "welcome-language",
     WelcomeTheme => "welcome-theme",

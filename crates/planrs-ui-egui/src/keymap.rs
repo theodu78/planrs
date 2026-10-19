@@ -120,6 +120,13 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
         Shortcut::new(Modifiers::NONE, Key::Delete),
         Binding::Command("task.delete"),
     ),
+    // Touche « delete » d'un clavier Mac (Retour arrière) : pas de Suppr
+    // sans fn. Après Suppr, qui reste le raccourci affiché.
+    (
+        KeyContext::Document,
+        Shortcut::new(Modifiers::NONE, Key::Backspace),
+        Binding::Command("task.delete"),
+    ),
     (
         KeyContext::Document,
         Shortcut::new(ALT_SHIFT, Key::ArrowRight),

@@ -264,9 +264,10 @@ fn secondary_click(ui: &egui::Ui, zone: Rect) -> Option<Pos2> {
     (zone.contains(pos) && ui.clip_rect().contains(pos) && on_layer).then_some(pos)
 }
 
-/// Entrées du menu contextuel : commande, libellé, liaison de [`keymap::KEYMAP`]
-/// dont le raccourci est affiché, et besoin d'une sélection.
-const CONTEXT_ENTRIES: [(StructureOp, TextId, &str, bool); 6] = [
+/// Entrées du menu contextuel (et du menu Édition) : commande, libellé,
+/// liaison de [`keymap::KEYMAP`] dont le raccourci est affiché, et besoin
+/// d'une sélection.
+pub(crate) const CONTEXT_ENTRIES: [(StructureOp, TextId, &str, bool); 6] = [
     (
         StructureOp::InsertBefore,
         TextId::StructureInsert,

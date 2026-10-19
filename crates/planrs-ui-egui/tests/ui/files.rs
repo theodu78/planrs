@@ -151,10 +151,14 @@ fn file_menu(harness: &mut Harness<'static, App>, item: TextId) {
     harness.run();
     let label = fr(item);
     let save_as = fr(TextId::MenuSaveAs);
+    // « Nouveau projet » de l'accueil commence aussi par « Nouveau ».
+    let welcome_new = fr(TextId::WelcomeNewProject);
     harness
         .get_by(|node| {
             node.label().is_some_and(|text| {
-                text.starts_with(&label) && (item == TextId::MenuSaveAs || !text.starts_with(&save_as))
+                text.starts_with(&label)
+                    && (item == TextId::MenuSaveAs || !text.starts_with(&save_as))
+                    && text != welcome_new
             })
         })
         .click();

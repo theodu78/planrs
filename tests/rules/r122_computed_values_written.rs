@@ -2,8 +2,9 @@
 //! `choose_computed`).
 
 use planrs_core::{
-    Assignment, AssignmentUid, CalendarUid, Duration, DurationUnit, ExtraEntry, Extras, Link, Minutes,
-    Percent, Resource, ResourceUid, ScheduleAnchor, SchedulingMode, Task, TaskUid, TimeBasis, schedule,
+    Assignment, AssignmentUid, CalendarUid, Duration, DurationUnit, ExtraEntry, Extras, LevelingDelay, Link,
+    Minutes, Percent, Resource, ResourceUid, ScheduleAnchor, SchedulingMode, Task, TaskUid, TimeBasis,
+    schedule,
 };
 use planrs_mspdi::write::{
     Computed, ScheduleGap, WriteCode, WriteOptions, choose_computed, schedule_gaps, write,
@@ -157,32 +158,45 @@ fn r122_policy_with_progress() {
 }
 
 #[test]
-fn r122_gaps_resource_calendars_and_leveling_delay() {
+fn r122_gaps_only_progress() {
+    // R-122 amendée (J5, R-199) : une ressource de travail dotée d'un
+    // calendrier sur une feuille automatique et un retard de nivellement
+    // (modèle ou `Extras` hérité) ne sont plus des manques ; seul
+    // l'avancement en reste un.
     let mut proj = new_project("2026-10-19T08:00");
     proj.tasks.push(task(&proj, 1, 2)).unwrap();
     let mut r = Resource::new(ResourceUid::new(1), "R".to_owned());
     r.calendar = Some(CalendarUid::new(1));
     proj.resources.push(r).unwrap();
-    proj.assignments
-        .push(Assignment::new(
-            AssignmentUid::new(1),
-            TaskUid::new(1),
-            Some(ResourceUid::new(1)),
-        ))
-        .unwrap();
-    assert_eq!(schedule_gaps(&proj), [ScheduleGap::ResourceCalendars]);
-    // Ignorer le calendrier des ressources : plus de manque.
-    proj.tasks
-        .get_mut(TaskUid::new(1))
-        .unwrap()
-        .ignore_resource_calendar = true;
+    let mut a = Assignment::new(AssignmentUid::new(1), TaskUid::new(1), Some(ResourceUid::new(1)));
+    a.leveling_delay = Some(LevelingDelay {
+        minutes: Minutes::new(480),
+        unit: DurationUnit::Day,
+        elapsed: false,
+    });
+    proj.assignments.push(a).unwrap();
+    {
+        let t = proj.tasks.get_mut(TaskUid::new(1)).unwrap();
+        t.leveling_delay = Some(LevelingDelay {
+            minutes: Minutes::new(4_320),
+            unit: DurationUnit::Day,
+            elapsed: true,
+        });
+        t.extras = Extras(vec![ExtraEntry {
+            origin: "mspdi".to_owned(),
+            key: "LevelingDelay".to_owned(),
+            payload: "<LevelingDelay>4800</LevelingDelay>".to_owned(),
+        }]);
+    }
     assert_eq!(schedule_gaps(&proj), []);
-    proj.tasks.get_mut(TaskUid::new(1)).unwrap().extras = Extras(vec![ExtraEntry {
-        origin: "mspdi".to_owned(),
-        key: "LevelingDelay".to_owned(),
-        payload: "<LevelingDelay>4800</LevelingDelay>".to_owned(),
-    }]);
-    assert_eq!(schedule_gaps(&proj), [ScheduleGap::LevelingDelay]);
+    let sched = schedule(&proj);
+    let (computed, diags) = choose_computed(&proj, &sched, None);
+    assert!(matches!(computed, Computed::Schedule(_)));
+    assert_eq!(diags, Vec::new());
+    // Avancement : seul manque restant.
+    proj.tasks.get_mut(TaskUid::new(1)).unwrap().progress.actual_start = Some(moment("2026-10-19T08:00"));
+    assert_eq!(schedule_gaps(&proj), [ScheduleGap::Progress]);
+    assert_eq!(ScheduleGap::Progress.code(), "progress");
 }
 
 #[test]

@@ -195,6 +195,7 @@ mod r195_resource_commands;
 mod r196_assignment_commands;
 mod r197_task_update_extended;
 mod r198_mspdi_resource_read;
+mod r199_mspdi_resource_write;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

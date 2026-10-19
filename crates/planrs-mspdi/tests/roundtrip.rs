@@ -2,7 +2,10 @@
 //!
 //! Pour tout projet sans erreur de `Project::validate` :
 //! `read(write(p)).project == normalize(p)` dans les profils observé et
-//! strict ; `normalize` est idempotente ; `write` est déterministe.
+//! strict ; avec les valeurs du moteur, `normalize(schedule_image(p, s))`
+//! (R-199 : travail des récapitulatives, durée des feuilles affectées,
+//! répartitions périmées) ; `normalize` est idempotente ; `write` est
+//! déterministe.
 //! 256 cas, 2 048 sous `PROPTEST_CASES` (CI).
 
 #![allow(
@@ -19,7 +22,7 @@
 mod generate;
 
 use planrs_core::{Severity, schedule};
-use planrs_mspdi::write::{Computed, OrderProfile, WriteOptions, write};
+use planrs_mspdi::write::{Computed, OrderProfile, WriteOptions, schedule_image, write};
 use planrs_mspdi::{ReadOptions, normalize, read};
 use proptest::prelude::*;
 
@@ -72,7 +75,11 @@ fn check(seed: u64) {
             "{seed} : écriture non déterministe"
         );
         let back = read(&out.xml, &opts()).unwrap_or_else(|e| panic!("{seed} {profile:?} : {e}"));
-        let expected = normalize(&p, &options);
+        let image = match computed {
+            Computed::Schedule(s) => schedule_image(&p, s),
+            _ => p.clone(),
+        };
+        let expected = normalize(&image, &options);
         same(
             &back.project,
             &expected,

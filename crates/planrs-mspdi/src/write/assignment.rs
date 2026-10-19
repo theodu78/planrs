@@ -1,11 +1,11 @@
-//! Affectations à l'écriture (R-125).
+//! Affectations à l'écriture (R-125, R-199).
 
 use planrs_core::{Assignment, Subject};
 
 use super::computed::Values;
 use super::emit::Emitter;
 use super::resource::units_text;
-use super::{OrderProfile, baseline, entity, leveling, plan, unscoped};
+use super::{OrderProfile, WriteCode, baseline, entity, leveling, plan, timephased, unscoped};
 use crate::codes;
 use crate::scalar::format_iso_duration;
 use crate::schema::Parent;
@@ -14,7 +14,8 @@ use crate::schema::Parent;
 const NO_RESOURCE: &str = "-65535";
 
 /// Écrit une affectation ; `values` : `Start`/`Finish` à écrire (R-198,
-/// R-122), absents sinon.
+/// R-199, R-122), absents sinon ; `TimephasedData` propres jetées si le
+/// placement du moteur a changé (R-199, `mspdi.write.timephased_dropped`).
 pub(crate) fn write(em: &mut Emitter, a: &Assignment, values: Option<&Values>, profile: OrderProfile) {
     let computed = values.and_then(|v| v.assignments.get(&a.uid()));
     em.subject = Some(Subject::Assignment(a.uid()));
@@ -22,6 +23,18 @@ pub(crate) fn write(em: &mut Emitter, a: &Assignment, values: Option<&Values>, p
     let planned = plan(em, "Assignment", Parent::Assignment, &a.extras, &numbers, profile);
     let mut top = unscoped(&planned);
     leveling::drop_legacy(&mut top, a.leveling_delay);
+    if computed.is_some_and(|v| v.drop_timephased) {
+        let before = top.len();
+        top.retain(|p| !timephased::is_scheduled_work_key(&p.key, p.payload));
+        let count = u32::try_from(before.saturating_sub(top.len())).unwrap_or(u32::MAX);
+        if count > 0 {
+            em.report(
+                WriteCode::TimephasedDropped { count },
+                "Assignment/TimephasedData",
+                None,
+            );
+        }
+    }
     entity(
         em,
         "Assignment",

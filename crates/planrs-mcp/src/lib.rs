@@ -10,7 +10,7 @@
 //! Transport stdio (tokio à fil unique), lignes d'entrée bornées
 //! (C-MCP-06), journal de rejeu `--journal` facultatif. Transport HTTP
 //! (« streamable HTTP ») derrière la feature `http` (lot L17). Détail :
-//! `docs/features/mcp.md` (L18) et ADR-0012.
+//! `docs/features/mcp.md` et ADR-0012.
 
 mod bounded;
 #[cfg(feature = "http")]

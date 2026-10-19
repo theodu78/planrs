@@ -100,3 +100,46 @@ impl Resource {
         self.uid
     }
 }
+
+/// ID (colonne « ID » de MS Project) de la ressource en position `pos` de
+/// `resources` : la ressource UID 0 des fichiers MS Project (cachée, O34) a
+/// l'ID 0 et n'est pas comptée ; les autres sont numérotées depuis 1 dans
+/// l'ordre de l'arène. Un projet sans UID 0 (créé par planrs) garde donc
+/// ID = position + 1, et un fichier relu garde les ID de MS Project.
+#[must_use]
+pub fn resource_id(resources: &crate::arena::Arena<ResourceUid, Resource>, pos: usize) -> u64 {
+    let hidden = ResourceUid::new(0);
+    let rank = u64::try_from(pos).unwrap_or(u64::MAX);
+    match resources.position(hidden) {
+        Some(h) if h == pos => 0,
+        Some(h) if h < pos => rank,
+        _ => rank.saturating_add(1),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Resource, resource_id};
+    use crate::arena::Arena;
+    use crate::ids::ResourceUid;
+
+    fn arena(uids: &[u32]) -> Arena<ResourceUid, Resource> {
+        let mut a = Arena::new();
+        for &u in uids {
+            a.push(Resource::new(ResourceUid::new(u), format!("R{u}")))
+                .unwrap();
+        }
+        a
+    }
+
+    #[test]
+    fn resource_id_skips_hidden_uid_0() {
+        // Fichier MS Project : UID 0 / ID 0, puis UID 1 / ID 1, UID 2 / ID 2.
+        let file = arena(&[0, 1, 2]);
+        let ids: Vec<u64> = (0..3).map(|p| resource_id(&file, p)).collect();
+        assert_eq!(ids, [0, 1, 2]);
+        // Projet planrs, sans UID 0 : position + 1.
+        let own = arena(&[1, 2]);
+        assert_eq!((resource_id(&own, 0), resource_id(&own, 1)), (1, 2));
+    }
+}

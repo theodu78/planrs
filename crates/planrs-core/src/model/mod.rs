@@ -32,7 +32,7 @@ pub use extras::{ExtraEntry, Extras};
 pub use leveling::LevelingDelay;
 pub use link::{Link, LinkType};
 pub use options::ProjectOptions;
-pub use resource::{Resource, ResourceKind};
+pub use resource::{Resource, ResourceKind, resource_id};
 pub use task::{
     Constraint, ConstraintKind, OutlineLevel, Priority, Progress, SchedulingMode, Task, TaskType,
 };

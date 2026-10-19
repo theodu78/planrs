@@ -214,3 +214,56 @@ fn resource_list_pagination_and_limits() {
         .unwrap_err();
     assert_eq!(err.code, codes::LIMIT_EXCEEDED);
 }
+
+#[test]
+fn resource_ids_follow_ms_project() {
+    // Fichier MS Project : ressource UID 0 cachée (ID 0, O34), puis UID 1 et
+    // 2 d'ID 1 et 2. Les vues rendent les ID de MS Project (et non
+    // position + 1, décalé d'un cran par l'UID 0), relus tels quels après
+    // l'écriture.
+    use planrs_core::{Resource, ResourceUid};
+    let mut p = planrs_core::Project::new(planrs_core::ProjectInit {
+        name: "P".to_owned(),
+        anchor: planrs_core::ScheduleAnchor::FromStart(now()),
+        current_date: now(),
+        calendar_names: planrs_core::BuiltinCalendarNames::default(),
+    });
+    for (uid, name) in [(0, ""), (1, "Maçon"), (2, "Électricien")] {
+        p.resources
+            .push(Resource::new(ResourceUid::new(uid), name.to_owned()))
+            .unwrap();
+    }
+    let xml = planrs_mspdi::write::write(
+        &p,
+        planrs_mspdi::write::Computed::Omit,
+        &planrs_mspdi::write::WriteOptions::default(),
+    )
+    .xml;
+    let text = String::from_utf8(xml).unwrap();
+    for (uid, id) in [(0, 0), (1, 1), (2, 2)] {
+        assert!(
+            text.contains(&format!("<UID>{uid}</UID>\n\t\t\t<ID>{id}</ID>"))
+                || text.contains(&format!("<UID>{uid}</UID><ID>{id}</ID>")),
+            "UID {uid} : ID {id} attendu"
+        );
+    }
+    let session = planrs_automation::Session::from_project(
+        p,
+        planrs_automation::DocOrigin {
+            name: "p.xml".to_owned(),
+            path: None,
+        },
+        now(),
+        Language::Fr,
+    );
+    let mut ws = Workspace::new(now(), Language::Fr);
+    ws.set_session(session);
+    let list = ws.call("resource.list", json!({})).unwrap();
+    let ids: Vec<(u64, u64)> = list["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["uid"].as_u64().unwrap(), r["id"].as_u64().unwrap()))
+        .collect();
+    assert_eq!(ids, [(1, 1), (2, 2)]);
+}

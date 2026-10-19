@@ -71,7 +71,7 @@ pub use model::{
     Assignment, AssignmentBaseline, Constraint, ConstraintKind, ExtraEntry, Extras, LevelingDelay, Link,
     LinkType, OutlineLevel, Priority, Progress, Project, ProjectInfo, ProjectInit, ProjectOptions, Resource,
     ResourceBaseline, ResourceKind, ScheduleAnchor, SchedulingMode, Task, TaskBaseline, TaskType,
-    WorkContour,
+    WorkContour, resource_id,
 };
 pub use quantity::{Money, Percent, Rate, RateUnit, SignedPercent, Units};
 pub use schedule::{

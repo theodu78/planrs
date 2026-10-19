@@ -695,10 +695,8 @@ impl<'a> ViewCtx<'a> {
     pub fn resource_at(&self, pos: usize, r: &Resource) -> ResourceView {
         let uid = r.uid();
         let load = self.schedule.resources.get(&uid);
-        let id = pos
-            .checked_add(1)
-            .and_then(|n| u32::try_from(n).ok())
-            .unwrap_or(u32::MAX);
+        // ID de MS Project : la ressource UID 0 cachée n'est pas comptée.
+        let id = u32::try_from(planrs_core::resource_id(&self.project.resources, pos)).unwrap_or(u32::MAX);
         let mut assignments = Vec::new();
         let mut total = 0usize;
         for a in self

@@ -165,6 +165,7 @@ mod r162_recorded_discarded;
 mod r163_schedule_diff;
 mod r164_history;
 mod r165_calendar_exceptions;
+mod r172_calendar_intersection_union;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

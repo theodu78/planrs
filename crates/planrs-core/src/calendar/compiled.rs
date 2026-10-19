@@ -16,12 +16,15 @@
 //! déterministe ; elle est recompilée à chaque recalcul.
 //!
 //! Coût d'une conversion, sans allocation : une dichotomie sur les segments,
-//! une sur au plus 7 jours, une sur au plus 5 plages.
+//! une sur au plus 7 jours, une sur les plages du jour (au plus 5 pour un
+//! calendrier stocké, davantage pour un calendrier combiné par
+//! [`CompiledCalendar::intersect`] ou [`CompiledCalendar::union`], R-172).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::arena::Arena;
 use crate::calendar::Direction;
+use crate::calendar::combine::{Op, combine};
 use crate::calendar::model::{Calendar, CalendarKind, DaySetting, TimeRange};
 use crate::calendar::recurrence::{DayClaims, expand_exception};
 use crate::calendar::resolve::{
@@ -37,13 +40,13 @@ use crate::time::{Day, Moment, TimeOfDay, Week, Weekday};
 /// Minutes par jour civil (R-005).
 const MINUTES_PER_DAY: i64 = 1_440;
 /// Nombre de jours du domaine (1984-01-01 à 2149-12-31).
-const DAY_COUNT: i32 = 60_631;
+pub(super) const DAY_COUNT: i32 = 60_631;
 
 /// Motif d'un jour : plages fusionnées (contiguës réunies), cumul avant
 /// chaque plage, total.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct DayPattern {
-    ranges: Vec<TimeRange>,
+pub(super) struct DayPattern {
+    pub(super) ranges: Vec<TimeRange>,
     cum: Vec<i64>,
     total: i64,
 }
@@ -65,6 +68,12 @@ impl DayPattern {
             .into_iter()
             .filter_map(|(a, b)| TimeRange::new(TimeOfDay::new(a).ok()?, TimeOfDay::new(b).ok()?).ok())
             .collect();
+        Self::from_ranges(ranges)
+    }
+
+    /// Motif de plages déjà triées, disjointes et non contiguës (forme
+    /// fusionnée) : cumuls et total.
+    pub(super) fn from_ranges(ranges: Vec<TimeRange>) -> Self {
         let mut cum = Vec::with_capacity(ranges.len());
         let mut total: i64 = 0;
         for r in &ranges {
@@ -103,8 +112,8 @@ impl DayPattern {
 /// Motif de semaine : motif de jour de chaque jour de semaine, cumul avant
 /// chaque jour (`prefix[k]` = minutes des jours `0..k`, dimanche = 0), total.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct WeekPattern {
-    days: Week<u32>,
+pub(super) struct WeekPattern {
+    pub(super) days: Week<u32>,
     prefix: [i64; 8],
     total: i64,
 }
@@ -135,8 +144,8 @@ impl WeekPattern {
 }
 
 /// Règle d'un segment.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SegmentRule {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum SegmentRule {
     /// Motif de semaine répété.
     Weekly(u32),
     /// Chaque jour identique (série de jours d'exception).
@@ -145,9 +154,9 @@ enum SegmentRule {
 
 /// Segment `[first_day, jour suivant le segment)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Segment {
-    first_day: i32,
-    rule: SegmentRule,
+pub(super) struct Segment {
+    pub(super) first_day: i32,
+    pub(super) rule: SegmentRule,
     /// W au début du segment.
     cum_start: i64,
     /// `Wp(first_day)` pour un segment `Weekly`, 0 sinon.
@@ -159,25 +168,25 @@ struct Segment {
 pub struct CompiledCalendar {
     uid: CalendarUid,
     /// Motifs de jour internés ; `day_patterns[0]` est le jour chômé.
-    day_patterns: Vec<DayPattern>,
+    pub(super) day_patterns: Vec<DayPattern>,
     /// Motifs de semaine internés.
-    week_patterns: Vec<WeekPattern>,
+    pub(super) week_patterns: Vec<WeekPattern>,
     /// Partition triée de `[0, 60 631)` ; `segments[0].first_day == 0`.
-    segments: Vec<Segment>,
+    pub(super) segments: Vec<Segment>,
     /// `W(Moment::MAX)`.
     total: i64,
 }
 
 /// Motifs en cours d'internement.
-struct Patterns {
-    days: Vec<DayPattern>,
+pub(super) struct Patterns {
+    pub(super) days: Vec<DayPattern>,
     day_index: BTreeMap<Vec<TimeRange>, u32>,
-    weeks: Vec<WeekPattern>,
+    pub(super) weeks: Vec<WeekPattern>,
     week_index: BTreeMap<[u32; 7], u32>,
 }
 
 impl Patterns {
-    fn new() -> Option<Self> {
+    pub(super) fn new() -> Option<Self> {
         let mut p = Self {
             days: Vec::new(),
             day_index: BTreeMap::new(),
@@ -190,7 +199,16 @@ impl Patterns {
     }
 
     fn day(&mut self, setting: &DaySetting) -> Option<u32> {
-        let pattern = DayPattern::new(setting);
+        self.intern_day(DayPattern::new(setting))
+    }
+
+    /// Motif de jour de plages déjà fusionnées (voir
+    /// [`DayPattern::from_ranges`]), interné.
+    pub(super) fn day_of_ranges(&mut self, ranges: Vec<TimeRange>) -> Option<u32> {
+        self.intern_day(DayPattern::from_ranges(ranges))
+    }
+
+    fn intern_day(&mut self, pattern: DayPattern) -> Option<u32> {
         if let Some(i) = self.day_index.get(&pattern.ranges) {
             return Some(*i);
         }
@@ -205,6 +223,11 @@ impl Patterns {
         for wd in Weekday::ALL {
             *days.get_mut(wd) = self.day(settings.get(wd))?;
         }
+        self.week_of_days(days)
+    }
+
+    /// Motif de semaine de motifs de jour déjà internés, interné.
+    pub(super) fn week_of_days(&mut self, days: Week<u32>) -> Option<u32> {
         let key = Weekday::ALL.map(|wd| *days.get(wd));
         if let Some(i) = self.week_index.get(&key) {
             return Some(*i);
@@ -351,7 +374,14 @@ impl CompiledCalendar {
             }
         }
 
-        // 5. Cumuls.
+        Self::assemble(uid, patterns, &raw)
+    }
+
+    /// Étape 5 de la compilation, partagée avec la combinaison (R-172) :
+    /// cumuls d'une partition `raw` de `[0, 60 631)` (premier jour et règle
+    /// de chaque segment, voisins distincts) ; `None` si un invariant est
+    /// violé.
+    pub(super) fn assemble(uid: CalendarUid, patterns: Patterns, raw: &[(i32, SegmentRule)]) -> Option<Self> {
         let mut segments = Vec::with_capacity(raw.len());
         let mut cum: i64 = 0;
         for (i, (first_day, rule)) in raw.iter().enumerate() {
@@ -406,40 +436,33 @@ impl CompiledCalendar {
         Minutes::new(self.total)
     }
 
-    /// Intersection : minutes ouvrées à la fois dans `self` et dans `other`
-    /// (calendrier effectif d'une affectation, R-171, R-172). Le résultat
-    /// porte l'UID de `self`.
-    ///
-    /// Squelette du contrat J5 (lot L0), rempli par le lot L1 : renvoie
-    /// toujours [`CalendarError::Inconsistent`].
+    /// R-172 : intersection, ouvrée à l'instant t si et seulement si `self`
+    /// et `other` le sont (calendrier effectif d'une affectation, R-171).
+    /// Le résultat porte l'UID de `self`. Coût linéaire en nombre de
+    /// segments des deux calendriers (module `combine`).
     ///
     /// # Errors
     ///
     /// [`CalendarError::TooManySegments`] si le résultat dépasse le plafond
-    /// de segments.
+    /// de segments ou de motifs ; [`CalendarError::Inconsistent`] si un
+    /// invariant interne est violé (jamais attendu).
     pub fn intersect(&self, other: &Self) -> Result<Self, CalendarError> {
-        let _ = other;
-        Err(self.inconsistent())
+        combine(self, other, Op::Intersect)
     }
 
-    /// Union : minutes ouvrées dans `self` ou dans `other` (mesure de la
-    /// durée d'une feuille affectée, R-172, R-173). Le résultat porte l'UID
-    /// de `self`.
-    ///
-    /// Squelette du contrat J5 (lot L0), rempli par le lot L1 : renvoie
-    /// toujours [`CalendarError::Inconsistent`].
+    /// R-172 : union, ouvrée à l'instant t si et seulement si `self` ou
+    /// `other` l'est (mesure de la durée d'une feuille affectée, R-173). Le
+    /// résultat porte l'UID de `self`.
     ///
     /// # Errors
     ///
-    /// [`CalendarError::TooManySegments`] si le résultat dépasse le plafond
-    /// de segments.
+    /// Comme [`CompiledCalendar::intersect`].
     pub fn union(&self, other: &Self) -> Result<Self, CalendarError> {
-        let _ = other;
-        Err(self.inconsistent())
+        combine(self, other, Op::Union)
     }
 
     /// Erreur d'invariant interne.
-    const fn inconsistent(&self) -> CalendarError {
+    pub(super) const fn inconsistent(&self) -> CalendarError {
         CalendarError::Inconsistent { calendar: self.uid }
     }
 

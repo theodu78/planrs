@@ -79,7 +79,7 @@ fn contract_compiles() {
     let mut ws = Workspace::new(now(), Language::En);
     assert!(ws.session().is_none());
     let err = ws.call("project.summary", serde_json::json!({})).unwrap_err();
-    assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE);
+    assert_eq!(err.code, codes::SESSION_NONE);
     let entry = Entry {
         v: 1,
         seq: 7,

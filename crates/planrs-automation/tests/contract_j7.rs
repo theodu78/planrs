@@ -167,8 +167,6 @@ fn contract_schemas_unchanged_until_l5() {
     assert!(props("project.set_info").get("calendar").is_none());
     assert!(props("resource.update").get("standard_rate").is_none());
     assert!(props("calendar.set_exception").get("name").is_none());
-    let usage_schema = serde_json::to_string(&(lookup("analysis.resource_usage").unwrap().schema)()).unwrap();
-    assert!(!usage_schema.contains("quarter"));
     let batch = serde_json::to_string(&(lookup("batch.apply").unwrap().schema)()).unwrap();
     for id in [
         "calendar.add",
@@ -190,7 +188,7 @@ fn contract_schemas_unchanged_until_l5() {
 
 /// `app.*` sans application : `control.not_attached` ; une entrée réservée :
 /// `command.not_yet_available` ; le trimestre de `resource_usage` est
-/// refusé jusqu'au lot L4.
+/// servi depuis le lot L4 (R-246, `views_j7.rs`).
 #[test]
 fn contract_workspace_refusals() {
     let mut w = Workspace::new(now(), Language::Fr);
@@ -201,11 +199,8 @@ fn contract_workspace_refusals() {
     }
     let err = w.call("calendar.add", json!({"name": "B"})).unwrap_err();
     assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE);
-    let err = w
-        .call("analysis.resource_usage", json!({"by": "quarter"}))
-        .unwrap_err();
-    assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE);
-    assert_eq!(err.field.as_deref(), Some("by"));
+    w.call("analysis.resource_usage", json!({"by": "quarter"}))
+        .unwrap();
     w.call("analysis.resource_usage", json!({"by": "week"})).unwrap();
     // Paramètres des entrées `app.*`.
     let p: UiActionParams =

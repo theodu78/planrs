@@ -126,6 +126,10 @@ pub struct UsageParams {
     /// Ressources (UID) ; vide : toutes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resources: Vec<u32>,
+    /// Ajoute une ligne par affectation et le total de chaque tâche
+    /// (J7, R-245 ; défaut : non).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub assignments: bool,
 }
 
 /// `analysis.explain_date` (J6, R-230 à R-233) : pourquoi une tâche

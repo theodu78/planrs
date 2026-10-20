@@ -631,9 +631,7 @@ pub enum GranularityJson {
     Week,
     /// Mois.
     Month,
-    /// Trimestre civil (J7, R-246). Contrat L0 : hors du schéma, refusé
-    /// `command.not_yet_available` jusqu'au lot L4.
-    #[schemars(skip)]
+    /// Trimestre civil (1er janvier, avril, juillet, octobre ; J7, R-246).
     Quarter,
 }
 

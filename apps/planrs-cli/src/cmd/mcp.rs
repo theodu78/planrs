@@ -1,14 +1,20 @@
 //! `planrs mcp [--journal F] [--open plan.xml] [--headless]
-//! [--http ADDR --root DOSSIER [--allow-remote] [--token-file F]]` :
+//! [--approval-timeout S] [--http ADDR --root DOSSIER [--allow-remote]
+//! [--token-file F]]` :
 //! serveur MCP sur l'entrée et la sortie standard (`planrs_mcp::serve_stdio`)
 //! ou en HTTP (`planrs_mcp::serve_http`, lot L17).
 //!
 //! Langue par défaut des textes : anglais (ADR-0012, arbitrage 6), sauf
 //! `--lang` explicite. En HTTP, `--root` est obligatoire (code 2 sinon) ;
 //! une adresse non locale exige `--allow-remote` et `--token-file`.
+//!
+//! Sans `--headless` (stdio), le serveur relaie les appels à l'application
+//! planrs qui tient le fichier (ADR-0015 D9) ; `--headless` coupe ce relais
+//! et garde le refus `file.open_in_app` d'un fichier tenu.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use clap::Args;
 use planrs_automation::text::Language;
@@ -26,9 +32,15 @@ pub struct McpArgs {
     /// Projet ouvert au démarrage.
     #[arg(long, value_name = "PLAN")]
     pub open: Option<PathBuf>,
-    /// Ignore la garde « fichier ouvert dans l'application » (ADR-0002).
+    /// Travaille seul : aucun relais vers l'application planrs ouverte ; un
+    /// fichier qu'elle tient reste refusé (ADR-0002).
     #[arg(long)]
     pub headless: bool,
+    /// Attente maximale, en secondes, de la validation d'une écriture
+    /// relayée à l'application (plus 10 s pour la réponse).
+    #[arg(long, value_name = "SECONDES", default_value_t = 120,
+          value_parser = clap::value_parser!(u64).range(1..=3600))]
+    pub approval_timeout: u64,
     /// Transport HTTP sur ADRESSE (`:8080` = `127.0.0.1:8080`), chemin `/mcp`.
     #[arg(long, value_name = "ADRESSE")]
     pub http: Option<String>,
@@ -50,7 +62,8 @@ pub fn run(ctx: &Ctx, args: McpArgs) -> ExitCode {
     let mut opts = ServeOptions::new(ctx.now, lang);
     opts.journal = args.journal;
     opts.open = args.open;
-    opts.ignore_app_guard = args.headless;
+    opts.headless = args.headless;
+    opts.approval_timeout = Duration::from_secs(args.approval_timeout);
     let res = match args.http {
         None => planrs_mcp::serve_stdio(opts),
         Some(addr) => {

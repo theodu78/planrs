@@ -1,7 +1,10 @@
 //! Garde ADR-0002 du serveur MCP : un fichier tenu par une application
-//! vivante n'est ni ouvert ni écrit (`file.open_in_app`), sauf
-//! `--headless` (lot L8). L'application est simulée par l'écouteur `hello`
-//! et le rendez-vous du canal de contrôle (L10), sous Unix.
+//! vivante n'est ni ouvert ni écrit (`file.open_in_app`) depuis l'espace
+//! local (lot L8 de J4). Depuis J7 (lot L2), sans `--headless`, ouvrir un
+//! tel fichier rattache le serveur à l'application (`tests/relay.rs`) : la
+//! garde est testée ici relais coupé (`--headless`), et levée seulement par
+//! `ignore_app_guard`. L'application est simulée par l'écouteur `hello` et
+//! le rendez-vous du canal de contrôle (L10), sous Unix.
 
 #![cfg(unix)]
 #![allow(
@@ -60,10 +63,12 @@ fn live_app(dir: &Path, project: &Path) -> (ListenerHandle, RendezvousGuard) {
     (listener, guard)
 }
 
+/// Serveur `--headless` (relais coupé, garde active).
 fn server(control: Option<PathBuf>) -> PlanrsServer {
     PlanrsServer::new(&ServeOptions::new(now(), Language::En))
         .unwrap()
         .with_control_dir(control)
+        .with_relay(false)
 }
 
 fn args(v: &Value) -> Option<serde_json::Map<String, Value>> {
@@ -122,11 +127,11 @@ async fn mcp_guard_open_in_app_refused() {
 }
 
 #[test]
-fn mcp_guard_headless_opens() {
+fn mcp_guard_ignored_opens() {
     let dir = TempDir::new("headless");
     let house = house_path();
     let (_listener, _rv) = live_app(&dir.0, &house);
-    // `--headless` : la garde est inactive.
+    // `ignore_app_guard` (tests, rejeux) : la garde est inactive.
     let mut opts = ServeOptions::new(now(), Language::En);
     opts.ignore_app_guard = true;
     let s = PlanrsServer::new(&opts).unwrap();

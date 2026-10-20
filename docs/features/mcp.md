@@ -4,10 +4,11 @@
 
 ## 1. Lancement
 
-- `planrs mcp [--journal F] [--open plan.xml] [--headless]` : transport stdio, runtime tokio à fil unique ; options globales `--now` et `--lang` (`docs/features/cli.md` § 2). Langue par défaut des textes : anglais (ADR-0012, arbitrage 6) sauf `--lang` explicite.
+- `planrs mcp [--journal F] [--open plan.xml] [--headless] [--approval-timeout S]` : transport stdio, runtime tokio à fil unique ; options globales `--now` et `--lang` (`docs/features/cli.md` § 2). Langue par défaut des textes : anglais (ADR-0012, arbitrage 6) sauf `--lang` explicite.
 - `--http ADDR --root DOSSIER` (feature `http`, lot L17) : « streamable HTTP » sur `http://ADDR/mcp`, chemins confinés à `--root`, sécurité décrite dans `docs/features/cli.md` § 1.
 - Claude Code : `claude mcp add planrs -- planrs mcp --journal run.jsonl`.
-- Consignes du serveur (`instructions` de l'initialisation) : désigner les tâches par leur UID, ne jamais calculer ni estimer une date, `dry_run:true` pour voir le diff sans rien modifier, étiquettes `"as":"$x"` dans `apply_batch`, justifier une date par `explain_date`, comparer des options par `what_if`, suivre l'avancement par `update_progress` et `set_status_date` et les écarts par `set_baseline` puis `baseline_variance` (J6), commencer par `new_project`, `open_project` ou `import_csv`.
+- Relais vers l'application (J7, lot L2, ADR-0002, ADR-0015 D9) : voir § 3 bis ; `--headless` le coupe, `--approval-timeout S` (1 à 3 600, défaut 120) borne l'attente de la validation d'une écriture relayée.
+- Consignes du serveur (`instructions` de l'initialisation) : désigner les tâches par leur UID, ne jamais calculer ni estimer une date, `dry_run:true` pour voir le diff sans rien modifier, étiquettes `"as":"$x"` dans `apply_batch`, justifier une date par `explain_date`, comparer des options par `what_if`, suivre l'avancement par `update_progress` et `set_status_date` et les écarts par `set_baseline` puis `baseline_variance` (J6), commencer par `new_project`, `open_project` ou `import_csv` ; depuis J7, appels relayés à l'application qui tient le projet, chaque écriture attendant la validation de l'utilisateur, et `ui_state`, `ui_action`, `screenshot` servis seulement ainsi.
 
 ## 2. Outils
 
@@ -36,7 +37,22 @@ Générés depuis `planrs_automation::REGISTRY` (`tools.rs`, sans macro `#[tool]
 | C-MCP-07 | noms d'outils conformes à `^[a-zA-Z0-9_-]{1,64}$`, uniques | `tools_names_valid_and_unique`, `mcp_list_tools_from_registry` |
 | C-MCP-08 | codes de sortie de la CLI | `docs/features/cli.md` § 3 |
 
-Garde ADR-0002 (`file.open_in_app`) : `open_project`, `save_project`, `export_mspdi` et `--open` refusent un fichier tenu par une application planrs vivante (rendez-vous du canal de contrôle, `docs/features/control.md`) ; `--headless` la lève. La garde vise le chemin effectif (`Workspace::resolve_path`) : avec `--root`, un chemin relatif part de la racine, comme pour l'outil, pas du dossier courant du processus. Tests : `tests/guard.rs` (dont `mcp_guard_relative_path_under_root`).
+Garde ADR-0002 (`file.open_in_app`) : depuis l'espace local, `open_project`, `save_project`, `export_mspdi` et `--open` refusent un fichier tenu par une application planrs vivante (rendez-vous du canal de contrôle, `docs/features/control.md`). Depuis J7 (lot L2), sans `--headless`, `open_project` d'un tel fichier rattache le serveur à l'application au lieu de refuser (§ 3 bis) ; en `--headless` (et avec `--root`, relais coupé) la garde reste. Seul `ServeOptions::ignore_app_guard` (tests, rejeux en mémoire) la lève : le relais est alors coupé aussi. La garde vise le chemin effectif (`Workspace::resolve_path`) : avec `--root`, un chemin relatif part de la racine, comme pour l'outil, pas du dossier courant du processus. Tests : `tests/guard.rs` (dont `mcp_guard_relative_path_under_root`), relais coupé.
+
+## 3 bis. Relais vers l'application (J7, lot L2)
+
+`server.rs` tient un `Backend` : `Local(Workspace)` ou `Relay { client: RelayClient, rendezvous }` (`planrs_automation::control`). Rattaché, **tout** appel est relayé à l'application, seule source de vérité ; elle le valide (ADR-0015 D10, lot L3) et le serveur ne garde aucune session.
+
+- **Rattachement** (sans `--headless`, hors `--root`) : au démarrage, sans `--open`, s'il y a **un seul** rendez-vous vivant (`RelayClient::single_live_in` : fichiers `.json` de version 1 du dossier d'état, sondés par `hello`, au plus 64) ; deux applications ou plus ⇒ local. Ou à `open_project` (et `--open`) d'un fichier tenu par une application (`find_live_for_in`) : résultat de forme `open_project`, `{ summary (relayé), diagnostics: [], diagnostics_total: 0, attached: true }`. Rouvrir le fichier de l'application rattachée garde le rattachement.
+- **Détachement** : `open_project` d'un fichier non tenu pendant un rattachement ⇒ ouverture locale, résultat local plus `attached: false` (un échec d'ouverture laisse le rattachement) ; hors rattachement, le résultat d'`open_project` est inchangé (pas de champ `attached` : rejeux intacts). `control.app_gone` ⇒ retour en local **sans projet** (`session.none` ensuite, C-CTL-06).
+- **Appel relayé** (`RelayClient::call`) : une connexion par appel (`hello` avec le jeton en 5 s au plus, puis la requête) : `app.ui_state` par la méthode `ui_state`, `app.screenshot` par `screenshot { scale_down? }`, tout le reste par `execute { tool (id du registre), params (tels que reçus, `dry_run` et `detail` compris) }`. `pending_approval` est lu puis la réponse finale attendue sur la même connexion et le même `id`, le tout en `--approval-timeout` + 10 s au plus ; une réponse d'un autre `id` est ignorée. Une connexion par appel évite qu'une connexion inactive fermée par l'application se confonde avec une application partie (et qu'une écriture déjà reçue soit rejouée).
+- **Erreurs** : refus de l'application rendu **tel quel** (`structured_error` de l'objet `error` reçu, champs au-delà de `code` et `message` compris : `RelayError::App`) ; connexion impossible, jeton refusé, flux fermé, réponse illisible ou aucune réponse dans le délai ⇒ `control.app_gone` (détachement) ; `pending_approval` reçu puis plus rien dans le délai ⇒ `control.approval_timeout` (le rattachement reste).
+- **Outils `app.*`** (C-CTL-10) : listés (`ui_state`, `ui_action`, `screenshot`) dès que le relais est permis, relayés si rattaché, sinon `control.not_attached` (`Workspace::call`) ; en `--headless`, ni listés ni servis.
+- **Journal** : `--journal` enregistre les appels relayés comme les locaux (même verrou, même ordre).
+- **Concurrence** : `call_tool` exécute `dispatch` par `tokio::task::spawn_blocking` (un appel relayé peut attendre 130 s) ; l'espace (ou le rattachement) reste sous un seul verrou, les appels restent sérialisés.
+- **Limites** : pas de relais hors Unix (Windows garde la règle des 24 h, ADR-0015) ; le relais en HTTP est coupé (l'application ignore `--root`) ; la liste des outils ne change pas pendant la session (pas de `tools/list_changed`) ; un rattachement n'est retenté qu'à `open_project`.
+
+Tests (`tests/relay.rs`, faux écouteur sur socket Unix) : `relay_attach_single_rendezvous`, `relay_attach_on_open_held_file`, `relay_detach_on_open_other_file`, `relay_headless_keeps_open_in_app_guard`, `relay_waits_pending_then_final`, `relay_timeout_bounded`, `relay_app_error_passed_through`, `relay_journal_records_relayed_calls`, `c_ctl_06_app_gone_detaches`, `c_ctl_10_app_tools_not_attached`.
 
 ## 4. Journal de rejeu (`--journal`)
 
@@ -109,5 +125,5 @@ Résultat (essai mené le 2026-10-20 par la session principale, versionné par l
 ## 7. Limites
 
 - Le rejeu fige les sorties du moteur à une date donnée ; il ne vérifie aucune règle contre MS Project (les règles R-150 à R-165 restent `hypothèse`).
-- Une seule session de travail par serveur (toutes les sessions HTTP partagent l'espace de travail).
+- Une seule session de travail par serveur (toutes les sessions HTTP partagent l'espace de travail) ; rattaché, aucune (celle de l'application).
 - Pas de PNG (`render_gantt` rend un SVG borné et un résumé texte), pas de notifications de progression, pas de ressources MCP (`resources/*`) ni de prompts.

@@ -455,6 +455,10 @@ fn cli_usage_errors_exit_2() {
     assert_eq!(code(&run(&["inconnue"])), 2);
     assert_eq!(code(&run(&["summary"])), 2);
     assert_eq!(code(&run(&["mcp", "--http", ":8080"])), 2);
+    // `--approval-timeout` hors de 1..=3600 s (J7, relais) : usage.
+    for bad in ["0", "3601", "x"] {
+        assert_eq!(code(&run(&["mcp", "--approval-timeout", bad])), 2, "{bad}");
+    }
     // `--limit` hors de 1..500 : usage (2), même sur un plan absent (le
     // contrôle passe avant la lecture) ; bornes acceptées.
     for bad in ["0", "501"] {

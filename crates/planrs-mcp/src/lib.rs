@@ -4,8 +4,10 @@
 //! calcule jamais une date lui-même et ne renvoie jamais de résultat estimé :
 //! tout vient du moteur (règle 3). Les outils sont générés depuis
 //! `planrs_automation::REGISTRY`, au-dessus de `Workspace` (ADR-0012 D7,
-//! D8). Un fichier tenu par une application vivante est refusé
-//! (`file.open_in_app`, ADR-0002).
+//! D8). Sans `--headless`, le serveur se rattache à l'application qui tient
+//! le fichier et lui relaie les appels (ADR-0002, ADR-0015 D9, lot L2 de
+//! J7) ; en `--headless`, un fichier tenu par une application vivante est
+//! refusé (`file.open_in_app`).
 //!
 //! Transport stdio (tokio à fil unique), lignes d'entrée bornées
 //! (C-MCP-06), journal de rejeu `--journal` facultatif. Transport HTTP
@@ -22,6 +24,7 @@ mod tools;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use planrs_automation::text::Language;
 use planrs_core::Moment;
@@ -45,9 +48,19 @@ pub struct ServeOptions {
     pub open: Option<PathBuf>,
     /// Longueur maximale d'une ligne d'entrée (8 Mio).
     pub max_line_bytes: usize,
-    /// Ignore la garde ADR-0002 (`--headless`).
+    /// Ignore la garde ADR-0002 et coupe le relais (tests, rejeux : aucun
+    /// rendez-vous lu).
     pub ignore_app_guard: bool,
+    /// `--headless` : aucun relais vers l'application ; la garde reste
+    /// active (`file.open_in_app`).
+    pub headless: bool,
+    /// Attente de la validation d'une écriture relayée
+    /// (`--approval-timeout`, défaut 120 s), plus 10 s pour la réponse.
+    pub approval_timeout: Duration,
 }
+
+/// Délai de validation par défaut d'une écriture relayée (C-CTL-04).
+pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
 
 impl ServeOptions {
     /// Options par défaut à l'instant `now`.
@@ -60,6 +73,8 @@ impl ServeOptions {
             open: None,
             max_line_bytes: 8 * 1024 * 1024,
             ignore_app_guard: false,
+            headless: false,
+            approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
         }
     }
 }
@@ -109,6 +124,10 @@ pub fn serve_stdio(opts: ServeOptions) -> Result<(), McpServeError> {
 ///
 /// Celles de [`PlanrsServer::new`], [`PlanrsServer::open_initial`] et
 /// [`serve_with`].
+///
+/// Sans `--open`, le serveur se rattache à l'application s'il y a un seul
+/// rendez-vous vivant ([`PlanrsServer::attach_at_startup`]) ; avec
+/// `--open`, l'ouverture décide (fichier tenu : rattachement).
 pub async fn serve_on<R, W>(r: R, w: W, opts: ServeOptions) -> Result<(), McpServeError>
 where
     R: AsyncRead + Send + Unpin + 'static,
@@ -117,6 +136,8 @@ where
     let server = PlanrsServer::new(&opts)?;
     if let Some(path) = &opts.open {
         server.open_initial(path)?;
+    } else if server.attach_at_startup() {
+        eprintln!("planrs mcp : rattaché à l'application planrs ouverte, appels relayés");
     }
     serve_with(server, r, w, opts.max_line_bytes).await
 }

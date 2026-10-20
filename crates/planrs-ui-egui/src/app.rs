@@ -855,6 +855,7 @@ impl App {
             last_gantt_width: self.view.last_gantt_width,
             last_gantt_left: self.view.last_gantt_left,
             edit: TableEdit::default(),
+            ..ViewTransient::default()
         }
     }
 
@@ -1106,6 +1107,27 @@ impl App {
             }
             Action::Structure(op) => self.run_structure(op),
             Action::ConfirmDelete(confirmed) => self.answer_delete(confirmed),
+            // Contrat J7 (lot L0) : actions câblées par leur lot.
+            other @ (Action::Nav { .. }
+            | Action::FocusPane(_)
+            | Action::SetView(_)
+            | Action::SetGanttStyle(_)
+            | Action::ShowDialog(_)
+            | Action::ShowTaskInformation
+            | Action::CloseDialog
+            | Action::ToggleColumn(_)
+            | Action::SetColumnWidth { .. }
+            | Action::ScrollTableX(_)
+            | Action::TimescaleStep(_)
+            | Action::TimescalePage(_)
+            | Action::TimescaleToStart
+            | Action::TimescaleToEnd
+            | Action::ZoomBy(_)
+            | Action::Approve(_)
+            | Action::Reject(_)
+            | Action::OpenRecent(_)
+            | Action::Recover(_)
+            | Action::Ui(_)) => log::debug!("action J7 pas encore câblée : {other:?}"),
         }
     }
 

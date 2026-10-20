@@ -56,6 +56,11 @@ col-finish = Fin
 col-predecessors = Prédécesseurs
 col-total-slack = Marge totale
 col-critical = Critique
+col-percent-complete = % achevé
+col-resource-names = Noms ressources
+col-baseline-start = Début de référence
+col-baseline-finish = Fin de référence
+col-finish-variance = Variation de fin
 yes = Oui
 no = Non
 

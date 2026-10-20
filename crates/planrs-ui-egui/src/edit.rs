@@ -359,7 +359,14 @@ pub fn commit_edit(state: &EditState, session: &Session, lang: text::Language) -
                     batch.ops = ops;
                     return Ok(batch);
                 }
-                Column::Id | Column::TotalSlack | Column::Critical => return Err(EditError::NotEditable),
+                Column::Id
+                | Column::TotalSlack
+                | Column::Critical
+                | Column::PercentComplete
+                | Column::ResourceNames
+                | Column::BaselineStart
+                | Column::BaselineFinish
+                | Column::FinishVariance => return Err(EditError::NotEditable),
             }
             vec![Command::TaskUpdate(op)]
         }
@@ -409,7 +416,14 @@ fn blank_row_ops(
             }));
             return Ok(ops);
         }
-        Column::Id | Column::TotalSlack | Column::Critical => return Err(EditError::NotEditable),
+        Column::Id
+        | Column::TotalSlack
+        | Column::Critical
+        | Column::PercentComplete
+        | Column::ResourceNames
+        | Column::BaselineStart
+        | Column::BaselineFinish
+        | Column::FinishVariance => return Err(EditError::NotEditable),
     }
     Ok(vec![Command::TaskAdd(add)])
 }

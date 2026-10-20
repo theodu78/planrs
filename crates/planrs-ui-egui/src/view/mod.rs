@@ -6,12 +6,16 @@
 
 use std::ops::Range;
 
+use planrs_automation::gesture::{GestureKind, Preview};
 use planrs_core::{Severity, TaskUid};
 
 use crate::action::Action;
 use crate::app::OpenDocument;
+use crate::column::Column;
+use crate::dialog::DialogState;
 use crate::edit::TableEdit;
 use crate::i18n::Texts;
+use crate::nav::CellCursor;
 use crate::rows::RowModel;
 use crate::selection::Selection;
 use crate::state::UiState;
@@ -88,6 +92,46 @@ pub struct ViewTransient {
     pub last_gantt_left: f32,
     /// Cellule courante de la table et saisie en cours (lot L12).
     pub edit: TableEdit,
+    /// Cellule courante de la table (J7 ; remplace `TableEdit.blank` au lot
+    /// L1).
+    pub cursor: CellCursor<TaskUid, Column>,
+    /// Volet qui a le focus clavier (J7, lot L1).
+    pub focus: Pane,
+    /// Défilement horizontal de la table, en points (J7, lot L6).
+    pub table_scroll_x: f32,
+    /// Glisser d'une barre en cours (J7, lot L8).
+    pub drag: Option<BarDrag>,
+    /// Fenêtre ouverte (J7, lots L8, L9, L12, L13).
+    pub dialog: Option<DialogState>,
+}
+
+/// Volet de la vue principale (J7).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Pane {
+    /// Table des tâches.
+    #[default]
+    Table,
+    /// Diagramme de Gantt.
+    Gantt,
+}
+
+/// Glisser d'une barre en cours (J7, lot L8) : l'interface ne garde qu'un
+/// écart en jours entiers et l'aperçu calculé par
+/// `planrs_automation::gesture::preview`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BarDrag {
+    /// Tâche glissée.
+    pub uid: TaskUid,
+    /// Geste.
+    pub kind: GestureKind,
+    /// Abscisse du début du glisser, relative au bord gauche du Gantt.
+    pub origin_x: f32,
+    /// Écart courant en jours entiers (`TimeAxis::days_for_dx`).
+    pub days: i64,
+    /// Ligne survolée (tracer un lien).
+    pub over_row: Option<usize>,
+    /// Aperçu pour `days`, recalculé seulement quand `days` change.
+    pub preview: Option<Preview>,
 }
 
 /// Relevé d'une image (tests de synchronisation et de performance).

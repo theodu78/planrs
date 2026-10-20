@@ -55,6 +55,11 @@ col-finish = Finish
 col-predecessors = Predecessors
 col-total-slack = Total Slack
 col-critical = Critical
+col-percent-complete = % Complete
+col-resource-names = Resource Names
+col-baseline-start = Baseline Start
+col-baseline-finish = Baseline Finish
+col-finish-variance = Finish Variance
 yes = Yes
 no = No
 

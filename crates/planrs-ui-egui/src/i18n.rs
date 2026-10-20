@@ -161,6 +161,12 @@ text_ids! {
     ColPredecessors => "col-predecessors",
     ColTotalSlack => "col-total-slack",
     ColCritical => "col-critical",
+    // Colonnes J7 (contrat L0, données au lot L6).
+    ColPercentComplete => "col-percent-complete",
+    ColResourceNames => "col-resource-names",
+    ColBaselineStart => "col-baseline-start",
+    ColBaselineFinish => "col-baseline-finish",
+    ColFinishVariance => "col-finish-variance",
     Yes => "yes",
     No => "no",
     // Unités de durée.

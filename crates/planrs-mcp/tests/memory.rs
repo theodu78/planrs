@@ -330,6 +330,67 @@ async fn mcp_resource_usage_structured() {
     client.cancel().await.unwrap();
 }
 
+/// J6 (lot L7) : `explain_date` listé, réponse structurée (étapes,
+/// chaîne, résumés), erreurs structurées.
+#[tokio::test]
+async fn mcp_explain_structured() {
+    let (client, _server) = connect(opts()).await;
+    new_project(&client).await;
+    let out = ok(
+        &client,
+        "apply_batch",
+        json!({ "ops": [
+            { "op": "task.add", "name": "A", "as": "$a", "duration": { "text": "1d" } },
+            { "op": "task.add", "name": "B", "as": "$b", "duration": { "text": "2d" } },
+            { "op": "task.add", "name": "C", "as": "$c", "duration": { "text": "1d" } },
+            { "op": "link.add", "pred": "$a", "succ": "$c" },
+            { "op": "link.add", "pred": "$b", "succ": "$c" }
+        ] }),
+    )
+    .await;
+    let (b, c) = (out["labels"]["$b"].clone(), out["labels"]["$c"].clone());
+    let tools = client.list_all_tools().await.unwrap();
+    assert!(tools.iter().any(|t| t.name == "explain_date"));
+    let v = ok(
+        &client,
+        "explain_date",
+        json!({ "task": c.clone(), "side": "finish" }),
+    )
+    .await;
+    assert_eq!(v["date"], json!("2026-11-04T17:00"));
+    assert_eq!(v["side"], json!("finish"));
+    assert_eq!(
+        v["steps"][0],
+        json!({ "step": "driver", "driver": { "kind": "link", "predecessor": b.clone(), "link": "fs" },
+                "raw": "2026-11-03T17:00" })
+    );
+    assert_eq!(v["chain"][0]["uid"], b);
+    assert_eq!(v["late"]["critical"], json!(true));
+    assert!(
+        v["summary_en"]
+            .as_str()
+            .unwrap()
+            .starts_with("C finishes on Wed 11/04/2026 17:00")
+    );
+    assert!(
+        v["summary_fr"]
+            .as_str()
+            .unwrap()
+            .starts_with("C finit le mer 04/11/2026 17:00")
+    );
+    let e = refused(&client, "explain_date", json!({ "task": c, "depth": 0 })).await;
+    assert_eq!(e["code"], json!("param.invalid"));
+    let e = refused(&client, "explain_date", json!({ "task": 77 })).await;
+    assert_eq!(e["code"], json!("task.not_found"));
+    let info = client.peer_info().unwrap();
+    assert!(
+        info.instructions
+            .as_deref()
+            .is_some_and(|i| i.contains("explain_date"))
+    );
+    client.cancel().await.unwrap();
+}
+
 #[tokio::test]
 async fn mcp_undo_redo() {
     let (client, _server) = connect(opts()).await;

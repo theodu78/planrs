@@ -212,7 +212,10 @@ mod r212_physical_percent;
 mod r213_progress_edge_cases;
 mod r214_mspdi_progress_read;
 mod r215_mspdi_progress_write;
+mod r216_progress_update;
+mod r217_progress_reschedule;
 mod r218_status_date_options;
+mod r219_status_date_roles;
 mod r220_baseline_values;
 mod r221_baseline_scope;
 mod r222_baseline_rollup;
@@ -220,6 +223,7 @@ mod r223_baseline_overwrite;
 mod r224_start_finish_variance;
 mod r225_duration_work_variance;
 mod r226_mspdi_variances_write;
+mod r227_baseline_set;
 mod r230_driver_bound;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention

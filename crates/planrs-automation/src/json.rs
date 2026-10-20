@@ -504,6 +504,33 @@ pub struct PercentJson {
     pub text: Option<String>,
 }
 
+impl PercentJson {
+    /// % d'avancement (R-216) : `value` en 1/100 de % (10 000 = 100 %) ou
+    /// `text` (« 40% », « 12,5 % », nombre dans la langue du lot, `%`
+    /// obligatoire), arrondi par R-001 ; les deux fournis doivent concorder
+    /// strictement (comme [`UnitsJson::to_units`]).
+    ///
+    /// # Errors
+    ///
+    /// `text.*` si le texte est illisible ; `param.mismatch` si `value`
+    /// contredit le texte ; `param.invalid` sans valeur, ou hors de
+    /// `0..=10 000`. Le champ fautif est posé par l'appelant.
+    pub fn to_percent(&self, ctx: &TextContext) -> Result<planrs_core::Percent, CommandError> {
+        let out_of_range = || invalid("pourcentage hors des bornes (0 à 100 %, 0 à 10 000)");
+        let value = if let Some(text) = &self.text {
+            let u = parse_units_text(text, true, ctx).map_err(CommandError::text)?;
+            if !agrees(self.value, u.get()) {
+                return Err(mismatch());
+            }
+            u.get()
+        } else {
+            self.value
+                .ok_or_else(|| invalid("« value » ou « text » attendu"))?
+        };
+        planrs_core::Percent::new(value).map_err(|_| out_of_range())
+    }
+}
+
 /// Cumul d'une ligne de base vers les récapitulatives (J6, R-222 ; S58
 /// « Roll up baselines »).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

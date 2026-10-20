@@ -707,3 +707,68 @@ fn perf_batch_progress_updates() {
     assert_eq!(err.code, codes::LIMIT_EXCEEDED);
     assert!(took <= Duration::from_secs(60), "{took:?}");
 }
+
+/// `baseline_variance` page par page (relecture finale J6, J6-PERF-3) :
+/// 20 000 tâches à ligne de base 0, dont une tâche d'arrivée de 19 999
+/// prédécesseurs (FS). Chaque page ne construit que ses lignes (sans liens
+/// ni ressources) : médiane de 15 pages de 50 lignes, budget de 50 ms
+/// (avant : toutes les vues de tâches, liens compris, à chaque page ;
+/// serveurdvp : 92 ms avant, 17,6 ms après).
+#[test]
+#[ignore = "mesuré en release, job CI perf"]
+fn perf_baseline_variance_page() {
+    use planrs_automation::ApplyMode;
+    use planrs_automation::analysis::baseline_variance;
+    use planrs_automation::command::params::VarianceParams;
+    let start: Moment = "2026-11-02T08:00".parse().unwrap();
+    let mut p = Project::new(ProjectInit {
+        name: "Variance".to_owned(),
+        anchor: ScheduleAnchor::FromStart(start),
+        current_date: start,
+        calendar_names: BuiltinCalendarNames::default(),
+    });
+    let options = p.options;
+    let n = 20_000u32;
+    let day = TaskDuration::new(Minutes::new(480), DurationUnit::Day, TimeBasis::Working, false).unwrap();
+    for i in 1..n {
+        let mut t = Task::new(TaskUid::new(i), format!("T{i}"), &options);
+        t.duration = day;
+        p.tasks.push(t).unwrap();
+    }
+    let mut hub = Task::new(TaskUid::new(n), "Arrivée".to_owned(), &options);
+    hub.duration = day;
+    hub.predecessors = (1..n)
+        .map(|i| Link {
+            predecessor: TaskUid::new(i),
+            kind: LinkType::FinishToStart,
+            lag: Lag::ZERO,
+        })
+        .collect();
+    p.tasks.push(hub).unwrap();
+    let mut s = planrs_tests::session::session(p);
+    s.apply(
+        &planrs_tests::task_edit::batch(serde_json::json!([{ "op": "baseline.set", "number": 0 }])),
+        ApplyMode::Commit,
+    )
+    .unwrap();
+    let mut cursor = None;
+    let mut times = Vec::new();
+    for _ in 0..15 {
+        let params = VarianceParams {
+            baseline: Some(0),
+            only_varied: false,
+            cursor,
+            limit: Some(50),
+        };
+        let t = Instant::now();
+        let view = baseline_variance(&s, &params).unwrap();
+        times.push(t.elapsed());
+        assert_eq!(view.total, 20_000);
+        assert_eq!(view.tasks.len(), 50);
+        cursor = view.next_cursor;
+    }
+    times.sort_unstable();
+    let median = times[times.len() / 2];
+    eprintln!("baseline_variance (20 000 tâches, page de 50) : médiane {median:?}");
+    assert!(median <= Duration::from_millis(50), "{median:?}");
+}

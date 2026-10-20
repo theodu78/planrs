@@ -1556,7 +1556,7 @@ Règles J6 (ADR-0014 D6, D7) : capture des valeurs du moteur (récapitulatives e
   - Exemples (S, début lun 19/10/2026) : cinq tâches de 2 j, ligne 0, puis durées 2 j, 1,5 j, 3 j, 1 j, 4 j ⇒ ordre +960, +480, −480, −240, 0 ; la tâche de 1,5 j : fin mar 20/10 12:00, base 17:00, écart de fin −240 (« -0,5j ») ; projet déduit : fin de base mar 20/10 17:00, écart +960 ; tâche ajoutée après la ligne : `baseline: null`, écartée par `only_varied` ; A7 (O42) : ligne du projet lue, écarts de dates nuls sur les 25 tâches.
 - **Source** : S59 ; brief § 6 ; hypothèse (forme de la vue, ligne du projet déduite).
 - **Statut** : `hypothèse`.
-- **Tests** : `tests/rules/r228_baseline_variance.rs` (`r228_variance_pagination`, `r228_only_varied`, `r228_corpus_a7_stored_project_line`).
+- **Tests** : `tests/rules/r228_baseline_variance.rs` (`r228_variance_pagination`, `r228_only_varied`, `r228_corpus_a7_stored_project_line`). ; `perf_baseline_variance_page` (`tests/perf`, job `perf` : page construite seule, J6-PERF-3)
 
 ### Analyse (R-230 à R-236)
 

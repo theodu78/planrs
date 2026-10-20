@@ -219,6 +219,7 @@ mod r222_baseline_rollup;
 mod r223_baseline_overwrite;
 mod r224_start_finish_variance;
 mod r225_duration_work_variance;
+mod r227_baseline_set;
 mod r230_driver_bound;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention

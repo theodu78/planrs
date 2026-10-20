@@ -92,8 +92,7 @@ fn contract_compiles() {
         let again: Batch = serde_json::from_value(serde_json::to_value(&batch).unwrap()).unwrap();
         assert_eq!(again, batch, "aller-retour {i}");
         assert_eq!(batch.ops[0].id(), op["op"].as_str().unwrap());
-        // `baseline.set` (i ≥ 4) : squelette jusqu'au commit suivant du lot.
-        assert_eq!(not_yet(&mut s, &batch), i >= 4, "{i}");
+        assert!(!not_yet(&mut s, &batch), "{i}");
     }
     let batch = Batch::from_json(json!({ "format_version": 1, "ops": [ops[5]] })).unwrap();
     let Command::BaselineSet(set) = &batch.ops[0] else {

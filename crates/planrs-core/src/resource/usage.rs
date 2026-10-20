@@ -274,25 +274,29 @@ pub fn usage_by_assignment(
     let mut totals: BTreeMap<TaskUid, Vec<i128>> = BTreeMap::new();
     let mut rows = Vec::with_capacity(picked.len());
     for (resource, task, assignment, a) in picked {
-        let mut work: Vec<i128> = vec![0; n];
-        if let Some(scale) = scales.as_ref().and_then(|sc| sc.get(a.calendar)) {
-            spread(a, scale, &bounds, &mut work);
-        }
+        // Seules les périodes touchées par le span sont écrites (bloc de 64
+        // périodes, 10 000 lignes : la plupart des cellules restent nulles).
+        let mut work = vec![Work::ZERO; n];
         let is_work = p
             .resources
             .get(resource)
             .is_some_and(|res| res.kind == ResourceKind::Work);
-        if is_work {
-            let total = totals.entry(task).or_insert_with(|| vec![0; n]);
-            for (t, w) in total.iter_mut().zip(&work) {
-                *t = t.saturating_add(*w);
-            }
+        let mut total = is_work.then(|| totals.entry(task).or_insert_with(|| vec![0; n]));
+        if let Some(scale) = scales.as_ref().and_then(|sc| sc.get(a.calendar)) {
+            spread_with(a, scale, &bounds, |i, d| {
+                if let Some(cell) = work.get_mut(i) {
+                    *cell = clamp_work(d);
+                }
+                if let Some(t) = total.as_mut().and_then(|t| t.get_mut(i)) {
+                    *t = t.saturating_add(d);
+                }
+            });
         }
         rows.push(AssignmentUsageRow {
             assignment,
             task,
             resource,
-            work: work.into_iter().map(clamp_work).collect(),
+            work,
         });
     }
     let periods = bounds
@@ -400,6 +404,23 @@ fn periods(p: &Project, (from, to): (Moment, Moment), by: Granularity) -> Option
 /// (`bounds` : n + 1 bornes), au prorata du temps ouvré de son échelle ;
 /// span sans temps ouvré : tout le travail dans la période de son début.
 fn spread(a: &AssignmentSchedule, scale: TimeScale<'_>, bounds: &[Moment], work: &mut [i128]) {
+    spread_with(a, scale, bounds, |i, d| {
+        if let Some(cell) = work.get_mut(i) {
+            *cell = cell.saturating_add(d);
+        }
+    });
+}
+
+/// Travail de l'affectation `a` période par période, comme [`spread`] :
+/// `add(i, d)` au plus une fois par période `i` touchée (`bounds` : n + 1
+/// bornes), jamais pour une période hors du span.
+fn spread_with(
+    a: &AssignmentSchedule,
+    scale: TimeScale<'_>,
+    bounds: &[Moment],
+    mut add: impl FnMut(usize, i128),
+) {
+    let periods = bounds.len().saturating_sub(1);
     let w = i128::from(a.work.minutes().get());
     if w == 0 {
         return;
@@ -410,8 +431,8 @@ fn spread(a: &AssignmentSchedule, scale: TimeScale<'_>, bounds: &[Moment], work:
     let first = bounds.partition_point(|&b| b <= start).saturating_sub(1);
     if total <= 0 {
         let inside = bounds.first().is_some_and(|&b| b <= start) && bounds.last().is_some_and(|&b| start < b);
-        if let Some(cell) = work.get_mut(first).filter(|_| inside) {
-            *cell = cell.saturating_add(w);
+        if inside && first < periods {
+            add(first, w);
         }
         return;
     }
@@ -423,7 +444,7 @@ fn spread(a: &AssignmentSchedule, scale: TimeScale<'_>, bounds: &[Moment], work:
             .and_then(|num| round_div(num, total))
             .map_or(0, i128::from)
     };
-    for (i, cell) in work.iter_mut().enumerate().skip(first) {
+    for i in first..periods {
         let (Some(&lo), Some(&hi)) = (bounds.get(i), bounds.get(i.saturating_add(1))) else {
             break;
         };
@@ -433,7 +454,7 @@ fn spread(a: &AssignmentSchedule, scale: TimeScale<'_>, bounds: &[Moment], work:
         if hi <= start {
             continue;
         }
-        *cell = cell.saturating_add(cumul(hi).saturating_sub(cumul(lo)));
+        add(i, cumul(hi).saturating_sub(cumul(lo)));
     }
 }
 

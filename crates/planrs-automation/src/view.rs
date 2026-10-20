@@ -1513,6 +1513,10 @@ pub fn resource_usage(session: &Session, p: &UsageParams) -> Result<UsageView, C
     if from > to {
         return Err(invalid("from", "« from » est après « to »"));
     }
+    // Trimestre : contrat J7 L0, calculé par le lot L4 (R-246).
+    if p.by == GranularityJson::Quarter {
+        return Err(CommandError::not_yet(7).with_field("by"));
+    }
     let resources: Vec<ResourceUid> = if p.resources.is_empty() {
         let mut all: Vec<ResourceUid> = project
             .resources

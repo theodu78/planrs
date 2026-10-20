@@ -9,7 +9,7 @@
 
 use std::collections::VecDeque;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::command::Batch;
 use crate::delta::Delta;
@@ -28,10 +28,32 @@ pub struct History {
     last_id: u64,
 }
 
+/// Origine d'un lot de l'historique (J7, ADR-0015 D10) : l'utilisateur, ou
+/// un agent dont l'écriture relayée a été acceptée dans l'application.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EditSource {
+    /// Utilisateur (interface, CLI, MCP local).
+    #[default]
+    User,
+    /// Agent, par le relais du canal de contrôle.
+    Agent,
+}
+
+impl EditSource {
+    /// Vrai pour [`EditSource::User`] (omis du JSON).
+    #[must_use]
+    pub const fn is_user(&self) -> bool {
+        matches!(self, Self::User)
+    }
+}
+
 /// Entrée d'historique.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct HistoryEntry {
     pub label: Option<String>,
+    /// Origine du lot (J7 ; toujours `User` jusqu'au lot L3).
+    pub source: EditSource,
     pub ops: Batch,
     pub delta: Delta,
     pub bytes: usize,
@@ -59,6 +81,9 @@ pub struct HistoryItem {
     pub ops: usize,
     /// Taille approchée du delta.
     pub bytes: usize,
+    /// Origine du lot (J7) ; omise pour l'utilisateur (JSON J6 inchangé).
+    #[serde(skip_serializing_if = "EditSource::is_user")]
+    pub source: EditSource,
 }
 
 impl History {
@@ -92,6 +117,7 @@ impl History {
         self.last_id = self.last_id.saturating_add(1);
         self.undo.push_back(HistoryEntry {
             label,
+            source: EditSource::User,
             ops,
             delta,
             bytes,
@@ -137,6 +163,7 @@ impl History {
             label: e.label.clone(),
             ops: e.ops.ops.len(),
             bytes: e.bytes,
+            source: e.source,
         };
         HistoryView {
             entries: self.undo.iter().map(item).collect(),

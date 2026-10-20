@@ -30,6 +30,12 @@ pub(crate) fn tool_for(spec: &CommandSpec, lang: Language) -> Tool {
             .destructive(is_destructive(spec.id))
             .idempotent(false)
             .open_world(false),
+        // `app.*` (J7) : interface de l'application rattachée, sans effet
+        // sur le projet ; `app.ui` change l'affichage.
+        Kind::Ui => ToolAnnotations::new()
+            .read_only(spec.id != "app.ui")
+            .destructive(false)
+            .open_world(false),
     };
     Tool::new(
         spec.mcp_name,

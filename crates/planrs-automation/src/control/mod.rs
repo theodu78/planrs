@@ -10,18 +10,22 @@
 //!    un rendez-vous vivant qui tient ce fichier ⇒ `file.open_in_app` ;
 //! 3. à la fermeture, le garde et la poignée suppriment fichier et socket.
 
+mod client;
 mod frame;
 mod listener;
+mod relay;
 mod rendezvous;
 
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+pub use client::RelayClient;
 pub use frame::{
     Frame, LineError, MAX_LINE_BYTES, Method, PROTOCOL_VERSION, Reply, WireError, codes, read_line_bounded,
     to_line,
 };
-pub use listener::{ListenerHandle, spawn_hello_listener, spawn_hello_listener_in};
+pub use listener::{ListenerHandle, spawn_hello_listener, spawn_hello_listener_in, spawn_listener_in};
+pub use relay::{CallState, RelayCall, RelayKind, Waker};
 pub use rendezvous::{
     Rendezvous, RendezvousGuard, STATE_DIR_ENV, canonical_project, find_live_for, find_live_for_in, probe,
     publish, publish_in, state_dir,

@@ -285,6 +285,12 @@ fn push_texts(
                 Column::Critical => schedule
                     .map(|s| if s.critical { l.yes.clone() } else { l.no.clone() })
                     .unwrap_or_default(),
+                // Colonnes J7 (contrat L0) : textes du lot L6.
+                Column::PercentComplete
+                | Column::ResourceNames
+                | Column::BaselineStart
+                | Column::BaselineFinish
+                | Column::FinishVariance => String::new(),
             }
         };
         texts.push(text);
@@ -352,9 +358,11 @@ mod tests {
         OpenDocument::new(loaded, origin, 1)
     }
 
-    /// Ligne d'ID `id` (indice `id − 1`).
+    /// Ligne d'ID `id` (indice `id − 1`), colonnes J6 ; les colonnes J7
+    /// (contrat L0) sont vides jusqu'au lot L6.
     fn row_texts(model: &RowModel, id: usize) -> Vec<&str> {
-        Column::ALL.iter().map(|&c| model.text(id - 1, c)).collect()
+        assert!(Column::ALL[8..].iter().all(|&c| model.text(id - 1, c).is_empty()));
+        Column::ALL[..8].iter().map(|&c| model.text(id - 1, c)).collect()
     }
 
     #[test]

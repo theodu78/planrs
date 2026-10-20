@@ -55,6 +55,11 @@ col-finish = Finish
 col-predecessors = Predecessors
 col-total-slack = Total Slack
 col-critical = Critical
+col-percent-complete = % Complete
+col-resource-names = Resource Names
+col-baseline-start = Baseline Start
+col-baseline-finish = Baseline Finish
+col-finish-variance = Finish Variance
 yes = Yes
 no = No
 
@@ -303,3 +308,50 @@ blank-row-label = Blank row (new task)
 cell-edit-label = Edit: { $column }
 edit-error-unknown-id = No task with ID { $id }
 edit-error-not-editable = Computed column, read-only
+
+## J7 — L0: Contract refusal codes (ADR-0015)
+
+error-calendar-name_taken = Calendar name already taken: { $detail }
+error-calendar-base_not_base = Invalid base calendar: { $detail }
+error-calendar-in_use = Calendar in use: { $detail }
+error-gesture-not_draggable = Bar cannot be dragged this way: { $detail }
+error-usage-limit = Usage report too large: { $detail }
+error-control-rejected = Rejected in the application: { $detail }
+error-control-approval_timeout = No answer in time: { $detail }
+error-control-not_relayable = Command cannot be relayed: { $detail }
+error-control-not_attached = No attached application: { $detail }
+error-control-app_gone = Application closed: { $detail }
+error-control-screenshot_unavailable = Screenshot unavailable: { $detail }
+error-control-screenshot_too_large = Screenshot too large: { $detail }
+
+# --- J7 L1 ---
+
+# --- J7 L2 ---
+
+# --- J7 L3 ---
+
+# --- J7 L4 ---
+
+# --- J7 L5 ---
+
+# --- J7 L6 ---
+
+# --- J7 L7 ---
+
+# --- J7 L8 ---
+
+# --- J7 L9 ---
+
+# --- J7 L10 ---
+
+# --- J7 L11 ---
+
+# --- J7 L12 ---
+
+# --- J7 L13 ---
+
+# --- J7 L14 ---
+
+# --- J7 L15 ---
+
+# --- J7 L16 ---

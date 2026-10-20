@@ -161,6 +161,12 @@ text_ids! {
     ColPredecessors => "col-predecessors",
     ColTotalSlack => "col-total-slack",
     ColCritical => "col-critical",
+    // Colonnes J7 (contrat L0, données au lot L6).
+    ColPercentComplete => "col-percent-complete",
+    ColResourceNames => "col-resource-names",
+    ColBaselineStart => "col-baseline-start",
+    ColBaselineFinish => "col-baseline-finish",
+    ColFinishVariance => "col-finish-variance",
     Yes => "yes",
     No => "no",
     // Unités de durée.
@@ -353,6 +359,35 @@ text_ids! {
     CellEditLabel => "cell-edit-label",
     EditErrorUnknownId => "edit-error-unknown-id",
     EditErrorNotEditable => "edit-error-not-editable",
+    // --- J7 L0 : codes de refus du contrat (ADR-0015) ---
+    ErrorCalendarNameTaken => "error-calendar-name_taken",
+    ErrorCalendarBaseNotBase => "error-calendar-base_not_base",
+    ErrorCalendarInUse => "error-calendar-in_use",
+    ErrorGestureNotDraggable => "error-gesture-not_draggable",
+    ErrorUsageLimit => "error-usage-limit",
+    ErrorControlRejected => "error-control-rejected",
+    ErrorControlApprovalTimeout => "error-control-approval_timeout",
+    ErrorControlNotRelayable => "error-control-not_relayable",
+    ErrorControlNotAttached => "error-control-not_attached",
+    ErrorControlAppGone => "error-control-app_gone",
+    ErrorControlScreenshotUnavailable => "error-control-screenshot_unavailable",
+    ErrorControlScreenshotTooLarge => "error-control-screenshot_too_large",
+    // --- J7 L1 ---
+    // --- J7 L2 ---
+    // --- J7 L3 ---
+    // --- J7 L4 ---
+    // --- J7 L5 ---
+    // --- J7 L6 ---
+    // --- J7 L7 ---
+    // --- J7 L8 ---
+    // --- J7 L9 ---
+    // --- J7 L10 ---
+    // --- J7 L11 ---
+    // --- J7 L12 ---
+    // --- J7 L13 ---
+    // --- J7 L14 ---
+    // --- J7 L15 ---
+    // --- J7 L16 ---
 }
 
 /// Clé fluent du refus de code `code` : `error-<code>`, points changés en

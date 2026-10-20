@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`calendar.add` (J7, R-248) : nouveau calendrier de base (aucun de\n`base`, `copy_of`), dérivé de `base`, ou copie de `copy_of` (les deux :\n`param.invalid`). Contrat J7 L0 ; exécution : lot L5.",
+  "properties": {
+    "base": {
+      "description": "Calendrier de base dont le nouveau dérive.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "copy_of": {
+      "description": "Calendrier copié (semaine, exceptions et base).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "name": {
+      "description": "Nom (non vide, unique sans tenir compte de la casse).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "title": "CalendarAdd",
+  "type": "object"
+}

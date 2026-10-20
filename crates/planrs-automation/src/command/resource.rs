@@ -277,6 +277,16 @@ fn same_kind(a: &ResourceKind, b: &ResourceKind) -> bool {
     reason = "un contrôle par champ, puis une écriture par champ, dans l'ordre du contrat"
 )]
 pub(super) fn update(op: &ResourceUpdate, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
+    // Taux (R-195 amendée) : contrat J7 L0, exécutés par le lot L5.
+    for (field, keep) in [
+        ("standard_rate", op.standard_rate.is_keep()),
+        ("overtime_rate", op.overtime_rate.is_keep()),
+        ("cost_per_use", op.cost_per_use.is_keep()),
+    ] {
+        if !keep {
+            return Err(CommandError::not_yet(7).with_field(field));
+        }
+    }
     let uid = ctx.resource(&op.uid, "uid")?;
     let Some(current) = ctx.project.resources.get(uid) else {
         return Err(not_found(uid, "uid"));

@@ -107,6 +107,29 @@ pub fn spawn_hello_listener_in(
     }
 }
 
+/// Écouteur du relais J7 (ADR-0015 D9) : chaque requête authentifiée
+/// devient un [`super::RelayCall`] poussé dans `inbox`, puis `wake` réveille
+/// l'interface. Remplace [`spawn_hello_listener_in`] au lot L3.
+///
+/// # Errors
+///
+/// [`ControlError::InvalidToken`] ; squelette J7 L0 :
+/// [`ControlError::Unsupported`].
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "contrat J7 : l'écouteur du lot L3 garde le jeton, la file et le rappel"
+)]
+pub fn spawn_listener_in(
+    dir: &std::path::Path,
+    token: String,
+    inbox: std::sync::mpsc::SyncSender<super::RelayCall>,
+    wake: super::Waker,
+) -> Result<ListenerHandle, ControlError> {
+    let _ = decode_token(&token).ok_or(ControlError::InvalidToken)?;
+    drop((dir, inbox, wake));
+    Err(ControlError::Unsupported)
+}
+
 #[cfg(unix)]
 mod unix {
     use std::io::{BufReader, Write};

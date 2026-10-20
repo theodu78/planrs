@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`baseline.clear` (J7, R-250) : efface la ligne de base `number` (0 à\n10, défaut 0) du projet entier ou de `tasks`. Contrat J7 L0 ; exécution :\nlot L5.",
+  "properties": {
+    "number": {
+      "description": "Numéro de la ligne (0 à 10 ; défaut 0).",
+      "format": "uint8",
+      "maximum": 10,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "tasks": {
+      "description": "Tâches sélectionnées (défaut : projet entier, ressources comprises).",
+      "items": {
+        "description": "Tâche : UID (entier) ou étiquette \"$x\" d'une tâche créée plus tôt dans le même lot.",
+        "oneOf": [
+          {
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+            "type": "string"
+          }
+        ]
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    }
+  },
+  "title": "BaselineClear",
+  "type": "object"
+}

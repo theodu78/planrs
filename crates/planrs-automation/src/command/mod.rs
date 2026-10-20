@@ -35,14 +35,16 @@ use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-pub use self::baseline::BaselineSet;
+pub use self::baseline::{BaselineClear, BaselineSet};
+pub use self::calendar::{CalendarAdd, CalendarDelete, CalendarSetWeek, CalendarUpdate};
 pub use self::progress::{ProgressReschedule, ProgressUpdate};
 use self::refs::label_refusal;
 pub use self::refs::{LABEL_PATTERN, define_label, is_valid_label, resolve_task};
 use crate::error::{CommandError, CommandErrorKind, codes};
 pub use crate::json::{
-    ConstraintKindJson, DurationJson, DurationUnitJson, GranularityJson, LagJson, LinkTypeJson, PercentJson,
-    ResourceKindJson, RollupJson, SideJson, TaskTypeJson, UnitsJson,
+    ConstraintKindJson, DaySettingJson, DurationJson, DurationUnitJson, GranularityJson, LagJson,
+    LinkTypeJson, PercentJson, RangeJson, RateJson, RateUnitJson, ResourceKindJson, RollupJson, SideJson,
+    TaskTypeJson, UnitsJson, WeekSettingJson, WeekdayJson,
 };
 use crate::json::{DaySchema, MomentSchema, TimeOfDaySchema};
 use crate::text::Language;
@@ -212,6 +214,27 @@ pub enum Command {
     /// Enregistre une ligne de base (R-227).
     #[serde(rename = "baseline.set")]
     BaselineSet(BaselineSet),
+    /// Crée un calendrier (R-248 ; contrat J7, réservée jusqu'au lot L5 :
+    /// hors du schéma des lots, refusée `command.not_yet_available`).
+    #[serde(rename = "calendar.add")]
+    #[schemars(skip)]
+    CalendarAdd(CalendarAdd),
+    /// Renomme un calendrier ou change sa base (R-248 ; réservée, L5).
+    #[serde(rename = "calendar.update")]
+    #[schemars(skip)]
+    CalendarUpdate(CalendarUpdate),
+    /// Règle la semaine type d'un calendrier (R-247 ; réservée, L5).
+    #[serde(rename = "calendar.set_week")]
+    #[schemars(skip)]
+    CalendarSetWeek(CalendarSetWeek),
+    /// Supprime un calendrier (R-248 ; réservée, L5).
+    #[serde(rename = "calendar.delete")]
+    #[schemars(skip)]
+    CalendarDelete(CalendarDelete),
+    /// Efface une ligne de base (R-250 ; réservée, L5).
+    #[serde(rename = "baseline.clear")]
+    #[schemars(skip)]
+    BaselineClear(BaselineClear),
 }
 
 impl Command {
@@ -244,6 +267,11 @@ impl Command {
             Self::ProgressUpdate(_) => "progress.update",
             Self::ProgressReschedule(_) => "progress.reschedule",
             Self::BaselineSet(_) => "baseline.set",
+            Self::CalendarAdd(_) => "calendar.add",
+            Self::CalendarUpdate(_) => "calendar.update",
+            Self::CalendarSetWeek(_) => "calendar.set_week",
+            Self::CalendarDelete(_) => "calendar.delete",
+            Self::BaselineClear(_) => "baseline.clear",
         }
     }
 }
@@ -588,6 +616,12 @@ pub struct ProjectInfoPatch {
     /// R-197 ; J5, refusé jusqu'au lot L7).
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
     pub new_tasks_effort_driven: Patch<bool>,
+    /// Calendrier du projet (J7, R-249 ; UID d'un calendrier existant,
+    /// `null` refusé). Contrat L0 : hors du schéma, refusé
+    /// `command.not_yet_available` jusqu'au lot L5.
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    #[schemars(skip)]
+    pub calendar: Patch<u32>,
 }
 
 impl ProjectInfoPatch {
@@ -727,6 +761,12 @@ pub struct CalendarException {
     #[serde(default)]
     #[schemars(with = "Vec<[TimeOfDaySchema; 2]>")]
     pub ranges: Vec<[TimeOfDay; 2]>,
+    /// Nom de l'exception (J7, R-165 amendée, ≤ 512 caractères, O44).
+    /// Contrat L0 : hors du schéma, refusé `command.not_yet_available`
+    /// jusqu'au lot L5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub name: Option<String>,
 }
 
 /// `calendar.remove_exception` (R-165).
@@ -923,6 +963,20 @@ pub struct ResourceUpdate {
     /// Ressource inactive.
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
     pub inactive: Patch<bool>,
+    /// Taux standard (J7, R-195 amendée : stocké, jamais calculé). Contrat
+    /// L0 : hors du schéma, refusé `command.not_yet_available` jusqu'au
+    /// lot L5 (comme les deux champs suivants).
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    #[schemars(skip)]
+    pub standard_rate: Patch<RateJson>,
+    /// Taux des heures supplémentaires (J7, R-195 amendée).
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    #[schemars(skip)]
+    pub overtime_rate: Patch<RateJson>,
+    /// Coût par utilisation (J7, R-195 amendée ; `per` sans objet).
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    #[schemars(skip)]
+    pub cost_per_use: Patch<RateJson>,
 }
 
 /// `resource.delete` (R-195).

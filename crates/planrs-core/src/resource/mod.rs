@@ -13,4 +13,7 @@ pub mod edit;
 pub mod usage;
 
 pub use edit::{Edit, EditError, Part, Rebalanced, Recalculated, TaskSide, apply};
-pub use usage::{Granularity, UsageError, UsageReport, UsageRow, usage};
+pub use usage::{
+    AssignmentUsageReport, AssignmentUsageRow, Granularity, MAX_ASSIGNMENT_ROWS, UsageError, UsageReport,
+    UsageRow, usage, usage_by_assignment, usage_with,
+};

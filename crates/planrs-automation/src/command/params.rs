@@ -11,7 +11,7 @@ use planrs_core::{Day, Moment};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{Batch, Command, TaskRef};
+use super::{Batch, Command, Patch, TaskRef};
 use crate::json::{DaySchema, GranularityJson, MomentSchema, SideJson};
 use crate::text::Language;
 
@@ -297,4 +297,77 @@ impl ApplyBatchParams {
             label: self.label,
         }
     }
+}
+
+/// Vue principale demandée par `app.ui` (J7, ADR-0015 D6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewJson {
+    /// Diagramme de Gantt.
+    Gantt,
+    /// Feuille des ressources.
+    ResourceSheet,
+    /// Utilisation des ressources.
+    ResourceUsage,
+}
+
+/// Thème demandé par `app.ui` (J7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeJson {
+    /// Thème du système.
+    System,
+    /// Clair.
+    Light,
+    /// Sombre.
+    Dark,
+}
+
+/// Langue d'interface demandée par `app.ui` (J7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum UiLanguageJson {
+    /// Langue du système.
+    System,
+    /// Français.
+    Fr,
+    /// Anglais.
+    En,
+}
+
+/// `app.ui` (J7, ADR-0015 D11, disponibilité `Attached`) : actions
+/// d'interface sans historique, appliquées dans cet ordre ; au moins un
+/// champ (contrôle : lot L3). Aucune ne modifie le projet.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UiActionParams {
+    /// Sélectionne la tâche d'UID donné (`null` : aucune sélection).
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub select: Patch<u32>,
+    /// Fait défiler jusqu'à la tâche d'UID donné.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scroll_to: Option<u32>,
+    /// Zoom de l'échelle de temps (`auto` : ajusté au projet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zoom: Option<ZoomJson>,
+    /// Vue principale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<ViewJson>,
+    /// Thème.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeJson>,
+    /// Langue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<UiLanguageJson>,
+}
+
+/// `app.screenshot` (J7, ADR-0015 D11, disponibilité `Attached`) : PNG de
+/// la fenêtre, réduit de moitié `scale_down` fois (C-CTL-08).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScreenshotParams {
+    /// Réductions de moitié demandées (0 à 2 ; défaut 0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(max = 2))]
+    pub scale_down: Option<u8>,
 }

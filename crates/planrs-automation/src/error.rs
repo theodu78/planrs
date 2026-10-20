@@ -108,6 +108,30 @@ pub mod codes {
     pub const BASELINE_ROLLUP_NEEDS_SELECTION: &str = "baseline.rollup_needs_selection";
     /// Tâche exclue du calcul : aucune date à expliquer (J6, R-230).
     pub const EXPLAIN_NOT_SCHEDULED: &str = "explain.not_scheduled";
+    /// Nom de calendrier déjà pris, sans tenir compte de la casse (J7, R-248).
+    pub const CALENDAR_NAME_TAKEN: &str = "calendar.name_taken";
+    /// Base qui n'est pas un calendrier de base, ou calendrier de base qui sert de base rendu dérivé (J7, R-248).
+    pub const CALENDAR_BASE_NOT_BASE: &str = "calendar.base_not_base";
+    /// Calendrier utilisé (projet, tâche, ressource, base) : suppression refusée (J7, R-248).
+    pub const CALENDAR_IN_USE: &str = "calendar.in_use";
+    /// Barre qui ne se déplace pas par ce geste (récapitulative, tâche commencée, jalon, exclue, ligne vide ; J7, R-240 à R-242).
+    pub const GESTURE_NOT_DRAGGABLE: &str = "gesture.not_draggable";
+    /// Rapport d'utilisation trop grand (périodes, ressources ou lignes d'affectation ; J7, R-245).
+    pub const USAGE_LIMIT: &str = "usage.limit";
+    /// Écriture relayée refusée par l'utilisateur (J7, C-CTL-03).
+    pub const CONTROL_REJECTED: &str = "control.rejected";
+    /// Écriture relayée sans réponse de l'utilisateur dans le délai (J7, C-CTL-04).
+    pub const CONTROL_APPROVAL_TIMEOUT: &str = "control.approval_timeout";
+    /// Commande non relayable vers l'application (`project.open`, `project.new`, `project.import_csv` ; J7, C-CTL-05).
+    pub const CONTROL_NOT_RELAYABLE: &str = "control.not_relayable";
+    /// Commande d'interface (`app.*`) sans application rattachée (J7, C-CTL-10).
+    pub const CONTROL_NOT_ATTACHED: &str = "control.not_attached";
+    /// Application rattachée fermée pendant un appel (J7, C-CTL-06).
+    pub const CONTROL_APP_GONE: &str = "control.app_gone";
+    /// Aucune capture d'écran dans le délai (J7, C-CTL-08).
+    pub const CONTROL_SCREENSHOT_UNAVAILABLE: &str = "control.screenshot_unavailable";
+    /// Capture d'écran trop grande, même réduite (J7, C-CTL-08).
+    pub const CONTROL_SCREENSHOT_TOO_LARGE: &str = "control.screenshot_too_large";
 }
 
 /// Commande refusée. L'état de la session est intact (atomicité du lot).

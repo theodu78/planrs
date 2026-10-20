@@ -38,6 +38,27 @@ pub struct BaselineSet {
     pub overwrite: bool,
 }
 
+/// `baseline.clear` (J7, R-250) : efface la ligne de base `number` (0 à
+/// 10, défaut 0) du projet entier ou de `tasks`. Contrat J7 L0 ; exécution :
+/// lot L5.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BaselineClear {
+    /// Numéro de la ligne (0 à 10 ; défaut 0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(max = 10))]
+    pub number: Option<u8>,
+    /// Tâches sélectionnées (défaut : projet entier, ressources comprises).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tasks: Option<Vec<TaskRef>>,
+}
+
+/// `baseline.clear` : squelette J7 L0.
+pub(super) fn clear(op: &BaselineClear, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
+    let _ = (op, ctx);
+    Err(CommandError::not_yet(7))
+}
+
 /// Refus de la capture → erreur de commande (R-227).
 fn capture_error(e: BaselineError) -> CommandError {
     match e {

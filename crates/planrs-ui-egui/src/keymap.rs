@@ -16,6 +16,7 @@
 use egui::{Key, KeyboardShortcut, Modifiers};
 
 use crate::action::Action;
+use crate::nav::NavMove;
 use crate::structure::StructureOp;
 
 /// Combinaison de touches (`Modifiers::COMMAND` : Ctrl, ou Cmd sur macOS).
@@ -28,6 +29,9 @@ pub enum KeyContext {
     Global,
     /// Un document est ouvert, hors saisie de texte.
     Document,
+    /// La table a le focus, sans saisie en cours, sans menu ni fenêtre
+    /// ouverts (J7, ADR-0015 D2 ; actif à partir du lot L1).
+    Table,
 }
 
 /// Action propre à l'interface (sans commande du registre).
@@ -42,6 +46,28 @@ pub enum UiBinding {
     /// document est modifié. Sur macOS, Cmd+Q n'arrive ici que parce que
     /// l'application retire le menu par défaut de winit (`apps/planrs`).
     Quit,
+    /// Déplacement dans la grille (J7, H-UI-13 à H-UI-16) ; `extend` :
+    /// étend la sélection de lignes.
+    Nav {
+        /// Déplacement.
+        mv: NavMove,
+        /// Extension de la sélection (Maj).
+        extend: bool,
+    },
+    /// « Informations sur la tâche » (Maj+F2, H-UI-19).
+    TaskInformation,
+    /// Une graduation fine de l'échelle de temps (Alt+←/→, H-UI-18).
+    TimescaleStep(i8),
+    /// Une largeur visible (Alt+Page haut/bas, H-UI-18).
+    TimescalePage(i8),
+    /// Début du projet (Alt+Origine, H-UI-18).
+    TimescaleToStart,
+    /// Fin du projet (Alt+Fin, H-UI-18).
+    TimescaleToEnd,
+    /// Unités de temps plus fines (Ctrl+/, Ctrl+=, H-UI-18).
+    ZoomFiner,
+    /// Unités de temps plus grossières (Ctrl+-, H-UI-18).
+    ZoomCoarser,
 }
 
 /// Liaison d'un raccourci.
@@ -166,9 +192,26 @@ pub fn binding_action(binding: Binding) -> Option<Action> {
         Binding::Command("link.add") => Some(Action::Structure(StructureOp::Link)),
         Binding::Command("link.remove") => Some(Action::Structure(StructureOp::Unlink)),
         Binding::Command(_) => None,
-        Binding::Ui(UiBinding::OpenFile) => Some(Action::OpenDialog),
-        Binding::Ui(UiBinding::SaveAs) => Some(Action::SaveAs),
-        Binding::Ui(UiBinding::Quit) => Some(Action::Quit),
+        Binding::Ui(ui) => Some(ui_action(ui)),
+    }
+}
+
+/// Action d'une liaison propre à l'interface : toute [`UiBinding`] en a
+/// une (`keymap_bindings_resolve`).
+#[must_use]
+pub const fn ui_action(binding: UiBinding) -> Action {
+    match binding {
+        UiBinding::OpenFile => Action::OpenDialog,
+        UiBinding::SaveAs => Action::SaveAs,
+        UiBinding::Quit => Action::Quit,
+        UiBinding::Nav { mv, extend } => Action::Nav { mv, extend },
+        UiBinding::TaskInformation => Action::ShowTaskInformation,
+        UiBinding::TimescaleStep(n) => Action::TimescaleStep(n),
+        UiBinding::TimescalePage(n) => Action::TimescalePage(n),
+        UiBinding::TimescaleToStart => Action::TimescaleToStart,
+        UiBinding::TimescaleToEnd => Action::TimescaleToEnd,
+        UiBinding::ZoomFiner => Action::ZoomBy(1),
+        UiBinding::ZoomCoarser => Action::ZoomBy(-1),
     }
 }
 
@@ -198,6 +241,9 @@ pub fn dispatch(ctx: &egui::Context, has_document: bool, actions: &mut Vec<Actio
         let active = match context {
             KeyContext::Global => true,
             KeyContext::Document => has_document,
+            // Focus de la table : suivi à partir du lot L1 (aucune entrée
+            // en J7 L0).
+            KeyContext::Table => false,
         };
         if !active {
             continue;
@@ -217,7 +263,9 @@ pub fn dispatch(ctx: &egui::Context, has_document: bool, actions: &mut Vec<Actio
     reason = "tests : un échec doit s'arrêter net et lisiblement"
 )]
 mod tests {
-    use super::{Binding, KEYMAP, binding_action};
+    use super::{Binding, KEYMAP, UiBinding, binding_action, ui_action};
+    use crate::action::Action;
+    use crate::nav::NavMove;
 
     /// Modificateurs de `a` contenant ceux de `b` (au moins autant de
     /// touches enfoncées).
@@ -250,5 +298,41 @@ mod tests {
             assert!(binding_action(*binding).is_some(), "{shortcut:?} → {binding:?}");
         }
         assert!(binding_action(Binding::Command("task.move")).is_none());
+    }
+
+    /// Contrat J7 (lot L0) : chaque `UiBinding` a son action.
+    #[test]
+    fn keymap_bindings_resolve() {
+        let all = [
+            UiBinding::OpenFile,
+            UiBinding::SaveAs,
+            UiBinding::Quit,
+            UiBinding::Nav {
+                mv: NavMove::Down,
+                extend: true,
+            },
+            UiBinding::TaskInformation,
+            UiBinding::TimescaleStep(-1),
+            UiBinding::TimescalePage(1),
+            UiBinding::TimescaleToStart,
+            UiBinding::TimescaleToEnd,
+            UiBinding::ZoomFiner,
+            UiBinding::ZoomCoarser,
+        ];
+        for binding in all {
+            assert_eq!(binding_action(Binding::Ui(binding)), Some(ui_action(binding)));
+        }
+        assert_eq!(
+            ui_action(UiBinding::Nav {
+                mv: NavMove::PageDown,
+                extend: false
+            }),
+            Action::Nav {
+                mv: NavMove::PageDown,
+                extend: false
+            }
+        );
+        assert_eq!(ui_action(UiBinding::ZoomFiner), Action::ZoomBy(1));
+        assert_eq!(ui_action(UiBinding::ZoomCoarser), Action::ZoomBy(-1));
     }
 }

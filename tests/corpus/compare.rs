@@ -718,7 +718,8 @@ fn rules(
                 ConstraintKind::MustFinishOn => "R-098",
             });
         }
-        Driver::Manual | Driver::Rollup => {}
+        // Début réel (J6) : étiqueté par les lots du moteur (R-203, R-204).
+        Driver::Manual | Driver::Rollup | Driver::Actual => {}
     }
     if task.predecessors.len() >= 2 {
         out.insert("R-044");

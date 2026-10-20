@@ -28,6 +28,7 @@
 
 mod backward;
 mod constraint;
+pub mod explain;
 mod forward;
 mod image;
 pub(crate) mod load;
@@ -45,7 +46,7 @@ pub use crate::diagnostic::Pass;
 pub use image::{assigned_leaf_duration, placed_by_assignments, sync_assigned_durations};
 pub use types::{
     AssignmentRole, AssignmentSchedule, Driver, EffectiveCalendar, Exclusion, LateDriver, MAX_OVERLOADS,
-    Overload, ResourceLoad, Schedule, TaskOutcome, TaskRole, TaskSchedule,
+    Overload, ProgressSchedule, ResourceLoad, Schedule, TaskOutcome, TaskRole, TaskSchedule,
 };
 
 use crate::arena::Arena;

@@ -31,6 +31,10 @@
 //!   décalages, marges ; R-035 à R-069, J2) ;
 //! - [`resource`] : équilibrage durée, travail, unités à l'édition et
 //!   utilisation par période (R-188 à R-194, J5) ;
+//! - [`progress`] : faits d'avancement, restes dérivés et équilibrage d'une
+//!   saisie (R-200 à R-213, J6) ;
+//! - [`baseline`] : capture des lignes de base et écarts (R-220 à R-225,
+//!   J6) ;
 //! - [`diagnostic`] : diagnostics typés, gravité et sujet déduits ;
 //! - [`error`] : erreurs typées, codes stables.
 
@@ -42,6 +46,7 @@
 )]
 
 pub mod arena;
+pub mod baseline;
 pub mod calendar;
 pub mod diagnostic;
 pub mod duration;
@@ -50,6 +55,7 @@ pub mod fixed;
 pub mod ids;
 pub mod model;
 pub mod parity;
+pub mod progress;
 pub mod quantity;
 pub mod resource;
 pub mod schedule;
@@ -69,14 +75,15 @@ pub use fixed::{Decimal, round_div};
 pub use ids::{AssignmentUid, BaselineNumber, CalendarUid, EntityUid, Guid, ResourceUid, TaskId, TaskUid};
 pub use model::{
     Assignment, AssignmentBaseline, Constraint, ConstraintKind, ExtraEntry, Extras, LevelingDelay, Link,
-    LinkType, OutlineLevel, Priority, Progress, Project, ProjectInfo, ProjectInit, ProjectOptions, Resource,
-    ResourceBaseline, ResourceKind, ScheduleAnchor, SchedulingMode, Task, TaskBaseline, TaskType,
-    WorkContour, resource_id,
+    LinkType, OutlineLevel, Priority, Progress, ProgressOption, ProgressOptions, Project, ProjectInfo,
+    ProjectInit, ProjectOptions, Resource, ResourceBaseline, ResourceKind, ScheduleAnchor, SchedulingMode,
+    Task, TaskBaseline, TaskType, WorkContour, resource_id,
 };
+pub use progress::{ProgressFacts, ProgressState};
 pub use quantity::{Money, Percent, Rate, RateUnit, SignedPercent, Units};
 pub use schedule::{
     AssignmentRole, AssignmentSchedule, Driver, EffectiveCalendar, Exclusion, LateDriver, Limits, Overload,
-    ResourceLoad, Schedule, TaskOutcome, TaskRole, TaskSchedule, schedule, schedule_with,
+    ProgressSchedule, ResourceLoad, Schedule, TaskOutcome, TaskRole, TaskSchedule, schedule, schedule_with,
 };
 pub use time::{Day, DayRange, Moment, Month, TimeOfDay, Week, Weekday};
 

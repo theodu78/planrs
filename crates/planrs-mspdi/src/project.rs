@@ -273,6 +273,9 @@ fn project_options(f: &Fields<'_>, sink: &mut Sink<'_>) -> ProjectOptions {
         // critique par défaut.
         critical_slack_limit_days: bounded_u32(f, "CriticalSlackLimit", 0..=u32::MAX, 0, sink),
         multiple_critical_paths: f.bool("MultipleCriticalPaths", sink).unwrap_or(false),
+        // Contrat J6 : options de l'avancement lues par le lot L5 (R-214,
+        // R-218) ; défauts jusque-là.
+        progress: defaults.progress,
     }
 }
 

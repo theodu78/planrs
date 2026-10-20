@@ -1311,6 +1311,18 @@ Règles J5 (ADR-0013, cahier `docs/plans/j5.md` § 2.3) : placement affectation 
 
 Règles J6 (ADR-0014 D1 à D5, cahier `docs/plans/j6.md` § 2.3) : faits d'avancement et restes dérivés (vérité = réels), saisie équilibrée par `planrs_core::progress::edit`, épingle réelle d'une tâche achevée, une seule coupure par tâche en cours (`Stop` calculé, `Resume`), options de la date d'état lues et réécrites, commandes `progress.*`. Les fiches sont écrites par les lots L0 à L6, chacune avec ses tests. Sources S20, S26, S33 (complétées), S50 à S56 ; observations O36 à O41.
 
+## R-200 — Faits d'avancement, équation, % dérivé
+- **Formulation** (partie faits, lot L0 ; l'équation à la saisie est complétée par le lot L2) : `planrs_core::progress::facts` lit l'avancement saisi d'une tâche.
+  - État : achevée ⇔ fin réelle saisie ; commencée ⇔ début réel, durée réelle > 0 ou % achevé > 0 ; non commencée sinon.
+  - Durée réelle effective : la durée réelle saisie si elle est > 0, sinon `percent_of(D, %)` (R-010) ; non achevée : bornée à `[0, D]` ; achevée sans durée réelle saisie : D (hypothèse : achevée ⇒ 100 %) ; non commencée : 0.
+  - Reste = D − réel, ≥ 0 (`remaining_duration`) ; 0 pour une achevée. Travail restant d'une affectation = W − travail réel, ≥ 0 (`remaining_work`, R-211). Les restes et le % stockés ne sont pas relus (ADR-0014 D4 : vérité = réels).
+  - % dérivé (`percent_of_duration`) = `round_div(réel × 10 000, D)` en `i128`, borné à `[0, 10 000]` ; achevée : 10 000 ; D = 0 : 10 000 si achevée, sinon 0.
+  - Commencée sans début réel : début réel implicite (`implicit_start`), pris par le moteur au début au plus tôt du réseau avec `progress.actual_start_missing` (lots L1, L3).
+  - Exemples (Standard) : D 2 400, réel 960 ⇒ reste 1 440, % 4 000 ; 3 333 sans réel sur D 1 440 ⇒ réel 480, % 3 333 ; 3 300 ⇒ réel 475 ; réel 960 saisi et 1 000 stocké ⇒ réel 960 (le réel gagne), % 6 667 ; fin réelle sans durée réelle ⇒ réel = D, reste 0, 10 000.
+- **Source** : support.microsoft.com, « Percent (%) Complete fields » (S26 : « Percent Complete = (Actual Duration / Duration) * 100 ») ; « Remaining Duration (task field) » (S50 : « Remaining Duration = Duration - Actual Duration ») ; « Actual Finish fields » (S52) ; bornes, cas achevé sans durée réelle, jalon : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r200_progress_facts.rs` (`r200_facts_states`, `r200_facts_percent_without_actual_duration`) ; tests unitaires de `crates/planrs-core/src/progress/facts.rs`.
+
 ### Lignes de base (R-220 à R-228)
 
 Règles J6 (ADR-0014 D6, D7) : capture des valeurs du moteur (récapitulatives et UID 0 compris), portée et cumul, remplacement sur `overwrite` (coût recopié tel quel avec `baseline.cost_not_computed`, arbitrage du 2026-10-20), écarts en minutes ouvrées signées de l'échelle de mesure, écriture MSPDI × 1000, commande `baseline.set`, vue `baseline_variance`. Fiches écrites par les lots L4 à L8. Sources S5 (complétée), S57 à S59 ; observations O42, O43.

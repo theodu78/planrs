@@ -1143,6 +1143,8 @@ impl<'n, 'a> Calc<'n, 'a> {
             work: res.work,
             effective_units,
             calendar,
+            actual: None,
+            remaining_start: None,
         })
     }
 }

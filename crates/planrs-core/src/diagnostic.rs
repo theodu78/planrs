@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::duration::Minutes;
 use crate::error::CalendarError;
-use crate::ids::{AssignmentUid, CalendarUid, ResourceUid, TaskUid};
-use crate::model::{ConstraintKind, LinkType, WorkContour};
+use crate::ids::{AssignmentUid, BaselineNumber, CalendarUid, ResourceUid, TaskUid};
+use crate::model::{ConstraintKind, LinkType, ProgressOption, WorkContour};
 use crate::quantity::Units;
 use crate::time::Moment;
 
@@ -562,6 +562,77 @@ pub enum Diagnostic {
         /// Plafond.
         limit: u32,
     },
+    /// Lien entrant d'une tâche en cours non fractionnable
+    /// (`split_in_progress` faux) : son reste suit la partie réelle, le lien
+    /// est sans effet (info, R-205).
+    #[serde(rename = "progress.link_ignored")]
+    ProgressLinkIgnored {
+        /// Prédécesseur.
+        predecessor: TaskUid,
+        /// Successeur (tâche en cours).
+        successor: TaskUid,
+    },
+    /// Lien entrant dont la borne est violée par les dates réelles d'une
+    /// tâche achevée : les dates réelles l'emportent (info, R-203).
+    #[serde(rename = "progress.link_overridden")]
+    ProgressLinkOverridden {
+        /// Prédécesseur.
+        predecessor: TaskUid,
+        /// Successeur (tâche achevée).
+        successor: TaskUid,
+    },
+    /// Option d'avancement que le calcul ne suit pas : calcul aux valeurs
+    /// par défaut (info, R-218).
+    #[serde(rename = "progress.option_unsupported")]
+    ProgressOptionUnsupported {
+        /// Option.
+        option: ProgressOption,
+    },
+    /// Tâche en cours dans un projet planifié à rebours : reste placé au
+    /// plus tôt depuis sa reprise (avertissement, R-207).
+    #[serde(rename = "progress.from_finish_in_progress")]
+    ProgressFromFinishInProgress {
+        /// Tâche.
+        task: TaskUid,
+    },
+    /// Tâche commencée sans début réel : début réel implicite = début au
+    /// plus tôt du réseau (info, R-200).
+    #[serde(rename = "progress.actual_start_missing")]
+    ProgressActualStartMissing {
+        /// Tâche.
+        task: TaskUid,
+    },
+    /// Jalon saisi à un % strictement entre 0 et 100 : ramené à 100 %
+    /// (avertissement, R-213).
+    #[serde(rename = "progress.milestone_rounded")]
+    ProgressMilestoneRounded {
+        /// Tâche.
+        task: TaskUid,
+    },
+    /// Contrainte de fin d'une tâche en cours : ignorée pour les dates
+    /// (info, R-205).
+    #[serde(rename = "constraint.ignored_in_progress")]
+    ConstraintIgnoredInProgress {
+        /// Tâche en cours.
+        task: TaskUid,
+        /// Type de la contrainte.
+        kind: ConstraintKind,
+    },
+    /// Ligne de base posée avec le coût stocké recopié tel quel : planrs ne
+    /// recalcule pas les coûts (info, R-223, ADR-0014 arbitrage du
+    /// 2026-10-20).
+    #[serde(rename = "baseline.cost_not_computed")]
+    BaselineCostNotComputed {
+        /// Numéro de la ligne.
+        number: BaselineNumber,
+    },
+    /// Tâches de la portée sautées (lignes vides, tâches exclues du
+    /// calcul) : sans ligne de base (info, R-221).
+    #[serde(rename = "baseline.task_skipped")]
+    BaselineTaskSkipped {
+        /// Nombre de tâches sautées.
+        count: u32,
+    },
     /// Invariant interne du calcul violé : jamais attendu, anomalie à
     /// signaler (erreur).
     #[serde(rename = "schedule.internal")]
@@ -651,18 +722,31 @@ impl Diagnostic {
             | Self::AssignmentCalendarEmpty { .. }
             | Self::TaskFixedWorkEffortDriven { .. }
             | Self::CalendarTooManySegments { .. }
-            | Self::AssignmentTooManyParts { .. } => Severity::Warning,
+            | Self::AssignmentTooManyParts { .. }
+            | Self::ProgressFromFinishInProgress { .. }
+            | Self::ProgressMilestoneRounded { .. } => Severity::Warning,
             Self::LinkInactive { .. }
             | Self::LinkExcludedEndpoint { .. }
             | Self::TaskManualUndated { .. }
             | Self::ConstraintManualIgnored { .. }
             | Self::ResourceAvailabilityIgnored { .. }
-            | Self::AssignmentContourUnsupported { .. } => Severity::Info,
+            | Self::AssignmentContourUnsupported { .. }
+            | Self::ProgressLinkIgnored { .. }
+            | Self::ProgressLinkOverridden { .. }
+            | Self::ProgressOptionUnsupported { .. }
+            | Self::ProgressActualStartMissing { .. }
+            | Self::ConstraintIgnoredInProgress { .. }
+            | Self::BaselineCostNotComputed { .. }
+            | Self::BaselineTaskSkipped { .. } => Severity::Info,
         }
     }
 
     /// Élément concerné, déduit des champs.
     #[must_use]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "un bras par famille de variantes, rien à factoriser"
+    )]
     pub fn subject(&self) -> Subject {
         match self {
             Self::CalendarUnknown { referenced_by, .. } => *referenced_by,
@@ -681,6 +765,9 @@ impl Diagnostic {
             Self::ProjectCalendarNotBase { .. }
             | Self::ProjectCalendarFallback { .. }
             | Self::LinkExpansionLimit { .. }
+            | Self::ProgressOptionUnsupported { .. }
+            | Self::BaselineCostNotComputed { .. }
+            | Self::BaselineTaskSkipped { .. }
             | Self::ScheduleInternal { .. } => Subject::Project,
             Self::TaskReservedUid => Subject::Task(TaskUid::PROJECT_SUMMARY),
             Self::TaskOutlineJump { task }
@@ -696,7 +783,11 @@ impl Diagnostic {
             | Self::ConstraintSummaryIgnored { task, .. }
             | Self::ConstraintManualIgnored { task, .. }
             | Self::TaskDeadlineMissed { task, .. }
-            | Self::TaskFixedWorkEffortDriven { task } => Subject::Task(*task),
+            | Self::TaskFixedWorkEffortDriven { task }
+            | Self::ProgressFromFinishInProgress { task }
+            | Self::ProgressActualStartMissing { task }
+            | Self::ProgressMilestoneRounded { task }
+            | Self::ConstraintIgnoredInProgress { task, .. } => Subject::Task(*task),
             Self::LinkCycle { tasks } => tasks.iter().min().map_or(Subject::Project, |t| Subject::Task(*t)),
             Self::LinkSelf { task } => Subject::Link {
                 predecessor: *task,
@@ -742,6 +833,14 @@ impl Diagnostic {
                 predecessor,
                 successor,
                 ..
+            }
+            | Self::ProgressLinkIgnored {
+                predecessor,
+                successor,
+            }
+            | Self::ProgressLinkOverridden {
+                predecessor,
+                successor,
             } => Subject::Link {
                 predecessor: *predecessor,
                 successor: *successor,
@@ -811,6 +910,15 @@ impl Diagnostic {
             Self::TaskFixedWorkEffortDriven { .. } => "task.fixed_work_effort_driven",
             Self::CalendarTooManySegments { .. } => "calendar.too_many_segments",
             Self::AssignmentTooManyParts { .. } => "assignment.too_many_parts",
+            Self::ProgressLinkIgnored { .. } => "progress.link_ignored",
+            Self::ProgressLinkOverridden { .. } => "progress.link_overridden",
+            Self::ProgressOptionUnsupported { .. } => "progress.option_unsupported",
+            Self::ProgressFromFinishInProgress { .. } => "progress.from_finish_in_progress",
+            Self::ProgressActualStartMissing { .. } => "progress.actual_start_missing",
+            Self::ProgressMilestoneRounded { .. } => "progress.milestone_rounded",
+            Self::ConstraintIgnoredInProgress { .. } => "constraint.ignored_in_progress",
+            Self::BaselineCostNotComputed { .. } => "baseline.cost_not_computed",
+            Self::BaselineTaskSkipped { .. } => "baseline.task_skipped",
             Self::ScheduleInternal { .. } => "schedule.internal",
         }
     }
@@ -1091,6 +1199,49 @@ impl fmt::Display for Diagnostic {
                 f,
                 "la tâche {task} a {parts} affectations de travail (plus de {limit}) : sa durée est celle de la plus longue"
             ),
+            Self::ProgressLinkIgnored {
+                predecessor,
+                successor,
+            } => write!(
+                f,
+                "le lien {predecessor} → {successor} est sans effet : la tâche en cours {successor} ne se fractionne pas"
+            ),
+            Self::ProgressLinkOverridden {
+                predecessor,
+                successor,
+            } => write!(
+                f,
+                "les dates réelles de la tâche achevée {successor} l'emportent sur son lien avec la tâche {predecessor}"
+            ),
+            Self::ProgressOptionUnsupported { option } => write!(
+                f,
+                "l'option d'avancement {} n'est pas suivie : calcul aux valeurs par défaut",
+                option.mspdi_name()
+            ),
+            Self::ProgressFromFinishInProgress { task } => write!(
+                f,
+                "la tâche en cours {task} d'un projet planifié à rebours : son reste est placé au plus tôt"
+            ),
+            Self::ProgressActualStartMissing { task } => write!(
+                f,
+                "la tâche commencée {task} n'a pas de début réel : son début planifié est pris"
+            ),
+            Self::ProgressMilestoneRounded { task } => {
+                write!(f, "le jalon {task} est passé à 100 % achevé")
+            }
+            Self::ConstraintIgnoredInProgress { task, kind } => write!(
+                f,
+                "la contrainte {} de la tâche en cours {task} est ignorée pour ses dates",
+                constraint_name(*kind)
+            ),
+            Self::BaselineCostNotComputed { number } => write!(
+                f,
+                "ligne de base {} : coûts recopiés tels quels, sans recalcul",
+                number.get()
+            ),
+            Self::BaselineTaskSkipped { count } => {
+                write!(f, "{count} tâche(s) non planifiée(s) sans ligne de base")
+            }
             Self::ScheduleInternal { detail } => {
                 write!(
                     f,
@@ -1693,6 +1844,103 @@ mod tests {
         assert_eq!(
             Diagnostic::from_calendar_error(&crate::error::CalendarError::TooManySegments { limit: 1 }),
             None
+        );
+    }
+
+    #[test]
+    fn contract_j6_diagnostics() {
+        let t = TaskUid::new(3);
+        let link = Subject::Link {
+            predecessor: TaskUid::new(1),
+            successor: t,
+        };
+        let n = crate::ids::BaselineNumber::new(1).unwrap();
+        let cases = [
+            (
+                Diagnostic::ProgressLinkIgnored {
+                    predecessor: TaskUid::new(1),
+                    successor: t,
+                },
+                "progress.link_ignored",
+                Severity::Info,
+                link,
+            ),
+            (
+                Diagnostic::ProgressLinkOverridden {
+                    predecessor: TaskUid::new(1),
+                    successor: t,
+                },
+                "progress.link_overridden",
+                Severity::Info,
+                link,
+            ),
+            (
+                Diagnostic::ProgressOptionUnsupported {
+                    option: crate::model::ProgressOption::MoveCompletedEndsBack,
+                },
+                "progress.option_unsupported",
+                Severity::Info,
+                Subject::Project,
+            ),
+            (
+                Diagnostic::ProgressFromFinishInProgress { task: t },
+                "progress.from_finish_in_progress",
+                Severity::Warning,
+                Subject::Task(t),
+            ),
+            (
+                Diagnostic::ProgressActualStartMissing { task: t },
+                "progress.actual_start_missing",
+                Severity::Info,
+                Subject::Task(t),
+            ),
+            (
+                Diagnostic::ProgressMilestoneRounded { task: t },
+                "progress.milestone_rounded",
+                Severity::Warning,
+                Subject::Task(t),
+            ),
+            (
+                Diagnostic::ConstraintIgnoredInProgress {
+                    task: t,
+                    kind: ConstraintKind::FinishNoLaterThan,
+                },
+                "constraint.ignored_in_progress",
+                Severity::Info,
+                Subject::Task(t),
+            ),
+            (
+                Diagnostic::BaselineCostNotComputed { number: n },
+                "baseline.cost_not_computed",
+                Severity::Info,
+                Subject::Project,
+            ),
+            (
+                Diagnostic::BaselineTaskSkipped { count: 2 },
+                "baseline.task_skipped",
+                Severity::Info,
+                Subject::Project,
+            ),
+        ];
+        for (d, code, severity, subject) in cases {
+            assert_eq!(d.code(), code);
+            assert_tag(&d, code);
+            assert_eq!(d.severity(), severity, "{code}");
+            assert_eq!(d.subject(), subject, "{code}");
+            let json = serde_json::to_string(&d).unwrap();
+            assert_eq!(serde_json::from_str::<Diagnostic>(&json).unwrap(), d);
+            assert_ne!(d.to_string(), "");
+        }
+        assert_eq!(
+            serde_json::to_string(&Diagnostic::ProgressOptionUnsupported {
+                option: crate::model::ProgressOption::TaskUpdatesResource
+            })
+            .unwrap(),
+            r#"{"code":"progress.option_unsupported","option":"task_updates_resource"}"#
+        );
+        assert_eq!(
+            Diagnostic::BaselineCostNotComputed { number: n }.to_string(),
+            "ligne de base 1 : coûts recopiés tels quels, sans recalcul"
         );
     }
 }

@@ -197,10 +197,15 @@ mod r197_task_update_extended;
 mod r198_mspdi_resource_read;
 mod r199_mspdi_resource_write;
 mod r200_progress_facts;
+mod r201_percent_input;
+mod r202_other_progress_inputs;
 mod r203_completed_leaf_pin;
 mod r208_manual_with_progress;
 mod r209_started_assignments;
 mod r210_summary_progress_rollup;
+mod r211_actual_work_progress;
+mod r212_physical_percent;
+mod r213_progress_edge_cases;
 mod r230_driver_bound;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention

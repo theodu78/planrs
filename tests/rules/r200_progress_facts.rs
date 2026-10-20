@@ -99,3 +99,58 @@ fn r200_facts_percent_without_actual_duration() {
     assert_eq!(facts(&t).actual_duration, Minutes::new(960));
     assert_eq!(percent_of_duration(&t), Percent::new(6_667).unwrap());
 }
+
+#[test]
+fn r200_equation_round_trip() {
+    // L2 : toute saisie rend un avancement cohérent ; relu par `facts`, il
+    // redonne réel, reste = D − réel et % dérivé. T 5 j (2 400) lun-ven.
+    use crate::r201_percent_input::{FRI, MON, calendar, ctx, write};
+    use planrs_core::progress::edit::{Input, apply};
+    let cal = calendar();
+    let cx = ctx(&cal, MON, FRI);
+    let inputs = [
+        Input::Percent(Percent::new(4_000).unwrap()),
+        Input::ActualDuration(Minutes::new(1_200)),
+        Input::RemainingDuration(Minutes::new(2_400)),
+        Input::ActualStart(at("2026-10-20T08:00")),
+        Input::ActualFinish(at("2026-10-21T12:00")),
+        Input::Percent(Percent::FULL),
+    ];
+    let mut tk = task(2_400);
+    for input in inputs {
+        let out = apply(&tk, &[], &[input], &cx).unwrap();
+        write(&mut tk, &out);
+        let read = facts(&tk);
+        let dur = tk.duration.minutes();
+        assert_eq!(read.actual_duration, out.progress.actual_duration, "{input:?}");
+        assert_eq!(
+            out.progress.remaining_duration.get(),
+            dur.get() - read.actual_duration.get(),
+            "{input:?}"
+        );
+        assert_eq!(
+            remaining_duration(&tk),
+            out.progress.remaining_duration,
+            "{input:?}"
+        );
+        assert_eq!(
+            percent_of_duration(&tk),
+            out.progress.percent_complete,
+            "{input:?}"
+        );
+        assert_eq!(
+            read.state == ProgressState::Complete,
+            out.progress.percent_complete == Percent::FULL
+        );
+    }
+    // 40 % : réel 960, reste 1 440, % 4 000 (exemple de R-200).
+    let out = apply(
+        &task(2_400),
+        &[],
+        &[Input::Percent(Percent::new(4_000).unwrap())],
+        &cx,
+    )
+    .unwrap();
+    assert_eq!(out.progress.actual_duration, Minutes::new(960));
+    assert_eq!(out.progress.remaining_duration, Minutes::new(1_440));
+}

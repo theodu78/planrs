@@ -114,18 +114,15 @@ impl EditState {
     }
 }
 
-/// Curseur de la table et saisie en cours : état transitoire de la vue
-/// (jamais sérialisé), tenu par `ViewTransient`.
+/// Saisie en cours dans la table : état transitoire de la vue (jamais
+/// sérialisé), tenu par `ViewTransient`.
 ///
-/// La ligne courante est la tâche sélectionnée (`App::selection`) ou, sans
-/// sélection, la ligne vide de fin si [`TableEdit::blank`] est vrai ; la
-/// colonne courante est [`TableEdit::column`] (clic sur une cellule, Tab).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// La cellule courante (ligne et colonne) est le curseur
+/// `ViewTransient::cursor` (J7, lot L1, ADR-0015 D1) : la ligne courante
+/// est la tâche sélectionnée (`App::selection`) ou, sans sélection, la
+/// ligne vide de fin.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TableEdit {
-    /// Colonne courante.
-    pub column: Column,
-    /// La ligne vide de fin est la ligne courante (sans sélection).
-    pub blank: bool,
     /// Saisie ouverte, s'il y en a une.
     pub editing: Option<EditState>,
     /// Donner le focus à la zone de saisie (curseur en fin de texte) à la
@@ -133,44 +130,11 @@ pub struct TableEdit {
     pub focus_pending: bool,
 }
 
-impl Default for TableEdit {
-    fn default() -> Self {
-        Self {
-            column: Column::Name,
-            blank: false,
-            editing: None,
-            focus_pending: false,
-        }
-    }
-}
-
 impl TableEdit {
     /// Ouvre une saisie et demande le focus.
     pub fn start(&mut self, state: EditState) {
-        self.column = state.column;
         self.editing = Some(state);
         self.focus_pending = true;
-    }
-}
-
-/// Colonne éditable visible suivante (`forward`) ou précédente de `from`
-/// parmi `visible` (ordre d'affichage) ; `None` au bord.
-#[must_use]
-pub fn neighbour_column(visible: &[Column], from: Column, forward: bool) -> Option<Column> {
-    let position = visible.iter().position(|c| *c == from)?;
-    if forward {
-        visible
-            .get(position.checked_add(1)?..)?
-            .iter()
-            .copied()
-            .find(|c| editable(*c))
-    } else {
-        visible
-            .get(..position)?
-            .iter()
-            .rev()
-            .copied()
-            .find(|c| editable(*c))
     }
 }
 
@@ -523,7 +487,7 @@ mod tests {
     use planrs_automation::{ApplyMode, Batch, Command, Placement, Session, TaskRef};
     use planrs_core::{LinkType, TaskUid};
 
-    use super::{EditError, EditState, commit_edit, editable, neighbour_column};
+    use super::{EditError, EditState, commit_edit, editable};
     use crate::column::Column;
 
     /// Session de l'exemple (UID n = ID n).
@@ -679,28 +643,5 @@ mod tests {
         s.apply(&batch, ApplyMode::Commit).unwrap();
         let last = s.project().tasks.iter().last().unwrap();
         assert_eq!(last.predecessors.len(), 2);
-    }
-
-    #[test]
-    fn edit_neighbour_column() {
-        let visible = [
-            Column::Id,
-            Column::Name,
-            Column::Duration,
-            Column::Start,
-            Column::Finish,
-            Column::Predecessors,
-        ];
-        assert_eq!(
-            neighbour_column(&visible, Column::Name, true),
-            Some(Column::Duration)
-        );
-        assert_eq!(neighbour_column(&visible, Column::Predecessors, true), None);
-        assert_eq!(neighbour_column(&visible, Column::Name, false), None);
-        assert_eq!(
-            neighbour_column(&visible, Column::Start, false),
-            Some(Column::Duration)
-        );
-        assert_eq!(neighbour_column(&visible, Column::TotalSlack, true), None);
     }
 }

@@ -25,7 +25,7 @@ use egui::{
 
 use planrs_core::TaskUid;
 
-use super::{FrameCtx, OVERSCAN, ViewTransient, gantt, table, timescale};
+use super::{FrameCtx, OVERSCAN, Pane, ViewTransient, gantt, table, timescale};
 use crate::action::Action;
 use crate::geom::{self, MainLayout};
 use crate::i18n::TextId;
@@ -100,7 +100,11 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
     let RowsOut {
         dx: mut delta_x,
         context_click,
+        scroll_y,
+        view_h,
     } = paint_rows(ui, fc, view, &layout, &axis);
+    view.last_scroll_y = scroll_y;
+    view.last_body_height = view_h;
     context_menu(ui, fc, context_click);
 
     // Molette horizontale (ou Maj + molette) au-dessus du Gantt : la
@@ -132,6 +136,10 @@ struct RowsOut {
     dx: f32,
     /// Clic droit sur le corps, s'il y en a eu un.
     context_click: Option<ContextClick>,
+    /// Haut de la fenêtre visible, en points depuis la ligne 0.
+    scroll_y: f32,
+    /// Hauteur de la fenêtre visible.
+    view_h: f32,
 }
 
 /// Clic droit sur le corps de la vue.
@@ -186,11 +194,26 @@ fn paint_rows(
         && y.is_finite()
     {
         // Borné au défilement maximal : un décalage au-delà ferait revenir
-        // la zone par un rebond animé sur une dizaine d'images.
-        let max_y = (content_h - layout.body.height()).max(0.0);
-        let max_y = if max_y.is_finite() { max_y } else { 0.0 };
+        // la zone par un rebond animé sur une dizaine d'images. egui borne
+        // d'abord par le maximum de l'image précédente : si le contenu
+        // vient de grandir (ligne ajoutée), le reste du défilement attend
+        // l'image suivante.
+        let max_of = |content: f32| {
+            let max = (content - layout.body.height()).max(0.0);
+            if max.is_finite() { max } else { 0.0 }
+        };
+        let max_now = max_of(content_h);
+        let max_y = if view.last_content_h > 0.0 {
+            max_now.min(max_of(view.last_content_h))
+        } else {
+            max_now
+        };
+        if y > max_y && max_now > max_y {
+            view.pending_scroll_y = Some(y);
+        }
         area = area.vertical_scroll_offset(y.clamp(0.0, max_y));
     }
+    view.last_content_h = content_h;
     let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(layout.body));
     // Barre verticale pleine, toujours visible (relecture B, I4) : elle
     // occupe `Metrics::vbar_w` à droite du corps, que la mise en page
@@ -199,6 +222,7 @@ fn paint_rows(
     let table_clip = layout.table_clip;
     let gantt_clip = layout.gantt_clip;
     let edit = &mut view.edit;
+    let cursor = &mut view.cursor;
     let out = area.show_viewport(&mut body_ui, |ui, viewport| {
         let origin = ui.max_rect().min;
         ui.set_min_size(vec2(ui.available_width().max(0.0), content_h));
@@ -211,14 +235,15 @@ fn paint_rows(
             Sense::click_and_drag(),
         );
         let first_action = fc.actions.len();
-        table::paint_body(ui, fc, edit, origin, range.clone(), table_clip);
+        table::paint_body(ui, fc, edit, cursor, origin, range.clone(), table_clip);
         gantt::paint_body(ui, fc, axis, origin, range, gantt_clip);
 
         let mut dx = 0.0;
         if background.clicked()
             && let Some(p) = background.interact_pointer_pos()
         {
-            let uid = if gantt_clip.contains(p) {
+            let in_gantt = gantt_clip.contains(p);
+            let uid = if in_gantt {
                 geom::row_at(p.y - origin.y, row_h, len)
                     .and_then(|i| fc.rows.and_then(|rows| rows.row(i)))
                     .map(|row| row.uid)
@@ -226,6 +251,9 @@ fn paint_rows(
                 None
             };
             fc.actions.push(Action::Select(uid));
+            // Clic dans le Gantt : le clavier quitte la table (J7, L1).
+            let pane = if in_gantt { Pane::Gantt } else { Pane::Table };
+            fc.actions.push(Action::FocusPane(pane));
         }
         let modifiers = ui.input(|i| i.modifiers);
         apply_click_modifiers(fc.actions, first_action, modifiers);
@@ -244,7 +272,12 @@ fn paint_rows(
             }
             ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
         }
-        RowsOut { dx, context_click }
+        RowsOut {
+            dx,
+            context_click,
+            scroll_y: viewport.top(),
+            view_h: viewport.height(),
+        }
     });
     // Les plages dessinées sont relevées par chaque volet lui-même.
     out.inner

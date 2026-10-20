@@ -453,6 +453,9 @@ fn click_edit_menu(harness: &mut Harness<'static, App>, item: TextId) {
 fn ui_edit_menu_structure_entries() {
     let mut harness = harness();
     open_demo(&mut harness);
+    // L'ouverture sélectionne la première ligne (J7 L1) : sans sélection.
+    harness.state_mut().dispatch(Action::Select(None));
+    harness.run();
     harness.get_by_label(&fr(TextId::MenuEdit)).click();
     harness.run();
     for (text, enabled) in [

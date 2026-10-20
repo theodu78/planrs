@@ -22,6 +22,7 @@ use planrs_ui_egui::column::Column;
 use planrs_ui_egui::edit::{EditError, date_edit_text, duration_edit_text, text_language};
 use planrs_ui_egui::format::{format_date, format_duration};
 use planrs_ui_egui::i18n::{Arg, Language, TextId, Texts};
+use planrs_ui_egui::nav::RowRef;
 use planrs_ui_egui::{Action, App};
 use proptest::prelude::*;
 
@@ -92,7 +93,7 @@ fn click_cell(harness: &mut Harness<'static, App>, index: usize, column: Column)
     click_at(harness, p);
     let uid = harness.state().rows().unwrap().row(index).unwrap().uid;
     assert_eq!(harness.state().selection, Some(uid));
-    assert_eq!(harness.state().view().edit.column, column);
+    assert_eq!(harness.state().view().cursor.column, column);
 }
 
 /// Frappe `text` (ouvre la saisie si aucune n'est ouverte).
@@ -248,7 +249,7 @@ fn ui_blank_row_creates_task() {
     let p = cell_point(&harness, &blank, Column::Name);
     click_at(&mut harness, p);
     assert!(harness.state().selection.is_none());
-    assert!(harness.state().view().edit.blank);
+    assert_eq!(harness.state().view().cursor.row, RowRef::Blank);
     let count = harness.state().document.as_ref().unwrap().project().tasks.len();
     for (k, name) in ["Réception", "Nettoyage"].into_iter().enumerate() {
         type_text(&mut harness, name);
@@ -262,7 +263,7 @@ fn ui_blank_row_creates_task() {
         assert_eq!(last.outline_level.get(), 1);
         // La ligne vide reste la ligne courante : saisie à la suite.
         assert!(app.selection.is_none());
-        assert!(app.view().edit.blank);
+        assert_eq!(app.view().cursor.row, RowRef::Blank);
     }
     let rows = harness.state().rows().unwrap();
     assert_eq!(rows.text(rows.len() - 1, Column::Name), "Nettoyage");
@@ -367,11 +368,11 @@ fn ui_edit_then_undo_exact() {
     // Tab sans modification : rien n'est envoyé, la cellule suivante devient
     // courante.
     press(&mut harness, Key::Tab);
-    assert_eq!(harness.state().view().edit.column, Column::Start);
+    assert_eq!(harness.state().view().cursor.column, Column::Start);
     assert_eq!(harness.state().document.as_ref().unwrap().generation(), 0);
     type_text(&mut harness, "04/01/2027");
     press(&mut harness, Key::Tab);
-    assert_eq!(harness.state().view().edit.column, Column::Finish);
+    assert_eq!(harness.state().view().cursor.column, Column::Finish);
     assert_eq!(harness.state().document.as_ref().unwrap().generation(), 1);
     assert_ne!(harness.state().document.as_ref().unwrap().project(), &project);
     harness.state_mut().dispatch(Action::Undo);

@@ -239,6 +239,9 @@ fn check_keymap_entry(i: usize) {
             ));
         }
         Binding::Ui(UiBinding::Quit) => crate::files::check_quit_shortcut(i),
+        // Navigation, échelle de temps, zoom, `task.move` (J7 lot L1) :
+        // vérifiées par `nav.rs`.
+        binding if crate::nav::is_nav_entry(binding) => crate::nav::check_keymap_entry(i),
         // Structure (lot L14) : vérifiées par `structure.rs`.
         Binding::Command(id) if crate::structure::COMMANDS.contains(&id) => {
             crate::structure::check_keymap_entry(id, KEYMAP[i].1);
@@ -280,6 +283,42 @@ keymap_entry_tests! {
     ui_keymap_each_shortcut_dispatches_12 => 12,
     ui_keymap_each_shortcut_dispatches_13 => 13,
     ui_keymap_each_shortcut_dispatches_14 => 14,
+    ui_keymap_each_shortcut_dispatches_15 => 15,
+    ui_keymap_each_shortcut_dispatches_16 => 16,
+    ui_keymap_each_shortcut_dispatches_17 => 17,
+    ui_keymap_each_shortcut_dispatches_18 => 18,
+    ui_keymap_each_shortcut_dispatches_19 => 19,
+    ui_keymap_each_shortcut_dispatches_20 => 20,
+    ui_keymap_each_shortcut_dispatches_21 => 21,
+    ui_keymap_each_shortcut_dispatches_22 => 22,
+    ui_keymap_each_shortcut_dispatches_23 => 23,
+    ui_keymap_each_shortcut_dispatches_24 => 24,
+    ui_keymap_each_shortcut_dispatches_25 => 25,
+    ui_keymap_each_shortcut_dispatches_26 => 26,
+    ui_keymap_each_shortcut_dispatches_27 => 27,
+    ui_keymap_each_shortcut_dispatches_28 => 28,
+    ui_keymap_each_shortcut_dispatches_29 => 29,
+    ui_keymap_each_shortcut_dispatches_30 => 30,
+    ui_keymap_each_shortcut_dispatches_31 => 31,
+    ui_keymap_each_shortcut_dispatches_32 => 32,
+    ui_keymap_each_shortcut_dispatches_33 => 33,
+    ui_keymap_each_shortcut_dispatches_34 => 34,
+    ui_keymap_each_shortcut_dispatches_35 => 35,
+    ui_keymap_each_shortcut_dispatches_36 => 36,
+    ui_keymap_each_shortcut_dispatches_37 => 37,
+    ui_keymap_each_shortcut_dispatches_38 => 38,
+    ui_keymap_each_shortcut_dispatches_39 => 39,
+    ui_keymap_each_shortcut_dispatches_40 => 40,
+    ui_keymap_each_shortcut_dispatches_41 => 41,
+    ui_keymap_each_shortcut_dispatches_42 => 42,
+    ui_keymap_each_shortcut_dispatches_43 => 43,
+    ui_keymap_each_shortcut_dispatches_44 => 44,
+    ui_keymap_each_shortcut_dispatches_45 => 45,
+    ui_keymap_each_shortcut_dispatches_46 => 46,
+    ui_keymap_each_shortcut_dispatches_47 => 47,
+    ui_keymap_each_shortcut_dispatches_48 => 48,
+    ui_keymap_each_shortcut_dispatches_49 => 49,
+    ui_keymap_each_shortcut_dispatches_50 => 50,
 }
 
 /// Lot refusé : UID absent.

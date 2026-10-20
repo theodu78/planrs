@@ -12,21 +12,51 @@ use std::sync::Arc;
 
 use egui::text::{CCursor, CCursorRange, LayoutJob, TextFormat, TextWrapping};
 use egui::{
-    Color32, Event, FontId, Galley, Id, Key, Modifiers, Order, Painter, Pos2, Rect, Response, Sense, Stroke,
-    UiBuilder, pos2, vec2,
+    Color32, Event, EventFilter, FontId, Galley, Id, Key, Modifiers, Order, Painter, Pos2, Rect, Response,
+    Sense, Stroke, StrokeKind, UiBuilder, pos2, vec2,
 };
 use planrs_core::TaskUid;
 
-use super::FrameCtx;
+use super::{FrameCtx, Pane};
 use crate::action::Action;
 use crate::column::{CellAlign, Column};
-use crate::edit::{
-    EditState, TableEdit, commit_edit, editable, initial_text, neighbour_column, text_language,
-};
+use crate::edit::{EditState, TableEdit, commit_edit, editable, initial_text, text_language};
 use crate::geom::index_to_f32;
 use crate::i18n::{Arg, TextId};
+use crate::nav::{CellCursor, NavMove, RowRef};
 use crate::rows::{Row, RowKind, RowModel};
 use crate::theme::Palette;
+
+/// Curseur de la table (cellule courante).
+pub type TableCursor = CellCursor<TaskUid, Column>;
+
+/// Identifiant focalisable de la table (J7, lot L1) : tant qu'il a le
+/// focus clavier, les raccourcis de navigation (`KeyContext::Table`) sont
+/// actifs.
+#[must_use]
+pub fn table_id() -> Id {
+    Id::unique("planrs.table")
+}
+
+/// Verrou de focus de la table, rappelé à chaque image : Tab et les
+/// flèches restent à la table (egui les traite en début d'image, avant
+/// l'application) ; Échap rend le focus (ADR-0015 D2).
+const NAV_FOCUS_FILTER: EventFilter = EventFilter {
+    tab: true,
+    horizontal_arrows: true,
+    vertical_arrows: true,
+    escape: false,
+};
+
+/// Épaisseur du cadre de la cellule courante, en points.
+const CURSOR_STROKE: f32 = 2.0;
+
+/// Vrai si un autre widget que la table a le focus clavier (zone de
+/// saisie, bouton parcouru au clavier) : la frappe ne s'adresse pas à la
+/// table.
+fn focus_elsewhere(ctx: &egui::Context) -> bool {
+    ctx.memory(|memory| memory.focused().is_some_and(|id| id != table_id()))
+}
 
 /// Largeur en dessous de laquelle une cellule n'affiche pas de texte.
 const MIN_TEXT_WIDTH: f32 = 4.0;
@@ -185,15 +215,18 @@ fn paint_cells(
 /// normale (rouge seulement dans la colonne « Critique »), nom indenté par
 /// niveau, récapitulative en texte appuyé, ligne vide sans texte. Chaque
 /// ligne est une zone cliquable (`Action::Select`, colonne courante posée
-/// dans `edit`) qui porte le libellé d'accessibilité `row-label`. La ligne
+/// dans `cursor`) qui porte le libellé d'accessibilité `row-label`. La ligne
 /// d'indice `rows.len()` est la ligne vide de fin (création d'une tâche,
-/// libellé `blank-row-label`). Saisie des cellules : voir [`edit_cells`].
-/// Écrit `FrameStats::table_rows` (et lui seul : le Gantt écrit
-/// `gantt_rows`).
+/// libellé `blank-row-label`). La table entière est un widget focalisable
+/// ([`table_id`]) ; la cellule courante porte un cadre de 2 px et un nœud
+/// d'accessibilité (« Ligne 3, Durée, 5 jours »). Saisie des cellules : voir
+/// [`edit_cells`]. Écrit `FrameStats::table_rows` (et lui seul : le Gantt
+/// écrit `gantt_rows`).
 pub fn paint_body(
     ui: &mut egui::Ui,
     fc: &mut FrameCtx<'_>,
     edit: &mut TableEdit,
+    cursor: &mut TableCursor,
     origin: Pos2,
     range: Range<usize>,
     clip: Rect,
@@ -217,10 +250,8 @@ pub fn paint_body(
         fc.stats.shapes = fc.stats.shapes.saturating_add(shapes);
         return;
     };
-    if fc.selection.is_some() {
-        edit.blank = false;
-    }
-    open_from_keys(ui, fc, rows, edit);
+    focus_widget(ui, fc, clip);
+    open_from_keys(ui, fc, rows, edit, cursor);
     fc.stats.table_rows = range.clone();
     let left = clip.left();
     let blank = rows.len();
@@ -236,7 +267,7 @@ pub fn paint_body(
         }
         let selected = match row {
             Some(row) => fc.selected.contains(row.uid),
-            None => edit.blank && fc.selection.is_none(),
+            None => fc.selection.is_none(),
         };
         if selected {
             painter.rect_filled(row_rect, 0.0, palette.selection);
@@ -279,7 +310,7 @@ pub fn paint_body(
                 };
                 egui::WidgetInfo::selected(egui::Role::Row, true, selected, label)
             });
-            row_clicked(fc, rows, edit, &response, i, left);
+            row_clicked(fc, rows, edit, cursor, &response, i, left);
         }
     }
 
@@ -293,8 +324,103 @@ pub fn paint_body(
         painter.vline(x - 0.5, clip.y_range(), Stroke::new(1.0, palette.grid));
         shapes = shapes.saturating_add(1);
     }
+    shapes = shapes.saturating_add(paint_cursor(ui, &painter, fc, rows, edit, cursor, origin, &range));
     fc.stats.shapes = fc.stats.shapes.saturating_add(shapes);
-    edit_cells(ui, fc, rows, edit, origin, &range, clip);
+    edit_cells(ui, fc, rows, edit, cursor, origin, &range, clip);
+}
+
+/// Widget focalisable de la table (sans clic : les lignes, dessinées
+/// au-dessus, reçoivent les clics) ; verrou de focus rappelé tant qu'il a
+/// le focus.
+fn focus_widget(ui: &egui::Ui, fc: &FrameCtx<'_>, clip: Rect) {
+    let response = ui.interact(clip, table_id(), Sense::focusable_noninteractive());
+    let texts = fc.texts;
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Table, true, texts.get(TextId::TableLabel)));
+    if response.has_focus() {
+        ui.memory_mut(|memory| memory.set_focus_lock_filter(table_id(), NAV_FOCUS_FILTER));
+    }
+}
+
+/// Indice de la ligne du curseur (ligne vide : `rows.len()`) ; `None` si
+/// sa tâche n'est plus dans le modèle.
+fn cursor_index(rows: &RowModel, cursor: &TableCursor) -> Option<usize> {
+    match cursor.row {
+        RowRef::Item(uid) => rows.index_of(uid),
+        RowRef::Blank => Some(rows.len()),
+    }
+}
+
+/// Cadre de 2 px de la cellule courante (couleur `Palette::cursor`) et
+/// son nœud d'accessibilité, si elle est dans la plage dessinée, sa colonne
+/// visible et aucune saisie ouverte ; rend le nombre de formes ajoutées.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "contexte d'image découpé en emprunts disjoints"
+)]
+fn paint_cursor(
+    ui: &egui::Ui,
+    painter: &Painter,
+    fc: &FrameCtx<'_>,
+    rows: &RowModel,
+    edit: &TableEdit,
+    cursor: &TableCursor,
+    origin: Pos2,
+    range: &Range<usize>,
+) -> usize {
+    if edit.editing.is_some() {
+        return 0;
+    }
+    let clip = painter.clip_rect();
+    let Some(index) = cursor_index(rows, cursor).filter(|i| range.contains(i)) else {
+        return 0;
+    };
+    let Some((left, w)) = column_span(fc, clip.left(), cursor.column) else {
+        return 0;
+    };
+    let top = origin.y + index_to_f32(index) * fc.metrics.row_h;
+    let rect = Rect::from_min_size(pos2(left, top), vec2(w, fc.metrics.row_h));
+    if !rect.is_finite() || !rect.is_positive() {
+        return 0;
+    }
+    painter.rect_stroke(
+        rect.shrink(CURSOR_STROKE * 0.5),
+        0.0,
+        Stroke::new(CURSOR_STROKE, fc.palette.cursor),
+        StrokeKind::Inside,
+    );
+    let hit = rect.intersect(clip);
+    if hit.is_positive() {
+        let response = ui.interact(hit, Id::unique("planrs.table.cursor"), Sense::hover());
+        let texts = fc.texts;
+        let column = texts.get(cursor.column.title());
+        response.widget_info(|| {
+            let label = match rows.row(index) {
+                Some(row) => {
+                    let value = rows.text(index, cursor.column);
+                    let value = if value.is_empty() {
+                        texts.get(TextId::NavCursorEmptyValue)
+                    } else {
+                        value.to_owned()
+                    };
+                    texts.get_args(
+                        TextId::NavCursorLabel,
+                        &[
+                            ("id", Arg::Count(i64::from(row.id))),
+                            ("column", Arg::Str(column.clone().into())),
+                            ("value", Arg::Str(value.into())),
+                        ],
+                    )
+                }
+                None => texts.get_args(
+                    TextId::NavCursorBlankLabel,
+                    &[("column", Arg::Str(column.clone().into()))],
+                ),
+            };
+            egui::WidgetInfo::labeled(egui::Role::Cell, true, label)
+        });
+    }
+    1
 }
 
 /// Colonne visible sous l'abscisse écran `x`, la table commençant à `left`.
@@ -323,12 +449,14 @@ fn column_span(fc: &FrameCtx<'_>, left: f32, column: Column) -> Option<(f32, f32
     None
 }
 
-/// Clic sur la ligne `i` (ou sur la ligne vide) : sélection, colonne
-/// courante sous le pointeur ; double-clic : ouverture de la saisie.
+/// Clic sur la ligne `i` (ou sur la ligne vide) : sélection, focus de la
+/// table, colonne courante sous le pointeur ; double-clic : ouverture de la
+/// saisie.
 fn row_clicked(
     fc: &mut FrameCtx<'_>,
     rows: &RowModel,
     edit: &mut TableEdit,
+    cursor: &mut TableCursor,
     response: &Response,
     i: usize,
     left: f32,
@@ -338,23 +466,29 @@ fn row_clicked(
     }
     let uid = rows.row(i).map(|row| row.uid);
     fc.actions.push(Action::Select(uid));
-    edit.blank = uid.is_none();
+    fc.actions.push(Action::FocusPane(Pane::Table));
     if let Some(column) = response
         .interact_pointer_pos()
         .and_then(|p| column_at(fc, left, p.x))
     {
-        edit.column = column;
+        cursor.column = column;
     }
     // Double-clic (ou triple : deux clics suivant de près un premier).
     if (response.double_clicked() || response.triple_clicked()) && edit.editing.is_none() {
-        open_editor(fc, rows, edit, uid, i);
+        open_editor(fc, rows, edit, cursor.column, uid, i);
     }
 }
 
-/// Ouvre la saisie de la cellule (`uid`, colonne courante) avec son texte
-/// initial (F2, double-clic) ; rien sur une colonne calculée.
-fn open_editor(fc: &FrameCtx<'_>, rows: &RowModel, edit: &mut TableEdit, uid: Option<TaskUid>, i: usize) {
-    let column = edit.column;
+/// Ouvre la saisie de la cellule (`uid`, `column`) avec son texte initial
+/// (F2, double-clic) ; rien sur une colonne calculée.
+fn open_editor(
+    fc: &FrameCtx<'_>,
+    rows: &RowModel,
+    edit: &mut TableEdit,
+    column: Column,
+    uid: Option<TaskUid>,
+    i: usize,
+) {
     let Some(doc) = fc.doc else { return };
     if !editable(column) {
         return;
@@ -363,32 +497,38 @@ fn open_editor(fc: &FrameCtx<'_>, rows: &RowModel, edit: &mut TableEdit, uid: Op
     edit.start(EditState::open(uid, column, text));
 }
 
-/// Ligne courante pour la saisie : tâche sélectionnée, ou ligne vide.
-fn current_row(fc: &FrameCtx<'_>, rows: &RowModel, edit: &TableEdit) -> Option<(Option<TaskUid>, usize)> {
+/// Ligne courante pour la saisie : tâche sélectionnée, ou ligne vide sans
+/// sélection.
+fn current_row(fc: &FrameCtx<'_>, rows: &RowModel) -> Option<(Option<TaskUid>, usize)> {
     match fc.selection {
         Some(uid) => rows.index_of(uid).map(|i| (Some(uid), i)),
-        None if edit.blank => Some((None, rows.len())),
-        None => None,
+        None => Some((None, rows.len())),
     }
 }
 
-/// F2 ou frappe d'un caractère (hors champ de texte, menu ouvert ou
-/// modificateur Ctrl/Cmd) : ouvre la saisie de la cellule courante. Le
-/// caractère frappé remplace la valeur.
-fn open_from_keys(ui: &egui::Ui, fc: &FrameCtx<'_>, rows: &RowModel, edit: &mut TableEdit) {
+/// F2 ou frappe d'un caractère (hors champ de texte ou autre widget
+/// focalisé, menu ouvert ou modificateur Ctrl/Cmd) : ouvre la saisie de la
+/// cellule courante. Le caractère frappé remplace la valeur.
+fn open_from_keys(
+    ui: &egui::Ui,
+    fc: &FrameCtx<'_>,
+    rows: &RowModel,
+    edit: &mut TableEdit,
+    cursor: &TableCursor,
+) {
     let ctx = ui.ctx();
-    if edit.editing.is_some() || ctx.egui_wants_keyboard_input() || ctx.any_popup_open() {
+    if edit.editing.is_some() || focus_elsewhere(ctx) || ctx.any_popup_open() {
         return;
     }
-    let Some((uid, i)) = current_row(fc, rows, edit) else {
+    let Some((uid, i)) = current_row(fc, rows) else {
         return;
     };
-    let column = edit.column;
+    let column = cursor.column;
     if !editable(column) || !fc.state.visible_columns().any(|state| state.column == column) {
         return;
     }
     if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::F2)) {
-        open_editor(fc, rows, edit, uid, i);
+        open_editor(fc, rows, edit, column, uid, i);
         return;
     }
     let typed = ctx.input_mut(|input| {
@@ -424,19 +564,33 @@ enum Finish {
     Commit(Move),
 }
 
-/// Déplacement après validation.
+/// Déplacement après validation (H-UI-14 : Tab passe à la colonne
+/// **visible** voisine, colonnes calculées comprises).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Move {
     /// Entrée, flèche bas : ligne suivante.
     Down,
     /// Flèche haut : ligne précédente.
     Up,
-    /// Tab : colonne éditable suivante.
+    /// Tab : colonne visible suivante.
     Next,
-    /// Maj+Tab : colonne éditable précédente.
+    /// Maj+Tab : colonne visible précédente.
     Previous,
     /// Défilement, perte du focus : la cellule reste.
     Stay,
+}
+
+impl Move {
+    /// Déplacement du curseur correspondant (`None` : la cellule reste).
+    const fn nav(self) -> Option<NavMove> {
+        match self {
+            Self::Down => Some(NavMove::Down),
+            Self::Up => Some(NavMove::Up),
+            Self::Next => Some(NavMove::Right),
+            Self::Previous => Some(NavMove::Left),
+            Self::Stay => None,
+        }
+    }
 }
 
 /// Touches de fin de saisie, consommées avant la zone de saisie (qui ne
@@ -463,15 +617,21 @@ fn finish_keys(ui: &egui::Ui) -> Option<Finish> {
 
 /// Saisie de la cellule ouverte : zone de saisie posée sur la cellule,
 /// message d'erreur dessous, fin de saisie. Entrée valide et descend, Tab
-/// valide et passe à la cellule suivante, Échap abandonne ; un défilement
-/// ou la perte du focus valident sur place. Une saisie refusée
+/// valide et passe à la cellule visible suivante, Échap abandonne ; un
+/// défilement ou la perte du focus valident sur place. Une saisie refusée
 /// ([`commit_edit`]) reste ouverte avec son message ; acceptée, son lot est
-/// poussé dans `Action::ExecOn` (refus du registre : bandeau).
+/// poussé dans `Action::ExecOn` (refus du registre : bandeau), suivi du
+/// déplacement du curseur (`Action::Nav`, appliqué après le lot).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "contexte d'image découpé en emprunts disjoints"
+)]
 fn edit_cells(
     ui: &mut egui::Ui,
     fc: &mut FrameCtx<'_>,
     rows: &RowModel,
     edit: &mut TableEdit,
+    cursor: &mut TableCursor,
     origin: Pos2,
     range: &Range<usize>,
     clip: Rect,
@@ -509,8 +669,12 @@ fn edit_cells(
     }
     match finish {
         None => {}
-        Some(Finish::Cancel) => close_editor(ui, edit),
-        Some(Finish::Commit(motion)) => commit(ui, fc, rows, edit, motion),
+        Some(Finish::Cancel) => {
+            close_editor(ui, edit);
+            // Échap rend la main à la table (navigation au clavier).
+            fc.actions.push(Action::FocusPane(Pane::Table));
+        }
+        Some(Finish::Commit(motion)) => commit(ui, fc, edit, cursor, motion),
     }
 }
 
@@ -580,9 +744,17 @@ fn close_editor(ui: &egui::Ui, edit: &mut TableEdit) {
 }
 
 /// Valide la saisie : refus → message sous la cellule, saisie gardée ;
-/// accord → lot poussé (s'il n'est pas vide), saisie fermée, cellule
-/// courante déplacée.
-fn commit(ui: &egui::Ui, fc: &mut FrameCtx<'_>, rows: &RowModel, edit: &mut TableEdit, motion: Move) {
+/// accord → lot poussé (s'il n'est pas vide), saisie fermée, curseur posé
+/// sur la cellule éditée puis déplacé (`Action::Nav`, après le lot : une
+/// tâche créée par la ligne vide la précède, la ligne vide reste la ligne
+/// courante pour saisir des tâches à la suite).
+fn commit(
+    ui: &egui::Ui,
+    fc: &mut FrameCtx<'_>,
+    edit: &mut TableEdit,
+    cursor: &mut TableCursor,
+    motion: Move,
+) {
     let Some(doc) = fc.doc else {
         close_editor(ui, edit);
         return;
@@ -599,7 +771,7 @@ fn commit(ui: &egui::Ui, fc: &mut FrameCtx<'_>, rows: &RowModel, edit: &mut Tabl
             return;
         }
     };
-    let uid = state.uid;
+    let column = state.column;
     close_editor(ui, edit);
     if !batch.ops.is_empty() {
         fc.actions.push(Action::ExecOn {
@@ -607,28 +779,12 @@ fn commit(ui: &egui::Ui, fc: &mut FrameCtx<'_>, rows: &RowModel, edit: &mut Tabl
             batch,
         });
     }
-    match motion {
-        Move::Stay => {}
-        Move::Down | Move::Up => {
-            let index = uid.and_then(|uid| rows.index_of(uid));
-            let target = match (motion, index) {
-                // Ligne vide : la tâche créée la précède, la ligne vide reste
-                // la ligne courante (saisie de tâches à la suite).
-                (Move::Down, None) => None,
-                (Move::Down, Some(i)) => i.checked_add(1),
-                (_, None) => rows.len().checked_sub(1),
-                (_, Some(i)) => Some(i.saturating_sub(1)),
-            };
-            let next = target.and_then(|i| rows.row(i)).map(|row| row.uid);
-            edit.blank = next.is_none();
-            fc.actions.push(Action::Select(next));
-        }
-        Move::Next | Move::Previous => {
-            let visible: Vec<Column> = fc.state.visible_columns().map(|state| state.column).collect();
-            if let Some(column) = neighbour_column(&visible, edit.column, motion == Move::Next) {
-                edit.column = column;
-            }
-        }
+    cursor.column = column;
+    // La ligne éditée est la ligne courante (sélection, ou ligne vide) :
+    // le curseur en part.
+    if let Some(mv) = motion.nav() {
+        fc.actions.push(Action::Nav { mv, extend: false });
+        fc.actions.push(Action::FocusPane(Pane::Table));
     }
 }
 

@@ -589,7 +589,8 @@ fn open_event_success_installs_new_generation() {
     let doc = app.document.as_ref().unwrap();
     assert_eq!(doc.opening, 2);
     assert_eq!(doc.origin.name, "maison.xml");
-    assert!(app.selection.is_none());
+    // J7 L1 : curseur (et sélection) sur la première ligne du document.
+    assert_eq!(app.selection, app.rows().unwrap().row(0).map(|row| row.uid));
     assert!(!app.view().needs_fit, "zoom ajusté dès l'image suivante");
     assert!(app.messages().is_empty(), "{:?}", app.messages());
 }

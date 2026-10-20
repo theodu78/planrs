@@ -1081,7 +1081,22 @@ impl<'n, 'a> Calc<'n, 'a> {
             Some(Some((at, span))) if *at == from => Some(*span),
             _ => Placer::part_span(&net.scales, part, from).ok(),
         };
+        // R-209 : feuille achevée, affectations de travail placées depuis le
+        // début réel sur leur échelle, travail nul daté au début réel brut ;
+        // partie réelle = dates planifiées.
+        let completed = node.actual().is_some();
         let (span, late, duration, calendar) = match o.part.and_then(|i| Some((i, net.parts.items.get(i)?))) {
+            Some((_, part)) if completed && res.work == Work::ZERO => {
+                let at = Span {
+                    start: planned.start,
+                    finish: planned.start,
+                };
+                (at, Some(at), part.d, res.calendar)
+            }
+            Some((i, part)) if completed => {
+                let at = span_from(i, part, planned.start)?;
+                (at, Some(at), part.d, res.calendar)
+            }
             // Une seule part sans délai : la feuille est la part (P34).
             Some((_, part)) if parts.len() == 1 && part.undelayed() => (planned, late, part.d, res.calendar),
             Some((i, part)) => (
@@ -1143,7 +1158,7 @@ impl<'n, 'a> Calc<'n, 'a> {
             work: res.work,
             effective_units,
             calendar,
-            actual: None,
+            actual: completed.then_some(span),
             remaining_start: None,
         })
     }

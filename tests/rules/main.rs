@@ -199,6 +199,7 @@ mod r199_mspdi_resource_write;
 mod r200_progress_facts;
 mod r203_completed_leaf_pin;
 mod r208_manual_with_progress;
+mod r209_started_assignments;
 mod r210_summary_progress_rollup;
 mod r230_driver_bound;
 

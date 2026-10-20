@@ -6,11 +6,14 @@
 //! d'initialisation graphique est affichée sur la sortie d'erreur et rend un
 //! code de sortie non nul : jamais de panique (règle 10).
 //!
-//! Canal de contrôle (ADR-0002, ADR-0012 D9) : après l'ouverture d'un fichier
-//! par chemin, l'application lance l'écouteur `hello`/`query` (une fois) et
-//! publie son rendez-vous, pour que `planrs mcp` refuse d'écrire le même
-//! fichier (`file.open_in_app`). Le résumé servi par `query` est tenu à jour
-//! à chaque édition.
+//! Canal de contrôle (ADR-0002, ADR-0015 D9) : après l'ouverture d'un fichier
+//! par chemin, l'application lance l'écouteur du relais (une fois) et publie
+//! son rendez-vous : `planrs mcp` s'y rattache et relaie ses appels, que
+//! l'application exécute sur la session du document (toute écriture après
+//! validation par le bandeau) ; en `--headless`, il refuse d'écrire le même
+//! fichier (`file.open_in_app`). Les appels arrivent dans une file bornée
+//! vidée par l'interface en début d'image ; l'écouteur la réveille par
+//! `request_repaint`.
 //!
 //! macOS : le menu applicatif par défaut de winit est retiré
 //! ([`event_loop_hook`]). Son entrée « Quitter » (Cmd+Q) appelle
@@ -22,13 +25,13 @@
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 
 use planrs_automation::control::{
-    ControlError, ListenerHandle, Rendezvous, RendezvousGuard, canonical_project, new_token, publish_in,
-    spawn_hello_listener_in, state_dir,
+    ControlError, ListenerHandle, RELAY_QUEUE, RelayCall, Rendezvous, RendezvousGuard, Waker,
+    canonical_project, new_token, publish_in, spawn_listener_in, state_dir,
 };
-use planrs_automation::view::{SummaryView, summary};
 use planrs_core::{Moment, PRODUCT_NAME};
 use planrs_ui_egui::{DocumentObserver, Env, Language, OpenDocument, PlanrsApp, RfdFileService};
 
@@ -48,13 +51,14 @@ fn now() -> Moment {
 }
 
 /// Rendez-vous du canal de contrôle, suivi du document ouvert.
-#[derive(Default)]
 struct ControlRendezvous {
     /// Dossier des rendez-vous ; `None` : celui de la plateforme
     /// (`state_dir`, lu au premier besoin). Imposé par les tests.
     dir: Option<PathBuf>,
-    /// Résumé servi par `query` (`None` : aucun document).
-    summary: Arc<Mutex<Option<SummaryView>>>,
+    /// File des appels relayés, vidée par l'application.
+    inbox: SyncSender<RelayCall>,
+    /// Réveil de l'interface à chaque appel.
+    wake: Waker,
     /// Rendez-vous publié, supprimé à la destruction (avant l'arrêt de
     /// l'écouteur : ordre de déclaration).
     guard: Option<RendezvousGuard>,
@@ -68,6 +72,21 @@ struct ControlRendezvous {
 }
 
 impl ControlRendezvous {
+    /// Rendez-vous sans écouteur, et la file que l'application vide.
+    fn new(wake: Waker) -> (Self, Receiver<RelayCall>) {
+        let (inbox, rx) = sync_channel(RELAY_QUEUE);
+        let control = Self {
+            dir: None,
+            inbox,
+            wake,
+            guard: None,
+            listener: None,
+            listener_failed: false,
+            path: None,
+        };
+        (control, rx)
+    }
+
     /// Dossier des rendez-vous (créé au besoin, en 0700, par le canal).
     fn dir(&mut self) -> Result<PathBuf, ControlError> {
         if self.dir.is_none() {
@@ -80,10 +99,11 @@ impl ControlRendezvous {
     /// premier besoin (un échec est signalé une fois, sans nouvel essai).
     fn rendezvous(&mut self, project: String) -> Option<Rendezvous> {
         if self.listener.is_none() && !self.listener_failed {
-            let summary = Arc::clone(&self.summary);
+            let inbox = self.inbox.clone();
+            let wake = Arc::clone(&self.wake);
             let started = self
                 .dir()
-                .and_then(|dir| new_token().and_then(|token| spawn_hello_listener_in(&dir, token, summary)));
+                .and_then(|dir| new_token().and_then(|token| spawn_listener_in(&dir, token, inbox, wake)));
             match started {
                 Ok(listener) => self.listener = Some(listener),
                 Err(error) => {
@@ -116,8 +136,6 @@ impl ControlRendezvous {
 
 impl DocumentObserver for ControlRendezvous {
     fn document_changed(&mut self, document: Option<&OpenDocument>) {
-        let current = document.map(|document| summary(&document.session));
-        *self.summary.lock().unwrap_or_else(PoisonError::into_inner) = current;
         let path = document.and_then(|document| document.origin.path.as_deref());
         if path != self.path.as_deref() {
             self.publish_for(path);
@@ -167,7 +185,10 @@ fn main() -> ExitCode {
                 files: Box::new(RfdFileService),
             };
             let mut app = PlanrsApp::new(cc, env);
-            app.app_mut().set_observer(Box::new(ControlRendezvous::default()));
+            let ctx = cc.egui_ctx.clone();
+            let (control, inbox) = ControlRendezvous::new(Arc::new(move || ctx.request_repaint()));
+            app.app_mut().control_inbox(inbox);
+            app.app_mut().set_observer(Box::new(control));
             Ok(Box::new(app))
         }),
     );
@@ -225,19 +246,15 @@ mod tests {
         for file in [&first, &second] {
             std::fs::write(file, planrs_ui_egui::DEMO_MSPDI).unwrap();
         }
-        let mut observer = ControlRendezvous {
-            dir: Some(dir.clone()),
-            ..ControlRendezvous::default()
-        };
+        let (mut observer, _inbox) = ControlRendezvous::new(std::sync::Arc::new(|| {}));
+        observer.dir = Some(dir.clone());
         observer.document_changed(Some(&demo_at(&first)));
         assert!(find_live_for_in(&dir, &first).is_some());
-        assert!(observer.summary.lock().unwrap().is_some());
         observer.document_changed(Some(&demo_at(&second)));
         assert!(find_live_for_in(&dir, &first).is_none());
         assert!(find_live_for_in(&dir, &second).is_some());
         observer.document_changed(None);
         assert!(find_live_for_in(&dir, &second).is_none());
-        assert!(observer.summary.lock().unwrap().is_none());
         drop(observer);
         std::fs::remove_dir_all(&root).unwrap();
     }

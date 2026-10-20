@@ -74,6 +74,35 @@ impl CallEnv {
 /// C-CTL-05).
 pub const NOT_RELAYABLE: [&str; 3] = ["project.import_csv", "project.new", "project.open"];
 
+/// Contrôles de [`call_with`] qui ne demandent aucune session : id connu
+/// (`param.invalid`), hors ouvertures (`control.not_relayable`), disponible
+/// (`command.not_yet_available`, `control.not_attached`). L'application
+/// s'en sert pour refuser un appel relayé sans document ouvert.
+///
+/// # Errors
+///
+/// Le refus, tel que [`call_with`] le rendrait.
+pub fn relayable(id: &str, lang: Language) -> Result<&'static crate::registry::CommandSpec, ToolError> {
+    let Some(spec) = lookup(id) else {
+        return Err(unknown_command(id, lang));
+    };
+    if NOT_RELAYABLE.contains(&id) {
+        return Err(ToolError::simple(
+            codes::CONTROL_NOT_RELAYABLE,
+            format!(
+                "{} : {id}",
+                tr(
+                    lang,
+                    "ouverture non relayable (ouvrir le fichier dans l'application)",
+                    "opening cannot be relayed (open the file in the application)"
+                )
+            ),
+        ));
+    }
+    check_available(spec.available, id, lang)?;
+    Ok(spec)
+}
+
 /// Routeur de [`Workspace::call`] appliqué à `session` (J7, ADR-0015 D9) :
 /// un seul registre pour le local et le relais. Les ouvertures
 /// ([`NOT_RELAYABLE`]) sont refusées `control.not_relayable`, les entrées
@@ -96,23 +125,7 @@ pub fn call_with(session: &mut Session, env: &CallEnv, id: &str, params: Value) 
 fn route(session: Option<&mut Session>, env: &CallEnv, id: &str, params: Value) -> Result<Value, ToolError> {
     let lang = env.lang;
     let cmd = |e: CommandError| ToolError::from_command(&e, lang);
-    let Some(spec) = lookup(id) else {
-        return Err(unknown_command(id, lang));
-    };
-    if NOT_RELAYABLE.contains(&id) {
-        return Err(ToolError::simple(
-            codes::CONTROL_NOT_RELAYABLE,
-            format!(
-                "{} : {id}",
-                tr(
-                    lang,
-                    "ouverture non relayable (ouvrir le fichier dans l'application)",
-                    "opening cannot be relayed (open the file in the application)"
-                )
-            ),
-        ));
-    }
-    check_available(spec.available, id, lang)?;
+    let spec = relayable(id, lang)?;
     match id {
         "project.save" => {
             let p = parse_params::<SaveProjectParams>(params).map_err(cmd)?;

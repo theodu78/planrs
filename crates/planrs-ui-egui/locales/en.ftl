@@ -333,6 +333,34 @@ nav-cursor-empty-value = empty
 # --- J7 L2 ---
 
 # --- J7 L3 ---
+approval-title = The agent proposes: { $name }
+approval-changed =
+    { $count ->
+        [0] no task changed
+        [one] { $count } task changed
+       *[other] { $count } tasks changed
+    }
+approval-finish = finish { $value }
+approval-finish-same = finish unchanged
+approval-critical = critical path changed
+approval-warnings =
+    { $count ->
+        [one] { $count } warning
+       *[other] { $count } warnings
+    }
+approval-queued =
+    { $count ->
+        [one] { $count } more proposal waiting
+       *[other] { $count } more proposals waiting
+    }
+approval-accept = Accept
+approval-reject = Reject
+menu-undo-agent = Undo: agent — { $detail }
+menu-undo-agent-ops =
+    { $count ->
+        [one] { $count } operation
+       *[other] { $count } operations
+    }
 
 # --- J7 L4 ---
 

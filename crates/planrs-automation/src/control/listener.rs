@@ -260,10 +260,13 @@ mod unix {
     impl Running {
         pub(super) fn stop(&mut self) {
             self.shared.stop.store(true, Ordering::SeqCst);
-            // Réveille `accept` ; l'échec signifie que le fil est déjà
-            // sorti.
-            let _ = UnixStream::connect(&self.socket);
-            if let Some(thread) = self.thread.take() {
+            // Réveille `accept`. Socket injoignable (fichier supprimé,
+            // dossier retiré) : le fil n'est pas attendu, pour ne jamais
+            // bloquer la fermeture ; il reste suspendu sur `accept`.
+            let woken = UnixStream::connect(&self.socket).is_ok();
+            if let Some(thread) = self.thread.take()
+                && (woken || thread.is_finished())
+            {
                 let _ = thread.join();
             }
             let _ = std::fs::remove_file(&self.socket);

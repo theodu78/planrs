@@ -31,7 +31,7 @@ use planrs_automation::{
 use planrs_core::{Day, Moment, PRODUCT_NAME, Project, Schedule, Severity, TaskUid, TimeOfDay, Weekday};
 use planrs_mspdi::ImportDiagnostic;
 
-use crate::action::{Action, ConfirmChoice};
+use crate::action::{Action, ConfirmChoice, UiOp};
 use crate::column::Column;
 use crate::document::{self, LoadedDocument, OpenError};
 use crate::edit::TableEdit;
@@ -256,15 +256,15 @@ pub struct App {
     /// Relevé de la dernière image.
     pub last_frame: FrameStats,
     /// Environnement injecté.
-    env: Env,
+    pub(crate) env: Env,
     /// Messages de la langue courante.
-    texts: Texts,
+    pub(crate) texts: Texts,
     /// Modèle de lignes du document, dans la langue courante.
-    rows: Option<RowModel>,
+    pub(crate) rows: Option<RowModel>,
     /// État transitoire de la vue.
-    view: ViewTransient,
+    pub(crate) view: ViewTransient,
     /// File des actions en attente.
-    actions: Vec<Action>,
+    pub(crate) actions: Vec<Action>,
     /// Messages affichés.
     messages: Vec<UserMessage>,
     /// Émetteur des résultats d'ouverture (cloné vers le sélecteur).
@@ -304,6 +304,10 @@ pub struct App {
     /// sont lus avant le dessin, quand egui ne sait pas encore si un menu
     /// est ouvert).
     popup_open: bool,
+    /// Relais des appels d'un agent (desktop, J7 lot L3) : branché par
+    /// [`App::control_inbox`].
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) relay: Option<crate::relay::Relay>,
 }
 
 impl App {
@@ -342,6 +346,8 @@ impl App {
             quit_confirmed: false,
             open_confirmed_for: None,
             popup_open: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            relay: None,
         }
     }
 
@@ -353,14 +359,14 @@ impl App {
     }
 
     /// Signale le document courant à l'observateur.
-    fn notify_observer(&mut self) {
+    pub(crate) fn notify_observer(&mut self) {
         if let Some(observer) = &mut self.observer {
             observer.document_changed(self.document.as_ref());
         }
     }
 
     /// Langue des textes du moteur (messages d'erreur des commandes).
-    fn text_language(&self) -> planrs_automation::text::Language {
+    pub(crate) fn text_language(&self) -> planrs_automation::text::Language {
         match self.texts.language() {
             Language::Fr => planrs_automation::text::Language::Fr,
             Language::En => planrs_automation::text::Language::En,
@@ -1146,11 +1152,60 @@ impl App {
             | Action::ToggleColumn(_)
             | Action::SetColumnWidth { .. }
             | Action::ScrollTableX(_)
-            | Action::Approve(_)
-            | Action::Reject(_)
             | Action::OpenRecent(_)
-            | Action::Recover(_)
-            | Action::Ui(_)) => log::debug!("action J7 pas encore câblée : {other:?}"),
+            | Action::Recover(_)) => log::debug!("action J7 pas encore câblée : {other:?}"),
+            Action::Approve(id) => self.approve_relayed(id),
+            Action::Reject(id) => self.reject_relayed(id),
+            Action::Ui(op) => self.apply_ui(op, ctx),
+        }
+    }
+
+    /// Accepte l'écriture relayée `id` (bandeau, H-UI-27) ; sans canal
+    /// (web), rien.
+    fn approve_relayed(&mut self, id: u64) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.approve(id);
+        #[cfg(target_arch = "wasm32")]
+        let _ = id;
+    }
+
+    /// Refuse l'écriture relayée `id` ; sans canal (web), rien.
+    fn reject_relayed(&mut self, id: u64) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.reject(id);
+        #[cfg(target_arch = "wasm32")]
+        let _ = id;
+    }
+
+    /// Action d'interface d'un agent (`app.ui`), sans historique ni effet
+    /// sur le projet ; les UID ont été vérifiés par le relais (une tâche
+    /// disparue entre-temps est ignorée).
+    fn apply_ui(&mut self, op: UiOp, ctx: &egui::Context) {
+        match op {
+            UiOp::Select(uid) => {
+                let uid = uid.map(TaskUid::new);
+                let known = uid.is_none_or(|uid| {
+                    self.rows
+                        .as_ref()
+                        .is_some_and(|rows| rows.index_of(uid).is_some())
+                });
+                if known {
+                    self.selection = uid;
+                }
+            }
+            UiOp::ScrollTo(uid) => {
+                if let Some(index) = self
+                    .rows
+                    .as_ref()
+                    .and_then(|rows| rows.index_of(TaskUid::new(uid)))
+                {
+                    self.apply(Action::ScrollToRow(index), ctx);
+                }
+            }
+            UiOp::Zoom(zoom) => self.apply(Action::SetZoom(zoom), ctx),
+            UiOp::View(kind) => self.state.view = kind,
+            UiOp::Theme(theme) => self.apply(Action::SetTheme(theme), ctx),
+            UiOp::Language(language) => self.apply(Action::SetLanguage(language), ctx),
         }
     }
 
@@ -1316,6 +1371,10 @@ impl App {
     /// ouvertures, réglages, panneaux, vue centrale, puis réducteur.
     pub(crate) fn show(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        // Appels relayés d'un agent d'abord (ADR-0015 D9) : la session vue
+        // par l'image est celle qui a répondu.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.drain_relay();
         self.poll_io();
         self.poll_save(&ctx);
         self.guard_close(&ctx);
@@ -1334,6 +1393,8 @@ impl App {
         // widget.
         crate::keymap::dispatch(&ctx, self.key_state(&ctx), &mut actions);
         let mut stats = FrameStats::default();
+        #[cfg(not(target_arch = "wasm32"))]
+        let approval = self.approval_banner();
         // Nom du document du bandeau de confirmation, s'il y en a un.
         let confirm_name = self.confirm.as_ref().map(|_| {
             self.document
@@ -1361,6 +1422,15 @@ impl App {
             view::chrome::toolbar(ui, &mut fc);
             view::chrome::status_bar(ui, &mut fc, &self.messages);
             view::chrome::confirm_banner(ui, &mut fc, confirm_name.as_deref());
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let banner = approval.and_then(|(_, take_focus)| {
+                    self.relay
+                        .as_ref()
+                        .and_then(|relay| crate::relay::banner_for(relay, take_focus))
+                });
+                view::approval::approval_banner(ui, &mut fc, banner);
+            }
             if self.state.diagnostics_open {
                 view::diagnostics::panel(ui, &mut fc);
             }

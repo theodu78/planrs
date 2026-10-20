@@ -291,7 +291,10 @@ fn assigned_leaves_network_shape() {
 /// échelles, environ 65 ms). Seuil bloquant de 250 ms en attendant
 /// l'arbitrage (`docs/decisions.md`, correctifs de la relecture finale
 /// (11)) : il rattrape une régression quadratique (O(S²) sur les échelles,
-/// O(P²) sur les parts), pas une dérive de quelques pour cent.
+/// O(P²) sur les parts), pas une dérive de quelques pour cent. J6, lot L9 :
+/// les 1 010 calendriers dérivés sans semaine propre sont compilés par
+/// surcharge de leur base (compilation 104 → 11 à 18 ms, calcul 178 → 110
+/// à 117 ms au minimum, binaires alternés sur serveurdvp chargé).
 const LEAVES_BUDGET: Duration = Duration::from_millis(250);
 
 /// Budget de `5000_assigned_leaves` : [`LEAVES_BUDGET`].

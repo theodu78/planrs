@@ -25,6 +25,13 @@
 //! jour (au plus 5 pour un calendrier stocké, davantage pour un calendrier
 //! combiné par [`CompiledCalendar::intersect`] ou
 //! [`CompiledCalendar::union`], R-172).
+//!
+//! Dans un [`CalendarSet`], un calendrier dérivé sans semaine propre est
+//! compilé par surcharge de sa base compilée (ses seules exceptions posées
+//! sur les segments de la base, J6 lot L9) : même fonction W que la
+//! compilation complète, sans rejouer les exceptions de la base. La
+//! compilation de l'ensemble est bornée par un budget de segments
+//! ([`CalendarSet::compile_with`], R-172 amendée).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -262,6 +269,26 @@ impl Patterns {
         Some(p)
     }
 
+    /// Motifs d'un calendrier compilé, index reconstruits (surcharge d'une
+    /// base, [`CompiledCalendar::overlay`]) : les indices des motifs de la
+    /// base sont gardés.
+    fn from_compiled(c: &CompiledCalendar) -> Option<Self> {
+        let mut day_index = BTreeMap::new();
+        for (i, d) in c.day_patterns.iter().enumerate() {
+            day_index.insert(d.ranges.clone(), u32::try_from(i).ok()?);
+        }
+        let mut week_index = BTreeMap::new();
+        for (i, w) in c.week_patterns.iter().enumerate() {
+            week_index.insert(Weekday::ALL.map(|wd| *w.days.get(wd)), u32::try_from(i).ok()?);
+        }
+        Some(Self {
+            days: c.day_patterns.clone(),
+            day_index,
+            weeks: c.week_patterns.clone(),
+            week_index,
+        })
+    }
+
     fn day(&mut self, setting: &DaySetting) -> Option<u32> {
         self.intern_day(DayPattern::new(setting))
     }
@@ -497,6 +524,104 @@ impl CompiledCalendar {
         }
 
         Some(Built::Done(Self::assemble(uid, patterns, &raw)?, work))
+    }
+
+    /// Vrai si le calendrier dérivé `c` se compile par surcharge de sa base
+    /// compilée ([`Self::overlay`]) : aucun jour de sa semaine par défaut
+    /// n'est défini et il n'a aucune semaine datée ; seules ses exceptions
+    /// le distinguent de sa base.
+    fn overlays_base(c: &Calendar) -> bool {
+        match c.kind() {
+            CalendarKind::Derived { week, .. } => {
+                c.work_weeks().is_empty() && Weekday::ALL.iter().all(|wd| defined(week.get(*wd)).is_none())
+            }
+            CalendarKind::Base { .. } => false,
+        }
+    }
+
+    /// Compilation d'un dérivé sans semaine propre (voir
+    /// [`Self::overlays_base`]) par surcharge de sa base compilée `base`
+    /// (J6, lot L9, dette de l'ADR-0013) : ses exceptions, dépliées et posées
+    /// dans l'ordre (R-016, étape 2, le dérivé d'abord), remplacent les jours
+    /// de la base qu'elles couvrent ; les autres jours gardent la règle de
+    /// la base (exception de la base ou semaine résolue, identiques à la
+    /// précédence R-016 puisque le dérivé n'a ni semaine ni semaine datée).
+    /// Même fonction W que [`Self::compile`] (motifs internés dans un autre
+    /// ordre : formes compilées différentes, conversions identiques) ;
+    /// coût linéaire en segments de la base plus les séries du dérivé, sans
+    /// rejouer les exceptions de la base. `None` si un invariant est violé.
+    fn overlay(base: &Self, derived: &Calendar, room: Room) -> Option<Built> {
+        let mut patterns = Patterns::from_compiled(base)?;
+        let mut claims: DayClaims<u32> = DayClaims::new();
+        let mut work: usize = 0;
+        for (_, e) in exceptions_in_order(derived) {
+            if work >= room.work {
+                return Some(Built::Over);
+            }
+            let p = patterns.day(&e.setting)?;
+            let runs = expand_exception(e).ok()?;
+            work = work.saturating_add(runs.len().max(1));
+            if work > room.work {
+                return Some(Built::Over);
+            }
+            for r in runs {
+                claims.claim(r.first().index(), r.last().index(), p);
+            }
+        }
+        work = work.saturating_add(base.segments.len());
+        if work > room.work {
+            return Some(Built::Over);
+        }
+        // Balayage : séries du dérivé, sinon segments de la base ; voisins
+        // de même règle fusionnés.
+        let mut raw: Vec<(i32, SegmentRule)> = Vec::with_capacity(base.segments.len());
+        let push = |raw: &mut Vec<(i32, SegmentRule)>, first: i32, rule: SegmentRule| -> bool {
+            if raw.last().map(|(_, r)| *r) == Some(rule) {
+                return true;
+            }
+            if raw.len() >= room.segments {
+                return false;
+            }
+            raw.push((first, rule));
+            true
+        };
+        let mut runs = claims.iter().peekable();
+        let mut si = 0usize;
+        let mut day = 0i32;
+        while day < DAY_COUNT {
+            if let Some(&(first, last, p)) = runs.peek()
+                && first <= day
+            {
+                if !push(&mut raw, day, SegmentRule::Daily(p)) {
+                    return Some(Built::Over);
+                }
+                day = last.checked_add(1)?;
+                runs.next();
+                continue;
+            }
+            while base
+                .segments
+                .get(si.checked_add(1)?)
+                .is_some_and(|s| s.first_day <= day)
+            {
+                si = si.checked_add(1)?;
+            }
+            let seg = base.segments.get(si)?;
+            let seg_end = base
+                .segments
+                .get(si.checked_add(1)?)
+                .map_or(DAY_COUNT, |s| s.first_day);
+            let next_run = runs.peek().map_or(DAY_COUNT, |r| r.0);
+            if !push(&mut raw, day, seg.rule) {
+                return Some(Built::Over);
+            }
+            let next = seg_end.min(next_run);
+            if next <= day {
+                return None;
+            }
+            day = next;
+        }
+        Some(Built::Done(Self::assemble(derived.uid(), patterns, &raw)?, work))
     }
 
     /// Étape 5 de la compilation, partagée avec la combinaison (R-172) :
@@ -1092,13 +1217,22 @@ impl CompileBudget {
         &mut self,
         calendars: &Arena<CalendarUid, Calendar>,
         uid: CalendarUid,
+        base: Option<&CompiledCalendar>,
     ) -> Result<CompiledCalendar, CalendarError> {
         let ch = chain(calendars, uid)?;
         let room = Room {
             segments: self.kept,
             work: self.work,
         };
-        match CompiledCalendar::build(ch, room) {
+        let built = match (ch, base) {
+            (CalendarChain::Derived { calendar, .. }, Some(b))
+                if CompiledCalendar::overlays_base(calendar) =>
+            {
+                CompiledCalendar::overlay(b, calendar, room)
+            }
+            _ => CompiledCalendar::build(ch, room),
+        };
+        match built {
             Some(Built::Done(c, work)) => {
                 self.kept = self.kept.saturating_sub(c.segment_count());
                 self.work = self.work.saturating_sub(work);
@@ -1155,9 +1289,24 @@ impl CalendarSet {
             .flatten()
             .filter(|uid| project.calendars.get(*uid).is_some());
         for uid in priority.chain(project.calendars.iter().map(Calendar::uid)) {
-            if let std::collections::btree_map::Entry::Vacant(slot) = compiled.entry(uid) {
-                slot.insert(budget.compile(&project.calendars, uid));
+            if compiled.contains_key(&uid) {
+                continue;
             }
+            // Dérivé : sa base d'abord, puis surcharge de la base compilée
+            // quand il n'a pas de semaine propre (lot L9).
+            let base = match project.calendars.get(uid).map(Calendar::kind) {
+                Some(CalendarKind::Derived { base, .. }) => Some(*base),
+                _ => None,
+            };
+            if let Some(b) = base.filter(|b| project.calendars.get(*b).is_some())
+                && !compiled.contains_key(&b)
+            {
+                let r = budget.compile(&project.calendars, b, None);
+                compiled.insert(b, r);
+            }
+            let base_compiled = base.and_then(|b| compiled.get(&b)).and_then(|r| r.as_ref().ok());
+            let r = budget.compile(&project.calendars, uid, base_compiled);
+            compiled.insert(uid, r);
         }
         // Diagnostics dans l'ordre du modèle.
         let mut out = Diagnostics::new();
@@ -1589,5 +1738,166 @@ mod tests {
         assert_eq!(b.shape_fingerprint(), d.shape_fingerprint());
         assert_ne!(b.shape_fingerprint(), l.shape_fingerprint());
         assert!(l.segment_count() > b.segment_count());
+    }
+
+    /// Surcharge d'une base compilée (J6, lot L9) = compilation complète,
+    /// sur tout le domaine : mêmes plages chaque jour, même W à chaque
+    /// minuit et en des instants tirés, mêmes conversions ; base à fériés,
+    /// semaine datée et exception ouvrée, dérivés à exceptions qui
+    /// chevauchent, prolongent ou jouxtent celles de la base, récurrentes,
+    /// aux bornes du domaine.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "test : jeu de calendriers et comparaisons en un seul lieu"
+    )]
+    fn overlay_matches_full_compile() {
+        use crate::calendar::model::WorkWeek;
+        let ranges = |a: u16, b: u16| {
+            DaySetting::Working(
+                DayHours::new(vec![
+                    TimeRange::new(TimeOfDay::hm(a, 0).unwrap(), TimeOfDay::hm(b, 0).unwrap()).unwrap(),
+                ])
+                .unwrap(),
+            )
+        };
+        let mut base = standard(uid(1), "Standard".to_owned());
+        let first = day("2026-01-01").index();
+        for k in (0..150).step_by(5) {
+            let d = Day::new(first + k).unwrap();
+            base.add_exception(CalendarException {
+                period: DayRange::new(d, d).unwrap(),
+                ..holiday("2026-01-01", "2026-01-01")
+            })
+            .unwrap();
+        }
+        base.add_exception(CalendarException {
+            setting: ranges(9, 11),
+            ..holiday("2026-07-06", "2026-07-12")
+        })
+        .unwrap();
+        base.add_work_week(WorkWeek {
+            name: "Été".to_owned(),
+            period: DayRange::new(day("2027-07-01"), day("2027-08-31")).unwrap(),
+            days: Week::from_fn(|wd| match wd {
+                crate::time::Weekday::Saturday => crate::calendar::model::DayRule::Working(
+                    DayHours::new(vec![
+                        TimeRange::new(TimeOfDay::hm(8, 0).unwrap(), TimeOfDay::hm(12, 0).unwrap()).unwrap(),
+                    ])
+                    .unwrap(),
+                ),
+                _ => crate::calendar::model::DayRule::Inherit,
+            }),
+        })
+        .unwrap();
+        let derived = |u: u32, f: &dyn Fn(&mut Calendar)| {
+            let mut c = Calendar::new_derived(uid(u), format!("D{u}"), uid(1));
+            f(&mut c);
+            c
+        };
+        let cals = vec![
+            base,
+            derived(2, &|_| {}),
+            derived(3, &|c| {
+                // Chevauche des fériés de la base, jouxte la semaine ouvrée
+                // d'exception, prolonge une série.
+                c.add_exception(holiday("2026-01-04", "2026-01-12")).unwrap();
+                c.add_exception(holiday("2026-07-13", "2026-07-14")).unwrap();
+                c.add_exception(CalendarException {
+                    setting: ranges(7, 19),
+                    ..holiday("2026-07-08", "2026-07-08")
+                })
+                .unwrap();
+                c.add_exception(CalendarException {
+                    setting: ranges(9, 11),
+                    ..holiday("2026-07-01", "2026-07-05")
+                })
+                .unwrap();
+                c.add_exception(holiday("2027-07-30", "2027-08-02")).unwrap();
+            }),
+            derived(4, &|c| {
+                // Bornes du domaine et récurrence.
+                c.add_exception(holiday("1984-01-01", "1984-01-03")).unwrap();
+                c.add_exception(holiday("2149-12-30", "2149-12-31")).unwrap();
+                c.add_exception(CalendarException {
+                    recurrence: Recurrence::Daily { every: 3 },
+                    ..holiday("2026-02-01", "2026-12-31")
+                })
+                .unwrap();
+            }),
+        ];
+        let arena = Arena::try_from(cals).unwrap();
+        let b = CompiledCalendar::compile(&arena, uid(1)).unwrap();
+        for u in 2..=4 {
+            let c = arena.get(uid(u)).unwrap();
+            assert!(CompiledCalendar::overlays_base(c));
+            let Some(super::Built::Done(over, _)) = CompiledCalendar::overlay(&b, c, super::Room::UNBOUNDED)
+            else {
+                panic!("surcharge attendue");
+            };
+            let full = CompiledCalendar::compile(&arena, uid(u)).unwrap();
+            assert_eq!(over.uid(), uid(u));
+            assert_eq!(over.total, full.total, "calendrier {u}");
+            assert_eq!(over.segments.len(), full.segments.len(), "calendrier {u}");
+            for d in 0..super::DAY_COUNT {
+                let dd = Day::new(d).unwrap();
+                assert_eq!(over.day_ranges(dd), full.day_ranges(dd), "{u} jour {d}");
+                let t = Moment::from_minutes(i64::from(d) * 1_440).unwrap();
+                assert_eq!(over.w(t), full.w(t), "{u} jour {d}");
+            }
+            let mut seed: u64 = u64::from(u);
+            let mut next = |hi: i64| {
+                seed = seed
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                i64::try_from((seed >> 33) % u64::try_from(hi).unwrap()).unwrap()
+            };
+            let max = Moment::MAX.minutes();
+            for _ in 0..5_000 {
+                let t = Moment::from_minutes(next(max + 1)).unwrap();
+                let d = Minutes::new(next(20_000) - 10_000);
+                assert_eq!(over.add_working(t, d), full.add_working(t, d), "{u} {t}");
+                assert_eq!(
+                    over.next_working_moment(t),
+                    full.next_working_moment(t),
+                    "{u} {t}"
+                );
+                assert_eq!(
+                    over.span_after(t, d.get().abs() + 1),
+                    full.span_after(t, d.get().abs() + 1)
+                );
+            }
+        }
+        // Sans exception : forme identique à la base (échelle partagée par
+        // le placement, `same_working_time`).
+        let Some(super::Built::Done(plain, _)) =
+            CompiledCalendar::overlay(&b, arena.get(uid(2)).unwrap(), super::Room::UNBOUNDED)
+        else {
+            panic!("surcharge attendue");
+        };
+        assert!(plain.same_working_time(&b));
+        // Un dérivé à semaine propre n'est pas surchargé.
+        let mut own = Calendar::new_derived(uid(5), "Propre".to_owned(), uid(1));
+        own.set_day(
+            crate::time::Weekday::Saturday,
+            crate::calendar::model::DayRule::NonWorking,
+        )
+        .unwrap();
+        assert!(!CompiledCalendar::overlays_base(&own));
+        let mut dated = Calendar::new_derived(uid(6), "Datée".to_owned(), uid(1));
+        dated
+            .add_work_week(WorkWeek {
+                name: "Hiver".to_owned(),
+                period: DayRange::new(day("2027-01-04"), day("2027-01-10")).unwrap(),
+                days: Week::from_fn(|_| crate::calendar::model::DayRule::Inherit),
+            })
+            .unwrap();
+        assert!(!CompiledCalendar::overlays_base(&dated));
+        assert!(!CompiledCalendar::overlays_base(&b_model()));
+    }
+
+    /// Calendrier de base (jamais surchargé).
+    fn b_model() -> Calendar {
+        standard(uid(1), "Standard".to_owned())
     }
 }

@@ -539,8 +539,9 @@ pub enum Diagnostic {
         /// Tâche.
         task: TaskUid,
     },
-    /// Intersection ou union de deux calendriers trop morcelée : plafond de
-    /// segments atteint (avertissement, R-172).
+    /// Intersection ou union de deux calendriers trop morcelée, ou
+    /// calendrier du modèle hors du budget de compilation (`calendar` =
+    /// `other`) : plafond de segments atteint (avertissement, R-172).
     #[serde(rename = "calendar.too_many_segments")]
     CalendarTooManySegments {
         /// Premier calendrier.
@@ -1186,6 +1187,14 @@ impl fmt::Display for Diagnostic {
             Self::TaskFixedWorkEffortDriven { task } => write!(
                 f,
                 "la tâche {task} est à travail fixe sans être pilotée par l'effort"
+            ),
+            Self::CalendarTooManySegments {
+                calendar,
+                other,
+                limit,
+            } if calendar == other => write!(
+                f,
+                "le calendrier {calendar} (ou sa combinaison) dépasse le budget de {limit} segments : remplacé par un calendrier de repli"
             ),
             Self::CalendarTooManySegments {
                 calendar,

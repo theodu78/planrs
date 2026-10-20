@@ -53,6 +53,41 @@ const BLOCK_SHIFT: i32 = 6;
 /// rapide que l'index de blocs ou la recherche galopante.
 const FEW_SEGMENTS: usize = 16;
 
+/// Segments compilés gardés par [`CalendarSet::compile`], par défaut
+/// (`Limits::compiled_segments`, R-172 amendée, règle 10) : environ 64 Mo
+/// de segments (32 octets chacun), soit 33 calendriers au morcellement
+/// maximal (un segment par jour du domaine) ou 9 000 calendriers Standard à
+/// 100 fériés (environ 220 segments).
+pub(crate) const DEFAULT_COMPILED_SEGMENTS: usize = 2_000_000;
+
+/// Travail de compilation permis par segment gardé : séries d'exception
+/// dépliées et points de coupure, tous calendriers confondus.
+const COMPILE_WORK_FACTOR: usize = 8;
+
+/// Place laissée à une compilation par le budget de [`CalendarSet`] :
+/// segments gardés et travail (séries dépliées, points de coupure).
+#[derive(Clone, Copy, Debug)]
+struct Room {
+    segments: usize,
+    work: usize,
+}
+
+impl Room {
+    /// Aucune borne ([`CompiledCalendar::compile`] seul).
+    const UNBOUNDED: Self = Self {
+        segments: usize::MAX,
+        work: usize::MAX,
+    };
+}
+
+/// Issue d'une compilation bornée.
+enum Built {
+    /// Calendrier compilé et travail consommé.
+    Done(CompiledCalendar, usize),
+    /// Budget dépassé : compilation abandonnée.
+    Over,
+}
+
 /// Motif d'un jour : plages fusionnées (contiguës réunies), cumul avant
 /// chaque plage, total.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -365,11 +400,18 @@ impl CompiledCalendar {
         uid: CalendarUid,
     ) -> Result<Self, CalendarError> {
         let ch = chain(calendars, uid)?;
-        Self::build(ch).ok_or(CalendarError::Inconsistent { calendar: uid })
+        match Self::build(ch, Room::UNBOUNDED) {
+            Some(Built::Done(c, _)) => Ok(c),
+            Some(Built::Over) | None => Err(CalendarError::Inconsistent { calendar: uid }),
+        }
     }
 
-    /// Compilation d'une chaîne valide ; `None` si un invariant est violé.
-    fn build(ch: CalendarChain<'_>) -> Option<Self> {
+    /// Compilation d'une chaîne valide dans la place `room` : abandonnée
+    /// ([`Built::Over`]) dès que le travail (séries d'exception dépliées,
+    /// points de coupure) ou le nombre de segments la dépasse, avant toute
+    /// allocation proportionnelle au dépassement ; `None` si un invariant
+    /// est violé.
+    fn build(ch: CalendarChain<'_>, room: Room) -> Option<Built> {
         let uid = ch.calendar().uid();
         let derived = match ch {
             CalendarChain::Base(_) => None,
@@ -381,11 +423,23 @@ impl CompiledCalendar {
 
         // 2. Exceptions : dérivé d'abord, puis base, chacune sur les jours libres.
         let mut claims: DayClaims<u32> = DayClaims::new();
+        let mut work: usize = 0;
         for c in levels() {
             for (_, e) in exceptions_in_order(c) {
+                // Place épuisée : abandon avant de déplier (une exception se
+                // déplie en au plus une série par jour du domaine, le
+                // dépassement est donc borné).
+                if work >= room.work {
+                    return Some(Built::Over);
+                }
                 let p = patterns.day(&e.setting)?;
                 // Une récurrence invalide ne peut pas être stockée.
-                for r in expand_exception(e).ok()? {
+                let runs = expand_exception(e).ok()?;
+                work = work.saturating_add(runs.len().max(1));
+                if work > room.work {
+                    return Some(Built::Over);
+                }
+                for r in runs {
                     claims.claim(r.first().index(), r.last().index(), p);
                 }
             }
@@ -404,6 +458,10 @@ impl CompiledCalendar {
             }
         }
         let cuts: Vec<i32> = cuts.into_iter().collect();
+        work = work.saturating_add(cuts.len());
+        if work > room.work {
+            return Some(Built::Over);
+        }
 
         // 4. Règle de chaque intervalle élémentaire, fusion des voisins égaux.
         let derived_ww = derived.map(work_weeks_in_order).unwrap_or_default();
@@ -431,11 +489,14 @@ impl CompiledCalendar {
                 SegmentRule::Weekly(w)
             };
             if raw.last().map(|(_, r)| *r) != Some(rule) {
+                if raw.len() >= room.segments {
+                    return Some(Built::Over);
+                }
                 raw.push((first, rule));
             }
         }
 
-        Self::assemble(uid, patterns, &raw)
+        Some(Built::Done(Self::assemble(uid, patterns, &raw)?, work))
     }
 
     /// Étape 5 de la compilation, partagée avec la combinaison (R-172) :
@@ -988,6 +1049,11 @@ fn compile_diagnostic(
     match result {
         Ok(cc) if !cc.has_working_time() => Some(Diagnostic::CalendarNoWorkingTime { calendar: uid }),
         Ok(_) => None,
+        Err(CalendarError::TooManySegments { limit }) => Some(Diagnostic::CalendarTooManySegments {
+            calendar: uid,
+            other: uid,
+            limit: *limit,
+        }),
         Err(e) => {
             Some(Diagnostic::from_calendar_error(e).unwrap_or(Diagnostic::CalendarInternal { calendar: uid }))
         }
@@ -1001,19 +1067,107 @@ pub struct CalendarSet {
     compiled: BTreeMap<CalendarUid, Result<CompiledCalendar, CalendarError>>,
 }
 
+/// Budget de compilation de [`CalendarSet::compile_with`] (R-172 amendée,
+/// règle 10) : segments gardés et travail restants, tous calendriers
+/// confondus.
+#[derive(Clone, Copy, Debug)]
+struct CompileBudget {
+    kept: usize,
+    work: usize,
+    limit: usize,
+}
+
+impl CompileBudget {
+    const fn new(limit: usize) -> Self {
+        Self {
+            kept: limit,
+            work: limit.saturating_mul(COMPILE_WORK_FACTOR),
+            limit,
+        }
+    }
+
+    /// Compile `uid` dans la place restante et la décompte ;
+    /// [`CalendarError::TooManySegments`] (plafond = le budget) au-delà.
+    fn compile(
+        &mut self,
+        calendars: &Arena<CalendarUid, Calendar>,
+        uid: CalendarUid,
+    ) -> Result<CompiledCalendar, CalendarError> {
+        let ch = chain(calendars, uid)?;
+        let room = Room {
+            segments: self.kept,
+            work: self.work,
+        };
+        match CompiledCalendar::build(ch, room) {
+            Some(Built::Done(c, work)) => {
+                self.kept = self.kept.saturating_sub(c.segment_count());
+                self.work = self.work.saturating_sub(work);
+                Ok(c)
+            }
+            Some(Built::Over) => {
+                // Le premier refus ferme le budget : les calendriers suivants
+                // sont refusés sans être dépliés (un fichier hostile ne fait
+                // pas recommencer un calendrier presque entier à chaque
+                // refus ; un projet réel n'approche pas du budget).
+                self.kept = 0;
+                self.work = 0;
+                Err(CalendarError::TooManySegments {
+                    limit: u32::try_from(self.limit).unwrap_or(u32::MAX),
+                })
+            }
+            None => Err(CalendarError::Inconsistent { calendar: uid }),
+        }
+    }
+}
+
 impl CalendarSet {
     /// Compile chaque calendrier du projet. Rend un diagnostic par calendrier
-    /// en échec (héritage) ou sans temps ouvré ; n'échoue jamais.
+    /// en échec (héritage), sans temps ouvré ou hors budget ; n'échoue
+    /// jamais. Budget par défaut ([`DEFAULT_COMPILED_SEGMENTS`], celui de
+    /// `Limits::default`).
     #[must_use]
     pub fn compile(project: &Project) -> (Self, Diagnostics) {
+        Self::compile_with(project, DEFAULT_COMPILED_SEGMENTS)
+    }
+
+    /// [`CalendarSet::compile`] avec un budget de `limit` segments gardés
+    /// (et 8 fois autant de travail : séries d'exception dépliées, points de
+    /// coupure), tous calendriers confondus (R-172 amendée, règle 10). Le
+    /// calendrier du projet, puis sa base, sont compilés d'abord ; les autres
+    /// dans l'ordre du modèle. Le premier calendrier qui ne tient plus dans
+    /// le budget est abandonné et ferme le budget : lui et les suivants ne
+    /// sont pas compilés, `get` rend [`CalendarError::TooManySegments`], un
+    /// diagnostic `calendar.too_many_segments` (`calendar` = `other`) est
+    /// émis pour chacun et leurs tâches et ressources se replient comme pour
+    /// un calendrier en échec (R-066, R-171). Travail total borné par le
+    /// budget plus un dépliage d'exception (au plus 60 631 séries).
+    #[must_use]
+    pub fn compile_with(project: &Project, limit: usize) -> (Self, Diagnostics) {
         let mut compiled = BTreeMap::new();
+        let mut budget = CompileBudget::new(limit);
+        let first = project.calendar;
+        let first_base = match project.calendars.get(first).map(Calendar::kind) {
+            Some(CalendarKind::Derived { base, .. }) => Some(*base),
+            _ => None,
+        };
+        let priority = [Some(first), first_base]
+            .into_iter()
+            .flatten()
+            .filter(|uid| project.calendars.get(*uid).is_some());
+        for uid in priority.chain(project.calendars.iter().map(Calendar::uid)) {
+            if let std::collections::btree_map::Entry::Vacant(slot) = compiled.entry(uid) {
+                slot.insert(budget.compile(&project.calendars, uid));
+            }
+        }
+        // Diagnostics dans l'ordre du modèle.
         let mut out = Diagnostics::new();
         for c in &project.calendars {
-            let result = CompiledCalendar::compile(&project.calendars, c.uid());
-            if let Some(d) = compile_diagnostic(c.uid(), &result) {
+            if let Some(d) = compiled
+                .get(&c.uid())
+                .and_then(|r| compile_diagnostic(c.uid(), r))
+            {
                 out.push(d);
             }
-            compiled.insert(c.uid(), result);
         }
         (Self { compiled }, out)
     }

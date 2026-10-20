@@ -5,9 +5,18 @@
 //!
 //! Repère : S = Standard (lun-ven 08:00-12:00, 13:00-17:00, UID 1) ;
 //! L = base lun-sam 09:00-18:00 (UID 2).
+//!
+//! Budget de compilation (amendement J6, lot L9, règle 10) :
+//! `Limits::compiled_segments` borne les segments des calendriers du modèle
+//! compilés par recalcul (`CalendarSet::compile_with`) ; le calendrier du
+//! projet et sa base passent d'abord ; au-delà, `calendar.too_many_segments`
+//! et repli R-066.
 
-use planrs_core::calendar::{Calendar, CompiledCalendar, DaySetting, TimeRange};
-use planrs_core::{CalendarUid, Week, Weekday};
+use planrs_core::calendar::{
+    Calendar, CalendarException, CalendarSet, CompiledCalendar, DaySetting, Recurrence, TimeRange,
+};
+use planrs_core::{CalendarError, CalendarUid, Day, DayRange, Diagnostic, Limits, Week, Weekday};
+use planrs_tests::net::Net;
 use planrs_tests::{calendars, compiled, day, exception, mins, moment, standard, time, working};
 
 /// Base lun-sam 09:00-18:00, UID 2.
@@ -152,4 +161,96 @@ fn r172_idempotent() {
         assert_eq!(ranges(&ii, d), ranges(&i, d));
         assert_eq!(ranges(&uu, d), ranges(&u, d));
     }
+}
+
+/// Limites par défaut, budget de compilation `segments`.
+fn compile_budget(segments: usize) -> Limits {
+    Limits {
+        compiled_segments: segments,
+        ..Limits::default()
+    }
+}
+
+/// `calendar.too_many_segments` d'un calendrier du modèle hors budget.
+fn over(uid: u32, limit: u32) -> Diagnostic {
+    Diagnostic::CalendarTooManySegments {
+        calendar: CalendarUid::new(uid),
+        other: CalendarUid::new(uid),
+        limit,
+    }
+}
+
+#[test]
+fn r172_compile_budget() {
+    // Calendriers intégrés : Standard (UID 1, celui du projet) et 24 heures
+    // (UID 2), un segment chacun. A (1 j) sur 24 heures.
+    let net = || Net::new("2026-10-19T08:00").task("A", 480).calendar("A", 2);
+    // Budget par défaut : 24 heures, lun 08:00 – 16:00.
+    let run = net().run();
+    assert_eq!(run.at("A").early.finish, moment("2026-10-19T16:00"));
+    assert!(!run.codes().contains(&"calendar.too_many_segments"));
+    // Budget d'un segment : Standard (projet) compilé, 24 heures refusé ;
+    // A se replie sur le calendrier du projet (R-066) : lun 08:00 – 17:00.
+    let run = net().run_with(compile_budget(1));
+    assert_eq!(run.at("A").early.finish, moment("2026-10-19T17:00"));
+    let diags = &run.schedule.diagnostics;
+    assert!(diags.contains(&over(2, 1)), "{diags:?}");
+    assert!(over(2, 1).to_string().contains("budget de 1 segments"));
+    assert!(diags.contains(&Diagnostic::TaskCalendarFallback {
+        task: run.uid("A"),
+        calendar: CalendarUid::new(2),
+    }));
+    assert!(!run.codes().contains(&"project.calendar_fallback"));
+    // Budget nul : même le calendrier du projet est refusé, Standard
+    // intégré (R-066, erreur), jamais de panique.
+    let run = net().run_with(compile_budget(0));
+    assert_eq!(run.at("A").early.finish, moment("2026-10-19T17:00"));
+    assert!(run.codes().contains(&"project.calendar_fallback"));
+    assert!(run.schedule.diagnostics.contains(&over(1, 0)));
+}
+
+#[test]
+fn r172_compile_budget_project_calendar_first() {
+    // Calendrier du projet = 24 heures (UID 2), rangé après Standard : il
+    // est compilé d'abord ; Standard, refusé, ne sert à personne. B sans
+    // calendrier propre : lun 08:00 – 16:00.
+    let run = Net::new("2026-10-19T08:00")
+        .project(|p| p.calendar = CalendarUid::new(2))
+        .task("B", 480)
+        .run_with(compile_budget(1));
+    assert_eq!(run.at("B").early.finish, moment("2026-10-19T16:00"));
+    assert!(run.schedule.diagnostics.contains(&over(1, 1)));
+    assert!(!run.codes().contains(&"project.calendar_fallback"));
+}
+
+#[test]
+fn r172_compile_budget_bounds_work() {
+    // Un jour chômé sur deux sur tout le domaine : environ 30 000 séries
+    // dépliées et 60 000 segments. Budget de 1 000 segments (8 000 de
+    // travail) : abandon pendant le dépliage, avant de poser les segments.
+    let mut p = Net::new("2026-10-19T08:00")
+        .task("A", 480)
+        .calendar("A", 7)
+        .build();
+    let mut c = Calendar::new_derived(CalendarUid::new(7), "Alterné".to_owned(), CalendarUid::new(1));
+    c.add_exception(CalendarException {
+        name: "Un jour sur deux".to_owned(),
+        period: DayRange::new(Day::new(0).unwrap(), Day::new(60_630).unwrap()).unwrap(),
+        setting: DaySetting::NonWorking,
+        recurrence: Recurrence::Daily { every: 2 },
+        occurrences: None,
+    })
+    .unwrap();
+    p.calendars.push(c).unwrap();
+    let (set, diags) = CalendarSet::compile_with(&p, 1_000);
+    assert_eq!(
+        set.get(CalendarUid::new(7)).unwrap_err(),
+        CalendarError::TooManySegments { limit: 1_000 }
+    );
+    assert!(diags.finish().contains(&over(7, 1_000)));
+    // Les autres calendriers restent compilés.
+    assert!(set.get(CalendarUid::new(1)).unwrap().has_working_time());
+    // Budget par défaut : compilé en entier (plus de 60 000 segments).
+    let (set, _) = CalendarSet::compile(&p);
+    assert!(set.get(CalendarUid::new(7)).unwrap().segment_count() > 60_000);
 }

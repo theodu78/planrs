@@ -176,7 +176,7 @@ fn contract_compiles() {
 }
 
 /// Types du cœur (contrat J6) : planning sans avancement, JSON inchangé,
-/// squelettes qui répondent sans paniquer.
+/// squelettes qui répondent sans paniquer (lignes de base remplies en L4).
 fn core_contract(s: &Session) {
     let schedule = s.schedule();
     let Some(TaskOutcome::Scheduled(t)) = schedule.get(TaskUid::new(1)) else {
@@ -221,7 +221,8 @@ fn core_contract(s: &Session) {
         Err(ExplainError::DepthOutOfRange(51))
     );
 
-    // Lignes de base : contrôles de portée, capture vide, écarts nuls.
+    // Lignes de base (lot L4) : contrôles de portée, capture de la tâche 1,
+    // écriture dans une copie du projet.
     let spec = |scope, rollup| BaselineSpec {
         number: BaselineNumber::PRIMARY,
         scope,
@@ -229,7 +230,7 @@ fn core_contract(s: &Session) {
         overwrite: false,
     };
     let edit = baseline::capture(p, schedule, &spec(Scope::Project, Rollup::None)).unwrap();
-    assert!(edit.tasks.is_empty() && !edit.cost_copied);
+    assert!(edit.tasks.contains_key(&TaskUid::new(1)) && !edit.cost_copied);
     assert_eq!(
         baseline::capture(p, schedule, &spec(Scope::Project, Rollup::ToAllSummaries)),
         Err(BaselineError::RollupNeedsSelection)
@@ -249,7 +250,14 @@ fn core_contract(s: &Session) {
     let mut copy = p.clone();
     let dropped = baseline::apply(&mut copy, BaselineNumber::PRIMARY, edit);
     assert_eq!(dropped.len(), 0);
-    assert_eq!(&copy, p);
+    assert!(
+        copy.tasks
+            .get(TaskUid::new(1))
+            .unwrap()
+            .baselines
+            .contains_key(&BaselineNumber::PRIMARY)
+    );
+    assert!(p.tasks.get(TaskUid::new(1)).unwrap().baselines.is_empty());
 }
 
 /// Les entrées J6 : présentes, triées avec le reste, noms MCP uniques et

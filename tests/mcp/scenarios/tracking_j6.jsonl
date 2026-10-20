@@ -11,7 +11,7 @@
 {"v":1,"seq":6,"tool":"set_baseline","params":{"number":0}}
 {"v":1,"seq":6,"tool":"set_baseline","params":null,"result":{"error":{"code":"baseline.exists","diagnostics":[],"field":"overwrite","message":"la ligne de base 0 existe déjà sur 27 élément(s) : la remplacer avec \"overwrite\": true (opération 0, champ « overwrite »)","op_index":0,"subject":null}}}
 {"v":1,"seq":7,"tool":"export_mspdi","params":{"path":"$TMP/extension-bureaux.xml"}}
-{"v":1,"seq":7,"tool":"export_mspdi","params":null,"result":{"ok":{"bytes":51931,"diagnostics":[],"dirty":true,"path":"$TMP/extension-bureaux.xml"}}}
+{"v":1,"seq":7,"tool":"export_mspdi","params":null,"result":{"ok":{"bytes":51938,"diagnostics":[],"dirty":true,"path":"$TMP/extension-bureaux.xml"}}}
 {"v":1,"seq":8,"tool":"set_status_date","params":{"date":"2026-11-13T17:00"}}
 {"v":1,"seq":8,"tool":"set_status_date","params":null,"result":{"ok":{"committed":true,"created":[],"created_uids":[],"diff":{"changed":[],"changed_total":0,"critical_entered":[],"critical_left":[],"finish_after":"2026-12-16T17:00","finish_before":"2026-12-16T17:00","finish_delta":{"minutes":0,"text":"0j","unit":"day"},"start_after":"2026-11-02T08:00","start_before":"2026-11-02T08:00","truncated":false},"history_len":3,"labels":{},"side_effects":[],"warnings":[]}}}
 {"v":1,"seq":9,"tool":"update_progress","params":{"percent_complete":{"text":"100%"},"task":2}}
@@ -91,9 +91,9 @@
 {"v":1,"seq":46,"tool":"project_summary","params":{}}
 {"v":1,"seq":46,"tool":"project_summary","params":null,"result":{"ok":{"baselines":[0,1],"critical":12,"dirty":true,"duration":{"minutes":22560,"text":"47j","unit":"day"},"errors":0,"finish":"2027-01-05T17:00","history_len":11,"links":20,"milestones":2,"name":"Extension de bureaux","path":null,"percent_complete":{"text":"24%","value":2400},"start":"2026-11-02T08:00","status_date":"2026-11-27T17:00","summaries":3,"tasks":20,"warnings":0}}}
 {"v":1,"seq":47,"tool":"save_project","params":{"path":"$TMP/tracking_j6.xml"}}
-{"v":1,"seq":47,"tool":"save_project","params":null,"result":{"ok":{"bytes":54796,"diagnostics":["mspdi.write.rounded","mspdi.write.rounded","mspdi.write.rounded","mspdi.write.rounded","mspdi.write.rounded","mspdi.write.rounded"],"dirty":false,"path":"$TMP/tracking_j6.xml"}}}
+{"v":1,"seq":47,"tool":"save_project","params":null,"result":{"ok":{"bytes":54801,"diagnostics":["mspdi.write.rounded","mspdi.write.rounded","mspdi.write.rounded","mspdi.write.rounded","mspdi.write.rounded","mspdi.write.rounded"],"dirty":false,"path":"$TMP/tracking_j6.xml"}}}
 {"v":1,"seq":48,"tool":"export_mspdi","params":{"path":"$TMP/export.xml"}}
-{"v":1,"seq":48,"tool":"export_mspdi","params":null,"result":{"ok":{"bytes":54796,"diagnostics":["mspdi.write.rounded","mspdi.write.rounded","mspdi.write.rounded","mspdi.write.rounded","mspdi.write.rounded","mspdi.write.rounded"],"dirty":false,"path":"$TMP/export.xml"}}}
+{"v":1,"seq":48,"tool":"export_mspdi","params":null,"result":{"ok":{"bytes":54801,"diagnostics":["mspdi.write.rounded","mspdi.write.rounded","mspdi.write.rounded","mspdi.write.rounded","mspdi.write.rounded","mspdi.write.rounded"],"dirty":false,"path":"$TMP/export.xml"}}}
 {"v":1,"seq":49,"tool":"open_project","params":{"path":"$TMP/export.xml"}}
 {"v":1,"seq":49,"tool":"open_project","params":null,"result":{"ok":{"diagnostics":[],"diagnostics_total":0,"summary":{"baselines":[0,1],"critical":12,"dirty":false,"duration":{"minutes":22560,"text":"47j","unit":"day"},"errors":0,"finish":"2027-01-05T17:00","history_len":0,"links":20,"milestones":2,"name":"Extension de bureaux","path":"$TMP/export.xml","percent_complete":{"text":"24%","value":2400},"start":"2026-11-02T08:00","status_date":"2026-11-27T17:00","summaries":3,"tasks":20,"warnings":0}}}}
 {"v":1,"seq":50,"tool":"baseline_variance","params":{"baseline":0}}

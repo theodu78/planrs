@@ -368,9 +368,9 @@
 			<PercentWorkComplete>54</PercentWorkComplete>
 			<ActualStart>2026-11-02T08:00:00</ActualStart>
 			<ActualDuration>PT129H25M0S</ActualDuration>
-			<ActualWork>PT0H0M0S</ActualWork>
+			<ActualWork>PT56H0M0S</ActualWork>
 			<RemainingDuration>PT70H35M0S</RemainingDuration>
-			<RemainingWork>PT0H0M0S</RemainingWork>
+			<RemainingWork>PT48H0M0S</RemainingWork>
 			<ConstraintType>0</ConstraintType>
 			<CalendarUID>-1</CalendarUID>
 			<IgnoreResourceCalendar>0</IgnoreResourceCalendar>
@@ -460,7 +460,7 @@
 			<DurationFormat>7</DurationFormat>
 			<Work>PT80H0M0S</Work>
 			<Stop>2026-11-09T17:00:00</Stop>
-			<Resume>2026-11-30T08:00:00</Resume>
+			<Resume>2026-11-27T17:00:00</Resume>
 			<EffortDriven>0</EffortDriven>
 			<Recurring>0</Recurring>
 			<Estimated>0</Estimated>
@@ -588,7 +588,7 @@
 			<DurationFormat>7</DurationFormat>
 			<Work>PT24H0M0S</Work>
 			<Stop>2026-11-09T17:00:00</Stop>
-			<Resume>2026-11-30T08:00:00</Resume>
+			<Resume>2026-11-27T17:00:00</Resume>
 			<EffortDriven>0</EffortDriven>
 			<Recurring>0</Recurring>
 			<Estimated>0</Estimated>
@@ -742,7 +742,7 @@
 			<ActualDuration>PT10H20M0S</ActualDuration>
 			<ActualWork>PT0H0M0S</ActualWork>
 			<RemainingDuration>PT237H40M0S</RemainingDuration>
-			<RemainingWork>PT0H0M0S</RemainingWork>
+			<RemainingWork>PT64H0M0S</RemainingWork>
 			<ConstraintType>0</ConstraintType>
 			<CalendarUID>-1</CalendarUID>
 			<IgnoreResourceCalendar>0</IgnoreResourceCalendar>
@@ -845,7 +845,7 @@
 			<DurationFormat>7</DurationFormat>
 			<Work>PT0H0M0S</Work>
 			<Stop>2026-11-12T17:00:00</Stop>
-			<Resume>2026-12-11T08:00:00</Resume>
+			<Resume>2026-11-27T17:00:00</Resume>
 			<EffortDriven>0</EffortDriven>
 			<Recurring>0</Recurring>
 			<Estimated>0</Estimated>
@@ -1251,7 +1251,7 @@
 			<PercentWorkComplete>0</PercentWorkComplete>
 			<ActualDuration>PT0H0M0S</ActualDuration>
 			<ActualWork>PT0H0M0S</ActualWork>
-			<RemainingDuration>PT0H0M0S</RemainingDuration>
+			<RemainingDuration>PT136H0M0S</RemainingDuration>
 			<RemainingWork>PT0H0M0S</RemainingWork>
 			<ConstraintType>0</ConstraintType>
 			<CalendarUID>-1</CalendarUID>

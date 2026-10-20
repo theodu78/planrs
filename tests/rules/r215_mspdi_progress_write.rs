@@ -66,15 +66,15 @@ fn in_progress() -> Project {
 
 #[test]
 fn r215_stop_resume_written() {
-    // En cours : `Stop` = fin de la partie réelle (lun 17:00), `Resume` =
-    // instant ouvré suivant (mar 08:00), relue dans `Progress::resume`.
+    // En cours : `Stop` = fin de la partie réelle (lun 17:00) ; `Resume`
+    // omis sans reprise saisie (relecture finale J6, J6-F1 : un `Resume`
+    // relu est une reprise saisie, R-214 ; la reprise calculée n'est pas
+    // écrite).
     let p = in_progress();
     let (xml, _) = by_engine(&p);
     let t = entity(&xml, "Task", 1);
-    assert!(
-        t.contains("<Stop>2026-10-19T17:00:00</Stop><Resume>2026-10-20T08:00:00</Resume>"),
-        "{t}"
-    );
+    assert!(t.contains("<Stop>2026-10-19T17:00:00</Stop>"), "{t}");
+    assert!(!t.contains("<Resume>"), "{t}");
     assert!(t.contains("<PercentComplete>50</PercentComplete>"), "{t}");
     assert!(t.contains("<ActualDuration>PT8H0M0S</ActualDuration>"), "{t}");
     assert!(
@@ -83,7 +83,17 @@ fn r215_stop_resume_written() {
     );
     let back = reread(&write(&p, Computed::Schedule(&schedule(&p)), &WriteOptions::default()).xml);
     let r = back.project.tasks.get(TaskUid::new(1)).unwrap().progress;
-    assert_eq!(r.resume, Some(moment("2026-10-20T08:00")));
+    assert_eq!(r.resume, None);
+    assert_round_trip(&p);
+    // Reprise saisie mar 13:00 : écrite telle quelle, relue telle quelle.
+    let mut p = in_progress();
+    p.tasks.get_mut(TaskUid::new(1)).unwrap().progress.resume = Some(moment("2026-10-20T13:00"));
+    let (xml, _) = by_engine(&p);
+    let t = entity(&xml, "Task", 1);
+    assert!(
+        t.contains("<Stop>2026-10-19T17:00:00</Stop><Resume>2026-10-20T13:00:00</Resume>"),
+        "{t}"
+    );
     assert_round_trip(&p);
     // Achevée : `Stop` = `Resume` = fin réelle ; non commencée : omis.
     let mut p = new_project("2026-10-19T08:00");
@@ -331,4 +341,114 @@ fn r215_a7_written_by_engine() {
         }
     }
     assert_eq!(differ, ["affectation 47", "affectation 48", "affectation 49"]);
+}
+
+/// Relecture finale J6 (J6-F1) : P 2 j FS → T 3 j commencée lun 08:00, 1 j
+/// réel, reprise tirée par le lien (mer 08:00). Après l'aller-retour, puis
+/// P raccourcie à 1 j, le reste de T avance comme dans le projet d'origine
+/// (mar 08:00 ; mar 13:00 avec une reprise saisie mar 13:00) : la reprise
+/// calculée n'est pas relue comme saisie.
+#[test]
+fn r215_resume_round_trip_keeps_plan_behaviour() {
+    for entered in [None, Some(moment("2026-10-20T13:00"))] {
+        let mut p = new_project("2026-10-19T08:00");
+        p.tasks.push(task(&p, 1, 960)).unwrap();
+        let mut t = task(&p, 2, 1_440);
+        t.progress.actual_start = Some(moment("2026-10-19T08:00"));
+        t.progress.actual_duration = Minutes::new(480);
+        t.progress.resume = entered;
+        t.predecessors.push(planrs_core::Link {
+            predecessor: TaskUid::new(1),
+            kind: planrs_core::LinkType::FinishToStart,
+            lag: planrs_core::Lag::ZERO,
+        });
+        p.tasks.push(t).unwrap();
+        let resume_of = |p: &Project| {
+            schedule(p)
+                .scheduled(TaskUid::new(2))
+                .and_then(|g| g.progress)
+                .map(|g| g.resume)
+        };
+        assert_eq!(resume_of(&p), Some(moment("2026-10-21T08:00")));
+        let s = schedule(&p);
+        let out = write(&p, Computed::Schedule(&s), &WriteOptions::default());
+        let mut back = reread(&out.xml).project;
+        assert_eq!(resume_of(&back), Some(moment("2026-10-21T08:00")));
+        let one_day = Duration::new(Minutes::new(480), DurationUnit::Day, TimeBasis::Working, false).unwrap();
+        p.tasks.get_mut(TaskUid::new(1)).unwrap().duration = one_day;
+        back.tasks.get_mut(TaskUid::new(1)).unwrap().duration = one_day;
+        let expected = entered.unwrap_or(moment("2026-10-20T08:00"));
+        assert_eq!(resume_of(&p), Some(expected), "{entered:?}");
+        assert_eq!(resume_of(&back), Some(expected), "{entered:?}");
+    }
+}
+
+/// Relecture finale J6 (J6-F2) : travail réel et restes d'une
+/// récapitulative et de l'UID 0 écrits depuis le moteur, jamais les
+/// valeurs stockées (ici périmées). S1 {A 2 j, R1 W 16 h dont 8 h réelles,
+/// 50 % ; B 1 j, R1 W 8 h} : `Work` 24 h, `ActualWork` 8 h, `RemainingWork`
+/// 16 h ; S2 {C 1 j non commencée, R1 W 8 h} : `ActualWork` 0,
+/// `RemainingDuration` = durée calculée (8 h), `RemainingWork` = travail
+/// calculé (8 h).
+#[test]
+fn r215_summary_work_written() {
+    let mut p = new_project("2026-10-19T08:00");
+    p.summary_task = Some(Task::new(TaskUid::PROJECT_SUMMARY, "P".to_owned(), &p.options));
+    p.resources
+        .push(Resource::new(ResourceUid::new(1), "R1".to_owned()))
+        .unwrap();
+    let stale = |t: &mut Task| {
+        t.progress.actual_work = work(999);
+        t.progress.remaining_work = Work::ZERO;
+        t.progress.remaining_duration = Minutes::ZERO;
+    };
+    let level = |t: &mut Task, l: u16| t.outline_level = OutlineLevel::new(l).unwrap();
+    let mut s1 = task(&p, 1, 0);
+    stale(&mut s1);
+    p.tasks.push(s1).unwrap();
+    let mut a = task(&p, 2, 960);
+    level(&mut a, 2);
+    a.work = work(960);
+    a.progress.actual_start = Some(moment("2026-10-19T08:00"));
+    a.progress.actual_duration = Minutes::new(480);
+    a.progress.actual_work = work(480);
+    p.tasks.push(a).unwrap();
+    let mut b = task(&p, 3, 480);
+    level(&mut b, 2);
+    b.work = work(480);
+    p.tasks.push(b).unwrap();
+    let mut s2 = task(&p, 4, 0);
+    stale(&mut s2);
+    p.tasks.push(s2).unwrap();
+    let mut c = task(&p, 5, 480);
+    level(&mut c, 2);
+    c.work = work(480);
+    p.tasks.push(c).unwrap();
+    for (uid, task, w, aw) in [(1, 2, 960, 480), (2, 3, 480, 0), (3, 5, 480, 0)] {
+        let mut x = Assignment::new(
+            AssignmentUid::new(uid),
+            TaskUid::new(task),
+            Some(ResourceUid::new(1)),
+        );
+        x.work = work(w);
+        x.actual_work = work(aw);
+        p.assignments.push(x).unwrap();
+    }
+    let (xml, _) = by_engine(&p);
+    let s1 = entity(&xml, "Task", 1);
+    assert!(s1.contains("<Work>PT24H0M0S</Work>"), "{s1}");
+    assert!(s1.contains("<ActualWork>PT8H0M0S</ActualWork>"), "{s1}");
+    assert!(s1.contains("<RemainingWork>PT16H0M0S</RemainingWork>"), "{s1}");
+    let s2 = entity(&xml, "Task", 4);
+    assert!(s2.contains("<ActualWork>PT0H0M0S</ActualWork>"), "{s2}");
+    assert!(
+        s2.contains("<RemainingDuration>PT8H0M0S</RemainingDuration>"),
+        "{s2}"
+    );
+    assert!(s2.contains("<RemainingWork>PT8H0M0S</RemainingWork>"), "{s2}");
+    let p0 = entity(&xml, "Task", 0);
+    assert!(p0.contains("<Work>PT32H0M0S</Work>"), "{p0}");
+    assert!(p0.contains("<ActualWork>PT8H0M0S</ActualWork>"), "{p0}");
+    assert!(p0.contains("<RemainingWork>PT24H0M0S</RemainingWork>"), "{p0}");
+    assert_round_trip(&p);
 }

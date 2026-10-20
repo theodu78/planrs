@@ -365,8 +365,8 @@
 			<PercentWorkComplete>0</PercentWorkComplete>
 			<ActualDuration>PT0H0M0S</ActualDuration>
 			<ActualWork>PT0H0M0S</ActualWork>
-			<RemainingDuration>PT0H0M0S</RemainingDuration>
-			<RemainingWork>PT0H0M0S</RemainingWork>
+			<RemainingDuration>PT80H0M0S</RemainingDuration>
+			<RemainingWork>PT104H0M0S</RemainingWork>
 			<ConstraintType>0</ConstraintType>
 			<CalendarUID>-1</CalendarUID>
 			<IgnoreResourceCalendar>0</IgnoreResourceCalendar>
@@ -721,8 +721,8 @@
 			<PercentWorkComplete>0</PercentWorkComplete>
 			<ActualDuration>PT0H0M0S</ActualDuration>
 			<ActualWork>PT0H0M0S</ActualWork>
-			<RemainingDuration>PT0H0M0S</RemainingDuration>
-			<RemainingWork>PT0H0M0S</RemainingWork>
+			<RemainingDuration>PT120H0M0S</RemainingDuration>
+			<RemainingWork>PT64H0M0S</RemainingWork>
 			<ConstraintType>0</ConstraintType>
 			<CalendarUID>-1</CalendarUID>
 			<IgnoreResourceCalendar>0</IgnoreResourceCalendar>
@@ -1197,7 +1197,7 @@
 			<PercentWorkComplete>0</PercentWorkComplete>
 			<ActualDuration>PT0H0M0S</ActualDuration>
 			<ActualWork>PT0H0M0S</ActualWork>
-			<RemainingDuration>PT0H0M0S</RemainingDuration>
+			<RemainingDuration>PT64H0M0S</RemainingDuration>
 			<RemainingWork>PT0H0M0S</RemainingWork>
 			<ConstraintType>0</ConstraintType>
 			<CalendarUID>-1</CalendarUID>

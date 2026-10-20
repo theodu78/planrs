@@ -137,8 +137,12 @@ impl Calc<'_, '_> {
                 }
                 continue;
             }
+            // R-206 : feuille en cours, marge du reste (reprise contre début
+            // au plus tard du reste, fin contre fin au plus tard) ; le début
+            // réel, fixe, ne compte pas. Calculée par la référence.
+            let running = node.in_progress().is_some().then_some(s.run).flatten();
             let fast = match &index {
-                Some(index) if !dirty => self.node_slack_fast(index, v, early, late),
+                Some(index) if !dirty && running.is_none() => self.node_slack_fast(index, v, early, late),
                 _ => None,
             };
             let result = match fast {
@@ -148,7 +152,7 @@ impl Calc<'_, '_> {
                     }
                     Ok((tf, fs))
                 }
-                None => self.node_slack(v, early, late),
+                None => self.node_slack(v, early, late, running),
             };
             match result {
                 Ok((tf, fs)) => {
@@ -204,7 +208,7 @@ impl Calc<'_, '_> {
         let te = match target.kind {
             NodeKind::Gate if self.state(to).is_some_and(|s| s.early.is_none()) => None,
             NodeKind::Gate => target.twin.and_then(|r| self.state(r)).and_then(|s| s.children),
-            _ => self.state(to).and_then(|s| s.early),
+            _ => self.early_view(to),
         };
         let Some(te) = te else { return Ok(None) };
         let anchor = match l.ty {
@@ -383,7 +387,13 @@ impl Calc<'_, '_> {
     /// Marge totale et marge libre du nœud `v` (référence, J3 : remontée
     /// des ancêtres et de leurs arcs sortants) ; oracle de la stratégie
     /// rapide et son repli.
-    fn node_slack(&mut self, v: NodeIx, early: Span, late: Span) -> Result<(Minutes, Minutes), Fail> {
+    fn node_slack(
+        &mut self,
+        v: NodeIx,
+        early: Span,
+        late: Span,
+        running: Option<super::Run>,
+    ) -> Result<(Minutes, Minutes), Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
         // Échelle de mesure (R-048, R-113) ; le dernier début plaçable d'un
         // lien SS/SF reste sur l'échelle de placement.
@@ -392,9 +402,11 @@ impl Calc<'_, '_> {
             .scale(node.measure)
             .ok_or(Fail::Internal("échelle hors bornes"))?;
         let place = self.placer(v)?;
-        let tf = m
-            .between(early.start, late.start)?
-            .min(m.between(early.finish, late.finish)?);
+        let (es, ls) = match running {
+            Some(run) => (run.resume, run.late_resume.unwrap_or(run.resume)),
+            None => (early.start, late.start),
+        };
+        let tf = m.between(es, ls)?.min(m.between(early.finish, late.finish)?);
         let mut fs = tf;
         // Arcs propres, puis ceux des agrégats ancêtres (§ 3.9) ; un arc SS
         // ou SF hérité ne compte que pour un nœud de même début que
@@ -538,7 +550,7 @@ impl Calc<'_, '_> {
         let te = match target.kind {
             NodeKind::Gate if self.state(arc.to).is_some_and(|s| s.early.is_none()) => None,
             NodeKind::Gate => target.twin.and_then(|r| self.state(r)).and_then(|s| s.children),
-            _ => self.state(arc.to).and_then(|s| s.early),
+            _ => self.early_view(arc.to),
         };
         let Some(te) = te else { return Ok(None) };
         let anchor = match l.ty {

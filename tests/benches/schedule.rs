@@ -12,7 +12,9 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use planrs_core::schedule;
-use planrs_tests::generate::{assigned_network, chain, fan_in, large_network};
+use planrs_tests::generate::{
+    assigned_network, assigned_progress_network, chain, fan_in, large_network, progress_network,
+};
 
 fn bench(c: &mut Criterion) {
     let large = large_network(2026);
@@ -29,6 +31,15 @@ fn bench(c: &mut Criterion) {
     let assigned = assigned_network(2026);
     c.bench_function("schedule/5000_assigned", |b| {
         b.iter(|| schedule(black_box(&assigned)));
+    });
+    // J6 : budget bloquant de 50 ms dans `tests/perf` (`perf_5000_progress`).
+    let progress = progress_network(2026);
+    c.bench_function("schedule/5000_progress", |b| {
+        b.iter(|| schedule(black_box(&progress)));
+    });
+    let assigned_progress = assigned_progress_network(2026);
+    c.bench_function("schedule/5000_assigned_progress", |b| {
+        b.iter(|| schedule(black_box(&assigned_progress)));
     });
 }
 

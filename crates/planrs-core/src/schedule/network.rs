@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-use super::constraint::{ConstraintRule, Mode, NodeConstraint, Side, anchor, derive};
+use super::constraint::{ConstraintRule, InProgress, Mode, NodeConstraint, Side, anchor, derive};
 use super::placement::{Parts, Placer, Resolved};
 use crate::calendar::{CalendarSet, CompiledCalendar, Span, TimeScale};
 use crate::diagnostic::{Diagnostic, Diagnostics};
@@ -178,6 +178,17 @@ impl Node {
                 rule: ConstraintRule::Actual { start, finish },
                 ..
             }) => Some((start, finish)),
+            _ => None,
+        }
+    }
+
+    /// Avancement d'une feuille automatique en cours (R-204 à R-207).
+    pub fn in_progress(&self) -> Option<InProgress> {
+        match self.constraint {
+            Some(NodeConstraint {
+                rule: ConstraintRule::Progress(ip),
+                ..
+            }) => Some(ip),
             _ => None,
         }
     }
@@ -514,6 +525,8 @@ pub(super) struct BuildCtx {
     pub mode: Mode,
     /// Option « les tâches respectent toujours leurs dates de contrainte ».
     pub honor: bool,
+    /// Option « fractionner les tâches en cours » (R-205).
+    pub split: bool,
 }
 
 /// Contrainte d'une feuille automatique active, placée par `placer` :
@@ -569,6 +582,22 @@ fn leaf_node(
             p,
             info,
             (place, measure, scale),
+            facts,
+            ctx,
+            diags,
+        ));
+    }
+    // R-204 : feuille automatique active commencée, non achevée : partie
+    // réelle fixe, reste replacé (une seule coupure, ADR-0014 D2).
+    if !info.inactive()
+        && facts.state == crate::progress::ProgressState::Started
+        && matches!(task.mode, SchedulingMode::Auto)
+    {
+        return Some(in_progress_leaf(
+            task,
+            p,
+            info,
+            (place, measure),
             facts,
             ctx,
             diags,
@@ -654,6 +683,65 @@ fn completed_leaf(
                 finish,
             },
             date: None,
+            anchor: None,
+        }),
+        deadline: task.deadline,
+        parent_rollup: None,
+        twin: None,
+    }
+}
+
+/// R-204, R-205 : nœud d'une feuille automatique active en cours. Durée D
+/// de la tâche (R-209 : hors union des affectations) ; règle
+/// `ConstraintRule::Progress` (début réel saisi ou implicite, durée réelle
+/// effective, reste D − réel, reprise saisie, fractionnement) ; la
+/// contrainte saisie ne garde sa date que si elle est un plancher de la
+/// reprise (SNET, MSO, fractionnement permis, depuis le début) ; toute autre
+/// contrainte datée est ignorée avec `constraint.ignored_in_progress`
+/// (info) ; échéance gardée (R-102). À rebours, le reste est placé au plus
+/// tôt depuis la reprise sans borne (R-207) : aucune contrainte ne joue.
+fn in_progress_leaf(
+    task: &Task,
+    p: usize,
+    info: &TaskInfo,
+    (place, measure): (u32, u32),
+    facts: crate::progress::ProgressFacts,
+    ctx: BuildCtx,
+    diags: &mut Diagnostics,
+) -> Node {
+    let kind = task.constraint.kind();
+    let floor = ctx.split
+        && ctx.mode == Mode::FromStart
+        && matches!(
+            kind,
+            ConstraintKind::StartNoEarlierThan | ConstraintKind::MustStartOn
+        );
+    if kind.is_dated() && !floor {
+        diags.push(Diagnostic::ConstraintIgnoredInProgress {
+            task: task.uid(),
+            kind,
+        });
+    }
+    let duration = task.duration.minutes().max(Minutes::ZERO);
+    Node {
+        kind: NodeKind::Leaf,
+        task: p,
+        uid: info.uid,
+        inactive: false,
+        place,
+        measure,
+        duration,
+        fixed: None,
+        constraint: Some(NodeConstraint {
+            kind,
+            rule: ConstraintRule::Progress(InProgress {
+                start: facts.actual_start,
+                actual: facts.actual_duration,
+                remaining: crate::progress::remaining_duration(task),
+                resume: task.progress.resume,
+                split: ctx.split,
+            }),
+            date: task.constraint.date().filter(|_| floor),
             anchor: None,
         }),
         deadline: task.deadline,
@@ -1216,6 +1304,7 @@ pub(super) fn build<'a>(
     let ctx = BuildCtx {
         mode,
         honor: project.options.honor_constraints,
+        split: project.options.progress.split_in_progress,
     };
     let mut tasks = classify(project, &sc.task_cal, diags)?;
     let parts = super::placement::attach(project, resolved, set, &mut sc.table, &tasks, diags)?;

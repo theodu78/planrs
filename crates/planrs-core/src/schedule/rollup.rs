@@ -465,7 +465,7 @@ impl Calc<'_, '_> {
         if info.role == Role::Leaf
             && let Some(n) = node
         {
-            ts.progress = self.leaf_progress(task, n, &ts, work);
+            ts.progress = self.leaf_progress(task, n, (&ts, state.run), work);
         }
         TaskOutcome::Scheduled(ts)
     }
@@ -478,14 +478,15 @@ impl Calc<'_, '_> {
     /// (`progress.actual_start_missing`) ; `Stop` = fin de la partie réelle
     /// placée depuis le début réel sur l'échelle de placement (début réel si
     /// la durée réelle est nulle) ; `Resume` = instant ouvré suivant `Stop`,
-    /// ou la reprise saisie si elle est plus tardive (le placement du reste
-    /// est celui du lot L3). `work` : (Σ W, Σ travail réel) de ses
-    /// affectations de travail.
+    /// ou la reprise saisie si elle est plus tardive. Feuille automatique
+    /// en cours (R-204, R-205) : les dates du moteur (`run`), reprise
+    /// comprise. `work` : (Σ W, Σ travail réel) de ses affectations de
+    /// travail.
     fn leaf_progress(
         &mut self,
         task: &Task,
         node: &super::network::Node,
-        ts: &TaskSchedule,
+        (ts, run): (&TaskSchedule, Option<super::Run>),
         work: (i128, i128),
     ) -> Option<ProgressSchedule> {
         let f = progress::facts(task);
@@ -504,6 +505,19 @@ impl Calc<'_, '_> {
                 percent_work_complete,
             }),
             ProgressState::Started => {
+                if let Some(run) = run.filter(|_| node.in_progress().is_some()) {
+                    return Some(ProgressSchedule {
+                        state: f.state,
+                        actual_start: run.actual_start,
+                        actual_finish: None,
+                        stop: run.stop,
+                        resume: run.resume,
+                        actual_duration: f.actual_duration,
+                        remaining_duration: progress::remaining_duration(task),
+                        percent_complete: progress::percent_of_duration(task),
+                        percent_work_complete,
+                    });
+                }
                 let actual_start = f.actual_start.unwrap_or(ts.early.start);
                 if f.actual_start.is_none() {
                     self.diags

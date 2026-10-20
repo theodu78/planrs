@@ -2,10 +2,11 @@
 //! des outils MCP, des commandes de la CLI, du canal et des raccourcis de
 //! l'interface.
 //!
-//! Entrées disponibles (J4, et les huit entrées J5 activées par le lot L8)
-//! et entrées réservées au jalon J6 (non listées, refusées
-//! `command.not_yet_available`) ; les six entrées J6 portent déjà le schéma
-//! de leur contrat (lot L0), activées par les lots L7 et L8. Le schéma de chaque
+//! Entrées disponibles : J4, les huit entrées J5 (lot L8 de J5) et les six
+//! entrées J6 (contrat du lot L0, activées par les lots L7 et L8 de J6).
+//! Une entrée réservée à un jalon futur (`Availability::Milestone`) ne
+//! serait pas listée et serait refusée `command.not_yet_available` ; il
+//! n'y en a plus à la fin de J6. Le schéma de chaque
 //! entrée est celui de ses paramètres (JSON Schema 2020-12, sous-schémas en
 //! ligne, sans `$ref`) ; les surfaces y ajoutent `dry_run` ou `detail`.
 //! Schémas de référence : `tests/golden/schemas/<id>.json`.
@@ -128,32 +129,6 @@ const fn now(
     }
 }
 
-/// Entrée réservée (non listée) dont le schéma est fixé par le contrat
-/// (J6, lot L0) : activée par les lots L7 et L8.
-const fn reserved(
-    id: &'static str,
-    mcp_name: &'static str,
-    kind: Kind,
-    milestone: u8,
-    schema: fn() -> Schema,
-    summary_fr: &'static str,
-    summary_en: &'static str,
-) -> CommandSpec {
-    let write = matches!(kind, Kind::Write);
-    CommandSpec {
-        id,
-        mcp_name,
-        kind,
-        dry_run: write,
-        undoable: write,
-        available: Availability::Milestone(milestone),
-        since_format: 1,
-        schema,
-        summary_fr,
-        summary_en,
-    }
-}
-
 /// Registre, trié par id (vérifié par test).
 pub static REGISTRY: &[CommandSpec] = &[
     now(
@@ -220,11 +195,10 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Modifie une affectation (unités, travail, quantité, retard).",
         "Update an assignment (units, work, quantity, delay).",
     ),
-    reserved(
+    now(
         "baseline.set",
         "set_baseline",
         Kind::Write,
-        6,
         schema_of::<BaselineSet>,
         "Enregistre une ligne de base (0 à 10) sur le projet ou une sélection, avec cumul facultatif.",
         "Set a baseline (0 to 10) on the project or a selection, with optional roll-up.",
@@ -301,20 +275,18 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Modifie le type ou le décalage d'un lien.",
         "Change the type or lag of a link.",
     ),
-    reserved(
+    now(
         "progress.reschedule",
         "reschedule_remaining",
         Kind::Write,
-        6,
         schema_of::<ProgressReschedule>,
         "Replanifie le travail restant après une date (défaut : date d'état) ; dates réelles inchangées.",
         "Reschedule remaining work after a date (default: status date); actual dates unchanged.",
     ),
-    reserved(
+    now(
         "progress.update",
         "update_progress",
         Kind::Write,
-        6,
         schema_of::<ProgressUpdate>,
         "Met à jour l'avancement d'une tâche (% achevé, dates réelles, durées réelle et restante, travail réel).",
         "Update a task's progress (% complete, actual dates, actual and remaining duration, actual work).",

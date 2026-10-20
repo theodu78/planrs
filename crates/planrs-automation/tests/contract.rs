@@ -140,10 +140,13 @@ fn registry_sorted_and_unique() {
         lookup("analysis.baseline_variance").unwrap().available,
         Availability::Now
     );
-    assert!(matches!(
-        lookup("baseline.set").unwrap().available,
-        Availability::Milestone(6)
-    ));
+    // Toutes les entrées J6 activées (lot L8) : plus aucune réservée.
+    assert_eq!(lookup("baseline.set").unwrap().available, Availability::Now);
+    assert!(
+        REGISTRY
+            .iter()
+            .all(|s| !matches!(s.available, Availability::Milestone(_)))
+    );
     assert_eq!(lookup("resource.add").unwrap().available, Availability::Now);
     assert!(lookup("task.nope").is_none());
 }

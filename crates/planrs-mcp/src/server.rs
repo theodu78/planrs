@@ -220,16 +220,20 @@ impl PlanrsServer {
              \"as\":\"$x\" et la désigner par \"$x\" dans les opérations suivantes (de même pour une \
              ressource créée par add_resource) ; travail, surutilisation et utilisation des ressources viennent \
              aussi du moteur (list_resources, resource_usage) ; justifier une date par explain_date (pilote, \
-             calendrier, avancement, chaîne des causes, résumé prêt à citer). Commencer par new_project, \
-             open_project ou import_csv.",
+             calendrier, avancement, chaîne des causes, résumé prêt à citer) ; comparer des options par \
+             what_if (lot simulé sans rien modifier : diff, écart de fin à une ligne de base, explications) ; \
+             suivre l'avancement par update_progress et set_status_date, les écarts par set_baseline puis \
+             baseline_variance. Commencer par new_project, open_project ou import_csv.",
             "planrs: an MS Project-compatible scheduling engine. Rules: tasks are designated by their stable \
              UID (never by their row ID); every date, duration and slack comes from the engine, never compute \
              or estimate one yourself; write tools accept dry_run:true to preview the schedule diff without \
              changing anything; in apply_batch, name a created task with \"as\":\"$x\" and refer to it as \
              \"$x\" in later operations (likewise for a resource created by add_resource); resource work, \
              overallocation and usage also come from the engine (list_resources, resource_usage); justify a date \
-             with explain_date (driver, calendar, progress, chain of causes, ready-to-quote summary). Start \
-             with new_project, open_project or import_csv.",
+             with explain_date (driver, calendar, progress, chain of causes, ready-to-quote summary); compare \
+             options with what_if (simulated batch, nothing changed: diff, finish variance from a baseline, \
+             explanations); track progress with update_progress and set_status_date, variances with \
+             set_baseline then baseline_variance. Start with new_project, open_project or import_csv.",
         )
     }
 }

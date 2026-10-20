@@ -262,9 +262,12 @@ async fn mcp_error_is_structured_not_rpc() {
     let e = refused(&client, "add_link", json!({ "pred": b, "succ": a })).await;
     assert_eq!(e["code"], json!("batch.would_create_errors"));
     assert_ne!(e["diagnostics"].as_array().map(Vec::len), Some(0));
-    // Commande réservée (J6) appelée par son nom : erreur structurée.
+    // Refus métier d'une commande J6 (ligne de base déjà posée) : erreur
+    // structurée, jamais une erreur JSON-RPC.
+    ok(&client, "set_baseline", json!({})).await;
     let e = refused(&client, "set_baseline", json!({})).await;
-    assert_eq!(e["code"], json!("command.not_yet_available"));
+    assert_eq!(e["code"], json!("baseline.exists"));
+    assert_eq!(e["field"], json!("overwrite"));
     // Seul un nom inconnu est une erreur JSON-RPC.
     let rpc = client.call_tool(CallToolRequestParams::new("no_such_tool")).await;
     assert!(rpc.is_err());
@@ -599,4 +602,82 @@ async fn mcp_eof_before_initialize_is_clean() {
     let (r, w) = tokio::io::split(server_io);
     drop(client_io);
     assert_eq!(serve_on(r, w, opts()).await, Ok(()));
+}
+
+/// J6 (lot L8) : les outils de suivi listés (44 outils), `update_progress`,
+/// `set_baseline`, `baseline_variance` et `what_if` en contenu structuré ;
+/// `what_if` ne change pas la session et rend un refus comme donnée ;
+/// consignes du serveur.
+#[tokio::test]
+#[allow(
+    clippy::many_single_char_names,
+    reason = "tests : noms des tâches de l'exemple (A, B)"
+)]
+async fn mcp_tracking_tools_structured() {
+    let (client, _server) = connect(opts()).await;
+    new_project(&client).await;
+    let out = ok(
+        &client,
+        "apply_batch",
+        json!({ "ops": [
+            { "op": "task.add", "name": "A", "as": "$a", "duration": { "text": "5d" } },
+            { "op": "task.add", "name": "B", "as": "$b", "duration": { "text": "1d" } },
+            { "op": "link.add", "pred": "$a", "succ": "$b" }
+        ] }),
+    )
+    .await;
+    let (a, b) = (out["labels"]["$a"].clone(), out["labels"]["$b"].clone());
+    let tools = client.list_all_tools().await.unwrap();
+    assert_eq!(tools.len(), 44);
+    for name in [
+        "update_progress",
+        "reschedule_remaining",
+        "set_baseline",
+        "baseline_variance",
+        "what_if",
+    ] {
+        assert!(tools.iter().any(|t| t.name == name), "{name}");
+    }
+    let set = ok(&client, "set_baseline", json!({})).await;
+    assert_eq!(set["side_effects"][0]["baseline_set"]["number"], json!(0));
+    let v = ok(&client, "baseline_variance", json!({})).await;
+    assert_eq!(v["total"], json!(2));
+    assert_eq!(v["tasks"][0]["variance"]["finish"]["minutes"], json!(0));
+    let before = ok(&client, "project_summary", json!({})).await;
+    let w = ok(
+        &client,
+        "what_if",
+        json!({
+            "ops": [{ "op": "task.update", "uid": a.clone(), "duration": { "text": "7d" } }],
+            "baseline": 0,
+            "explain": [b.clone()]
+        }),
+    )
+    .await;
+    assert_eq!(w["accepted"], json!(true));
+    assert_eq!(w["project_finish_variance"]["minutes"], json!(960));
+    assert_eq!(w["explanations"][0]["task"]["uid"], b);
+    assert_eq!(ok(&client, "project_summary", json!({})).await, before);
+    let w = ok(
+        &client,
+        "what_if",
+        json!({ "ops": [{ "op": "link.add", "pred": b.clone(), "succ": a.clone() }] }),
+    )
+    .await;
+    assert_eq!(w["accepted"], json!(false));
+    assert_eq!(w["errors"][0]["code"], json!("batch.would_create_errors"));
+    let p = ok(
+        &client,
+        "update_progress",
+        json!({ "task": a.clone(), "percent_complete": { "text": "40%" } }),
+    )
+    .await;
+    assert_eq!(p["committed"], json!(true));
+    let info = client.peer_info().unwrap();
+    assert!(
+        info.instructions
+            .as_deref()
+            .is_some_and(|i| i.contains("what_if") && i.contains("baseline_variance"))
+    );
+    client.cancel().await.unwrap();
 }

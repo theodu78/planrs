@@ -68,12 +68,15 @@ const J6_ENTRIES: [(&str, &str, Kind); 6] = [
     ("progress.update", "update_progress", Kind::Write),
 ];
 
-/// Entrées J6 déjà activées (lot L7 : `analysis.explain_date` ; lot L8 :
-/// `analysis.what_if`, `analysis.baseline_variance`).
-const ACTIVE: [&str; 3] = [
+/// Entrées J6 activées : toutes depuis le lot L8 (`analysis.explain_date`
+/// au lot L7).
+const ACTIVE: [&str; 6] = [
     "analysis.baseline_variance",
     "analysis.explain_date",
     "analysis.what_if",
+    "baseline.set",
+    "progress.reschedule",
+    "progress.update",
 ];
 
 #[test]
@@ -180,14 +183,14 @@ fn contract_compiles() {
 
     core_contract(&s);
 
-    // Surfaces : entrées réservées, refusées par l'espace de travail.
+    // Surfaces (lot L8) : toutes les entrées J6 sont routées ; sans projet
+    // ouvert, l'espace de travail répond `session.none`, jamais
+    // `command.not_yet_available`.
     let mut ws = Workspace::new(now(), Language::Fr);
     for (id, _, _) in J6_ENTRIES {
-        if ACTIVE.contains(&id) {
-            continue;
-        }
+        assert!(ACTIVE.contains(&id), "{id}");
         let err = ws.call(id, json!({})).unwrap_err();
-        assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{id}");
+        assert_ne!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{id}");
     }
 }
 

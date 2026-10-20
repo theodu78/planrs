@@ -30,9 +30,14 @@ pub(crate) fn write(em: &mut Emitter, a: &Assignment, values: Option<&Values>, p
     let planned = plan(em, "Assignment", Parent::Assignment, &a.extras, &numbers, profile);
     let mut top = unscoped(&planned);
     leveling::drop_legacy(&mut top, a.leveling_delay);
-    if computed.is_some_and(|v| v.drop_timephased) {
+    let drop_scheduled = computed.is_some_and(|v| v.drop_timephased);
+    let drop_actuals = computed.is_some_and(|v| v.drop_actuals);
+    if drop_scheduled || drop_actuals {
         let before = top.len();
-        top.retain(|p| !timephased::is_scheduled_work_key(&p.key, p.payload));
+        top.retain(|p| {
+            !((drop_scheduled && timephased::is_scheduled_work_key(&p.key, p.payload))
+                || (drop_actuals && timephased::is_actual_key(&p.key, p.payload)))
+        });
         let count = u32::try_from(before.saturating_sub(top.len())).unwrap_or(u32::MAX);
         if count > 0 {
             em.report(

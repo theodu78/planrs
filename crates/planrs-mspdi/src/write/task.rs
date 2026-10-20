@@ -2,7 +2,8 @@
 //! manuel ; ID, numéro hiérarchique et drapeau `Summary` déduits.
 
 use planrs_core::{
-    Constraint, Duration, Lag, LagValue, Link, Minutes, Project, SchedulingMode, Subject, Task, TaskUid, Work,
+    Constraint, Duration, Lag, LagValue, Link, Minutes, Progress, Project, SchedulingMode, Subject, Task,
+    TaskUid, Work,
 };
 
 use super::computed::{TaskValues, Values};
@@ -159,17 +160,30 @@ fn duration_of(row: &Row<'_>) -> Duration {
         .unwrap_or(row.task.duration)
 }
 
-/// Restes écrits (R-127), sur la durée écrite (R-199) : l'image relue reste
-/// celle de `normalize` appliquée à `schedule_image`.
+/// Avancement écrit : celui du moteur (R-215), sinon celui du modèle.
+fn progress_of<'r>(row: &'r Row<'_>) -> &'r Progress {
+    row.values
+        .and_then(|v| v.progress.as_ref())
+        .unwrap_or(&row.task.progress)
+}
+
+/// Restes écrits (R-127), sur la durée (R-199) et l'avancement (R-215)
+/// écrits : l'image relue reste celle de `normalize` appliquée à
+/// `schedule_image`.
 fn remaining_of(row: &Row<'_>) -> (Minutes, Work) {
-    match row.values.and_then(|v| v.leaf_duration) {
-        Some(d) => {
-            let mut t = row.task.clone();
-            t.duration = d;
-            remaining(&t, row.summary)
-        }
-        None => remaining(row.task, row.summary),
+    let duration = row.values.and_then(|v| v.leaf_duration);
+    let progress = row.values.and_then(|v| v.progress);
+    if duration.is_none() && progress.is_none() {
+        return remaining(row.task, row.summary);
     }
+    let mut t = row.task.clone();
+    if let Some(d) = duration {
+        t.duration = d;
+    }
+    if let Some(p) = progress {
+        t.progress = p;
+    }
+    remaining(&t, row.summary)
 }
 
 /// `DurationFormat` d'une durée.
@@ -286,9 +300,9 @@ fn field(
         "Estimated" => em.leaf(name, format_bool(t.duration.is_estimated())),
         "Milestone" => em.leaf(name, format_bool(t.milestone)),
         "Summary" => em.leaf(name, format_bool(row.summary)),
-        "PercentComplete" => percent(em, name, t.progress.percent_complete),
-        "PercentWorkComplete" => percent(em, name, t.progress.percent_work_complete),
-        "PhysicalPercentComplete" => percent(em, name, t.progress.physical_percent_complete),
+        "PercentComplete" => percent(em, name, progress_of(row).percent_complete),
+        "PercentWorkComplete" => percent(em, name, progress_of(row).percent_work_complete),
+        "PhysicalPercentComplete" => percent(em, name, progress_of(row).physical_percent_complete),
         // R-214, R-215 : `Stop` calculé ; `Resume` calculé, ou la reprise
         // saisie d'une feuille en cours sans valeurs calculées.
         "Stop" => em.opt_date(name, computed.and_then(|v| v.stop)),
@@ -298,10 +312,10 @@ fn field(
                 .and_then(|v| v.resume)
                 .or_else(|| super::computed::model_resume(t, row.summary)),
         ),
-        "ActualStart" => em.opt_date(name, t.progress.actual_start),
-        "ActualFinish" => em.opt_date(name, t.progress.actual_finish),
-        "ActualDuration" => em.leaf_iso(name, t.progress.actual_duration.get()),
-        "ActualWork" => em.leaf_iso(name, t.progress.actual_work.minutes().get()),
+        "ActualStart" => em.opt_date(name, progress_of(row).actual_start),
+        "ActualFinish" => em.opt_date(name, progress_of(row).actual_finish),
+        "ActualDuration" => em.leaf_iso(name, progress_of(row).actual_duration.get()),
+        "ActualWork" => em.leaf_iso(name, progress_of(row).actual_work.minutes().get()),
         "RemainingDuration" => em.leaf_iso(name, remaining_of(row).0.get()),
         "RemainingWork" => em.leaf_iso(name, remaining_of(row).1.minutes().get()),
         "ConstraintType" => em.leaf_int(name, codes::constraint_code(t.constraint.kind())),

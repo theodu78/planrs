@@ -296,6 +296,13 @@ pub fn project(seed: u64) -> Project {
     p.options.honor_constraints = r.chance(50);
     p.options.critical_slack_limit_days = u32::try_from(r.below(4)).unwrap();
     p.options.multiple_critical_paths = r.chance(30);
+    // P43 (R-214, R-218) : options de la date d'état.
+    p.options.progress.split_in_progress = r.chance(70);
+    p.options.progress.task_updates_resource = r.chance(80);
+    p.options.progress.move_completed_ends_back = r.chance(10);
+    p.options.progress.move_remaining_starts_back = r.chance(10);
+    p.options.progress.move_remaining_starts_forward = r.chance(10);
+    p.options.progress.move_completed_ends_forward = r.chance(10);
 
     // Calendriers : dérivé du Standard, base supplémentaire, exceptions,
     // semaines datées (périodes disjointes par construction).
@@ -406,6 +413,8 @@ pub fn project(seed: u64) -> Project {
         pr.remaining_duration = Minutes::new(r.int(0, 2_000));
         pr.actual_work = work(r);
         pr.remaining_work = work(r);
+        // P43 : reprise saisie (gardée seulement sur une feuille en cours).
+        pr.resume = r.chance(25).then(|| moment_near(r, start));
         if r.chance(15) {
             t.mode = SchedulingMode::Manual {
                 start: r.chance(60).then(|| moment_near(r, start)),

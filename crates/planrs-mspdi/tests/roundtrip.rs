@@ -1,4 +1,6 @@
-//! P24 (R-133) : aller-retour MSPDI sur des projets générés.
+//! P24 (R-133), étendue en P43 (J6 : avancement, reprises, options de la
+//! date d'état, lignes de base générées ; R-214, R-215, R-218, R-226) :
+//! aller-retour MSPDI sur des projets générés.
 //!
 //! Pour tout projet sans erreur de `Project::validate` :
 //! `read(write(p)).project == normalize(p)` dans les profils observé et
@@ -49,7 +51,7 @@ fn same<T: PartialEq + std::fmt::Debug>(a: &T, b: &T, what: &str) {
     panic!("{what}\n  relu    : …{}…\n  attendu : …{}…", cut(&x), cut(&y));
 }
 
-/// Vérifie P24 pour une graine.
+/// Vérifie P24 et P43 pour une graine.
 fn check(seed: u64) {
     let p = generate::project(seed);
     if p.validate()
@@ -91,6 +93,23 @@ fn check(seed: u64) {
             &format!("{seed} {profile:?} : normalize non idempotente"),
         );
     }
+}
+
+#[test]
+fn p43_progress_round_trip_fixed_seeds() {
+    // Graines dont le projet a une feuille en cours avec reprise.
+    let mut n = 0;
+    for seed in 0..400 {
+        let p = generate::project(seed);
+        if p.tasks
+            .iter()
+            .any(|t| t.progress.resume.is_some() && t.progress.actual_finish.is_none())
+        {
+            check(seed);
+            n += 1;
+        }
+    }
+    assert!(n > 20, "{n}");
 }
 
 #[test]

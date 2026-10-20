@@ -4,11 +4,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use planrs_core::progress::ProgressState;
+
 use planrs_core::calendar::{CalendarSet, CompiledCalendar, TimeScale, standard};
 use planrs_core::schedule::measure_calendar_in;
 use planrs_core::{
-    Arena, AssignmentUid, Duration, Exclusion, Minutes, Moment, Project, ResourceUid, Schedule, Task,
-    TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis, Work,
+    Arena, AssignmentSchedule, AssignmentUid, Duration, Exclusion, Minutes, Moment, Progress, Project,
+    ResourceUid, Schedule, Task, TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis, Work,
 };
 
 use super::WriteDiagnostic;
@@ -28,44 +30,6 @@ pub enum Computed<'a> {
     Omit,
 }
 
-/// Ce que le planning de planrs ne calcule pas encore (R-122) : l'écrire
-/// donnerait des dates fausses. R-122 amendée (J5, R-199) : calendriers de
-/// ressource et retards de nivellement sont calculés (R-171, R-178), seuls
-/// restent les manques d'avancement.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ScheduleGap {
-    /// Avancement saisi (% achevé, date ou durée réelle) : J6.
-    Progress,
-}
-
-impl ScheduleGap {
-    /// Code stable (`progress`).
-    #[must_use]
-    pub const fn code(self) -> &'static str {
-        match self {
-            Self::Progress => "progress",
-        }
-    }
-}
-
-/// R-122 : manques du planning de planrs pour ce projet, sans doublon,
-/// dans l'ordre de [`ScheduleGap`].
-#[must_use]
-pub fn schedule_gaps(project: &Project) -> Vec<ScheduleGap> {
-    let mut gaps = BTreeSet::new();
-    let tasks = || project.summary_task.iter().chain(project.tasks.iter());
-    if tasks().any(|t| {
-        let p = &t.progress;
-        p.percent_complete.get() > 0
-            || p.actual_start.is_some()
-            || p.actual_finish.is_some()
-            || p.actual_duration.get() > 0
-    }) {
-        gaps.insert(ScheduleGap::Progress);
-    }
-    gaps.into_iter().collect()
-}
-
 /// Valeur entière d'une charge `<LevelingDelay>n</LevelingDelay>`.
 pub(crate) fn leveling_delay(payload: &str) -> Option<i64> {
     let start = payload.find('>')?.checked_add(1)?;
@@ -73,29 +37,17 @@ pub(crate) fn leveling_delay(payload: &str) -> Option<i64> {
     parse_int(payload.get(start..end)?)
 }
 
-/// R-122 : `Schedule` si le planning de planrs est complet pour ce projet ;
-/// sinon les valeurs relues si elles sont fournies ; sinon rien, avec
-/// `mspdi.write.schedule_incomplete`.
+/// R-122 : source des valeurs calculées écrites. Amendement J6 (R-215) :
+/// le moteur calcule l'avancement, il n'y a plus de manque ; les valeurs
+/// du moteur sont toujours écrites (`recorded` est gardé pour la
+/// stabilité de l'API, R-162) et aucun diagnostic n'est rendu.
 #[must_use]
 pub fn choose_computed<'a>(
-    project: &Project,
+    _project: &Project,
     schedule: &'a Schedule,
-    recorded: Option<&'a RecordedSchedule>,
+    _recorded: Option<&'a RecordedSchedule>,
 ) -> (Computed<'a>, Vec<WriteDiagnostic>) {
-    let gaps = schedule_gaps(project);
-    if gaps.is_empty() {
-        return (Computed::Schedule(schedule), Vec::new());
-    }
-    if let Some(r) = recorded {
-        return (Computed::Recorded(r), Vec::new());
-    }
-    let d = WriteDiagnostic {
-        code: super::WriteCode::ScheduleIncomplete { gaps },
-        subject: None,
-        element: String::new(),
-        value: None,
-    };
-    (Computed::Omit, vec![d])
+    (Computed::Schedule(schedule), Vec::new())
 }
 
 /// Valeurs calculées d'une tâche, prêtes à écrire.
@@ -120,6 +72,10 @@ pub(crate) struct TaskValues {
     /// R-199 : durée calculée d'une feuille automatique affectée (R-173),
     /// avec `Computed::Schedule` seulement (voir [`assigned_leaf_duration`]).
     pub(crate) leaf_duration: Option<Duration>,
+    /// R-215 : avancement écrit avec `Computed::Schedule` (feuille : % dérivé,
+    /// durée réelle effective, début réel implicite compris ; récapitulative
+    /// et UID 0 : agrégats de R-210) ; `None` : celui du modèle.
+    pub(crate) progress: Option<Progress>,
     /// `Stop` (R-215) ; relu avec `Computed::Recorded`.
     pub(crate) stop: Option<Moment>,
     /// `Resume` (R-214, R-215) ; relu avec `Computed::Recorded`.
@@ -136,8 +92,11 @@ pub(crate) struct AssignmentValues {
     pub(crate) actual_finish: Option<Moment>,
     pub(crate) stop: Option<Moment>,
     pub(crate) resume: Option<Moment>,
-    /// R-199 : `TimephasedData` propres à jeter (placement changé).
+    /// R-199 : `TimephasedData` de type 1 à jeter (placement changé).
     pub(crate) drop_timephased: bool,
+    /// R-215 : `TimephasedData` de réel (types 2-3) à jeter (travail réel
+    /// changé).
+    pub(crate) drop_actuals: bool,
 }
 
 /// Valeurs calculées d'une ressource, prêtes à écrire (R-198, R-199).
@@ -245,6 +204,41 @@ fn from_task_schedule(s: &TaskSchedule, scale: Option<TimeScale<'_>>, summary: b
     }
 }
 
+/// R-215 : avancement écrit d'une tâche planifiée par le moteur, `Stop` et
+/// `Resume` ; rien sans avancement calculé (tâche non commencée,
+/// récapitulative sans feuille commencée) : le modèle est alors écrit.
+/// Feuille : % achevé dérivé (R-200), durée réelle effective, début réel
+/// (implicite compris, R-200) et fin réelle du moteur, reprise du moteur
+/// pour une feuille en cours (relue dans `Progress::resume`, R-214) ; les
+/// restes en sont dérivés à l'écriture (R-127). Récapitulative et UID 0 :
+/// %, % travail, début et fin réels, durée réelle et reste de R-210.
+pub(crate) fn progress_values(
+    t: &Task,
+    s: &TaskSchedule,
+) -> (Option<Progress>, Option<Moment>, Option<Moment>) {
+    let Some(ps) = s.progress else {
+        return (None, None, None);
+    };
+    let mut p = t.progress;
+    p.percent_complete = ps.percent_complete;
+    p.actual_start = Some(ps.actual_start);
+    p.actual_finish = ps.actual_finish;
+    p.actual_duration = ps.actual_duration;
+    if s.role == TaskRole::Summary {
+        p.percent_work_complete = ps.percent_work_complete;
+        p.remaining_duration = ps.remaining_duration;
+        p.resume = None;
+    } else {
+        p.resume = (ps.state == ProgressState::Started).then_some(ps.resume);
+    }
+    (Some(p), Some(ps.stop), Some(ps.resume))
+}
+
+/// Applique [`progress_values`] aux valeurs d'une tâche.
+fn with_progress(values: &mut TaskValues, t: &Task, s: &TaskSchedule) {
+    (values.progress, values.stop, values.resume) = progress_values(t, s);
+}
+
 /// R-199 : durée écrite d'une feuille automatique placée par ses
 /// affectations de travail : la durée calculée du moteur (mesure de l'union
 /// des intervalles travaillés, R-173), la même que celle que la session
@@ -268,10 +262,12 @@ pub(crate) fn from_schedule(project: &Project, schedule: &Schedule) -> Values {
         let values = match schedule.get(t.uid()) {
             Some(TaskOutcome::Scheduled(s)) => {
                 let summary = s.role == TaskRole::Summary;
-                TaskValues {
+                let mut values = TaskValues {
                     leaf_duration: assigned_leaf_duration(t, s, &placed),
                     ..from_task_schedule(s, scales.of(t, summary), summary)
-                }
+                };
+                with_progress(&mut values, t, s);
+                values
             }
             Some(TaskOutcome::Excluded {
                 reason: Exclusion::Inactive,
@@ -286,10 +282,9 @@ pub(crate) fn from_schedule(project: &Project, schedule: &Schedule) -> Values {
         tasks.insert(t.uid(), values);
     }
     if let (Some(summary), Some(s)) = (&project.summary_task, &schedule.project_summary) {
-        tasks.insert(
-            TaskUid::PROJECT_SUMMARY,
-            from_task_schedule(s, scales.of(summary, true), true),
-        );
+        let mut values = from_task_schedule(s, scales.of(summary, true), true);
+        with_progress(&mut values, summary, s);
+        tasks.insert(TaskUid::PROJECT_SUMMARY, values);
     }
     // R-199 : `Start`/`Finish` de chaque affectation placée ; répartition
     // gardée seulement si son placement est celui du moteur.
@@ -302,7 +297,8 @@ pub(crate) fn from_schedule(project: &Project, schedule: &Schedule) -> Values {
                 start: placed.map(|p| p.span.start),
                 finish: placed.map(|p| p.span.finish),
                 drop_timephased: super::timephased::stale(a, placed),
-                ..AssignmentValues::default()
+                drop_actuals: super::timephased::actuals_stale(a),
+                ..assignment_actuals(schedule, placed)
             };
             (a.uid(), values)
         })
@@ -331,6 +327,33 @@ pub(crate) fn from_schedule(project: &Project, schedule: &Schedule) -> Values {
     }
 }
 
+/// R-215 : réels et coupure d'une affectation placée d'une tâche commencée
+/// (partie réelle calculée, R-209) : `ActualStart` = début de son
+/// placement, `ActualFinish` = fin si la tâche est achevée, `Stop` = fin de
+/// sa partie réelle, `Resume` = début de son reste (achevée : `Stop`) ;
+/// rien sinon.
+fn assignment_actuals(schedule: &Schedule, placed: Option<&AssignmentSchedule>) -> AssignmentValues {
+    let Some((p, actual)) = placed.and_then(|p| Some((p, p.actual?))) else {
+        return AssignmentValues::default();
+    };
+    let complete = schedule
+        .scheduled(p.task)
+        .and_then(|t| t.progress)
+        .is_some_and(|ps| ps.state == ProgressState::Complete);
+    let stop = actual.finish;
+    AssignmentValues {
+        actual_start: Some(p.span.start),
+        actual_finish: complete.then_some(p.span.finish),
+        stop: Some(stop),
+        resume: Some(if complete {
+            stop
+        } else {
+            p.remaining_start.unwrap_or(stop)
+        }),
+        ..AssignmentValues::default()
+    }
+}
+
 /// R-199 : image du projet par une écriture avec `Computed::Schedule` (à
 /// composer avec [`crate::normalize`] pour l'aller-retour) : les champs du
 /// modèle que l'écrivain remplace par des valeurs du moteur. Travail d'une
@@ -356,9 +379,15 @@ pub fn schedule_image(project: &Project, schedule: &Schedule) -> Project {
         } else if let Some(d) = assigned_leaf_duration(t, s, &placed) {
             t.duration = d;
         }
+        if let (Some(progress), _, _) = progress_values(t, s) {
+            t.progress = progress;
+        }
     }
     if let (Some(t), Some(s)) = (&mut p.summary_task, &schedule.project_summary) {
         t.work = s.work;
+        if let (Some(progress), _, _) = progress_values(t, s) {
+            t.progress = progress;
+        }
     }
     let auids: Vec<AssignmentUid> = p.assignments.iter().map(planrs_core::Assignment::uid).collect();
     for uid in auids {
@@ -369,6 +398,11 @@ pub fn schedule_image(project: &Project, schedule: &Schedule) -> Project {
             a.extras.0.retain(|e| {
                 !(e.origin == ORIGIN && super::timephased::is_scheduled_work(&e.key, &e.payload))
             });
+        }
+        if super::timephased::actuals_stale(a) {
+            a.extras
+                .0
+                .retain(|e| !(e.origin == ORIGIN && super::timephased::is_actual(&e.key, &e.payload)));
         }
     }
     p
@@ -395,6 +429,7 @@ pub(crate) fn from_recorded(recorded: &RecordedSchedule) -> Values {
                     stop: r.stop,
                     resume: r.resume,
                     drop_timephased: false,
+                    drop_actuals: false,
                 },
             )
         })

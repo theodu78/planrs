@@ -545,6 +545,88 @@ pub fn from_finish_network(seed: u64) -> Project {
     p
 }
 
+/// Grand réseau avec avancement (J6, ADR-0014 D10, cas `5000_progress`) :
+/// le réseau de [`large_network`] dont 20 % des feuilles sont achevées
+/// (dates réelles = dates planifiées sans avancement) et 30 % en cours (10 à
+/// 90 %), la moitié hors séquence (début réel 1 à 3 jours avant le début
+/// planifié : les liens entrants repoussent la reprise, R-205) ; sans
+/// affectation.
+///
+/// # Panics
+///
+/// Jamais pour une graine quelconque (les valeurs sont toutes valides).
+#[must_use]
+pub fn progress_network(seed: u64) -> Project {
+    with_progress(large_network(seed), seed)
+}
+
+/// [`assigned_network`] avec l'avancement de [`progress_network`] (cas
+/// `5000_assigned_progress`, journalisé) ; travail réel des affectations
+/// des feuilles en cours = W × % (R-211).
+///
+/// # Panics
+///
+/// Jamais pour une graine quelconque (les valeurs sont toutes valides).
+#[must_use]
+pub fn assigned_progress_network(seed: u64) -> Project {
+    let mut p = with_progress(assigned_network(seed), seed);
+    let pct: std::collections::BTreeMap<TaskUid, i64> = p
+        .tasks
+        .iter()
+        .filter(|t| t.progress.actual_finish.is_none())
+        .map(|t| (t.uid(), t.progress.percent_complete.get()))
+        .collect();
+    let uids: Vec<AssignmentUid> = p.assignments.iter().map(Assignment::uid).collect();
+    for uid in uids {
+        let Some(a) = p.assignments.get_mut(uid) else {
+            continue;
+        };
+        let Some(&k) = pct.get(&a.task) else { continue };
+        let aw = a.work.minutes().get() * k / 10_000;
+        a.actual_work = Work::new(Minutes::new(aw)).unwrap_or(Work::ZERO);
+    }
+    p
+}
+
+/// Avancement de [`progress_network`] posé sur les feuilles de `p`, d'après
+/// son planning sans avancement.
+fn with_progress(mut p: Project, seed: u64) -> Project {
+    let base = planrs_core::schedule(&p);
+    let mut r = Rng::new(seed.rotate_left(41));
+    let uids: Vec<TaskUid> = p.tasks.iter().map(Task::uid).collect();
+    for uid in uids {
+        let Some(ts) = base.scheduled(uid).copied() else {
+            continue;
+        };
+        if ts.role != planrs_core::TaskRole::Leaf || ts.duration == Minutes::ZERO {
+            continue;
+        }
+        let Some(t) = p.tasks.get_mut(uid) else {
+            continue;
+        };
+        let draw = r.range(0, 99);
+        if draw < 20 {
+            t.progress.actual_start = Some(ts.start);
+            t.progress.actual_finish = Some(ts.finish);
+            t.progress.actual_duration = t.duration.minutes();
+        } else if draw < 50 {
+            let start = if draw < 35 {
+                ts.start
+            } else {
+                ts.start
+                    .checked_add(Minutes::new(-1_440 * r.range(1, 3)))
+                    .unwrap_or(ts.start)
+            };
+            t.progress.actual_start = Some(start);
+            let pct = 1_000 * r.range(1, 9);
+            t.progress.percent_complete =
+                planrs_core::Percent::new(pct).unwrap_or(planrs_core::Percent::ZERO);
+            t.progress.actual_duration = Minutes::new(t.duration.minutes().get() * pct / 10_000);
+        }
+    }
+    p
+}
+
 /// Contraintes du grand réseau : contrainte par défaut du sens sur toutes
 /// les tâches (R-108), puis, sur les feuilles, 20 % de contraintes datées,
 /// 5 % de la contrainte opposée (ALAP depuis le début, ASAP à rebours) et

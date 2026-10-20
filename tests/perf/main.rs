@@ -13,6 +13,9 @@
 //! temps borné. Hiérarchie profonde hostile (ADR-0012, lot L15) : 256 niveaux
 //! de récapitulatives imbriquées, 5 000 tâches, 10 000 liens dont des FS,
 //! SS et FF depuis chaque récapitulative ; budget 30 ms de médiane.
+//! J6 : `5000_progress` (20 % de feuilles achevées, 30 % en cours dont la
+//! moitié hors séquence), budget bloquant de 50 ms ; `5000_assigned_progress`
+//! journalisé (garde-fou de 250 ms).
 //! Mesure seulement en release, par le job CI `perf` :
 //! `cargo test -p planrs-tests --release --test perf -- --ignored --nocapture`.
 
@@ -36,8 +39,8 @@ use planrs_core::{
     TaskUid, TimeBasis, schedule,
 };
 use planrs_tests::generate::{
-    assigned_leaves_network, assigned_network, constrained_network, from_finish_network,
-    hostile_combined_calendars, hostile_parts, large_network,
+    assigned_leaves_network, assigned_network, assigned_progress_network, constrained_network,
+    from_finish_network, hostile_combined_calendars, hostile_parts, large_network, progress_network,
 };
 
 /// Seuil d'échec de la médiane.
@@ -198,6 +201,59 @@ fn assigned_network_shape() {
 #[ignore = "budget mesuré en release, job CI perf"]
 fn perf_5000_assigned() {
     budget("5000_assigned", &assigned_network(2026));
+}
+
+/// Réseau avec avancement (J6, ADR-0014 D10) : 5 000 tâches, 10 000 liens,
+/// ~20 % de feuilles achevées et ~30 % en cours dont la moitié hors
+/// séquence ; aucune erreur, aucune tâche dégradée ; déterministe.
+#[test]
+fn progress_network_shape() {
+    let p = progress_network(2026);
+    assert_eq!(p.tasks.len(), 5_000);
+    let s = schedule(&p);
+    let (mut done, mut running) = (0, 0);
+    for o in s.tasks.values() {
+        assert!(
+            matches!(o, TaskOutcome::Scheduled(ts) if !ts.degraded),
+            "tâche non planifiée ou dégradée : {o:?}"
+        );
+        let TaskOutcome::Scheduled(ts) = o else { continue };
+        if ts.role == TaskRole::Leaf {
+            match ts.progress.map(|p| p.state) {
+                Some(planrs_core::ProgressState::Complete) => done += 1,
+                Some(planrs_core::ProgressState::Started) => running += 1,
+                _ => {}
+            }
+        }
+    }
+    assert!((700..=1_200).contains(&done), "{done} achevées");
+    assert!((1_100..=1_700).contains(&running), "{running} en cours");
+    let errors: Vec<&Diagnostic> = s
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity() == Severity::Error)
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(progress_network(2026), p);
+}
+
+/// Budget J6 (ADR-0014 D10) : `5000_progress`, bloquant à 50 ms.
+#[test]
+#[ignore = "budget mesuré en release, job CI perf"]
+fn perf_5000_progress() {
+    budget("5000_progress", &progress_network(2026));
+}
+
+/// `5000_assigned_progress` (J6) : journalisé, sans seuil bloquant au-delà
+/// du garde-fou de `5000_assigned_leaves`.
+#[test]
+#[ignore = "mesuré en release, job CI perf"]
+fn perf_5000_assigned_progress() {
+    budget_of(
+        "5000_assigned_progress",
+        &assigned_progress_network(2026),
+        LEAVES_BUDGET,
+    );
 }
 
 /// Variante de la relecture finale J5 : chaque ressource a ses congés

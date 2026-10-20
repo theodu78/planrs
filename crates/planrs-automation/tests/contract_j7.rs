@@ -270,8 +270,8 @@ fn contract_gestures() {
 }
 
 /// Cœur (contrat J7) : `usage_with` = `usage` ; trimestre et utilisation
-/// par affectation en squelette ; bornes ; diagnostic
-/// `baseline.nothing_to_clear`.
+/// par affectation (lot L4, R-245, R-246 : leurs tests sont dans
+/// `tests/rules`) ; bornes ; diagnostic `baseline.nothing_to_clear`.
 #[test]
 fn contract_core_usage() {
     let s = session();
@@ -286,9 +286,10 @@ fn contract_core_usage() {
         assert_ne!(a.periods.len(), 0);
     }
     let q = usage_with(p, sched, &set, from, to, Granularity::Quarter, &resources).unwrap();
-    assert_eq!(q.periods.len(), 0);
+    assert_eq!(q.periods.len(), 1);
     let r = usage_by_assignment(p, sched, &set, from, to, Granularity::Week, &resources).unwrap();
-    assert!(r.periods.is_empty() && r.rows.is_empty() && r.task_totals.is_empty());
+    assert_eq!((r.rows.len(), r.task_totals.len()), (1, 1));
+    assert_ne!(r.periods.len(), 0);
     let many = vec![ResourceUid::new(1); MAX_RESOURCES + 1];
     assert!(matches!(
         usage_by_assignment(p, sched, &set, from, to, Granularity::Week, &many),

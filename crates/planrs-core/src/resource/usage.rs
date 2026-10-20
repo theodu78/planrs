@@ -1,9 +1,8 @@
 //! Utilisation des ressources par période (ADR-0013 D6 ; règle R-188, lot
 //! L5). Contrat J7 (ADR-0015 D7, lot L0) : [`usage_with`] sur des
 //! calendriers déjà compilés, granularité [`Granularity::Quarter`] et
-//! utilisation par affectation ([`usage_by_assignment`]) ; trimestre et
-//! utilisation par affectation sont des squelettes jusqu'au lot L4 (R-245,
-//! R-246).
+//! utilisation par affectation ([`usage_by_assignment`], R-245 ; trimestre
+//! civil R-246, lot L4).
 //!
 //! Calculée à la demande depuis un [`Schedule`] (jamais stockée) : pour
 //! chaque ressource demandée et chaque période civile qui coupe `[from,
@@ -46,8 +45,8 @@ pub enum Granularity {
     Week,
     /// Mois civil.
     Month,
-    /// Trimestre civil (1er janvier, avril, juillet, octobre ; R-246).
-    /// Squelette J7 L0 : aucune période jusqu'au lot L4.
+    /// Trimestre civil (1er janvier, avril, juillet, octobre à 00:00 ;
+    /// exercice fiscal ignoré, R-246).
     Quarter,
 }
 
@@ -94,8 +93,10 @@ pub struct AssignmentUsageReport {
     pub periods: Vec<Span>,
     /// Lignes triées par (ressource, tâche, UID d'affectation).
     pub rows: Vec<AssignmentUsageRow>,
-    /// Total de chaque tâche affectée, période par période (Σ de ses
-    /// affectations), dans l'ordre des UID.
+    /// Total de chaque tâche affectée, période par période : Σ de ses
+    /// lignes d'affectation à une ressource de travail (les quantités des
+    /// ressources matérielles ne s'ajoutent pas à des heures), dans l'ordre
+    /// des UID ; une tâche sans ligne de travail n'y figure pas.
     pub task_totals: Vec<(TaskUid, Vec<Work>)>,
 }
 
@@ -169,13 +170,7 @@ pub fn usage_with(
         return Err(limit);
     }
     let periods = periods(p, (from, to), by).ok_or(limit)?;
-    // Bornes des périodes, coupées à `[from, to)` : n + 1 instants.
-    let mut bounds: Vec<Moment> = Vec::with_capacity(periods.len().saturating_add(1));
-    if !periods.is_empty() {
-        bounds.push(from);
-        bounds.extend(periods.iter().skip(1).copied());
-        bounds.push(to);
-    }
+    let bounds = bounds(&periods, (from, to));
     let place = project_place(p, set);
     let mut scales = place.as_deref().map(|place| Scales::new(set, place));
     // Affectations des ressources demandées, dans l'ordre des UID.
@@ -195,11 +190,7 @@ pub fn usage_with(
     for &r in resources {
         let n = periods.len();
         let mut work: Vec<i128> = vec![0; n];
-        let counted = p
-            .resources
-            .get(r)
-            .is_some_and(|res| res.kind != ResourceKind::Cost);
-        if let (true, Some(sc), Some(list)) = (counted, scales.as_ref(), by_resource.get(&r)) {
+        if let (true, Some(sc), Some(list)) = (counted(p, r), scales.as_ref(), by_resource.get(&r)) {
             for a in list {
                 if let Some(scale) = sc.get(a.calendar) {
                     spread(a, scale, &bounds, &mut work);
@@ -227,15 +218,19 @@ pub fn usage_with(
 }
 
 /// Utilisation par affectation des ressources `resources` sur `[from, to)`
-/// (R-245) : une ligne par affectation de travail, totaux par tâche.
-///
-/// Squelette J7 L0 : périodes et lignes vides (lot L4) ; seules les bornes
-/// sont contrôlées.
+/// (R-245) : une ligne par affectation que la ligne de sa ressource compte
+/// dans [`usage_with`] (ressource demandée, connue, qui n'est pas de coût ;
+/// jamais une affectation fictive), travail par période calculé de la même
+/// façon, si bien que Σ des lignes d'une ressource = sa ligne d'[`usage`],
+/// période par période. Lignes triées par (ressource, tâche, UID) ; doublons
+/// de `resources` ignorés ; `to <= from` : aucune période, lignes vides.
+/// Totaux par tâche : voir [`AssignmentUsageReport::task_totals`].
 ///
 /// # Errors
 ///
 /// [`UsageError::Limit`] au-delà de [`MAX_PERIODS`] périodes, de
-/// [`MAX_RESOURCES`] ressources ou de [`MAX_ASSIGNMENT_ROWS`] lignes.
+/// [`MAX_RESOURCES`] ressources ou de [`MAX_ASSIGNMENT_ROWS`] lignes
+/// (`usage.limit`).
 pub fn usage_by_assignment(
     p: &Project,
     s: &Schedule,
@@ -245,7 +240,6 @@ pub fn usage_by_assignment(
     by: Granularity,
     resources: &[ResourceUid],
 ) -> Result<AssignmentUsageReport, UsageError> {
-    let _ = (s, set);
     let limit = UsageError::Limit {
         periods: MAX_PERIODS,
         resources: MAX_RESOURCES,
@@ -253,26 +247,103 @@ pub fn usage_by_assignment(
     if resources.len() > MAX_RESOURCES {
         return Err(limit);
     }
-    periods(p, (from, to), by).ok_or(limit)?;
+    let starts = periods(p, (from, to), by).ok_or(limit)?;
+    let bounds = bounds(&starts, (from, to));
+    let wanted: BTreeSet<ResourceUid> = resources.iter().copied().filter(|&r| counted(p, r)).collect();
+    // Affectations comptées, triées par (ressource, tâche, UID).
+    let mut picked: Vec<(ResourceUid, TaskUid, AssignmentUid, &AssignmentSchedule)> = s
+        .assignments
+        .iter()
+        .filter_map(|(&uid, a)| {
+            let r = a.resource.filter(|r| wanted.contains(r))?;
+            Some((r, a.task, uid, a))
+        })
+        .collect();
+    if picked.len() > MAX_ASSIGNMENT_ROWS {
+        return Err(limit);
+    }
+    picked.sort_unstable_by_key(|&(r, t, uid, _)| (r, t, uid));
+    let n = starts.len();
+    let place = project_place(p, set);
+    let mut scales = place.as_deref().map(|place| Scales::new(set, place));
+    if let Some(sc) = scales.as_mut() {
+        for (_, _, _, a) in &picked {
+            sc.prepare(a.calendar);
+        }
+    }
+    let mut totals: BTreeMap<TaskUid, Vec<i128>> = BTreeMap::new();
+    let mut rows = Vec::with_capacity(picked.len());
+    for (resource, task, assignment, a) in picked {
+        let mut work: Vec<i128> = vec![0; n];
+        if let Some(scale) = scales.as_ref().and_then(|sc| sc.get(a.calendar)) {
+            spread(a, scale, &bounds, &mut work);
+        }
+        let is_work = p
+            .resources
+            .get(resource)
+            .is_some_and(|res| res.kind == ResourceKind::Work);
+        if is_work {
+            let total = totals.entry(task).or_insert_with(|| vec![0; n]);
+            for (t, w) in total.iter_mut().zip(&work) {
+                *t = t.saturating_add(*w);
+            }
+        }
+        rows.push(AssignmentUsageRow {
+            assignment,
+            task,
+            resource,
+            work: work.into_iter().map(clamp_work).collect(),
+        });
+    }
+    let periods = bounds
+        .windows(2)
+        .filter_map(|w| match *w {
+            [start, finish] => Some(Span { start, finish }),
+            _ => None,
+        })
+        .collect();
     Ok(AssignmentUsageReport {
-        periods: Vec::new(),
-        rows: Vec::new(),
-        task_totals: Vec::new(),
+        periods,
+        rows,
+        task_totals: totals
+            .into_iter()
+            .map(|(t, w)| (t, w.into_iter().map(clamp_work).collect()))
+            .collect(),
     })
+}
+
+/// Vrai si la ligne de la ressource `r` compte ses affectations (R-188) :
+/// ressource connue, qui n'est pas de coût.
+fn counted(p: &Project, r: ResourceUid) -> bool {
+    p.resources
+        .get(r)
+        .is_some_and(|res| res.kind != ResourceKind::Cost)
+}
+
+/// Bornes des périodes `starts`, coupées à `[from, to)` : n + 1 instants
+/// (aucun sans période).
+fn bounds(starts: &[Moment], (from, to): (Moment, Moment)) -> Vec<Moment> {
+    let mut out: Vec<Moment> = Vec::with_capacity(starts.len().saturating_add(1));
+    if !starts.is_empty() {
+        out.push(from);
+        out.extend(starts.iter().skip(1).copied());
+        out.push(to);
+    }
+    out
 }
 
 /// Débuts des périodes civiles `by` qui coupent `[from, to)` : la première
 /// contient `from` (jour à 00:00, semaine au `week_start_day` du projet,
-/// mois au 1er). `None` au-delà de [`MAX_PERIODS`].
+/// mois au 1er, trimestre au 1er janvier, avril, juillet ou octobre, R-246).
+/// `None` au-delà de [`MAX_PERIODS`].
 fn periods(p: &Project, (from, to): (Moment, Moment), by: Granularity) -> Option<Vec<Moment>> {
     let mut out = Vec::new();
-    // Trimestre : squelette J7 L0, aucune période jusqu'au lot L4 (R-246).
-    if to <= from || by == Granularity::Quarter {
+    if to <= from {
         return Some(out);
     }
     let mut day = from.day();
     match by {
-        Granularity::Day | Granularity::Quarter => {}
+        Granularity::Day => {}
         Granularity::Week => {
             let mut back: u8 = 0;
             while day.weekday() != p.options.week_start_day && back < 7 {
@@ -281,9 +352,18 @@ fn periods(p: &Project, (from, to): (Moment, Moment), by: Granularity) -> Option
                 back = back.saturating_add(1);
             }
         }
-        Granularity::Month => {
+        Granularity::Month | Granularity::Quarter => {
             let d = day.to_naive();
-            day = NaiveDate::from_ymd_opt(d.year(), d.month(), 1)
+            // Mois du début de la période : le mois, ou le premier mois du
+            // trimestre civil (1, 4, 7, 10 ; exercice fiscal ignoré, R-246).
+            let month = match (by, d.month()) {
+                (Granularity::Quarter, 1..=3) => 1,
+                (Granularity::Quarter, 4..=6) => 4,
+                (Granularity::Quarter, 7..=9) => 7,
+                (Granularity::Quarter, _) => 10,
+                (_, m) => m,
+            };
+            day = NaiveDate::from_ymd_opt(d.year(), month, 1)
                 .and_then(|first| Day::from_naive(first).ok())
                 .unwrap_or(day);
         }
@@ -303,7 +383,10 @@ fn periods(p: &Project, (from, to): (Moment, Moment), by: Granularity) -> Option
                 .to_naive()
                 .checked_add_months(Months::new(1))
                 .and_then(|d| Day::from_naive(d).ok()),
-            Granularity::Quarter => None,
+            Granularity::Quarter => day
+                .to_naive()
+                .checked_add_months(Months::new(3))
+                .and_then(|d| Day::from_naive(d).ok()),
         };
         match next {
             Some(n) if n > day => day = n,

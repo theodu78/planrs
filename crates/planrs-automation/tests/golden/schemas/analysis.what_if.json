@@ -1,0 +1,2342 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`analysis.what_if` (J6, R-234) : simule un lot sur une copie, sans\nchanger la session ; un lot refusé est rendu comme donnée.",
+  "properties": {
+    "baseline": {
+      "description": "Ligne de base de référence de l'écart de fin du projet (0 à 10).",
+      "format": "uint8",
+      "maximum": 10,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "detail": {
+      "description": "Diff détaillé.",
+      "type": "boolean"
+    },
+    "explain": {
+      "description": "Tâches expliquées sur l'état simulé (au plus 5).",
+      "items": {
+        "description": "Tâche : UID (entier) ou étiquette \"$x\" d'une tâche créée plus tôt dans le même lot.",
+        "oneOf": [
+          {
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+            "type": "string"
+          }
+        ]
+      },
+      "maxItems": 5,
+      "type": "array"
+    },
+    "ops": {
+      "description": "Opérations simulées, dans l'ordre (même forme que `apply_batch`).",
+      "items": {
+        "description": "Commande d'écriture. Le nom JSON (`\"op\"`) est l'id du registre.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "Ajoute une tâche (R-152).",
+            "properties": {
+              "as": {
+                "description": "Étiquette `$x` de la tâche créée, pour la suite du lot (R-150).",
+                "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "at": {
+                "anyOf": [
+                  {
+                    "description": "Placement d'une tâche ajoutée ou déplacée (R-152, R-154).",
+                    "oneOf": [
+                      {
+                        "const": "end",
+                        "description": "En dernière position, niveau 1.",
+                        "type": "string"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "description": "Après le sous-arbre de la tâche, au même niveau.",
+                        "properties": {
+                          "after": {
+                            "description": "Tâche : UID (entier) ou étiquette \"$x\" d'une tâche créée plus tôt dans le même lot.",
+                            "oneOf": [
+                              {
+                                "maximum": 4294967295,
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              {
+                                "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                                "type": "string"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "after"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "description": "Juste avant la tâche, au même niveau.",
+                        "properties": {
+                          "before": {
+                            "description": "Tâche : UID (entier) ou étiquette \"$x\" d'une tâche créée plus tôt dans le même lot.",
+                            "oneOf": [
+                              {
+                                "maximum": 4294967295,
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              {
+                                "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                                "type": "string"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "before"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "description": "Premier enfant de la tâche.",
+                        "properties": {
+                          "first_child_of": {
+                            "description": "Tâche : UID (entier) ou étiquette \"$x\" d'une tâche créée plus tôt dans le même lot.",
+                            "oneOf": [
+                              {
+                                "maximum": 4294967295,
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              {
+                                "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                                "type": "string"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "first_child_of"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "description": "Dernier enfant de la tâche.",
+                        "properties": {
+                          "last_child_of": {
+                            "description": "Tâche : UID (entier) ou étiquette \"$x\" d'une tâche créée plus tôt dans le même lot.",
+                            "oneOf": [
+                              {
+                                "maximum": 4294967295,
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              {
+                                "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                                "type": "string"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "last_child_of"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Placement (défaut : fin)."
+              },
+              "duration": {
+                "additionalProperties": false,
+                "description": "Durée (défaut : celle du projet, estimée).",
+                "properties": {
+                  "elapsed": {
+                    "description": "Durée écoulée (« 5ej »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "estimated": {
+                    "description": "Durée estimée (« 5j? »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "minutes": {
+                    "description": "Minutes (ouvrées, ou écoulées si `elapsed`).",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "description": "Texte à la manière de MS Project (« 5j », « 2d? »).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "unit": {
+                    "anyOf": [
+                      {
+                        "description": "Unité d'une durée en JSON.",
+                        "oneOf": [
+                          {
+                            "const": "minute",
+                            "description": "Minute.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "hour",
+                            "description": "Heure.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "day",
+                            "description": "Jour.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "week",
+                            "description": "Semaine.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "month",
+                            "description": "Mois.",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Unité d'affichage."
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "finish": {
+                "description": "Fin saisie (→ contrainte, R-158).",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "milestone": {
+                "description": "Jalon.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "Nom.",
+                "type": "string"
+              },
+              "notes": {
+                "description": "Notes.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "op": {
+                "const": "task.add",
+                "type": "string"
+              },
+              "start": {
+                "description": "Début saisi (→ contrainte, R-158).",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "name"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Modifie une tâche (R-157, R-158).",
+            "properties": {
+              "active": {
+                "description": "Tâche active.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "duration": {
+                "additionalProperties": false,
+                "description": "Durée.",
+                "properties": {
+                  "elapsed": {
+                    "description": "Durée écoulée (« 5ej »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "estimated": {
+                    "description": "Durée estimée (« 5j? »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "minutes": {
+                    "description": "Minutes (ouvrées, ou écoulées si `elapsed`).",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "description": "Texte à la manière de MS Project (« 5j », « 2d? »).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "unit": {
+                    "anyOf": [
+                      {
+                        "description": "Unité d'une durée en JSON.",
+                        "oneOf": [
+                          {
+                            "const": "minute",
+                            "description": "Minute.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "hour",
+                            "description": "Heure.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "day",
+                            "description": "Jour.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "week",
+                            "description": "Semaine.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "month",
+                            "description": "Mois.",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Unité d'affichage."
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "effort_driven": {
+                "description": "Pilotée par l'effort (R-190 à R-193, R-197 ; J5, refusé jusqu'au lot\nL7).",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "finish": {
+                "description": "Fin saisie (R-158).",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "milestone": {
+                "description": "Jalon.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "Nom (`null` refusé).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "notes": {
+                "description": "Notes.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "op": {
+                "const": "task.update",
+                "type": "string"
+              },
+              "start": {
+                "description": "Début saisi (R-158).",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "anyOf": [
+                  {
+                    "description": "Type de tâche en JSON (S41).",
+                    "oneOf": [
+                      {
+                        "const": "fixed_units",
+                        "description": "Unités fixes.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "fixed_duration",
+                        "description": "Durée fixe.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "fixed_work",
+                        "description": "Travail fixe (toujours piloté par l'effort).",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Type de tâche (R-189, R-197 ; J5, refusé `command.not_yet_available`\njusqu'au lot L7)."
+              },
+              "uid": {
+                "description": "Tâche.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "work": {
+                "additionalProperties": false,
+                "description": "Travail total (R-189, R-197 ; `param.conflict` avec `duration` ; J5,\nrefusé jusqu'au lot L7).",
+                "properties": {
+                  "elapsed": {
+                    "description": "Durée écoulée (« 5ej »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "estimated": {
+                    "description": "Durée estimée (« 5j? »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "minutes": {
+                    "description": "Minutes (ouvrées, ou écoulées si `elapsed`).",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "description": "Texte à la manière de MS Project (« 5j », « 2d? »).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "unit": {
+                    "anyOf": [
+                      {
+                        "description": "Unité d'une durée en JSON.",
+                        "oneOf": [
+                          {
+                            "const": "minute",
+                            "description": "Minute.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "hour",
+                            "description": "Heure.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "day",
+                            "description": "Jour.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "week",
+                            "description": "Semaine.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "month",
+                            "description": "Mois.",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Unité d'affichage."
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "uid"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Supprime une tâche (R-155).",
+            "properties": {
+              "cascade": {
+                "default": false,
+                "description": "Supprimer aussi les descendants (obligatoire pour une récapitulative).",
+                "type": "boolean"
+              },
+              "op": {
+                "const": "task.delete",
+                "type": "string"
+              },
+              "uid": {
+                "description": "Tâche.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "uid"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Déplace un sous-arbre (R-154).",
+            "properties": {
+              "op": {
+                "const": "task.move",
+                "type": "string"
+              },
+              "to": {
+                "description": "Destination.",
+                "oneOf": [
+                  {
+                    "const": "end",
+                    "description": "En dernière position, niveau 1.",
+                    "type": "string"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "description": "Après le sous-arbre de la tâche, au même niveau.",
+                    "properties": {
+                      "after": {
+                        "description": "Tâche : UID (entier) ou étiquette \"$x\" d'une tâche créée plus tôt dans le même lot.",
+                        "oneOf": [
+                          {
+                            "maximum": 4294967295,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          {
+                            "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                            "type": "string"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "after"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "description": "Juste avant la tâche, au même niveau.",
+                    "properties": {
+                      "before": {
+                        "description": "Tâche : UID (entier) ou étiquette \"$x\" d'une tâche créée plus tôt dans le même lot.",
+                        "oneOf": [
+                          {
+                            "maximum": 4294967295,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          {
+                            "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                            "type": "string"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "before"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "description": "Premier enfant de la tâche.",
+                    "properties": {
+                      "first_child_of": {
+                        "description": "Tâche : UID (entier) ou étiquette \"$x\" d'une tâche créée plus tôt dans le même lot.",
+                        "oneOf": [
+                          {
+                            "maximum": 4294967295,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          {
+                            "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                            "type": "string"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "first_child_of"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "description": "Dernier enfant de la tâche.",
+                    "properties": {
+                      "last_child_of": {
+                        "description": "Tâche : UID (entier) ou étiquette \"$x\" d'une tâche créée plus tôt dans le même lot.",
+                        "oneOf": [
+                          {
+                            "maximum": 4294967295,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          {
+                            "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                            "type": "string"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "last_child_of"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "uid": {
+                "description": "Tâche (avec son sous-arbre).",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "uid",
+              "to"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Indente (R-153).",
+            "properties": {
+              "op": {
+                "const": "task.indent",
+                "type": "string"
+              },
+              "uid": {
+                "description": "Tâche.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "uid"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Désindente (R-153).",
+            "properties": {
+              "op": {
+                "const": "task.outdent",
+                "type": "string"
+              },
+              "uid": {
+                "description": "Tâche.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "uid"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Ajoute un lien (R-156).",
+            "properties": {
+              "kind": {
+                "anyOf": [
+                  {
+                    "description": "Type de lien en JSON (codes anglais de MS Project).",
+                    "oneOf": [
+                      {
+                        "const": "fs",
+                        "description": "Fin à début.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "ss",
+                        "description": "Début à début.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "ff",
+                        "description": "Fin à fin.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "sf",
+                        "description": "Début à fin.",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Type (défaut FS à l'ajout ; gardé à la modification)."
+              },
+              "lag": {
+                "additionalProperties": false,
+                "description": "Décalage (défaut 0 à l'ajout ; gardé à la modification).",
+                "properties": {
+                  "elapsed": {
+                    "description": "Décalage écoulé.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "minutes": {
+                    "description": "Minutes (signées).",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "percent": {
+                    "description": "Pourcentage en 1/100 de % (5 000 = 50 %).",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "description": "Texte (« +2j », « -1d », « 50% »).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "unit": {
+                    "anyOf": [
+                      {
+                        "description": "Unité d'une durée en JSON.",
+                        "oneOf": [
+                          {
+                            "const": "minute",
+                            "description": "Minute.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "hour",
+                            "description": "Heure.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "day",
+                            "description": "Jour.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "week",
+                            "description": "Semaine.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "month",
+                            "description": "Mois.",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Unité d'affichage."
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "op": {
+                "const": "link.add",
+                "type": "string"
+              },
+              "pred": {
+                "description": "Prédécesseur.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "succ": {
+                "description": "Successeur.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "pred",
+              "succ"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Modifie un lien (R-156).",
+            "properties": {
+              "kind": {
+                "anyOf": [
+                  {
+                    "description": "Type de lien en JSON (codes anglais de MS Project).",
+                    "oneOf": [
+                      {
+                        "const": "fs",
+                        "description": "Fin à début.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "ss",
+                        "description": "Début à début.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "ff",
+                        "description": "Fin à fin.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "sf",
+                        "description": "Début à fin.",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Type (défaut FS à l'ajout ; gardé à la modification)."
+              },
+              "lag": {
+                "additionalProperties": false,
+                "description": "Décalage (défaut 0 à l'ajout ; gardé à la modification).",
+                "properties": {
+                  "elapsed": {
+                    "description": "Décalage écoulé.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "minutes": {
+                    "description": "Minutes (signées).",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "percent": {
+                    "description": "Pourcentage en 1/100 de % (5 000 = 50 %).",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "description": "Texte (« +2j », « -1d », « 50% »).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "unit": {
+                    "anyOf": [
+                      {
+                        "description": "Unité d'une durée en JSON.",
+                        "oneOf": [
+                          {
+                            "const": "minute",
+                            "description": "Minute.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "hour",
+                            "description": "Heure.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "day",
+                            "description": "Jour.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "week",
+                            "description": "Semaine.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "month",
+                            "description": "Mois.",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Unité d'affichage."
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "op": {
+                "const": "link.update",
+                "type": "string"
+              },
+              "pred": {
+                "description": "Prédécesseur.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "succ": {
+                "description": "Successeur.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "pred",
+              "succ"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Retire un lien (R-156).",
+            "properties": {
+              "op": {
+                "const": "link.remove",
+                "type": "string"
+              },
+              "pred": {
+                "description": "Prédécesseur.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "succ": {
+                "description": "Successeur.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "pred",
+              "succ"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Pose une contrainte (R-159).",
+            "properties": {
+              "date": {
+                "description": "Date (obligatoire pour les types datés, interdite sinon).",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "description": "Type.",
+                "oneOf": [
+                  {
+                    "const": "asap",
+                    "description": "Le plus tôt possible.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "alap",
+                    "description": "Le plus tard possible.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "mso",
+                    "description": "Doit commencer le.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "mfo",
+                    "description": "Doit finir le.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "snet",
+                    "description": "Ne pas commencer avant le.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "snlt",
+                    "description": "Ne pas commencer après le.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "fnet",
+                    "description": "Ne pas finir avant le.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "fnlt",
+                    "description": "Ne pas finir après le.",
+                    "type": "string"
+                  }
+                ]
+              },
+              "op": {
+                "const": "task.set_constraint",
+                "type": "string"
+              },
+              "uid": {
+                "description": "Tâche.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "uid",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Pose ou retire une échéance (R-159).",
+            "properties": {
+              "deadline": {
+                "description": "Échéance (`null` : retirée).",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "op": {
+                "const": "task.set_deadline",
+                "type": "string"
+              },
+              "uid": {
+                "description": "Tâche.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "uid"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Modifie les informations du projet.",
+            "properties": {
+              "author": {
+                "description": "Auteur.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "category": {
+                "description": "Catégorie.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "company": {
+                "description": "Société.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "default_task_type": {
+                "anyOf": [
+                  {
+                    "description": "Type de tâche en JSON (S41).",
+                    "oneOf": [
+                      {
+                        "const": "fixed_units",
+                        "description": "Unités fixes.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "fixed_duration",
+                        "description": "Durée fixe.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "fixed_work",
+                        "description": "Travail fixe (toujours piloté par l'effort).",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Type des nouvelles tâches (S2 `DefaultTaskType`, R-197 ; J5, refusé\n`command.not_yet_available` jusqu'au lot L7)."
+              },
+              "manager": {
+                "description": "Responsable.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "Nom.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "new_tasks_effort_driven": {
+                "description": "Nouvelles tâches pilotées par l'effort (S2 `NewTasksEffortDriven`,\nR-197 ; J5, refusé jusqu'au lot L7).",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "op": {
+                "const": "project.set_info",
+                "type": "string"
+              },
+              "subject": {
+                "description": "Objet.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "description": "Titre.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Change le sens et la date pilote du projet.",
+            "properties": {
+              "finish": {
+                "description": "Date et heure locales, sans fuseau : 2026-11-02T08:00.",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "op": {
+                "const": "project.set_anchor",
+                "type": "string"
+              },
+              "start": {
+                "description": "Date et heure locales, sans fuseau : 2026-11-02T08:00.",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Pose ou retire la date d'état.",
+            "properties": {
+              "date": {
+                "description": "Date d'état (`null` : NA).",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "op": {
+                "const": "project.set_status_date",
+                "type": "string"
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Crée ou remplace une exception de calendrier (R-165).",
+            "properties": {
+              "cal": {
+                "description": "Calendrier.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "const": "project"
+                  }
+                ]
+              },
+              "from": {
+                "description": "Premier jour.",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                "type": "string"
+              },
+              "op": {
+                "const": "calendar.set_exception",
+                "type": "string"
+              },
+              "ranges": {
+                "default": [],
+                "description": "Plages ouvrées `[\"08:00\",\"12:00\"]` ; vide : jours chômés.",
+                "items": {
+                  "items": {
+                    "description": "Heure : 08:00 (24:00 = fin du jour).",
+                    "pattern": "^[0-9]{2}:[0-9]{2}$",
+                    "type": "string"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "to": {
+                "description": "Dernier jour (inclus).",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "cal",
+              "from",
+              "to"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Retire une exception de calendrier (R-165).",
+            "properties": {
+              "cal": {
+                "description": "Calendrier.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "const": "project"
+                  }
+                ]
+              },
+              "from": {
+                "description": "Premier jour de l'exception.",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                "type": "string"
+              },
+              "op": {
+                "const": "calendar.remove_exception",
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "cal",
+              "from"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Ajoute une ressource (R-195).",
+            "properties": {
+              "as": {
+                "description": "Étiquette `$x` de la ressource créée, pour la suite du lot.",
+                "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "calendar": {
+                "anyOf": [
+                  {
+                    "oneOf": [
+                      {
+                        "maximum": 4294967295,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "enum": [
+                          "own",
+                          "project"
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Calendrier (défaut : calendrier propre, O34)."
+              },
+              "group": {
+                "description": "Groupe.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "initials": {
+                "description": "Initiales.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "anyOf": [
+                  {
+                    "description": "Type de ressource en JSON.",
+                    "oneOf": [
+                      {
+                        "const": "work",
+                        "description": "Travail (personne, machine).",
+                        "type": "string"
+                      },
+                      {
+                        "const": "material",
+                        "description": "Matérielle (consommée en quantité, étiquette d'unité).",
+                        "type": "string"
+                      },
+                      {
+                        "const": "cost",
+                        "description": "Coût.",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Type (défaut : travail)."
+              },
+              "material_label": {
+                "description": "Étiquette d'unité d'une ressource matérielle (« m³ »).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "max_units": {
+                "additionalProperties": false,
+                "description": "Capacité maximale (défaut 100 %, S47).",
+                "properties": {
+                  "text": {
+                    "description": "Pourcentage en texte (`\"50%\"`).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "value": {
+                    "description": "Valeur en 1/10 000 (10 000 = 100 %).",
+                    "format": "int64",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "Nom.",
+                "type": "string"
+              },
+              "op": {
+                "const": "resource.add",
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "name"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Modifie une ressource (R-195).",
+            "properties": {
+              "calendar": {
+                "description": "Calendrier (`null` : aucun, calendrier de la tâche ou du projet).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "group": {
+                "description": "Groupe.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "inactive": {
+                "description": "Ressource inactive.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "initials": {
+                "description": "Initiales.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "anyOf": [
+                  {
+                    "description": "Type de ressource en JSON.",
+                    "oneOf": [
+                      {
+                        "const": "work",
+                        "description": "Travail (personne, machine).",
+                        "type": "string"
+                      },
+                      {
+                        "const": "material",
+                        "description": "Matérielle (consommée en quantité, étiquette d'unité).",
+                        "type": "string"
+                      },
+                      {
+                        "const": "cost",
+                        "description": "Coût.",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Type (`null` refusé ; refusé `resource.has_assignments` si la\nressource est affectée ; ajout du lot L7 au contrat L0)."
+              },
+              "material_label": {
+                "description": "Étiquette d'unité d'une ressource matérielle (ajout du lot L7).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "max_units": {
+                "additionalProperties": false,
+                "description": "Capacité maximale (`null` refusé).",
+                "properties": {
+                  "text": {
+                    "description": "Pourcentage en texte (`\"50%\"`).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "value": {
+                    "description": "Valeur en 1/10 000 (10 000 = 100 %).",
+                    "format": "int64",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "Nom (`null` refusé).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "notes": {
+                "description": "Notes.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "op": {
+                "const": "resource.update",
+                "type": "string"
+              },
+              "uid": {
+                "description": "Ressource.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "uid"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Supprime une ressource (R-195).",
+            "properties": {
+              "cascade": {
+                "default": false,
+                "description": "Retirer aussi ses affectations (obligatoire si elle en a :\n`resource.has_assignments`).",
+                "type": "boolean"
+              },
+              "op": {
+                "const": "resource.delete",
+                "type": "string"
+              },
+              "uid": {
+                "description": "Ressource.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "uid"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Affecte une ressource à une tâche (R-196).",
+            "properties": {
+              "delay": {
+                "additionalProperties": false,
+                "description": "Retard d'affectation (`Delay`, R-177).",
+                "properties": {
+                  "elapsed": {
+                    "description": "Durée écoulée (« 5ej »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "estimated": {
+                    "description": "Durée estimée (« 5j? »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "minutes": {
+                    "description": "Minutes (ouvrées, ou écoulées si `elapsed`).",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "description": "Texte à la manière de MS Project (« 5j », « 2d? »).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "unit": {
+                    "anyOf": [
+                      {
+                        "description": "Unité d'une durée en JSON.",
+                        "oneOf": [
+                          {
+                            "const": "minute",
+                            "description": "Minute.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "hour",
+                            "description": "Heure.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "day",
+                            "description": "Jour.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "week",
+                            "description": "Semaine.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "month",
+                            "description": "Mois.",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Unité d'affichage."
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "op": {
+                "const": "assignment.add",
+                "type": "string"
+              },
+              "quantity": {
+                "additionalProperties": false,
+                "description": "Quantité (ressource matérielle).",
+                "properties": {
+                  "text": {
+                    "description": "Pourcentage en texte (`\"50%\"`).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "value": {
+                    "description": "Valeur en 1/10 000 (10 000 = 100 %).",
+                    "format": "int64",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "resource": {
+                "description": "Ressource.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "task": {
+                "description": "Tâche.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "units": {
+                "additionalProperties": false,
+                "description": "Unités (ressource de travail ; défaut 100 %).",
+                "properties": {
+                  "text": {
+                    "description": "Pourcentage en texte (`\"50%\"`).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "value": {
+                    "description": "Valeur en 1/10 000 (10 000 = 100 %).",
+                    "format": "int64",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "work": {
+                "additionalProperties": false,
+                "description": "Travail de l'affectation (ressource de travail).",
+                "properties": {
+                  "elapsed": {
+                    "description": "Durée écoulée (« 5ej »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "estimated": {
+                    "description": "Durée estimée (« 5j? »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "minutes": {
+                    "description": "Minutes (ouvrées, ou écoulées si `elapsed`).",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "description": "Texte à la manière de MS Project (« 5j », « 2d? »).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "unit": {
+                    "anyOf": [
+                      {
+                        "description": "Unité d'une durée en JSON.",
+                        "oneOf": [
+                          {
+                            "const": "minute",
+                            "description": "Minute.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "hour",
+                            "description": "Heure.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "day",
+                            "description": "Jour.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "week",
+                            "description": "Semaine.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "month",
+                            "description": "Mois.",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Unité d'affichage."
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "task",
+              "resource"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Modifie une affectation (R-196).",
+            "properties": {
+              "delay": {
+                "additionalProperties": false,
+                "description": "Retard d'affectation.",
+                "properties": {
+                  "elapsed": {
+                    "description": "Durée écoulée (« 5ej »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "estimated": {
+                    "description": "Durée estimée (« 5j? »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "minutes": {
+                    "description": "Minutes (ouvrées, ou écoulées si `elapsed`).",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "description": "Texte à la manière de MS Project (« 5j », « 2d? »).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "unit": {
+                    "anyOf": [
+                      {
+                        "description": "Unité d'une durée en JSON.",
+                        "oneOf": [
+                          {
+                            "const": "minute",
+                            "description": "Minute.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "hour",
+                            "description": "Heure.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "day",
+                            "description": "Jour.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "week",
+                            "description": "Semaine.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "month",
+                            "description": "Mois.",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Unité d'affichage."
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "op": {
+                "const": "assignment.update",
+                "type": "string"
+              },
+              "quantity": {
+                "additionalProperties": false,
+                "description": "Quantité (ressource matérielle).",
+                "properties": {
+                  "text": {
+                    "description": "Pourcentage en texte (`\"50%\"`).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "value": {
+                    "description": "Valeur en 1/10 000 (10 000 = 100 %).",
+                    "format": "int64",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "resource": {
+                "description": "Ressource.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "task": {
+                "description": "Tâche.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "units": {
+                "additionalProperties": false,
+                "description": "Unités.",
+                "properties": {
+                  "text": {
+                    "description": "Pourcentage en texte (`\"50%\"`).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "value": {
+                    "description": "Valeur en 1/10 000 (10 000 = 100 %).",
+                    "format": "int64",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "work": {
+                "additionalProperties": false,
+                "description": "Travail.",
+                "properties": {
+                  "elapsed": {
+                    "description": "Durée écoulée (« 5ej »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "estimated": {
+                    "description": "Durée estimée (« 5j? »).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "minutes": {
+                    "description": "Minutes (ouvrées, ou écoulées si `elapsed`).",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "description": "Texte à la manière de MS Project (« 5j », « 2d? »).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "unit": {
+                    "anyOf": [
+                      {
+                        "description": "Unité d'une durée en JSON.",
+                        "oneOf": [
+                          {
+                            "const": "minute",
+                            "description": "Minute.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "hour",
+                            "description": "Heure.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "day",
+                            "description": "Jour.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "week",
+                            "description": "Semaine.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "month",
+                            "description": "Mois.",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Unité d'affichage."
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "task",
+              "resource"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Retire une affectation (R-196).",
+            "properties": {
+              "op": {
+                "const": "assignment.remove",
+                "type": "string"
+              },
+              "resource": {
+                "description": "Ressource.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "task": {
+                "description": "Tâche.",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "task",
+              "resource"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "ops"
+  ],
+  "title": "WhatIfParams",
+  "type": "object"
+}

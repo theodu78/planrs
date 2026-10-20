@@ -89,6 +89,18 @@ pub enum ApplyMode {
     DryRun,
 }
 
+/// Résultat de [`Session::simulate`] (J6, R-234) : le résultat d'un
+/// `dry_run` et l'état simulé.
+#[derive(Clone, Debug)]
+pub struct Simulation {
+    /// Résultat, comme celui d'un `dry_run` (`committed` faux).
+    pub outcome: ApplyOutcome,
+    /// Projet après le lot simulé.
+    pub project: Project,
+    /// Planning après le lot simulé.
+    pub schedule: Schedule,
+}
+
 /// Options d'application d'un lot.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ApplyOptions {
@@ -326,6 +338,20 @@ impl Session {
             ));
         }
         self.run(&batch.ops, batch, mode, opts)
+    }
+
+    /// Simule un lot sur une copie (J6, R-234, `what_if`) : même pipeline
+    /// que [`ApplyMode::DryRun`], plus l'état après (projet et planning)
+    /// pour expliquer des dates. L'emprunt immuable garantit que la session
+    /// ne change pas (P40).
+    ///
+    /// # Errors
+    ///
+    /// Comme [`Session::apply_with`] ; squelette L0 :
+    /// `command.not_yet_available` (lot L8).
+    pub fn simulate(&self, batch: &Batch, options: ApplyOptions) -> Result<Simulation, CommandError> {
+        let _ = (batch, options);
+        Err(CommandError::not_yet(6))
     }
 
     /// Applique des opérations de test (closures sur le contexte

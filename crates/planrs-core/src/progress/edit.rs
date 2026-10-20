@@ -126,7 +126,7 @@ impl EditError {
             Self::Inactive => "progress.inactive",
             Self::InvalidOrder => "progress.invalid_order",
             Self::Conflict(..) => "param.conflict",
-            Self::Overflow => "progress.overflow",
+            Self::Overflow => "limit.exceeded",
         }
     }
 }

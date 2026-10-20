@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`analysis.baseline_variance` (J6, R-228) : écarts à une ligne de base,\nligne du projet puis tâches, paginés.",
+  "properties": {
+    "baseline": {
+      "description": "Ligne de base (0 à 10 ; défaut 0).",
+      "format": "uint8",
+      "maximum": 10,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "cursor": {
+      "description": "Reprise d'une page précédente (son `next_cursor` ; sens fixé par\nle lot L8, R-228).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "limit": {
+      "description": "Taille de la page (défaut 50, au plus 500).",
+      "format": "uint32",
+      "maximum": 500,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "only_varied": {
+      "description": "Tâches à écart non nul seulement.",
+      "type": "boolean"
+    }
+  },
+  "title": "VarianceParams",
+  "type": "object"
+}

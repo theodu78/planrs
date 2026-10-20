@@ -488,6 +488,66 @@ impl UnitsJson {
     }
 }
 
+/// Pourcentage d'avancement en entrée (J6, `progress.update`, R-216) :
+/// `value` en 1/100 de % (10 000 = 100 %) ou `text` (`"40%"`, `"12,5 %"`) ;
+/// les deux fournis doivent concorder strictement (comme [`UnitsJson`]).
+/// Lecture et contrôle : lot L6.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PercentJson {
+    /// Valeur en 1/100 de % (0 à 10 000).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0, max = 10_000))]
+    pub value: Option<i64>,
+    /// Pourcentage en texte (`"40%"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+/// Cumul d'une ligne de base vers les récapitulatives (J6, R-222 ; S58
+/// « Roll up baselines »).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RollupJson {
+    /// Aucun cumul.
+    #[default]
+    None,
+    /// « To all summary tasks ».
+    ToAllSummaries,
+    /// « From subtasks into selected summary task(s) ».
+    FromSubtasks,
+}
+
+impl From<RollupJson> for planrs_core::baseline::Rollup {
+    fn from(r: RollupJson) -> Self {
+        match r {
+            RollupJson::None => Self::None,
+            RollupJson::ToAllSummaries => Self::ToAllSummaries,
+            RollupJson::FromSubtasks => Self::FromSubtasks,
+        }
+    }
+}
+
+/// Date expliquée par `explain_date` (J6, R-230, R-231).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SideJson {
+    /// Début.
+    #[default]
+    Start,
+    /// Fin.
+    Finish,
+}
+
+impl From<SideJson> for planrs_core::schedule::explain::Side {
+    fn from(s: SideJson) -> Self {
+        match s {
+            SideJson::Start => Self::Start,
+            SideJson::Finish => Self::Finish,
+        }
+    }
+}
+
 /// Type de tâche en JSON (S41).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

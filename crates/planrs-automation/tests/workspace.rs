@@ -716,8 +716,9 @@ fn workspace_import_csv_roundtrip() {
 #[test]
 fn workspace_batch_version_checked_before_ops() {
     // ADR-0012 L3 (4) : un lot d'un format futur est refusé comme tel, même
-    // si ses opérations sont inconnues de cette version (`progress.update`,
-    // J6 ; `resource.add` est connue depuis le contrat J5).
+    // si ses opérations sont mal formées pour cette version
+    // (`progress.update` est connue depuis le contrat J6, mais sans champ
+    // `uid`).
     let mut ws = fresh(Language::Fr);
     let err = ws
         .call(

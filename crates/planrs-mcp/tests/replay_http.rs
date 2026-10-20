@@ -1,4 +1,4 @@
-//! Rejeu des scénarios `build_30` et `resources_j5` (J5, lot L9) en MCP HTTP (feature `http`, lot L18,
+//! Rejeu des scénarios `build_30`, `resources_j5` (J5, lot L9) et `tracking_j6` (J6, lot L10) en MCP HTTP (feature `http`, lot L18,
 //! vérification 6) : serveur sur `127.0.0.1:0`, `--root` = dossier
 //! temporaire du rejeu, client HTTP/1.1 minimal (hyper). Mêmes résultats et
 //! même journal que le rejeu en mémoire.
@@ -25,7 +25,7 @@ use hyper::{HeaderMap, Request, StatusCode};
 use hyper_util::rt::TokioIo;
 use planrs_automation::text::Language;
 use planrs_mcp::{HttpOptions, HttpServer, ServeOptions};
-use replay::{NOW, Scenario, TempDir, logged, normalized, repo_root, substitute};
+use replay::{Scenario, TempDir, logged, normalized, now_of, repo_root, substitute};
 use serde_json::{Value, json};
 
 const PROTOCOL: &str = "2025-06-18";
@@ -155,6 +155,12 @@ async fn replay_resources_j5_http() {
     replay_http("resources_j5").await;
 }
 
+/// Scénario de suivi J6 (lot L10) : avancement, lignes de base, analyse.
+#[tokio::test]
+async fn replay_tracking_j6_http() {
+    replay_http("tracking_j6").await;
+}
+
 /// Rejoue le scénario `name` en MCP HTTP.
 async fn replay_http(name: &str) {
     let root = repo_root(env!("CARGO_MANIFEST_DIR"));
@@ -163,7 +169,7 @@ async fn replay_http(name: &str) {
     // Journal hors de la racine confinée : il n'est pas un fichier du projet.
     let journal_dir = TempDir::new("http-journal");
     let journal = journal_dir.path().join("run.jsonl");
-    let mut opts = ServeOptions::new(NOW.parse().unwrap(), Language::Fr);
+    let mut opts = ServeOptions::new(now_of(name).parse().unwrap(), Language::Fr);
     opts.ignore_app_guard = true;
     opts.journal = Some(journal.clone());
     let http = HttpOptions {

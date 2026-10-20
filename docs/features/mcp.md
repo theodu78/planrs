@@ -1,6 +1,6 @@
 # Serveur MCP (`crates/planrs-mcp`, `planrs mcp`)
 
-État au 2026-10-19 (lots L8, L17 et L18 de J4, ADR-0012 D7, D8). Le serveur expose les commandes de `planrs-automation` à un agent IA par le SDK officiel `rmcp` (=3.5.1). Il ne calcule aucune date et ne renvoie jamais de résultat estimé (règle 3) : chaque appel passe par `Workspace::call` (`docs/features/workspace.md`), toute date, durée ou marge de la réponse vient du moteur.
+État au 2026-10-20 (lots L8, L17 et L18 de J4, ADR-0012 D7, D8 ; outils J5 et J6, ADR-0013, ADR-0014 ; scénario de suivi et harnais de l'essai n° 3 : lot L10 de J6). Le serveur expose les commandes de `planrs-automation` à un agent IA par le SDK officiel `rmcp` (=3.5.1). Il ne calcule aucune date et ne renvoie jamais de résultat estimé (règle 3) : chaque appel passe par `Workspace::call` (`docs/features/workspace.md`), toute date, durée ou marge de la réponse vient du moteur.
 
 ## 1. Lancement
 
@@ -58,6 +58,7 @@ Deux lignes `planrs_automation::journal::Entry` par appel, de même `seq` (1 au 
 - **Régénération** : `PLANRS_BLESS=1 cargo test -p planrs-mcp --test replay replay_build_30_memory` réécrit le scénario (requêtes gardées, résultats recalculés) et `tests/mcp/expected/build_30.xml` ; relire le diff avant de versionner (le rejeu fige le comportement du moteur, il ne le vérifie pas contre MS Project).
 - **CI** : job `mcp` (`.github/workflows/ci.yml`) ; les mêmes tests tournent aussi dans `checks`, macOS et Windows (`cargo test --workspace`).
 - **J5** : le scénario `resources_j5.jsonl` (ressources, affectations, types de tâche, surutilisation) suit le même harnais, en mémoire, en stdio et en HTTP (`replay_resources_j5_*`) ; contenu et vérifications dans [`resources.md`](resources.md) § 4.
+- **J6** : le scénario `tracking_j6.jsonl` (53 appels, `--now 2026-11-02T08:00` : ligne de base 0, avancement au 13/11, refus, tâche commencée hors séquence, `explain_date`, replanification du reste au 27/11, deux `what_if`, ligne de base 1 sur une sélection, 3 undo / 3 redo, enregistrement, export et réouverture) suit le même harnais, en mémoire, en stdio et en HTTP (`replay_tracking_j6_memory`, `_stdio`, `_http`), plus `replay_tracking_j6_saved_mspdi_matches` et `replay_tracking_j6_reopen_same_variances` ; « maintenant » par scénario (`now_of` du harnais). Contenu chiffré : [`tracking.md`](tracking.md) § 3. L'export de l'étape « ligne de base 0 » est versionné (`tests/mcp/expected/tracking_j6_baseline0.xml`) : c'est le fichier de départ de l'essai n° 3.
 
 ## 6. Essais réels avec Claude (local, hors CI)
 
@@ -89,6 +90,14 @@ Résultat :
 - Planning obtenu : 35 tâches dont 5 phases et 5 jalons, 43 liens (39 + 4 ; la réponse finale de l'agent en annonce 42 : écart de recopie de l'agent, les charges par artisan de sa réponse sont celles du moteur), 6 artisans, surutilisation détectée par le moteur (Maçon à 300 %, Carreleur à 200 %) puis aucune surcharge restante ; fin mer 27/01/2027 17:00, 22 tâches critiques.
 - Règle 3 tenue : l'agent n'a fourni que le début du projet et des jours chômés (indisponibilités qu'il a inventées et signalées comme telles) ; dates, marges, charges et surcharges de sa réponse viennent des résultats du moteur, et il a comparé les options par `dry_run` au lieu de les estimer.
 - Versionné : `tests/mcp/scenarios/claude_run_2.jsonl` (chemins absolus remplacés par `$TMP`), MSPDI attendu `tests/mcp/expected/claude_run_2.xml`, rejoué par `replay_claude_run_2` (mêmes vérifications que l'essai n° 1, plus les faits clés ci-dessus). Diff de `PLANRS_BLESS=1` relu : hors chemins, seuls changent les `RemainingWork` des 25 affectations (0 dans le fichier de l'essai, égaux au travail depuis le correctif de la relecture finale, R-199) et la taille de l'enregistrement (`bytes` 81 062 → 81 085) ; aucun résultat du moteur ne change (dates, durées, marges, charges, surcharges, chemin critique).
+
+### Essai n° 3 (suivi J6) : procédure préparée, essai mené par la session principale
+
+Même procédure que les essais n° 1 et 2 (binaire release, conversation neuve, `claude -p`, `--strict-mcp-config`, planrs seul outil), serveur `planrs --now 2026-11-13T17:00 --lang fr mcp --headless --journal run.jsonl --open extension-bureaux.xml`, où `extension-bureaux.xml` est une copie de `tests/mcp/expected/tracking_j6_baseline0.xml` (planning « Extension de bureaux » de `tracking_j6` juste après la ligne de base 0). Consigne figée, envoyée telle quelle :
+
+> Nous sommes le 13/11/2026. Le terrassement est terminé, la maçonnerie a commencé avec un jour de retard et elle est à moitié faite. Mets à jour l'avancement, explique-moi pourquoi la réception bouge, puis dis-moi ce que changerait un second plaquiste.
+
+Le fichier garde sa date courante enregistrée (lun 02/11/2026 08:00, `CurrentDate`) : sa date d'état effective reste le 02/11 tant que l'agent ne pose pas le 13/11 (`set_status_date`), ce que la consigne lui laisse faire. À vérifier sur la réponse : règle 3 (toute date de la réponse vient d'un résultat du moteur), `explain_date` et `what_if` utilisés. Versionner le journal sous `tests/mcp/scenarios/claude_run_3.jsonl` (chemins absolus remplacés par `$TMP`, le fichier ouvert devenant `$TMP/extension-bureaux.xml`), puis `PLANRS_BLESS=1 cargo test -p planrs-mcp --test replay replay_claude_run_3`. Le harnais `replay_claude_run_3` (`crates/planrs-mcp/tests/replay.rs`, `--now 2026-11-13T17:00`) dépose le fichier de départ dans `$TMP`, rejoue le journal, compare résultats et journal produit, lance le serveur avec `--open` sur ce fichier (sauf si le journal commence par son `open_project`) et exige `update_progress`, `explain_date` et `what_if` ; sans journal versionné, il ne fait rien (message sur stderr). Les faits clés de l'essai (dates, écart de fin) seront ajoutés au test après l'essai.
 
 ## 7. Limites
 

@@ -33,7 +33,9 @@ pub struct TasksArgs {
     /// Tâches critiques seulement.
     #[arg(long)]
     pub critical: bool,
-    /// Tâches en retard seulement (fin après l'échéance).
+    /// Tâches en retard seulement (R-236) : fin après l'échéance ou après la
+    /// ligne de base 0, non achevée à fin passée ou non commencée à début
+    /// passé (date d'état).
     #[arg(long)]
     pub late: bool,
     /// Tâches qui finissent ce jour ou après (`AAAA-MM-JJ`).

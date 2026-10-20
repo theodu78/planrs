@@ -4,9 +4,10 @@
 //! `Session::apply` exécute chaque opération sur un clone du projet ; une
 //! erreur interrompt le lot, l'état de la session reste intact.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use planrs_core::{Project, ResourceUid, Subject, TaskUid};
+use planrs_core::{Diagnostic, Project, ResourceUid, Schedule, Subject, TaskUid};
 
 use super::{Command, assignment, baseline, calendar, constraint, link, progress, project, resource, task};
 use crate::error::CommandError;
@@ -38,6 +39,31 @@ pub(crate) struct Ctx<'a> {
     pub resource_labels: &'a mut BTreeMap<String, ResourceUid>,
     /// Ressources créées, dans l'ordre (R-195).
     pub created_resources: &'a mut Vec<ResourceUid>,
+    /// Projet de la session avant le lot (J6, R-216) : tant que le clone
+    /// lui est égal, `base_schedule` est son planning.
+    pub base: &'a Project,
+    /// Planning de la session avant le lot (J6, R-216, R-217, R-227).
+    pub base_schedule: &'a Schedule,
+    /// Avertissements et informations émis par les commandes elles-mêmes
+    /// (J6 : `progress.milestone_rounded`, `progress.option_unsupported`,
+    /// `baseline.cost_not_computed`, `baseline.task_skipped`), rendus avec
+    /// ceux du delta de R-160.
+    pub notes: &'a mut Vec<Diagnostic>,
+}
+
+impl Ctx<'_> {
+    /// Planning courant du clone (J6, R-216, R-217, R-227) : celui de la
+    /// session tant que le lot n'a rien changé, sinon recalculé (comme le
+    /// correctif J5 (4) pour la durée d'une récapitulative). Le recalcul ne
+    /// synchronise pas les durées des feuilles affectées : les dates sont
+    /// celles du planning final du lot (R-173 amendée).
+    pub(crate) fn current_schedule(&self) -> Cow<'_, Schedule> {
+        if *self.project == *self.base {
+            Cow::Borrowed(self.base_schedule)
+        } else {
+            Cow::Owned(planrs_core::schedule(self.project))
+        }
+    }
 }
 
 /// Exécution d'une commande sur le contexte.

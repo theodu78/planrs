@@ -4,7 +4,9 @@
 //! Amendée en J5 (lot L7) : `LevelingDelay` et `LevelingDelayFormat` sortent
 //! de la table (entrées du modèle, gardées à l'édition) ; une affectation
 //! dont les unités, le travail, le délai ou la ressource changent perd sa
-//! répartition.
+//! répartition. Amendée en J6 (lot L6) : l'avancement d'une tâche jette son
+//! interruption (`Stop`, `Resume`, `ResumeValid`), le travail réel d'une
+//! affectation ses lignes de répartition réelles (types 2 et 3).
 
 use planrs_automation::SideEffect;
 use planrs_core::{
@@ -267,6 +269,45 @@ fn r161_assignment_change_drops_its_timephased_data() {
         &mut s,
         json!([{ "op": "assignment.update", "task": 1, "resource": 1, "delay": { "minutes": 0 } }]),
     );
+    assert!(
+        !o.side_effects
+            .iter()
+            .any(|e| matches!(e, SideEffect::ExtrasDropped { .. }))
+    );
+}
+
+#[test]
+fn r161_progress_drops_actual_timephased() {
+    // R-161 amendée (J6) : le travail réel d'une affectation change
+    // (`progress.update`) ⇒ ses lignes `TimephasedData` de travail réel
+    // (types 2 et 3) sont jetées, un effet ; la ligne de type 1 (planifiée,
+    // R-199 décide à l'écriture) et celle d'une ligne de base restent. Un
+    // avancement inchangé ne jette rien.
+    let mut p = new_project("2026-11-02T08:00");
+    push_tasks(&mut p, &[1], 2);
+    p.resources
+        .push(Resource::new(ResourceUid::new(1), "R".to_owned()))
+        .unwrap();
+    let mut a = Assignment::new(AssignmentUid::new(1), TaskUid::new(1), Some(ResourceUid::new(1)));
+    a.work = planrs_core::Work::new(Minutes::new(960)).unwrap();
+    let row = |t: u8| format!("<TimephasedData><Type>{t}</Type><UID>1</UID></TimephasedData>");
+    for t in [1, 2, 3] {
+        a.extras.0.push(entry("TimephasedData", &row(t)));
+    }
+    a.extras.0.push(entry("Baseline#0/TimephasedData", &row(4)));
+    p.assignments.push(a).unwrap();
+    let mut s = session(p);
+    let update = json!([{ "op": "progress.update", "task": 1, "percent_complete": { "text": "50%" } }]);
+    let o = apply(&mut s, update.clone());
+    assert!(o.side_effects.contains(&SideEffect::ExtrasDropped {
+        subject: Subject::Assignment(AssignmentUid::new(1)),
+        keys: vec!["TimephasedData".to_owned()],
+    }));
+    let a = s.project().assignments.get(AssignmentUid::new(1)).unwrap();
+    let kept: Vec<&str> = a.extras.0.iter().map(|e| e.payload.as_str()).collect();
+    assert_eq!(kept, [row(1).as_str(), row(4).as_str()]);
+    assert_eq!(a.actual_work.minutes(), Minutes::new(480));
+    let o = apply(&mut s, update);
     assert!(
         !o.side_effects
             .iter()

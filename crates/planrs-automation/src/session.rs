@@ -409,6 +409,7 @@ impl Session {
         let mut created = Vec::new();
         let mut resource_labels = BTreeMap::new();
         let mut created_resources = Vec::new();
+        let mut notes = Vec::new();
         for (i, op) in ops.iter().enumerate() {
             let mut ctx = Ctx {
                 project: &mut work,
@@ -421,12 +422,22 @@ impl Session {
                 created: &mut created,
                 resource_labels: &mut resource_labels,
                 created_resources: &mut created_resources,
+                base: &self.project,
+                base_schedule: &self.schedule,
+                notes: &mut notes,
             };
             op.exec(&mut ctx).map_err(|e| e.with_op_index(i))?;
         }
         let schedule = synced_schedule(&mut work);
         let diagnostics = state_diagnostics(&work, &schedule);
-        let delta = diagnostics_delta(&self.diagnostics, &diagnostics);
+        let mut delta = diagnostics_delta(&self.diagnostics, &diagnostics);
+        // J6 : remarques des commandes (saisie d'avancement, ligne de base),
+        // jointes aux nouveautés du recalcul.
+        if !notes.is_empty() {
+            delta.warnings.extend(notes);
+            delta.warnings.sort();
+            delta.warnings.dedup();
+        }
         if !delta.errors.is_empty() {
             return Err(would_create_errors(delta.errors, &touched, ops.len()));
         }

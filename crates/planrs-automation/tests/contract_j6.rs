@@ -1,9 +1,9 @@
 //! Contrat J6 (lot L0, ADR-0014) : types, squelettes et registre. Les
 //! commandes nouvelles (`progress.update`, `progress.reschedule`,
 //! `baseline.set`) se lisent et se relisent, hors du schéma des lots, et
-//! sont refusées `command.not_yet_available` ; les six entrées J6 du
-//! registre sont réservées avec leur schéma ; les squelettes du cœur
-//! répondent sans paniquer.
+//! s'exécutent depuis le lot L6 (jamais `command.not_yet_available`) ; les
+//! six entrées J6 du registre sont réservées avec leur schéma ; les
+//! squelettes du cœur répondent sans paniquer.
 
 #![allow(
     clippy::unwrap_used,
@@ -51,6 +51,12 @@ fn session_with_task() -> Session {
     s
 }
 
+/// Vrai si le lot est refusé `command.not_yet_available` (simulation).
+fn not_yet(s: &mut Session, batch: &Batch) -> bool {
+    s.apply(batch, ApplyMode::DryRun)
+        .is_err_and(|e| e.code == codes::COMMAND_NOT_YET_AVAILABLE)
+}
+
 /// Les six entrées J6 (ADR-0014) : cinq réservées depuis J4, une créée
 /// en L0 (`progress.reschedule`).
 const J6_ENTRIES: [(&str, &str, Kind); 6] = [
@@ -68,7 +74,8 @@ fn contract_compiles() {
     let before = s.project().clone();
     let generation = s.generation();
 
-    // Commandes nouvelles : lues, relues à l'identique, refusées sans effet.
+    // Commandes nouvelles : lues, relues à l'identique, exécutées (lot L6)
+    // en simulation, sans effet sur la session.
     let ops = [
         json!({"op": "progress.update", "task": 1, "percent_complete": {"value": 4_000},
                "actual_start": "2026-10-19T08:00", "remaining_duration": {"text": "1j"},
@@ -85,9 +92,8 @@ fn contract_compiles() {
         let again: Batch = serde_json::from_value(serde_json::to_value(&batch).unwrap()).unwrap();
         assert_eq!(again, batch, "aller-retour {i}");
         assert_eq!(batch.ops[0].id(), op["op"].as_str().unwrap());
-        let err = s.apply(&batch, ApplyMode::Commit).unwrap_err();
-        assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{i}");
-        assert_eq!(err.op_index, Some(0), "{i}");
+        // `baseline.set` (i ≥ 4) : squelette jusqu'au commit suivant du lot.
+        assert_eq!(not_yet(&mut s, &batch), i >= 4, "{i}");
     }
     let batch = Batch::from_json(json!({ "format_version": 1, "ops": [ops[5]] })).unwrap();
     let Command::BaselineSet(set) = &batch.ops[0] else {

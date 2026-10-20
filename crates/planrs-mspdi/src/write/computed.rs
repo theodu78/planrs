@@ -218,33 +218,68 @@ fn from_task_schedule(s: &TaskSchedule, scale: Option<TimeScale<'_>>, summary: b
 }
 
 /// R-215 : avancement écrit d'une tâche planifiée par le moteur, `Stop` et
-/// `Resume` ; rien sans avancement calculé (tâche non commencée,
-/// récapitulative sans feuille commencée) : le modèle est alors écrit.
-/// Feuille : % achevé dérivé (R-200), durée réelle effective, début réel
-/// (implicite compris, R-200) et fin réelle du moteur, reprise du moteur
-/// pour une feuille en cours (relue dans `Progress::resume`, R-214) ; les
-/// restes en sont dérivés à l'écriture (R-127). Récapitulative et UID 0 :
-/// %, % travail, début et fin réels, durée réelle et reste de R-210.
+/// `Resume` ; rien sans avancement calculé pour une feuille (tâche non
+/// commencée) : le modèle est alors écrit. Feuille : % achevé dérivé
+/// (R-200), durée réelle effective, début réel (implicite compris, R-200) et
+/// fin réelle du moteur ; feuille en cours : reprise saisie seulement (la
+/// reprise relue est une reprise saisie, R-214 ; J6-F1) ; les restes en sont dérivés à
+/// l'écriture (R-127). Récapitulative et UID 0 : %, % travail, début et fin
+/// réels, durée réelle et reste de R-210, travail réel (Σ du périmètre de
+/// R-184) et travail restant = travail calculé − travail réel (relecture
+/// finale J6, J6-F2) ; sans feuille commencée : % de R-055, aucun réel
+/// (dates, durée, travail, % travail), reste de durée = durée calculée,
+/// travail restant = travail calculé.
 pub(crate) fn progress_values(
     t: &Task,
     s: &TaskSchedule,
 ) -> (Option<Progress>, Option<Moment>, Option<Moment>) {
+    let summary = s.role == TaskRole::Summary;
     let Some(ps) = s.progress else {
-        return (None, None, None);
+        if !summary {
+            return (None, None, None);
+        }
+        let mut p = t.progress;
+        p.percent_complete = s.percent_complete;
+        p.percent_work_complete = planrs_core::Percent::ZERO;
+        p.actual_start = None;
+        p.actual_finish = None;
+        p.actual_duration = Minutes::ZERO;
+        p.actual_work = Work::ZERO;
+        p.remaining_duration = s.duration.max(Minutes::ZERO);
+        p.remaining_work = s.work;
+        p.resume = None;
+        return (Some(p), None, None);
     };
     let mut p = t.progress;
     p.percent_complete = ps.percent_complete;
     p.actual_start = Some(ps.actual_start);
     p.actual_finish = ps.actual_finish;
     p.actual_duration = ps.actual_duration;
-    if s.role == TaskRole::Summary {
+    if summary {
         p.percent_work_complete = ps.percent_work_complete;
         p.remaining_duration = ps.remaining_duration;
+        p.actual_work = ps.actual_work;
+        let rest = s
+            .work
+            .minutes()
+            .get()
+            .saturating_sub(ps.actual_work.minutes().get())
+            .max(0);
+        p.remaining_work = Work::new(Minutes::new(rest)).unwrap_or(Work::ZERO);
         p.resume = None;
-    } else {
-        p.resume = (ps.state == ProgressState::Started).then_some(ps.resume);
+    } else if ps.state != ProgressState::Started {
+        p.resume = None;
     }
-    (Some(p), Some(ps.stop), Some(ps.resume))
+    // Relecture finale J6 (J6-F1) : `Resume` d'une feuille en cours est relu
+    // comme reprise saisie (R-214), plancher du moteur ; la reprise calculée
+    // (tirée d'un lien, d'une porte…) n'est donc jamais écrite : seule la
+    // reprise saisie l'est, telle quelle, et l'aller-retour garde le modèle.
+    let resume = if !summary && ps.state == ProgressState::Started {
+        p.resume
+    } else {
+        Some(ps.resume)
+    };
+    (Some(p), Some(ps.stop), resume)
 }
 
 /// Applique [`progress_values`] aux valeurs d'une tâche.

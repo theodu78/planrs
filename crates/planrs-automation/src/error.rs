@@ -99,6 +99,9 @@ pub mod codes {
     pub const PROGRESS_INACTIVE: &str = "progress.inactive";
     /// Fin réelle avant le début réel (J6, R-202).
     pub const PROGRESS_INVALID_ORDER: &str = "progress.invalid_order";
+    /// Durée saisie sous la durée réelle (J6, R-213, arbitrage du
+    /// 2026-10-20).
+    pub const PROGRESS_DURATION_BELOW_ACTUAL: &str = "progress.duration_below_actual";
     /// Ligne de base déjà présente, sans `overwrite` (J6, R-223, R-227).
     pub const BASELINE_EXISTS: &str = "baseline.exists";
     /// Cumul d'une ligne de base sans sélection de tâches (J6, R-222).
@@ -208,6 +211,13 @@ pub enum CommandErrorKind {
     ProgressInactive,
     /// Fin réelle avant le début réel (J6).
     ProgressInvalidOrder,
+    /// Durée saisie sous la durée réelle (J6, R-213).
+    DurationBelowActual {
+        /// Durée réelle stockée, minutes ouvrées.
+        actual: i64,
+        /// Durée saisie, minutes ouvrées.
+        entered: i64,
+    },
     /// Ligne de base déjà présente (J6).
     BaselineExists {
         /// Numéro de la ligne.
@@ -542,6 +552,17 @@ fn kind_message(kind: &CommandErrorKind, lang: Language) -> String {
                 "la fin réelle précède le début réel".to_owned()
             } else {
                 "the actual finish is before the actual start".to_owned()
+            }
+        }
+        K::DurationBelowActual { actual, entered } => {
+            if fr {
+                format!(
+                    "durée de {entered} min inférieure à la durée réelle déjà saisie ({actual} min) : réduire d'abord l'avancement (progress.update)"
+                )
+            } else {
+                format!(
+                    "duration of {entered} min is less than the actual duration already entered ({actual} min): reduce the progress first (progress.update)"
+                )
             }
         }
         K::BaselineExists { number, count } => {

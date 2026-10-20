@@ -98,7 +98,8 @@ pub(super) fn set(op: &BaselineSet, ctx: &mut Ctx<'_>) -> Result<(), CommandErro
         rollup: op.rollup.unwrap_or_default().into(),
         overwrite: op.overwrite,
     };
-    let edit = baseline::capture(ctx.project, &ctx.current_schedule(), &spec).map_err(capture_error)?;
+    ctx.ensure_schedule()?;
+    let edit = baseline::capture(ctx.project, ctx.schedule(), &spec).map_err(capture_error)?;
     let effect = SideEffect::BaselineSet {
         number: number.get(),
         tasks: count(edit.tasks.len()),

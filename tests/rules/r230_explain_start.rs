@@ -251,6 +251,100 @@ fn r230_actual_and_resume() {
             link: LinkType::FinishToFinish,
         })
     );
+    // Relecture finale J6 (J6-EXPLAIN-1) : toutes les bornes du réseau
+    // (R-205). P 2 j lun-mar FS → récapitulative S, T dans S commencée lun
+    // 08:00 à 3 333 : la porte de S (fin de P, mar 17:00) cale la reprise
+    // mer 08:00.
+    let in_summary = || {
+        Net::new("2026-10-19T08:00")
+            .task("P", 960)
+            .task("S", 0)
+            .task("T", 1_440)
+            .level("T", 2)
+            .fs("P", "S")
+            .with_task("T", |t| {
+                t.progress.actual_start = Some(moment("2026-10-19T08:00"));
+                t.progress.percent_complete = planrs_core::Percent::new(3_333).unwrap();
+            })
+    };
+    let (p, s, [sum, t]) = plan(in_summary(), ["S", "T"]);
+    let x = explain(&p, &s, t, Side::Start, 5).unwrap();
+    assert_eq!(
+        x.steps.last(),
+        Some(&Step::Resume {
+            stop: moment("2026-10-19T17:00"),
+            resume: moment("2026-10-21T08:00"),
+            cause: ResumeCause::SummaryGate { summary: sum },
+        })
+    );
+    // Un lien propre de T à égalité avec la porte : la porte, premier terme
+    // du moteur, est gardée.
+    let (p, s, [sum, t]) = plan(in_summary().task("Q", 960).fs("Q", "T"), ["S", "T"]);
+    let x = explain(&p, &s, t, Side::Start, 5).unwrap();
+    assert_eq!(resume_cause(&x), Some(ResumeCause::SummaryGate { summary: sum }));
+    // Porte d'un ancêtre : S0 ⊃ S ⊃ T, lien FS P → S0 ; la cause cite la
+    // récapitulative parente S, par laquelle passe la borne.
+    let (p, s, [sum, t]) = plan(
+        Net::new("2026-10-19T08:00")
+            .task("P", 960)
+            .task("S0", 0)
+            .task("S", 0)
+            .level("S", 2)
+            .task("T", 1_440)
+            .level("T", 3)
+            .fs("P", "S0")
+            .with_task("T", |t| {
+                t.progress.actual_start = Some(moment("2026-10-19T08:00"));
+                t.progress.percent_complete = planrs_core::Percent::new(3_333).unwrap();
+            }),
+        ["S", "T"],
+    );
+    let x = explain(&p, &s, t, Side::Start, 5).unwrap();
+    assert_eq!(resume_cause(&x), Some(ResumeCause::SummaryGate { summary: sum }));
+    assert_eq!(
+        s.scheduled(t).and_then(|g| g.progress).map(|g| g.resume),
+        Some(moment("2026-10-21T08:00"))
+    );
+    // FF P 5 j → récapitulative S, déplié sur T (R-058) : reprise jeu
+    // 08:00, causée par le lien.
+    let (p, s, [pp, t]) = plan(
+        Net::new("2026-10-19T08:00")
+            .task("P", 2_400)
+            .task("S", 0)
+            .task("T", 1_440)
+            .level("T", 2)
+            .link("P", "S", LinkType::FinishToFinish, planrs_core::Lag::ZERO)
+            .with_task("T", |t| {
+                t.progress.actual_start = Some(moment("2026-10-19T08:00"));
+                t.progress.percent_complete = planrs_core::Percent::new(3_333).unwrap();
+            }),
+        ["P", "T"],
+    );
+    let x = explain(&p, &s, t, Side::Start, 5).unwrap();
+    assert_eq!(
+        resume_cause(&x),
+        Some(ResumeCause::Link {
+            predecessor: pp,
+            link: LinkType::FinishToFinish,
+        })
+    );
+    // Début du projet mar 13:00, après `Stop` (lun 17:00) : il cale la
+    // reprise.
+    let (p, s, [t]) = plan(
+        started(3_333).project(|p| {
+            p.anchor = planrs_core::ScheduleAnchor::FromStart(moment("2026-10-20T13:00"));
+        }),
+        ["T"],
+    );
+    let x = explain(&p, &s, t, Side::Start, 5).unwrap();
+    assert_eq!(
+        x.steps.last(),
+        Some(&Step::Resume {
+            stop: moment("2026-10-19T17:00"),
+            resume: moment("2026-10-20T13:00"),
+            cause: ResumeCause::ProjectStart,
+        })
+    );
 }
 
 #[test]

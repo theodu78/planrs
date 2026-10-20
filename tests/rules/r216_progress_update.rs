@@ -264,3 +264,49 @@ fn r216_milestone_rounded_warning() {
 fn work(m: i64) -> Work {
     Work::new(Minutes::new(m)).unwrap()
 }
+
+/// Relecture finale J6 (J6-PERF-2) : le planning du clone est recalculé une
+/// fois par état du clone (une suite d'opérations qui lisent sans écrire
+/// réutilise le dernier recalcul), et le travail de recalcul d'un lot est
+/// borné (`SessionLimits::max_batch_schedule_work`) : au-delà,
+/// `limit.exceeded`, session intacte.
+#[test]
+fn r216_batch_schedule_recomputes_cached_and_bounded() {
+    use planrs_automation::SessionLimits;
+    let mut s = chain();
+    // Avancement de B mis sous sa forme écrite (restes dérivés) : la même
+    // saisie ne le change plus.
+    apply(
+        &mut s,
+        json!([{ "op": "progress.update", "task": 2, "physical_percent_complete": { "value": 0 } }]),
+    );
+    // Budget d'un seul recalcul (2 tâches).
+    s.set_limits(SessionLimits {
+        max_batch_schedule_work: 2,
+        ..SessionLimits::default()
+    });
+    // Op 0 écrit ; ops 1 et 2 lisent le même clone (% physique inchangé) :
+    // un seul recalcul.
+    apply(
+        &mut s,
+        json!([
+            { "op": "task.update", "uid": 1, "name": "A'" },
+            { "op": "progress.update", "task": 2, "physical_percent_complete": { "value": 0 } },
+            { "op": "progress.update", "task": 2, "physical_percent_complete": { "value": 0 } }
+        ]),
+    );
+    // Deux saisies qui écrivent après une écriture : deux recalculs, refusé.
+    let before = s.project().clone();
+    let err = try_apply(
+        &mut s,
+        json!([
+            { "op": "task.update", "uid": 1, "name": "A" },
+            { "op": "progress.update", "task": 1, "percent_complete": { "text": "50%" } },
+            { "op": "progress.update", "task": 2, "percent_complete": { "text": "10%" } }
+        ]),
+    )
+    .unwrap_err();
+    assert_eq!(err.code, codes::LIMIT_EXCEEDED);
+    assert_eq!(err.op_index, Some(2));
+    assert_eq!(s.project(), &before);
+}

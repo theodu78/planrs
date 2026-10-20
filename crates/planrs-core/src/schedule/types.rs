@@ -195,6 +195,11 @@ pub struct ProgressSchedule {
     pub percent_complete: Percent,
     /// % travail achevé (R-211, R-210), 1/10 000.
     pub percent_work_complete: Percent,
+    /// Travail réel (R-210) : Σ travail réel des affectations de travail du
+    /// périmètre de R-184 (feuille : ses propres affectations) ; relecture
+    /// finale J6, J6-F2 : écrit `ActualWork` d'une récapitulative.
+    #[serde(default, skip_serializing_if = "is_zero_work")]
+    pub actual_work: Work,
 }
 
 /// Vrai pour un travail nul (champ omis du JSON).

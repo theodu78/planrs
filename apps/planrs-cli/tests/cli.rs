@@ -671,3 +671,23 @@ fn cli_usage_by_week() {
     let o = run(&["--now", NOW, "usage", s(&plan), "--by", "year"]);
     assert_eq!(code(&o), 2);
 }
+
+/// Aide de `planrs tasks --late` alignée sur R-236 (arbitrage du
+/// 2026-10-20) : les quatre critères et la date d'état effective.
+#[test]
+fn cli_tasks_late_help_follows_r236() {
+    let o = run(&["tasks", "--help"]);
+    assert_eq!(code(&o), 0);
+    let text = String::from_utf8_lossy(&o.stdout)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    for part in [
+        "fin planifiée après l'échéance ou après la fin de la ligne de base 0",
+        "non achevée avec une fin planifiée au plus tard à la date d'état",
+        "non commencée avec un début planifié avant la date d'état",
+        "Date d'état : celle du projet, sinon la date du jour",
+    ] {
+        assert!(text.contains(part), "« {part} » absent de : {text}");
+    }
+}

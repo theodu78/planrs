@@ -491,6 +491,7 @@ impl Calc<'_, '_> {
     ) -> Option<ProgressSchedule> {
         let f = progress::facts(task);
         let percent_work_complete = ratio(work.1, work.0);
+        let actual_work = work_of(work.1);
         match f.state {
             ProgressState::NotStarted => None,
             ProgressState::Complete => Some(ProgressSchedule {
@@ -503,6 +504,7 @@ impl Calc<'_, '_> {
                 remaining_duration: Minutes::ZERO,
                 percent_complete: Percent::FULL,
                 percent_work_complete,
+                actual_work,
             }),
             ProgressState::Started => {
                 if let Some(run) = run.filter(|_| node.in_progress().is_some()) {
@@ -516,6 +518,7 @@ impl Calc<'_, '_> {
                         remaining_duration: progress::remaining_duration(task),
                         percent_complete: progress::percent_of_duration(task),
                         percent_work_complete,
+                        actual_work,
                     });
                 }
                 let actual_start = f.actual_start.unwrap_or(ts.early.start);
@@ -542,6 +545,7 @@ impl Calc<'_, '_> {
                     remaining_duration: progress::remaining_duration(task),
                     percent_complete: progress::percent_of_duration(task),
                     percent_work_complete,
+                    actual_work,
                 })
             }
         }
@@ -827,5 +831,15 @@ fn summary_progress(ts: &TaskSchedule, agg: &Agg, manual: Option<Minutes>) -> Op
         remaining_duration: Minutes::new(dm.get().saturating_sub(actual).max(0)),
         percent_complete: ts.percent_complete,
         percent_work_complete: ratio(agg.actual_work, agg.work),
+        actual_work: work_of(agg.actual_work),
     })
+}
+
+/// Travail en minutes `i128` (somme saturée) en [`Work`], borné au domaine
+/// (règle 10 : jamais de panique, un travail hors domaine est ramené à 0).
+fn work_of(minutes: i128) -> Work {
+    i64::try_from(minutes.max(0))
+        .ok()
+        .and_then(|m| Work::new(Minutes::new(m)).ok())
+        .unwrap_or(Work::ZERO)
 }

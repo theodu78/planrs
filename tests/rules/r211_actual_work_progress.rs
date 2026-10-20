@@ -28,14 +28,31 @@ fn r211_prorata_and_largest_remainder() {
     assert_eq!(e.progress.remaining_work, work(720));
 
     // Travail réel 540 sur la tâche : 540 × 960 / 1 440 = 360, 540 × 480 /
-    // 1 440 = 180 ; la durée n'avance pas (commencée à 0 %, début réel
-    // implicite lun 08:00).
+    // 1 440 = 180 ; R-211 amendée (2026-10-20) : saisi seul, il fixe la
+    // durée réelle = 960 × 540 / 1 440 = 360 (% 3 750), début réel
+    // implicite lun 08:00.
     let e = apply(&task(960), &parts, &[Input::ActualWork(work(540))], &c).unwrap();
     assert_eq!(e.parts[0].actual_work, work(360));
     assert_eq!(e.parts[1].actual_work, work(180));
     assert_eq!(e.progress.percent_work_complete, pct(3_750));
-    assert_eq!(e.progress.percent_complete, Percent::ZERO);
+    assert_eq!(e.progress.actual_duration, planrs_core::Minutes::new(360));
+    assert_eq!(e.progress.percent_complete, pct(3_750));
     assert_eq!(e.progress.actual_start, Some(at(MON)));
+    // % travail 25 % saisi seul : AW 240 et 120, durée réelle 240.
+    let e = apply(&task(960), &parts, &[Input::PercentWork(pct(2_500))], &c).unwrap();
+    assert_eq!(e.progress.actual_duration, planrs_core::Minutes::new(240));
+    // Avec un champ de durée, la durée réelle saisie l'emporte.
+    let e = apply(
+        &task(960),
+        &parts,
+        &[
+            Input::ActualWork(work(540)),
+            Input::ActualDuration(planrs_core::Minutes::new(480)),
+        ],
+        &c,
+    )
+    .unwrap();
+    assert_eq!(e.progress.actual_duration, planrs_core::Minutes::new(480));
 
     // 7 min sur trois W égaux : 2 chacune, la minute restante au plus petit
     // UID ⇒ 3, 2, 2.
@@ -91,4 +108,39 @@ fn r211_remaining_work_changes_work() {
     assert_eq!(q.actual_work, work(480));
     a.work = q.work;
     assert_eq!(remaining_work(&a), work(720));
+}
+
+/// R-211 amendée (arbitrage du 2026-10-20), cas relevé par le lot L10 : T 3
+/// j, R 100 % (W 24 h), travail réel 16 h saisi seul ⇒ durée réelle 2 j,
+/// `Stop` mar 17:00, reprise mer 08:00, fin mer 17:00 (D = 3 j) ; la partie
+/// réelle de l'affectation (16 h, lun – mar) finit à `Stop` et son reste
+/// (8 h) part de la reprise, sans chevauchement.
+#[test]
+fn r211_actual_work_alone_sets_actual_duration() {
+    use planrs_tests::resource_edit::with_tasks;
+    use planrs_tests::task_edit::apply as apply_ops;
+    use serde_json::json;
+
+    let mut s = with_tasks(&[("T", "3j")]);
+    apply_ops(
+        &mut s,
+        json!([
+            { "op": "resource.add", "name": "R" },
+            { "op": "assignment.add", "task": 1, "resource": 1 },
+            { "op": "progress.update", "task": 1, "actual_work": { "text": "16h" } }
+        ]),
+    );
+    let t = s.project().tasks.get(TaskUid::new(1)).unwrap();
+    assert_eq!(t.progress.actual_duration, planrs_core::Minutes::new(960));
+    let Some(planrs_core::TaskOutcome::Scheduled(ts)) = s.schedule().get(TaskUid::new(1)) else {
+        panic!("T non planifiée");
+    };
+    let g = ts.progress.unwrap();
+    assert_eq!(g.stop, crate::r201_percent_input::at("2026-10-20T17:00"));
+    assert_eq!(g.resume, crate::r201_percent_input::at("2026-10-21T08:00"));
+    assert_eq!(ts.finish, crate::r201_percent_input::at("2026-10-21T17:00"));
+    let a = s.schedule().assignments.values().next().unwrap();
+    let actual = a.actual.unwrap();
+    assert_eq!(actual.finish, g.stop);
+    assert_eq!(a.remaining_start, Some(g.resume));
 }

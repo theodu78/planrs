@@ -143,4 +143,4 @@
 {"v":1,"seq":72,"tool":"render_gantt","params":{}}
 {"v":1,"seq":72,"tool":"render_gantt","params":null,"result":{"ok":{"bytes":13028,"hidden":0,"shown":30,"truncated_bytes":false,"truncated_days":false}}}
 {"v":1,"seq":73,"tool":"save_project","params":{"path":"$TMP/build_30.xml"}}
-{"v":1,"seq":73,"tool":"save_project","params":null,"result":{"ok":{"bytes":58188,"diagnostics":[],"dirty":false,"path":"$TMP/build_30.xml"}}}
+{"v":1,"seq":73,"tool":"save_project","params":null,"result":{"ok":{"bytes":58195,"diagnostics":[],"dirty":false,"path":"$TMP/build_30.xml"}}}

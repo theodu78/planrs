@@ -7,6 +7,6 @@
 {"v":1,"seq":4,"tool":"project_summary","params":{}}
 {"v":1,"seq":4,"tool":"project_summary","params":null,"result":{"ok":{"critical":21,"dirty":true,"duration":{"minutes":44640,"text":"93j","unit":"day"},"errors":0,"finish":"2027-03-10T17:00","history_len":1,"links":40,"milestones":4,"name":"Rénovation maison","path":null,"start":"2026-11-02T08:00","status_date":"2026-10-19T08:00","summaries":5,"tasks":35,"warnings":0}}}
 {"v":1,"seq":5,"tool":"save_project","params":{"path":"$TMP/renovation-maison.xml"}}
-{"v":1,"seq":5,"tool":"save_project","params":null,"result":{"ok":{"bytes":68738,"diagnostics":[],"dirty":false,"path":"$TMP/renovation-maison.xml"}}}
+{"v":1,"seq":5,"tool":"save_project","params":null,"result":{"ok":{"bytes":68746,"diagnostics":[],"dirty":false,"path":"$TMP/renovation-maison.xml"}}}
 {"v":1,"seq":6,"tool":"render_gantt","params":{"max_rows":40,"zoom":"week"}}
 {"v":1,"seq":6,"tool":"render_gantt","params":null,"result":{"ok":{"bytes":18966,"hidden":0,"shown":35,"truncated_bytes":false,"truncated_days":false}}}

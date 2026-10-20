@@ -71,6 +71,23 @@ pub const MAX_TASK_RESOURCES: usize = 100;
 /// (1 000 × 1 000, R-188).
 pub const MAX_USAGE_CELLS: usize = 20_000;
 
+/// Champs d'une tâche repris par une ligne de `baseline_variance`
+/// ([`ViewCtx::task_brief`]), mêmes valeurs que [`TaskView`].
+pub(crate) struct TaskBrief {
+    /// ID (position).
+    pub id: u32,
+    /// Nom.
+    pub name: String,
+    /// Début planifié.
+    pub start: Option<String>,
+    /// Fin planifiée.
+    pub finish: Option<String>,
+    /// Durée.
+    pub duration: DurationJson,
+    /// Travail calculé, absent quand nul.
+    pub work: Option<DurationJson>,
+}
+
 /// Tâche, telle que le moteur l'a planifiée.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct TaskView {
@@ -990,6 +1007,27 @@ impl<'a> ViewCtx<'a> {
                     state: g.state,
                     percent: percent_out(g.percent_complete, &self.text),
                 }),
+        }
+    }
+
+    /// Champs de [`Self::task_at`] lus par `baseline_variance` (ID, nom,
+    /// dates, durée, travail), sans les liens, ressources ni diagnostics
+    /// (relecture finale J6, J6-PERF-3).
+    pub(crate) fn task_brief(&self, pos: usize, task: &Task) -> TaskBrief {
+        let scheduled = self.schedule.scheduled(task.uid());
+        TaskBrief {
+            id: pos
+                .checked_add(1)
+                .and_then(|n| u32::try_from(n).ok())
+                .unwrap_or(u32::MAX),
+            name: task.name.clone(),
+            start: scheduled.map(|s| iso(s.start)),
+            finish: scheduled.map(|s| iso(s.finish)),
+            duration: self.duration(task, scheduled),
+            work: scheduled
+                .map(|s| s.work)
+                .filter(|w| *w != Work::ZERO)
+                .map(|w| work_out(w, &self.text)),
         }
     }
 

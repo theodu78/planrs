@@ -225,6 +225,13 @@ pub enum LateDriverView {
 pub enum ResumeCauseView {
     /// Instant ouvré suivant la partie réelle.
     NextWorking,
+    /// Début du projet.
+    ProjectStart,
+    /// Borne de la récapitulative parente.
+    SummaryGate {
+        /// Récapitulative (UID).
+        summary: u32,
+    },
     /// Lien.
     Link {
         /// Prédécesseur (UID).
@@ -506,6 +513,10 @@ fn late_driver_view(d: LateDriver) -> LateDriverView {
 fn cause_view(c: ResumeCause) -> ResumeCauseView {
     match c {
         ResumeCause::NextWorking => ResumeCauseView::NextWorking,
+        ResumeCause::ProjectStart => ResumeCauseView::ProjectStart,
+        ResumeCause::SummaryGate { summary } => ResumeCauseView::SummaryGate {
+            summary: summary.get(),
+        },
         ResumeCause::Link { predecessor, link } => ResumeCauseView::Link {
             predecessor: predecessor.get(),
             link: link_json(link),
@@ -725,6 +736,15 @@ impl Writer<'_> {
             ResumeCause::NextWorking => self
                 .tr("premier instant ouvré suivant", "next working time")
                 .to_owned(),
+            ResumeCause::ProjectStart => self.tr("début du projet", "project start").to_owned(),
+            ResumeCause::SummaryGate { summary } => {
+                let n = self.name(summary);
+                if self.fr() {
+                    format!("borne de la récapitulative {n}")
+                } else {
+                    format!("bound of summary task {n}")
+                }
+            }
             ResumeCause::Link { predecessor, link } => {
                 let (head, _) = self.anchor(predecessor, link);
                 let code = Self::link_code(link);

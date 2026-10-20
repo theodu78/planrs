@@ -305,6 +305,39 @@ fn check_computed(op: &TaskUpdate, uid: TaskUid, summary: bool, manual: bool) ->
     Ok(())
 }
 
+/// Durée saisie par `task.update` (R-157) ; R-213 (arbitrage du
+/// 2026-10-20) : une durée sous la durée réelle stockée de `uid`
+/// laisserait un avancement incohérent (réel > D) : refusée,
+/// `progress.duration_below_actual`.
+fn entered_duration(
+    op: &TaskUpdate,
+    ctx: &Ctx<'_>,
+    uid: TaskUid,
+) -> Result<Option<planrs_core::Duration>, CommandError> {
+    let d = match &op.duration {
+        Patch::Keep => return Ok(None),
+        Patch::Set(d) => ctx.duration(d, "duration")?,
+        Patch::Clear => return Err(invalid("duration", "durée attendue (la durée ne s'efface pas)")),
+    };
+    let actual = ctx
+        .project
+        .tasks
+        .get(uid)
+        .map_or(planrs_core::Minutes::ZERO, |t| t.progress.actual_duration);
+    if actual > planrs_core::Minutes::ZERO && d.minutes() < actual {
+        return Err(CommandError::new(
+            codes::PROGRESS_DURATION_BELOW_ACTUAL,
+            CommandErrorKind::DurationBelowActual {
+                actual: actual.get(),
+                entered: d.minutes().get(),
+            },
+        )
+        .with_field("duration")
+        .with_subject(Subject::Task(uid)));
+    }
+    Ok(Some(d))
+}
+
 /// R-157, R-158, R-161 : `task.update`.
 pub(super) fn update(op: &TaskUpdate, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
     let uid = ctx.task(&op.uid, "uid")?;
@@ -325,11 +358,7 @@ pub(super) fn update(op: &TaskUpdate, ctx: &mut Ctx<'_>) -> Result<(), CommandEr
         return Err(invalid("active", "booléen attendu"));
     }
     check_computed(op, uid, summary, manual)?;
-    let duration = match &op.duration {
-        Patch::Keep => None,
-        Patch::Set(d) => Some(ctx.duration(d, "duration")?),
-        Patch::Clear => return Err(invalid("duration", "durée attendue (la durée ne s'efface pas)")),
-    };
+    let duration = entered_duration(op, ctx, uid)?;
     let entered = entered_date(&op.start, &op.finish)?;
     let balance = j5_balance(
         op,

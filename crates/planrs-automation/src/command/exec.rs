@@ -4,13 +4,13 @@
 //! `Session::apply` exécute chaque opération sur un clone du projet ; une
 //! erreur interrompt le lot, l'état de la session reste intact.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use planrs_core::{Diagnostic, Project, ResourceUid, Schedule, Subject, TaskUid};
+use planrs_core::calendar::{Calendar, CalendarSet};
+use planrs_core::{Arena, CalendarUid, Diagnostic, Project, ResourceUid, Schedule, Subject, TaskUid};
 
 use super::{Command, assignment, baseline, calendar, constraint, link, progress, project, resource, task};
-use crate::error::CommandError;
+use crate::error::{CommandError, CommandErrorKind, codes};
 use crate::outcome::SideEffect;
 use crate::text::TextContext;
 use crate::uid::UidAlloc;
@@ -49,20 +49,124 @@ pub(crate) struct Ctx<'a> {
     /// `baseline.cost_not_computed`, `baseline.task_skipped`), rendus avec
     /// ceux du delta de R-160.
     pub notes: &'a mut Vec<Diagnostic>,
+    /// Planning et calendriers mémorisés du lot (relecture finale J6,
+    /// J6-PERF-2).
+    pub cache: &'a mut BatchCache,
+}
+
+/// Travail de recalcul permis dans un lot (relecture finale J6,
+/// J6-PERF-2) : chaque recalcul du planning du clone coûte son nombre de
+/// tâches et d'affectations (au moins 1) ; au-delà, `limit.exceeded`
+/// (`what` = `schedule_recomputes`). 1 000 000 : 200 recalculs
+/// d'un projet de 5 000 tâches (environ 4 s sur serveurdvp), 10 d'un projet de
+/// 100 000 ; un petit projet n'est pas limité en pratique (10 000
+/// opérations au plus par lot).
+pub(crate) const MAX_BATCH_SCHEDULE_WORK: u64 = 1_000_000;
+
+/// Mémoire d'un lot (J6-PERF-2) : le dernier planning recalculé du clone,
+/// gardé tant que le clone ne change pas (une suite d'opérations qui lisent
+/// sans écrire ne recalcule qu'une fois), et les calendriers compilés,
+/// gardés tant que les calendriers du projet ne changent pas.
+#[derive(Debug)]
+pub(crate) struct BatchCache {
+    /// Travail de recalcul permis (`SessionLimits::max_batch_schedule_work`).
+    budget: u64,
+    /// Projet et planning du dernier recalcul.
+    last: Option<(Project, Schedule)>,
+    /// Le planning courant est `last` (et non celui de la session).
+    fresh: bool,
+    /// Travail de recalcul consommé.
+    spent: u64,
+    /// Calendriers (et calendrier du projet) et leur compilation.
+    calendars: Option<(Arena<CalendarUid, Calendar>, CalendarUid, CalendarSet)>,
+}
+
+impl BatchCache {
+    /// Mémoire vide d'un lot, `budget` de travail de recalcul.
+    pub(crate) const fn new(budget: u64) -> Self {
+        Self {
+            budget,
+            last: None,
+            fresh: false,
+            spent: 0,
+            calendars: None,
+        }
+    }
 }
 
 impl Ctx<'_> {
-    /// Planning courant du clone (J6, R-216, R-217, R-227) : celui de la
-    /// session tant que le lot n'a rien changé, sinon recalculé (comme le
-    /// correctif J5 (4) pour la durée d'une récapitulative). Le recalcul ne
-    /// synchronise pas les durées des feuilles affectées : les dates sont
-    /// celles du planning final du lot (R-173 amendée).
-    pub(crate) fn current_schedule(&self) -> Cow<'_, Schedule> {
+    /// Rend à jour le planning courant du clone (J6, R-216, R-217, R-227) :
+    /// celui de la session tant que le lot n'a rien changé, sinon le dernier
+    /// recalcul s'il a été fait sur le même clone, sinon un recalcul (comme
+    /// le correctif J5 (4) pour la durée d'une récapitulative). Le recalcul
+    /// ne synchronise pas les durées des feuilles affectées : les dates sont
+    /// celles du planning final du lot (R-173 amendée). Lire ensuite par
+    /// [`Ctx::schedule`].
+    ///
+    /// # Errors
+    ///
+    /// `limit.exceeded` (`schedule_recomputes`) au-delà du budget du lot
+    /// (`SessionLimits::max_batch_schedule_work`).
+    pub(crate) fn ensure_schedule(&mut self) -> Result<(), CommandError> {
         if *self.project == *self.base {
-            Cow::Borrowed(self.base_schedule)
-        } else {
-            Cow::Owned(planrs_core::schedule(self.project))
+            self.cache.fresh = false;
+            return Ok(());
         }
+        if self.cache.last.as_ref().is_some_and(|(p, _)| p == &*self.project) {
+            self.cache.fresh = true;
+            return Ok(());
+        }
+        let size = self
+            .project
+            .tasks
+            .len()
+            .saturating_add(self.project.assignments.len())
+            .max(1);
+        let cost = u64::try_from(size).unwrap_or(u64::MAX);
+        let spent = self.cache.spent.saturating_add(cost);
+        let budget = self.cache.budget;
+        if spent > budget {
+            return Err(CommandError::new(
+                codes::LIMIT_EXCEEDED,
+                CommandErrorKind::Limit {
+                    what: "schedule_recomputes",
+                    max: budget.checked_div(cost).unwrap_or(0),
+                },
+            ));
+        }
+        self.cache.spent = spent;
+        let s = planrs_core::schedule(self.project);
+        self.cache.last = Some((self.project.clone(), s));
+        self.cache.fresh = true;
+        Ok(())
+    }
+
+    /// Planning courant posé par le dernier [`Ctx::ensure_schedule`].
+    pub(crate) fn schedule(&self) -> &Schedule {
+        match &self.cache.last {
+            Some((_, s)) if self.cache.fresh => s,
+            _ => self.base_schedule,
+        }
+    }
+
+    /// Calendriers compilés du clone et le clone lui-même ; recompilés
+    /// seulement si ses calendriers (ou le calendrier du projet) ont changé
+    /// depuis la dernière compilation du lot.
+    pub(crate) fn calendar_set(&mut self) -> (&Project, &CalendarSet) {
+        let p = &*self.project;
+        let same = self
+            .cache
+            .calendars
+            .as_ref()
+            .is_some_and(|(c, uid, _)| *uid == p.calendar && *c == p.calendars);
+        if !same {
+            self.cache.calendars = None;
+        }
+        let entry = self.cache.calendars.get_or_insert_with(|| {
+            let (set, _) = CalendarSet::compile(p);
+            (p.calendars.clone(), p.calendar, set)
+        });
+        (p, &entry.2)
     }
 }
 

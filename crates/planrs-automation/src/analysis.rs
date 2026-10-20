@@ -374,7 +374,14 @@ pub fn baseline_variance(session: &Session, params: &VarianceParams) -> Result<V
     let all = planrs_core::baseline::variance(p, s, &set, number);
     let by_uid: BTreeMap<TaskUid, &planrs_core::baseline::TaskVariance> =
         all.tasks.iter().map(|v| (v.uid, v)).collect();
-    let mut rows: Vec<(Minutes, u32, VarianceRow)> = Vec::new();
+    // J6-PERF-3 : tri sur la clé seule (|écart de fin|, ID), pagination,
+    // puis vues des seules lignes de la page.
+    let mut keys: Vec<(
+        Minutes,
+        usize,
+        &planrs_core::Task,
+        &planrs_core::baseline::TaskVariance,
+    )> = Vec::new();
     for (pos, task) in ctx.rows() {
         let Some(v) = by_uid.get(&task.uid()) else {
             continue;
@@ -382,17 +389,43 @@ pub fn baseline_variance(session: &Session, params: &VarianceParams) -> Result<V
         if params.only_varied && (v.baseline.is_none() || !varied(&v.variance)) {
             continue;
         }
-        let view = ctx.task_at(pos, task);
         let key = if v.baseline.is_some() {
             v.variance.finish
         } else {
             Minutes::ZERO
         };
-        rows.push((
-            key,
-            view.id,
+        keys.push((key, pos, task, v));
+    }
+    keys.sort_by(|a, b| {
+        b.0.get()
+            .unsigned_abs()
+            .cmp(&a.0.get().unsigned_abs())
+            .then(a.1.cmp(&b.1))
+    });
+    let total = keys.len();
+    let skip = match params.cursor {
+        None => 0,
+        Some(c) => keys
+            .iter()
+            .position(|r| r.2.uid().get() == c)
+            .and_then(|i| i.checked_add(1))
+            .ok_or_else(|| {
+                CommandError::new(
+                    codes::TASK_NOT_FOUND,
+                    CommandErrorKind::UnknownTask(TaskUid::new(c)),
+                )
+                .with_field("cursor")
+            })?,
+    };
+    let rest = total.saturating_sub(skip);
+    let tasks: Vec<VarianceRow> = keys
+        .into_iter()
+        .skip(skip)
+        .take(page)
+        .map(|(_, pos, task, v)| {
+            let view = ctx.task_brief(pos, task);
             VarianceRow {
-                uid: view.uid,
+                uid: task.uid().get(),
                 id: Some(view.id),
                 name: view.name,
                 start: view.start,
@@ -405,32 +438,9 @@ pub fn baseline_variance(session: &Session, params: &VarianceParams) -> Result<V
                     .is_some()
                     .then(|| variance_out(&v.variance, unit, false, text)),
                 derived: false,
-            },
-        ));
-    }
-    rows.sort_by(|a, b| {
-        b.0.get()
-            .unsigned_abs()
-            .cmp(&a.0.get().unsigned_abs())
-            .then(a.1.cmp(&b.1))
-    });
-    let total = rows.len();
-    let skip = match params.cursor {
-        None => 0,
-        Some(c) => rows
-            .iter()
-            .position(|r| r.2.uid == c)
-            .and_then(|i| i.checked_add(1))
-            .ok_or_else(|| {
-                CommandError::new(
-                    codes::TASK_NOT_FOUND,
-                    CommandErrorKind::UnknownTask(TaskUid::new(c)),
-                )
-                .with_field("cursor")
-            })?,
-    };
-    let rest = total.saturating_sub(skip);
-    let tasks: Vec<VarianceRow> = rows.into_iter().skip(skip).take(page).map(|r| r.2).collect();
+            }
+        })
+        .collect();
     let next_cursor = if rest > tasks.len() {
         tasks.last().map(|r| r.uid)
     } else {

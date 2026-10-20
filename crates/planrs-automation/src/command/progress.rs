@@ -12,7 +12,7 @@
 
 use std::collections::BTreeSet;
 
-use planrs_core::calendar::{self, CalendarSet, CompiledCalendar, Span};
+use planrs_core::calendar::{self, CompiledCalendar, Span};
 use planrs_core::progress::edit::{self, EditError, EditNote, Input, Part, apply};
 use planrs_core::progress::facts;
 use planrs_core::resource::Edit;
@@ -172,12 +172,19 @@ fn edit_error(e: EditError, task: TaskUid) -> CommandError {
 
 /// Calendrier compilé qui mesure `task` (R-113, celui du moteur) ; repli
 /// sur le Standard intégré quand le calendrier du projet est inutilisable
-/// (R-066).
-fn measure_of(project: &Project, task: &Task) -> Result<CompiledCalendar, CommandError> {
-    let (set, _) = CalendarSet::compile(project);
-    if let Some(cal) = measure_calendar_in(project, &set, task).and_then(|uid| set.get(uid).ok()) {
-        return Ok(cal.clone());
+/// (R-066). Calendriers compilés une fois par lot tant qu'ils ne changent
+/// pas (J6-PERF-2).
+fn measure_of(ctx: &mut Ctx<'_>, task: &Task) -> Result<CompiledCalendar, CommandError> {
+    let found = {
+        let (project, set) = ctx.calendar_set();
+        measure_calendar_in(project, set, task)
+            .and_then(|uid| set.get(uid).ok())
+            .cloned()
+    };
+    if let Some(cal) = found {
+        return Ok(cal);
     }
+    let project = &*ctx.project;
     Arena::try_from(vec![calendar::standard(project.calendar, "Standard".to_owned())])
         .ok()
         .and_then(|arena| CompiledCalendar::compile(&arena, project.calendar).ok())
@@ -279,8 +286,9 @@ pub(super) fn update(op: &ProgressUpdate, ctx: &mut Ctx<'_>) -> Result<(), Comma
     let pos = tasks.position(uid).ok_or_else(|| not_found(uid))?;
     let summary = is_summary_at(tasks, pos);
     let task = tasks.at(pos).ok_or_else(|| not_found(uid))?.clone();
-    let measure = measure_of(ctx.project, &task)?;
-    let scheduled = scheduled_span(&ctx.current_schedule(), uid);
+    let measure = measure_of(ctx, &task)?;
+    ctx.ensure_schedule()?;
+    let scheduled = scheduled_span(ctx.schedule(), uid);
     let ectx = edit::Ctx {
         scheduled,
         measure: &measure,
@@ -420,7 +428,8 @@ pub(super) fn reschedule(op: &ProgressReschedule, ctx: &mut Ctx<'_>) -> Result<(
             Some(set)
         }
     };
-    let schedule = ctx.current_schedule().into_owned();
+    ctx.ensure_schedule()?;
+    let schedule = ctx.schedule();
     let tasks = &ctx.project.tasks;
     let mut moves = Vec::new();
     for (pos, t) in tasks.iter().enumerate() {

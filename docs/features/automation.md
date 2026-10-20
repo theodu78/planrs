@@ -20,7 +20,7 @@ Format versionné unique pour la CLI (`planrs apply`), le MCP (`apply_batch` et 
 
 ## 3. Pipeline d'un lot (ADR-0012 D2 à D4)
 
-1. Le lot s'applique à un **clone** du projet, commande par commande (validation de chaque commande, `op_index` de la première refusée) ; au plus 10 000 opérations.
+1. Le lot s'applique à un **clone** du projet, commande par commande (validation de chaque commande, `op_index` de la première refusée) ; au plus 10 000 opérations. Les commandes qui lisent le planning (`progress.*`, `baseline.set`) partagent le dernier recalcul du clone tant qu'il ne change pas ; le travail de recalcul d'un lot est borné (`SessionLimits::max_batch_schedule_work`, 1 000 000 tâches et affectations recalculées, `limit.exceeded` `schedule_recomputes`, R-216, ADR-0014 relecture finale (10)).
 2. **Un recalcul** (`planrs_core::schedule`) en fin de lot.
 3. **Refus sur nouvelle erreur** (R-160) : le lot est refusé (`batch.would_create_errors`, avec `op_index` et les diagnostics) si une erreur absente avant apparaît (comparée par code et sujet ; un `link.cycle` n'est nouveau que si sa composante n'était contenue dans aucune d'avant). Les avertissements sont rendus sans bloquer.
 4. `Commit` : échange du clone et du projet, **delta par entité** (pré- et post-images des seules entités changées, R-164) poussé dans l'historique, `Extras` des entités modifiées invalidés (R-161), valeurs relues du fichier jetées au premier commit (R-162). `DryRun` : clone jeté, session intacte, aucune entrée d'historique.

@@ -528,7 +528,8 @@ fn total(parts: &[Part], f: impl Fn(&Part) -> Work) -> Result<i64, EditError> {
 /// - R-211 : un % de durée saisi donne `AW_a = percent_of(W_a, p)` ; % travail
 ///   saisi : `AW_a = percent_of(W_a, p)` ; travail réel saisi : réparti au
 ///   prorata ; travail réel au-delà de W ⇒ W = AW ; travail achevé ⇒ tâche
-///   achevée (S52) ;
+///   achevée (S52) ; travail saisi sans champ de durée (tâche non achevée) ⇒
+///   durée réelle = `round_div(D × Σ AW, Σ W)` (amendement du 2026-10-20) ;
 /// - R-213 : récapitulative, inactive refusées ; jalon à un % entre 0 et
 ///   100 ⇒ 100 % (`MilestoneRounded`).
 ///
@@ -671,6 +672,20 @@ fn apply_work(
                 field,
                 e.duration_field().unwrap_or(ACTUAL_FINISH),
             ));
+        }
+        // R-211 amendée (arbitrage du 2026-10-20) : travail saisi seul sur
+        // une tâche affectée non achevée ⇒ durée réelle tirée du travail,
+        // `round_div(D × Σ AW, Σ W)` bornée à D − 1 : la partie réelle de
+        // chaque affectation (R-209, AW_a / U_a) finit au plus tard à `Stop`
+        // et son reste ne la chevauche plus.
+        if e.duration_field().is_none() && st.finish.is_none() && planned_work > 0 {
+            let d = i128::from(st.d.get());
+            let act = d
+                .checked_mul(i128::from(done_work))
+                .and_then(|x| round_div(x, i128::from(planned_work)))
+                .ok_or(EditError::Overflow)?;
+            let below = st.d.get().saturating_sub(1).max(0);
+            st.act = Minutes::new(act.clamp(0, below));
         }
         if done_work > 0 {
             calc.ensure_start(st);

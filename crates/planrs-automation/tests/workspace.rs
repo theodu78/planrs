@@ -573,7 +573,7 @@ fn workspace_render_gantt_bounded() {
 }
 
 /// Critère de fin L6 : `house.xml` ouvert, modifié, enregistré, relu :
-/// projets égaux par `normalize` (R-133).
+/// projets égaux par `normalize` (R-133) de l'image du moteur (R-215).
 #[test]
 fn workspace_open_save_reopen_equal() {
     let dir = TempDir::new("save");
@@ -605,7 +605,12 @@ fn workspace_open_save_reopen_equal() {
     assert!(saved["bytes"].as_u64().unwrap() > 0);
     let session = ws.session().unwrap();
     let options = planrs_mspdi::write::WriteOptions::default();
-    let expected = planrs_mspdi::normalize(session.project(), &options);
+    // Image écrite par le moteur (R-215 : restes et travail réel des
+    // récapitulatives calculés, relecture finale J6, J6-F2).
+    let expected = planrs_mspdi::normalize(
+        &planrs_mspdi::write::schedule_image(session.project(), session.schedule()),
+        &options,
+    );
 
     let mut again = Workspace::new(now(), Language::Fr);
     again

@@ -30,7 +30,9 @@ use crate::calendar::{Calendar, CalendarKind, CompiledCalendar, Span, TimeScale}
 use crate::diagnostic::{Diagnostic, Severity, Subject};
 use crate::duration::{LagValue, Minutes, TimeBasis, percent_of};
 use crate::ids::{AssignmentUid, CalendarUid, TaskUid};
-use crate::model::{ConstraintKind, LevelingDelay, Link, LinkType, Project, ScheduleAnchor, Task};
+use crate::model::{
+    ConstraintKind, LevelingDelay, Link, LinkType, Project, ScheduleAnchor, SchedulingMode, Task,
+};
 use crate::progress::ProgressState;
 use crate::time::Moment;
 
@@ -126,7 +128,16 @@ pub enum Step {
 pub enum ResumeCause {
     /// Premier instant ouvré après la fin de la partie réelle.
     NextWorking,
-    /// Lien depuis un prédécesseur.
+    /// Début du projet (relecture finale J6, J6-EXPLAIN-1).
+    ProjectStart,
+    /// Borne de la récapitulative parente (sa porte : liens FS/SS
+    /// entrants, SNET, porte de ses ancêtres), relecture finale J6.
+    SummaryGate {
+        /// Récapitulative parente.
+        summary: TaskUid,
+    },
+    /// Lien depuis un prédécesseur (propre, ou FF/SF vers une
+    /// récapitulative ancêtre déplié sur la feuille, R-058).
     Link {
         /// Prédécesseur.
         predecessor: TaskUid,
@@ -463,11 +474,15 @@ impl Ctx<'_> {
     }
 
     /// R-204, R-205 : cause de la reprise d'une feuille en cours. La
-    /// reprise est le premier instant de placement depuis
+    /// reprise est le premier instant de placement du reste depuis
     /// `max(Stop, reprise saisie, bornes, date SNET/MSO)` (bornes et date
-    /// seulement si le fractionnement est permis) : la cause est le terme
-    /// qui atteint ce maximum, dans l'ordre du moteur (reprise saisie,
-    /// liens dans l'ordre de stockage, contrainte), une égalité gardant le
+    /// seulement si le fractionnement est permis) ; les bornes sont toutes
+    /// celles du réseau (R-205) : début du projet, porte de la récapitulative
+    /// parente, liens FF/SF vers une récapitulative ancêtre dépliés sur la
+    /// feuille (R-058), liens propres. La cause est le terme qui atteint ce
+    /// maximum, dans l'ordre du moteur (reprise saisie, début du projet,
+    /// porte, liens dépliés de l'ancêtre le plus haut au plus bas, liens
+    /// propres dans l'ordre de stockage, contrainte), une égalité gardant le
     /// premier ; un terme après la reprise n'est jamais retenu. Une borne FF
     /// ou SF qui atteint la fin du reste vaut la reprise. Aucun terme :
     /// `NextWorking`. Hypothèse (bornes relues sur les dates planifiées).
@@ -485,10 +500,50 @@ impl Ctx<'_> {
         if let Some(r) = task.progress.resume {
             take(r, ResumeCause::Entered);
         }
-        let split = self.p.options.progress.split_in_progress
-            && matches!(self.p.anchor, ScheduleAnchor::FromStart(_));
-        if !split {
+        let ScheduleAnchor::FromStart(project_start) = self.p.anchor else {
             return best.1;
+        };
+        if !self.p.options.progress.split_in_progress {
+            return best.1;
+        }
+        take(project_start, ResumeCause::ProjectStart);
+        let ancestors = self.ancestors();
+        if let Some(&parent) = ancestors.first()
+            && let Some(gate) = self.gate_value(&ancestors, project_start)
+        {
+            take(gate, ResumeCause::SummaryGate { summary: parent });
+        }
+        let finish = self.ts.finish;
+        let finish_link = |link: &Link, x: Moment, take: &mut dyn FnMut(Moment, ResumeCause)| {
+            if x >= finish {
+                take(
+                    resume,
+                    ResumeCause::Link {
+                        predecessor: link.predecessor,
+                        link: link.kind,
+                    },
+                );
+            }
+        };
+        // R-058 : liens FF/SF vers une récapitulative ancêtre, dépliés sur
+        // la feuille (ordre de stockage : l'ancêtre le plus haut d'abord).
+        for &a in ancestors.iter().rev() {
+            let Some(at) = self.p.tasks.get(a) else { continue };
+            let mut scale = LagScale::Unresolved;
+            let cal = self.measure_calendar_of(a, Some(at));
+            for link in at
+                .predecessors
+                .iter()
+                .filter(|l| matches!(l.kind, LinkType::FinishToFinish | LinkType::StartToFinish))
+            {
+                if let Some(x) = self
+                    .s
+                    .scheduled(link.predecessor)
+                    .and_then(|ps| self.link_bound(link, ps, cal, &mut scale))
+                {
+                    finish_link(link, x, &mut take);
+                }
+            }
         }
         let mut lag_scale = LagScale::Unresolved;
         let cal = self.measure_calendar();
@@ -499,17 +554,15 @@ impl Ctx<'_> {
             let Some(x) = self.link_bound(link, ps, cal, &mut lag_scale) else {
                 continue;
             };
-            let cause = ResumeCause::Link {
-                predecessor: link.predecessor,
-                link: link.kind,
-            };
             match link.kind {
-                LinkType::FinishToStart | LinkType::StartToStart => take(x, cause),
-                LinkType::FinishToFinish | LinkType::StartToFinish => {
-                    if x >= self.ts.finish {
-                        take(resume, cause);
-                    }
-                }
+                LinkType::FinishToStart | LinkType::StartToStart => take(
+                    x,
+                    ResumeCause::Link {
+                        predecessor: link.predecessor,
+                        link: link.kind,
+                    },
+                ),
+                LinkType::FinishToFinish | LinkType::StartToFinish => finish_link(link, x, &mut take),
             }
         }
         let c = task.constraint;
@@ -519,6 +572,69 @@ impl Ctx<'_> {
             take(date, ResumeCause::Constraint(kind));
         }
         best.1
+    }
+
+    /// Récapitulatives ancêtres de la tâche, de la parente à la plus haute
+    /// (hors UID 0) ; vide pour une tâche de premier niveau.
+    fn ancestors(&self) -> Vec<TaskUid> {
+        let tasks = &self.p.tasks;
+        let Some(pos) = tasks.position(self.uid) else {
+            return Vec::new();
+        };
+        let Some(mut level) = tasks.at(pos).map(|t| t.outline_level) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for t in tasks.iter().take(pos).rev() {
+            if t.is_null || t.outline_level >= level {
+                continue;
+            }
+            out.push(t.uid());
+            level = t.outline_level;
+        }
+        out
+    }
+
+    /// Porte de la récapitulative `ancestors[0]` (R-056, R-103) relue sur
+    /// les dates planifiées : max du début du projet et, pour chaque
+    /// ancêtre, de ses bornes FS/SS entrantes (lecture de
+    /// [`Ctx::gate_cause`]) et de sa date SNET (automatique). `None` sans
+    /// ancêtre.
+    fn gate_value(&self, ancestors: &[TaskUid], project_start: Moment) -> Option<Moment> {
+        ancestors.first()?;
+        let mut gate = project_start;
+        for &a in ancestors {
+            let Some(at) = self.p.tasks.get(a) else { continue };
+            if at.is_null {
+                continue;
+            }
+            let mut scale = LagScale::Unresolved;
+            let cal = self.measure_calendar_of(a, Some(at));
+            for link in at
+                .predecessors
+                .iter()
+                .filter(|l| matches!(l.kind, LinkType::FinishToStart | LinkType::StartToStart))
+            {
+                if let Some(x) = self
+                    .s
+                    .scheduled(link.predecessor)
+                    .and_then(|ps| self.link_bound(link, ps, cal, &mut scale))
+                {
+                    gate = gate.max(x);
+                }
+            }
+            let dated_manual = matches!(
+                at.mode,
+                SchedulingMode::Manual { start, finish, .. } if start.is_some() || finish.is_some()
+            );
+            if !dated_manual
+                && at.constraint.kind() == ConstraintKind::StartNoEarlierThan
+                && let Some(date) = at.constraint.date()
+            {
+                gate = gate.max(date);
+            }
+        }
+        Some(gate)
     }
 
     /// Borne `g(ancre)` d'un lien entrant (R-037 à R-043) relue sur les

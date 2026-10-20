@@ -324,6 +324,7 @@ text_ids! {
     ErrorParamConflict => "error-param-conflict",
     ErrorParamInvalid => "error-param-invalid",
     ErrorParamMismatch => "error-param-mismatch",
+    ErrorProgressDurationBelowActual => "error-progress-duration_below_actual",
     ErrorProgressInactive => "error-progress-inactive",
     ErrorProgressInvalidOrder => "error-progress-invalid_order",
     ErrorProgressSummaryNotEditable => "error-progress-summary_not_editable",

@@ -86,8 +86,8 @@ Suite : jalon 6 + 1 j (fin de T2), T5 à T20 décalés de + 1 j (fin de T2 lun 1
 - Règles : `tests/rules/r2NN_*.rs` (R-200 à R-236), `cargo xtask rules` (aucune règle sans test).
 - Propriétés : P37 (avancement nul ⇒ rien ne change ; date d'état sans effet), P38 (achevée), P39 (édition), P40 (`what_if`), P41 (`explain`), P42 (lignes de base), P43 (aller-retour MSPDI), P44 (en cours).
 - Corpus : A7 11/11 (UID 2 et 3 achevées, UID 0 agrégé), ressources A7 7/7 ; les cinq fichiers s'écrivent avec le moteur (aucun manque restant).
-- Bout en bout : `replay_tracking_j6_memory`, `replay_tracking_j6_saved_mspdi_matches`, `replay_tracking_j6_reopen_same_variances` (`crates/planrs-mcp/tests/replay.rs`), `replay_tracking_j6_stdio` (`apps/planrs-cli/tests/mcp_replay.rs`), `replay_tracking_j6_http` (`crates/planrs-mcp/tests/replay_http.rs`) ; essai réel n° 3 : `replay_claude_run_3` (harnais prêt, actif dès que le journal est versionné).
-- Performance (job `perf`, release) : `5000_progress` et `5000_assigned` sous 50 ms (médiane), `5000_assigned_leaves` sous 250 ms ; mesuré en local au lot L10 (serveurdvp, charge ≈ 2) : 20,6 ms, 34,1 ms, 108,6 ms (`5000_assigned_progress` 36,0 ms).
+- Bout en bout : `replay_tracking_j6_memory`, `replay_tracking_j6_saved_mspdi_matches`, `replay_tracking_j6_reopen_same_variances` (`crates/planrs-mcp/tests/replay.rs`), `replay_tracking_j6_stdio` (`apps/planrs-cli/tests/mcp_replay.rs`), `replay_tracking_j6_http` (`crates/planrs-mcp/tests/replay_http.rs`) ; essai réel n° 3 : `replay_claude_run_3` (journal du 2026-10-20 versionné, faits clés vérifiés, `mcp.md` § 6).
+- Performance (job `perf`, release) : `5000_progress` et `5000_assigned` sous 50 ms (médiane), `deep_hierarchy` et `deep_hierarchy_progress` sous 30 ms, `5000_assigned_leaves` sous 250 ms, `perf_baseline_variance_page` sous 50 ms ; mesuré à la relecture finale (serveurdvp, charge ≈ 1, médiane de 5 mesures) : 19,5 ms, 35,8 ms, 25,7 ms, 27,7 ms, 108,1 ms, 17,6 ms (`5000_assigned_progress` 34,8 ms ; lot de 200 `progress.update` sur 5 000 tâches 3,7 s).
 
 ## 5. Limites
 

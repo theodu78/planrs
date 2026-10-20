@@ -656,13 +656,28 @@ async fn replay_claude_run_3() {
     });
     let open = (!opened_by_tool).then_some(start);
     let journal = tmp.path().join("run.jsonl");
+    let saved = tmp.path().join(TRACKING_BASELINE0);
     let (got, produced, elapsed) = replay_opened(&scenario, &tmp, journal, open).await;
     if replay::blessing() {
-        replay::bless(&root, &scenario, &produced, tmp.path(), None);
+        replay::bless(&root, &scenario, &produced, tmp.path(), Some(&saved));
         return;
     }
     replay::assert_results(&scenario, &got);
     replay::assert_journal(&scenario, &produced, tmp.path());
+    // MSPDI enregistré par l'agent (`save_project` sur le fichier ouvert) :
+    // `normalize` égal à l'attendu relu.
+    let read = |p: &Path| {
+        let bytes = std::fs::read(p).unwrap_or_else(|e| panic!("{} : {e}", p.display()));
+        planrs_mspdi::read(&bytes, &planrs_mspdi::ReadOptions::new(now_of(name)))
+            .unwrap_or_else(|e| panic!("{} : {e}", p.display()))
+            .project
+    };
+    let w = planrs_mspdi::write::WriteOptions::default();
+    assert_eq!(
+        planrs_mspdi::normalize(&read(&saved), &w),
+        planrs_mspdi::normalize(&read(&replay::expected_xml_path(&root, name)), &w),
+        "{name} : MSPDI enregistré différent de l'attendu"
+    );
     assert!(
         elapsed < BUDGET,
         "rejeu de {name} en {elapsed:?}, budget {BUDGET:?}"
@@ -671,6 +686,86 @@ async fn replay_claude_run_3() {
     for t in ["update_progress", "explain_date", "what_if"] {
         assert!(tools.contains(&t), "{t} absent de l'essai n° 3 : {tools:?}");
     }
+    // Faits clés de l'essai du 2026-10-20 (`docs/features/mcp.md` § 6).
+    assert_eq!(
+        tools,
+        [
+            "open_project",
+            "list_tasks",
+            "list_resources",
+            "set_status_date",
+            "get_task",
+            "get_task",
+            "update_progress",
+            "update_progress",
+            "reschedule_remaining",
+            "explain_date",
+            "baseline_variance",
+            "get_task",
+            "what_if",
+            "what_if",
+            "what_if",
+            "save_project"
+        ]
+    );
+    assert!(
+        scenario
+            .calls
+            .iter()
+            .all(|c| error_code(c.expected.as_ref().unwrap()).is_none())
+    );
+    let ok = |i: usize| ok_at(&scenario, i);
+    // Date d'état posée au 13/11 17:00 par l'agent.
+    assert_eq!(scenario.calls[3].params, json!({ "date": "2026-11-13T17:00" }));
+    // Terrassement achevé (sort du chemin critique) ; Maçonnerie commencée
+    // le 03/11 à 50 % : réception 16/12 → 17/12 ; reste replanifié après
+    // la date d'état : 17/12 → 23/12 (+ 4 j).
+    assert_eq!(ok(6)["diff"]["critical_left"], json!([2]));
+    assert_eq!(ok(7)["diff"]["finish_after"], json!("2026-12-17T17:00"));
+    assert_eq!(ok(8)["diff"]["finish_after"], json!("2026-12-23T17:00"));
+    assert_eq!(minutes_of(&ok(8)["diff"]["finish_delta"]), 1_920);
+    // Maçonnerie : partie réelle jusqu'au lun 09/11, reprise lun 16/11
+    // (reprise saisie au 13/11 17:00), fin ven 20/11.
+    let mac = &ok(11)["progress"];
+    assert_eq!(mac["stop"], json!("2026-11-09T17:00"));
+    assert_eq!(mac["resume"], json!("2026-11-16T08:00"));
+    assert_eq!(ok(11)["finish"], json!("2026-11-20T17:00"));
+    // Pourquoi la réception bouge : chaîne des pilotes jusqu'à la
+    // Maçonnerie (FS de bout en bout).
+    let chain: Vec<Value> = ok(9)["chain"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["uid"].clone())
+        .collect();
+    assert_eq!(Value::Array(chain), json!([19, 17, 16, 14, 10, 9, 8, 3]));
+    assert_eq!(ok(9)["date"], json!("2026-12-23T17:00"));
+    // Écarts à la ligne 0 : projet (ligne déduite) et réception + 5 j.
+    let variance = ok(10);
+    assert_eq!(variance["project"]["derived"], json!(true));
+    assert_eq!(minutes_of(&variance["project"]["variance"]["finish"]), 2_400);
+    assert_eq!(minutes_of(&task_of(&variance, 20)["variance"]["finish"]), 2_400);
+    assert_eq!(minutes_of(&task_of(&variance, 6)["variance"]["finish"]), 2_400);
+    // Second plaquiste : simple ajout sans effet (tâches non pilotées par
+    // l'effort) ; à 200 % ou piloté par l'effort, réception au 21/12
+    // (− 2 j), Électricité puis Ventilation deviennent le chemin.
+    assert_eq!(minutes_of(&ok(12)["diff"]["finish_delta"]), 0);
+    for i in [13, 14] {
+        assert_eq!(ok(i)["diff"]["finish_after"], json!("2026-12-21T17:00"));
+        assert_eq!(minutes_of(&ok(i)["diff"]["finish_delta"]), -960);
+    }
+    let after: Vec<&Value> = ok(14)["explanations"][0]["chain"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| &c["uid"])
+        .collect();
+    assert!(
+        after.contains(&&json!(13)) && after.contains(&&json!(11)),
+        "{after:?}"
+    );
+    // Simulations sans effet : enregistrement du seul avancement.
+    assert_eq!(ok(15)["path"], json!(format!("$TMP/{TRACKING_BASELINE0}")));
 }
 
 /// Minutes d'une durée de vue (`{minutes, unit, text}`).

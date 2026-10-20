@@ -663,3 +663,47 @@ fn perf_deep_hierarchy_256_5000() {
 fn perf_deep_hierarchy_progress_256_5000() {
     deep_budget("deep_hierarchy_progress, 256 niveaux, 5 000 tâches", true);
 }
+
+/// Lot de saisies d'avancement (relecture finale J6, J6-PERF-2) sur le
+/// grand réseau (5 000 tâches) : chaque `progress.update` qui suit une
+/// écriture recalcule le clone (le début implicite est le début planifié
+/// courant) ; 200 saisies, journalisé, garde-fou de 20 s. Un lot de 10 000
+/// saisies est refusé par le budget de recalcul du lot (`limit.exceeded`,
+/// `schedule_recomputes`, 200 recalculs au plus) en temps borné.
+#[test]
+#[ignore = "mesuré en release, job CI perf"]
+fn perf_batch_progress_updates() {
+    use planrs_automation::error::codes;
+    use planrs_automation::{ApplyMode, Batch};
+    let p = large_network(2026);
+    let plan = schedule(&p);
+    let uids: Vec<u32> = p
+        .tasks
+        .iter()
+        .map(planrs_core::Task::uid)
+        .filter(|u| matches!(plan.get(*u), Some(TaskOutcome::Scheduled(ts)) if ts.role == TaskRole::Leaf))
+        .map(TaskUid::get)
+        .collect();
+    let mut s = planrs_tests::session::session(p);
+    let batch = |n: usize| -> Batch {
+        let ops: Vec<serde_json::Value> = uids
+            .iter()
+            .cycle()
+            .take(n)
+            .map(|u| serde_json::json!({ "op": "progress.update", "task": u, "percent_complete": { "text": "10%" } }))
+            .collect();
+        planrs_tests::task_edit::batch(serde_json::Value::Array(ops))
+    };
+    let t = Instant::now();
+    let out = s.apply(&batch(200), ApplyMode::DryRun);
+    let took = t.elapsed();
+    eprintln!("lot de 200 progress.update (5 000 tâches) : {took:?}");
+    assert!(out.is_ok(), "{out:?}");
+    assert!(took <= Duration::from_secs(20), "{took:?}");
+    let t = Instant::now();
+    let err = s.apply(&batch(10_000), ApplyMode::DryRun).unwrap_err();
+    let took = t.elapsed();
+    eprintln!("lot de 10 000 progress.update refusé : {took:?}");
+    assert_eq!(err.code, codes::LIMIT_EXCEEDED);
+    assert!(took <= Duration::from_secs(60), "{took:?}");
+}

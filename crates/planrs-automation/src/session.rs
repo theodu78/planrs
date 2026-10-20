@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::command::AnchorSpec;
 use crate::command::Batch;
-use crate::command::exec::{Ctx, Exec};
+use crate::command::exec::{BatchCache, Ctx, Exec};
 use crate::delta::{Dir, apply_delta, approx_bytes, diff_projects, json_len};
 use crate::diag_delta::{blame, diagnostics_delta, state_diagnostics};
 pub use crate::diff::DEFAULT_DIFF_TASKS;
@@ -68,6 +68,12 @@ pub struct SessionLimits {
     pub history_entries: usize,
     /// Tâches du diff détaillé (1 000).
     pub diff_detail_max: usize,
+    /// Travail de recalcul du planning permis dans un lot (relecture finale
+    /// J6, J6-PERF-2) : chaque recalcul du clone coûte son nombre de tâches
+    /// et d'affectations ; au-delà, `limit.exceeded` (`schedule_recomputes`).
+    /// Défaut : 1 000 000 (200 recalculs d'un projet de 5 000
+    /// tâches, 10 d'un projet de 100 000).
+    pub max_batch_schedule_work: u64,
 }
 
 impl Default for SessionLimits {
@@ -77,6 +83,7 @@ impl Default for SessionLimits {
             history_bytes: 64 * 1024 * 1024,
             history_entries: 1_000,
             diff_detail_max: 1_000,
+            max_batch_schedule_work: crate::command::exec::MAX_BATCH_SCHEDULE_WORK,
         }
     }
 }
@@ -529,6 +536,7 @@ impl Session {
         let mut resource_labels = BTreeMap::new();
         let mut created_resources = Vec::new();
         let mut notes = Vec::new();
+        let mut cache = BatchCache::new(self.limits.max_batch_schedule_work);
         for (i, op) in ops.iter().enumerate() {
             let mut ctx = Ctx {
                 project: &mut work,
@@ -544,6 +552,7 @@ impl Session {
                 base: &self.project,
                 base_schedule: &self.schedule,
                 notes: &mut notes,
+                cache: &mut cache,
             };
             op.exec(&mut ctx).map_err(|e| e.with_op_index(i))?;
         }

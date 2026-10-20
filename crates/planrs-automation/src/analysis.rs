@@ -1,4 +1,5 @@
-//! Analyses J6 (lot L8) : `analysis.what_if` (R-234).
+//! Analyses J6 (lot L8) : `analysis.what_if` (R-234) et
+//! `analysis.baseline_variance` (R-228).
 //!
 //! Contrat de surface (C-MCP-01, règle 3) : toute date, durée et tout écart
 //! viennent du moteur — planning simulé par [`Session::simulate`], écarts
@@ -13,11 +14,12 @@ use std::collections::BTreeMap;
 
 use planrs_core::schedule::explain::{DEFAULT_DEPTH, Side, explain};
 use planrs_core::{
-    BaselineNumber, CalendarSet, CompiledCalendar, Minutes, Moment, Project, Schedule, TaskBaseline, TaskUid,
+    BaselineNumber, CalendarSet, CompiledCalendar, DurationUnit, Minutes, Moment, Project, Schedule,
+    TaskBaseline, TaskUid, Work,
 };
 use serde::Serialize;
 
-use crate::command::params::WhatIfParams;
+use crate::command::params::{VarianceParams, WhatIfParams};
 use crate::command::{Batch, TaskRef, resolve_task};
 use crate::error::{CommandError, CommandErrorKind, codes};
 use crate::explain::{ExplainView, explain_error, explain_view};
@@ -25,11 +27,15 @@ use crate::json::DurationJson;
 use crate::outcome::SideEffect;
 use crate::session::{ApplyOptions, Session};
 use crate::text::{Language, TextContext};
-use crate::view::{DiagView, DiffView, ViewCtx, signed_minutes};
+use crate::view::{DiagView, DiffView, ViewCtx, signed_minutes, work_out};
 use crate::workspace::ToolError;
 
 /// Tâches expliquées par un `what_if` au plus (R-234).
 pub const MAX_WHAT_IF_EXPLAIN: usize = 5;
+/// Lignes d'une page de `baseline_variance` par défaut (R-228).
+pub const DEFAULT_VARIANCE_ROWS: usize = 50;
+/// Lignes d'une page de `baseline_variance` au plus (C-MCP-03).
+pub const MAX_VARIANCE_ROWS: usize = 500;
 
 /// Résultat d'un `what_if` (R-234).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -67,6 +73,81 @@ pub struct WhatIfView {
     /// Explications du début des tâches demandées, sur l'état simulé
     /// (R-230 à R-233).
     pub explanations: Vec<ExplainView>,
+}
+
+/// Page de `baseline_variance` (R-228).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct VarianceView {
+    /// Numéro de la ligne de base.
+    pub baseline: u8,
+    /// Ligne du projet (toujours présente).
+    pub project: VarianceRow,
+    /// Tâches de la page : |écart de fin| décroissant, puis ID.
+    pub tasks: Vec<VarianceRow>,
+    /// UID à passer en `cursor` pour la page suivante ; absent à la fin.
+    pub next_cursor: Option<u32>,
+    /// Tâches retenues (toutes pages comprises).
+    pub total: usize,
+}
+
+/// Ligne d'écarts d'une tâche ou du projet.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct VarianceRow {
+    /// UID (0 : projet).
+    pub uid: u32,
+    /// ID (ligne) ; absent pour le projet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<u32>,
+    /// Nom.
+    pub name: String,
+    /// Début planifié (ISO local).
+    pub start: Option<String>,
+    /// Fin planifiée.
+    pub finish: Option<String>,
+    /// Durée (saisie d'une feuille, calculée d'une récapitulative).
+    pub duration: DurationJson,
+    /// Travail calculé (heures) ; absent quand nul.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work: Option<DurationJson>,
+    /// Valeurs de la ligne de base ; `null` sans ligne.
+    pub baseline: Option<BaselineOut>,
+    /// Écarts ; absents sans ligne de base.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variance: Option<VarianceOut>,
+    /// Vrai si la ligne du projet est déduite des tâches de premier niveau
+    /// (projet sans récapitulative stockée).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub derived: bool,
+}
+
+/// Valeurs d'une ligne de base.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct BaselineOut {
+    /// Début de base.
+    pub start: Option<String>,
+    /// Fin de base.
+    pub finish: Option<String>,
+    /// Durée de base ; absente si la ligne n'en a pas.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<DurationJson>,
+    /// Travail de base (heures) ; absent si la ligne n'en a pas.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work: Option<DurationJson>,
+}
+
+/// Écarts signés (valeur − ligne de base), calculés par le moteur.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct VarianceOut {
+    /// Écart de début (unité par défaut du projet).
+    pub start: DurationJson,
+    /// Écart de fin.
+    pub finish: DurationJson,
+    /// Écart de durée ; absent pour une ligne du projet déduite.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<DurationJson>,
+    /// Écart de travail (heures) ; absent pour une ligne du projet déduite.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work: Option<DurationJson>,
 }
 
 /// Erreur `param.invalid` sur `field`.
@@ -250,4 +331,176 @@ pub fn what_if(session: &Session, params: &WhatIfParams, lang: Language) -> Resu
         baseline_derived: line.as_ref().is_some_and(|l| l.derived),
         explanations,
     })
+}
+
+/// Valeurs d'une ligne de base en sortie.
+fn baseline_out(b: &TaskBaseline, text: &TextContext) -> BaselineOut {
+    BaselineOut {
+        start: b.start.map(|m| m.to_string()),
+        finish: b.finish.map(|m| m.to_string()),
+        duration: b.duration.map(|d| DurationJson::from_duration(&d, text)),
+        work: b.work.map(|w| work_out(w, text)),
+    }
+}
+
+/// Écarts en sortie : dates et durée dans l'unité `unit`, travail en
+/// heures ; durée et travail omis si `dates_only`.
+fn variance_out(
+    v: &planrs_core::baseline::Variance,
+    unit: DurationUnit,
+    dates_only: bool,
+    text: &TextContext,
+) -> VarianceOut {
+    VarianceOut {
+        start: signed_minutes(v.start, unit, text),
+        finish: signed_minutes(v.finish, unit, text),
+        duration: (!dates_only).then(|| signed_minutes(v.duration, unit, text)),
+        work: (!dates_only).then(|| signed_minutes(v.work, DurationUnit::Hour, text)),
+    }
+}
+
+/// Vrai si un écart est non nul.
+fn varied(v: &planrs_core::baseline::Variance) -> bool {
+    [v.start, v.finish, v.duration, v.work]
+        .iter()
+        .any(|m| *m != Minutes::ZERO)
+}
+
+/// `analysis.baseline_variance` (R-228) : ligne du projet, puis tâches
+/// planifiées triées par |écart de fin| décroissant puis ID (comme R-163),
+/// filtrées (`only_varied` : tâches dotées de la ligne et d'un écart non
+/// nul) et paginées (curseur : UID de la dernière ligne de la page
+/// précédente, dans cet ordre).
+///
+/// # Errors
+///
+/// `param.invalid` (`baseline` hors de 0 à 10, `limit` 0),
+/// `limit.exceeded` au-delà de [`MAX_VARIANCE_ROWS`], `task.not_found`
+/// (champ `cursor`) si le curseur ne désigne aucune ligne retenue.
+pub fn baseline_variance(session: &Session, params: &VarianceParams) -> Result<VarianceView, CommandError> {
+    let number = baseline_number(params.baseline.unwrap_or(0))?;
+    let page = match params.limit {
+        None => DEFAULT_VARIANCE_ROWS,
+        Some(0) => return Err(invalid("limit", "« limit » doit valoir au moins 1")),
+        Some(n) => {
+            let n = usize::try_from(n).unwrap_or(usize::MAX);
+            if n > MAX_VARIANCE_ROWS {
+                return Err(limit("limit", MAX_VARIANCE_ROWS, "limit"));
+            }
+            n
+        }
+    };
+    let p = session.project();
+    let s = session.schedule();
+    let ctx = ViewCtx::new(session);
+    let text = ctx.text();
+    let unit = p.options.default_duration_unit;
+    let (set, _) = CalendarSet::compile(p);
+    let all = planrs_core::baseline::variance(p, s, &set, number);
+    let by_uid: BTreeMap<TaskUid, &planrs_core::baseline::TaskVariance> =
+        all.tasks.iter().map(|v| (v.uid, v)).collect();
+    let mut rows: Vec<(Minutes, u32, VarianceRow)> = Vec::new();
+    for (pos, task) in ctx.rows() {
+        let Some(v) = by_uid.get(&task.uid()) else {
+            continue;
+        };
+        if params.only_varied && (v.baseline.is_none() || !varied(&v.variance)) {
+            continue;
+        }
+        let view = ctx.task_at(pos, task);
+        let key = if v.baseline.is_some() {
+            v.variance.finish
+        } else {
+            Minutes::ZERO
+        };
+        rows.push((
+            key,
+            view.id,
+            VarianceRow {
+                uid: view.uid,
+                id: Some(view.id),
+                name: view.name,
+                start: view.start,
+                finish: view.finish,
+                duration: view.duration,
+                work: view.work,
+                baseline: v.baseline.as_ref().map(|b| baseline_out(b, text)),
+                variance: v
+                    .baseline
+                    .is_some()
+                    .then(|| variance_out(&v.variance, unit, false, text)),
+                derived: false,
+            },
+        ));
+    }
+    rows.sort_by(|a, b| {
+        b.0.get()
+            .unsigned_abs()
+            .cmp(&a.0.get().unsigned_abs())
+            .then(a.1.cmp(&b.1))
+    });
+    let total = rows.len();
+    let skip = match params.cursor {
+        None => 0,
+        Some(c) => rows
+            .iter()
+            .position(|r| r.2.uid == c)
+            .and_then(|i| i.checked_add(1))
+            .ok_or_else(|| {
+                CommandError::new(
+                    codes::TASK_NOT_FOUND,
+                    CommandErrorKind::UnknownTask(TaskUid::new(c)),
+                )
+                .with_field("cursor")
+            })?,
+    };
+    let rest = total.saturating_sub(skip);
+    let tasks: Vec<VarianceRow> = rows.into_iter().skip(skip).take(page).map(|r| r.2).collect();
+    let next_cursor = if rest > tasks.len() {
+        tasks.last().map(|r| r.uid)
+    } else {
+        None
+    };
+    Ok(VarianceView {
+        baseline: number.get(),
+        project: project_row(session, &set, number, unit, text),
+        tasks,
+        next_cursor,
+        total,
+    })
+}
+
+/// Ligne du projet de `baseline_variance`.
+fn project_row(
+    session: &Session,
+    set: &CalendarSet,
+    number: BaselineNumber,
+    unit: DurationUnit,
+    text: &TextContext,
+) -> VarianceRow {
+    let p = session.project();
+    let s = session.schedule();
+    let line = project_line(p, s, set, number);
+    let ps = s.project_summary.as_ref();
+    let name = if p.info.name.is_empty() {
+        session.origin().name.clone()
+    } else {
+        p.info.name.clone()
+    };
+    let duration = ps.map_or(Minutes::ZERO, |ps| ps.duration);
+    let work = ps.map_or(Work::ZERO, |ps| ps.work);
+    VarianceRow {
+        uid: TaskUid::PROJECT_SUMMARY.get(),
+        id: None,
+        name,
+        start: Some(ps.map_or(s.project_start, |ps| ps.start).to_string()),
+        finish: Some(ps.map_or(s.project_finish, |ps| ps.finish).to_string()),
+        duration: signed_minutes(duration, unit, text),
+        work: (work != Work::ZERO).then(|| work_out(work, text)),
+        baseline: line.as_ref().map(|l| baseline_out(&l.baseline, text)),
+        variance: line
+            .as_ref()
+            .map(|l| variance_out(&l.variance, unit, l.derived, text)),
+        derived: line.as_ref().is_some_and(|l| l.derived),
+    }
 }

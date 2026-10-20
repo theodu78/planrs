@@ -69,8 +69,12 @@ const J6_ENTRIES: [(&str, &str, Kind); 6] = [
 ];
 
 /// Entrées J6 déjà activées (lot L7 : `analysis.explain_date` ; lot L8 :
-/// `analysis.what_if`).
-const ACTIVE: [&str; 2] = ["analysis.explain_date", "analysis.what_if"];
+/// `analysis.what_if`, `analysis.baseline_variance`).
+const ACTIVE: [&str; 3] = [
+    "analysis.baseline_variance",
+    "analysis.explain_date",
+    "analysis.what_if",
+];
 
 #[test]
 fn contract_compiles() {

@@ -224,6 +224,7 @@ mod r224_start_finish_variance;
 mod r225_duration_work_variance;
 mod r226_mspdi_variances_write;
 mod r227_baseline_set;
+mod r228_baseline_variance;
 mod r230_driver_bound;
 mod r230_explain_start;
 mod r231_explain_finish;

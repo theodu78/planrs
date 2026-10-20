@@ -156,11 +156,10 @@ const fn reserved(
 
 /// Registre, trié par id (vérifié par test).
 pub static REGISTRY: &[CommandSpec] = &[
-    reserved(
+    now(
         "analysis.baseline_variance",
         "baseline_variance",
         Kind::Analysis,
-        6,
         schema_of::<VarianceParams>,
         "Écarts à une ligne de base (début, fin, durée, travail), calculés par le moteur, paginés.",
         "Variance from a baseline (start, finish, duration, work), computed by the engine, paginated.",

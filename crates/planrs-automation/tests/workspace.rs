@@ -280,13 +280,14 @@ fn workspace_no_session_error() {
         ("batch.apply", json!({ "ops": [] })),
         ("project.save", json!({})),
         ("analysis.what_if", json!({ "ops": [] })),
+        ("analysis.baseline_variance", json!({})),
     ] {
         let err = ws.call(id, params).unwrap_err();
         assert_eq!(err.code, codes::SESSION_NONE, "{id}");
         assert!(err.message.contains("open_project"), "{id} : {}", err.message);
     }
     // Commande réservée, id inconnu, paramètres mal formés.
-    let err = ws.call("analysis.baseline_variance", json!({})).unwrap_err();
+    let err = ws.call("progress.update", json!({})).unwrap_err();
     assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE);
     assert_eq!(
         ws.call("task.nope", json!({})).unwrap_err().code,

@@ -136,8 +136,12 @@ fn registry_sorted_and_unique() {
         Availability::Now
     );
     assert_eq!(lookup("analysis.what_if").unwrap().available, Availability::Now);
-    assert!(matches!(
+    assert_eq!(
         lookup("analysis.baseline_variance").unwrap().available,
+        Availability::Now
+    );
+    assert!(matches!(
+        lookup("baseline.set").unwrap().available,
         Availability::Milestone(6)
     ));
     assert_eq!(lookup("resource.add").unwrap().available, Availability::Now);

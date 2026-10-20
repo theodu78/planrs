@@ -13,8 +13,8 @@
 //! reporter changerait le placement suivant) : la durée fixe (`d_a` = durée
 //! de la tâche, S41, R-170) et toute feuille dont une affectation de travail
 //! a des unités nulles (`d_a` = durée de la tâche, R-181 : reporter l'union
-//! l'allongerait à chaque recalcul) ; une feuille achevée (J6, R-209 : sa
-//! durée est celle de l'avancement).
+//! l'allongerait à chaque recalcul) ; une feuille achevée ou en cours (J6,
+//! R-209 : sa durée est celle de l'avancement).
 
 use std::collections::BTreeSet;
 
@@ -28,8 +28,9 @@ use crate::quantity::Units;
 /// Feuilles dont la durée du modèle suit la durée calculée : placées par au
 /// moins une affectation de travail (rôle `Work`, R-173), sans affectation
 /// de travail à unités nulles (R-181). Amendement J6 (R-209) : une feuille
-/// achevée en sort, sa durée est celle de l'avancement (l'union de ses
-/// affectations placées depuis le début réel écraserait la mesure).
+/// achevée ou en cours en sort, sa durée est celle de l'avancement (l'union
+/// de ses affectations placées depuis le début réel écraserait la mesure ;
+/// arbitrage de l'ADR-0014, `sync_assigned_durations`).
 #[must_use]
 pub fn placed_by_assignments(project: &Project, schedule: &Schedule) -> BTreeSet<TaskUid> {
     let mut placed = BTreeSet::new();
@@ -41,11 +42,12 @@ pub fn placed_by_assignments(project: &Project, schedule: &Schedule) -> BTreeSet
         if s.role != AssignmentRole::Work {
             continue;
         }
-        let completed = schedule
+        // R-209 : feuille achevée ou en cours, durée de l'avancement.
+        let started = schedule
             .scheduled(s.task)
             .and_then(|t| t.progress)
-            .is_some_and(|p| p.state == ProgressState::Complete);
-        if completed {
+            .is_some_and(|p| p.state != ProgressState::NotStarted);
+        if started {
             excluded.insert(s.task);
             continue;
         }

@@ -282,11 +282,7 @@ impl Calc<'_, '_> {
             // Cible sans dates au plus tard, ou porte dont la borne n'a pas pu
             // se calculer en passe avant (R-069) : le lien n'a pas été
             // appliqué, il ne plafonne rien.
-            let Some(tl) = self
-                .state(arc.to)
-                .filter(|_| self.reached(arc.to))
-                .and_then(|s| s.late.map(|l| Self::held_late(l, s.held, self.mode)))
-            else {
+            let Some(tl) = self.late_view(arc.to) else {
                 continue;
             };
             let y = match self.link_cap(a, l, arc.to, tl) {
@@ -308,6 +304,24 @@ impl Calc<'_, '_> {
             }
         }
         Ok(caps)
+    }
+
+    /// Dates au plus tard de la cible `target` vues par ses prédécesseurs,
+    /// `None` si elle n'est pas atteinte ou n'en a pas : retard de
+    /// nivellement (R-178, [`Self::held_late`]) ; feuille en cours (R-206,
+    /// R-207) : début = début au plus tard du reste, seule partie qui dépend
+    /// d'eux.
+    fn late_view(&self, target: NodeIx) -> Option<Span> {
+        let s = self.state(target).filter(|_| self.reached(target))?;
+        let late = Self::held_late(s.late?, s.held, self.mode);
+        let running = self.net.node(target).is_some_and(|n| n.in_progress().is_some());
+        Some(match s.run.and_then(|r| r.late_resume) {
+            Some(start) if running => Span {
+                start,
+                finish: late.finish,
+            },
+            _ => late,
+        })
     }
 
     /// R-178 : dates au plus tard d'une cible à retard de nivellement, vues
@@ -394,6 +408,9 @@ impl Calc<'_, '_> {
         // R-203, R-207 : feuille achevée, dates au plus tard = dates réelles.
         if let Some((start, finish)) = node.actual() {
             return self.actual_late(v, early, start, finish);
+        }
+        if let Some(ip) = node.in_progress() {
+            return self.running_late(v, early, has_succ, ip);
         }
         // R-097, R-098 : une feuille épinglée (MSO, MFO, option active) a
         // ses dates au plus tard sur l'ancrage, sans plafond : une borne
@@ -528,6 +545,114 @@ impl Calc<'_, '_> {
         Ok((span, LateDriver::Actual))
     }
 
+    /// R-206 (depuis le début) : dates au plus tard d'une feuille en cours.
+    /// Partie réelle fixe : début au plus tard = début réel ; fin au plus
+    /// tard par les plafonds de fin normaux (fin du projet, EF si plusieurs
+    /// chemins critiques et aucun successeur, `C(parent)`, liens FS/FF,
+    /// échéance) ; les plafonds de début (`K(parent)`, SS, SF) portent sur
+    /// le début réel, déjà passé, et ne jouent pas ; la contrainte ne plafonne
+    /// rien (R-205). Début au plus tard du reste = `backward_span(LF, reste)`
+    /// sur le placement du reste, gardé pour les prédécesseurs (FS, SS).
+    ///
+    /// R-207 (à rebours) : le reste est placé au plus tôt depuis la reprise
+    /// (`max(Stop, reprise saisie)`, aucune borne : les prédécesseurs ne sont
+    /// pas encore placés), dates au plus tard = ces dates, cause
+    /// `LateDriver::Actual`, `progress.from_finish_in_progress`
+    /// (avertissement, passe principale). Début réel implicite : début du
+    /// placement de toute la tâche sous ses plafonds de fin (hypothèse,
+    /// comme R-203 à rebours), résolu une fois.
+    fn running_late(
+        &mut self,
+        v: NodeIx,
+        early: Option<Span>,
+        has_succ: bool,
+        ip: super::constraint::InProgress,
+    ) -> Result<(Span, LateDriver), Fail> {
+        let stored = self.state(v).and_then(|s| s.run);
+        let from_finish = self.mode == Mode::FromFinish;
+        if from_finish && let Some(run) = stored {
+            let span = Span {
+                start: run.actual_start,
+                finish: run.finish,
+            };
+            return Ok((span, LateDriver::Actual));
+        }
+        let mut lf = LateCap {
+            finish: self.finish,
+            driver: LateDriver::ProjectFinish,
+        };
+        if !from_finish
+            && self.project.options.multiple_critical_paths
+            && !has_succ
+            && let Some(e) = early
+        {
+            lf.apply(e.finish, LateDriver::MultipleCriticalPaths);
+        }
+        let links = self.out_caps(v, false)?;
+        let mut unreliable = links.unreliable;
+        let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+        let (uid, parent, deadline) = (node.uid, node.parent_rollup, node.deadline);
+        if let Some(pr) = parent {
+            let ps = *self.state(pr).ok_or(Fail::Internal("nœud hors bornes"))?;
+            if let Some((c, summary)) = ps.cap_finish {
+                lf.apply(c, LateDriver::SummaryCap { summary });
+            }
+            unreliable |= ps.late_degraded && !self.net.is_fixed_rollup(pr);
+        }
+        for &(at, driver) in &links.finishes {
+            lf.apply(at, driver);
+        }
+        if let Some(d) = deadline {
+            lf.apply(d, LateDriver::Deadline);
+        }
+        if unreliable && let Some(s) = self.state_mut(v) {
+            s.late_degraded = true;
+        }
+        if !from_finish {
+            let run = stored.ok_or(Fail::Internal("tâche en cours sans dates au plus tôt"))?;
+            let rest = self.remaining_placer(v)?.backward_span(lf.finish)?;
+            if let Some(s) = self.state_mut(v) {
+                s.run = Some(super::Run {
+                    late_resume: Some(rest.start),
+                    ..run
+                });
+            }
+            let late = Span {
+                start: run.actual_start.min(rest.finish),
+                finish: rest.finish,
+            };
+            return Ok((late, lf.driver));
+        }
+        // R-207 : à rebours, passe principale.
+        let actual_start = if let Some(start) = ip.start {
+            start
+        } else {
+            self.emit(Diagnostic::ProgressActualStartMissing { task: uid });
+            self.placer(v)?.backward_span(lf.finish)?.start
+        };
+        let stop = self.stop_of(v, actual_start, ip.actual)?;
+        let from = ip.resume.map_or(stop, |r| r.max(stop));
+        let rest = self.remaining_placer(v)?.forward_span(from)?;
+        let run = super::Run {
+            actual_start,
+            stop,
+            resume: rest.start.max(stop),
+            finish: rest.finish.max(stop),
+            late_resume: Some(rest.start.max(stop)),
+        };
+        self.emit(Diagnostic::ProgressFromFinishInProgress { task: uid });
+        if let Some(s) = self.state_mut(v) {
+            s.run = Some(run);
+        }
+        Ok((
+            Span {
+                start: actual_start,
+                finish: run.finish,
+            },
+            LateDriver::Actual,
+        ))
+    }
+
     /// Plafonds d'une feuille, dans l'ordre de R-047 (`C(parent)`,
     /// `K(parent)` si `k_applies`, liens FS/FF puis SS/SF dans l'ordre des
     /// arcs), chacun converti en plafond de fin : un plafond de début `y`
@@ -640,11 +765,7 @@ impl Calc<'_, '_> {
             let Some(l) = arc.link.filter(|l| !l.to_inactive && !self.actual_target(arc.to)) else {
                 continue;
             };
-            let Some(tl) = self
-                .state(arc.to)
-                .filter(|_| self.reached(arc.to))
-                .and_then(|s| s.late.map(|l| Self::held_late(l, s.held, self.mode)))
-            else {
+            let Some(tl) = self.late_view(arc.to) else {
                 continue;
             };
             let Some(target_scale) = net.node(arc.to).and_then(|n| net.scale(n.place)).copied() else {
@@ -725,7 +846,8 @@ impl Calc<'_, '_> {
             | ConstraintRule::Opposite
             | ConstraintRule::Floor(_)
             | ConstraintRule::Pin(_)
-            | ConstraintRule::Actual { .. } => false,
+            | ConstraintRule::Actual { .. }
+            | ConstraintRule::Progress(_) => false,
         }
     }
 
@@ -813,12 +935,19 @@ impl Calc<'_, '_> {
                 continue;
             };
             // R-203 : une sous-tâche achevée ne plafonne pas la porte (ni,
-            // par elle, les prédécesseurs de la récapitulative).
-            if child.inactive || child.actual().is_some() {
+            // par elle, les prédécesseurs de la récapitulative) ; R-205 :
+            // une sous-tâche en cours sans fractionnement non plus.
+            if child.inactive || self.actual_target(arc.to) {
                 continue;
             }
             unreliable |= self.unreliable(arc.to);
-            if let Some(l) = self.state(arc.to).and_then(|s| s.late) {
+            // R-206 : sous-tâche en cours, début au plus tard du reste.
+            let late = if child.in_progress().is_some() {
+                self.late_view(arc.to)
+            } else {
+                self.state(arc.to).and_then(|s| s.late)
+            };
+            if let Some(l) = late {
                 lg = Some(min_opt(lg, l.start));
             }
         }

@@ -170,6 +170,9 @@ struct Resolution {
     work: Work,
     /// Unités.
     units: Units,
+    /// Tâche en cours (R-209) : `(d_act, d_rem)`, durées de la partie
+    /// réelle et du reste de l'affectation, ou le code de leur échec.
+    progress: Option<Result<(Minutes, Minutes), &'static str>>,
 }
 
 /// Résultat de [`resolve`] : décisions par affectation et calendriers
@@ -226,6 +229,38 @@ fn assignment_duration(
         .filter(|m| (0..=Duration::MAX_MINUTES).contains(m))
         .map(Minutes::new)
         .ok_or(OUT_OF_DOMAIN)
+}
+
+/// R-209 (tâche en cours) : durées de la partie réelle et du reste d'une
+/// affectation de travail `W`, travail réel `AW` (borné à `[0, W]`),
+/// unités `U` : `d_act = round_div(AW × 10 000, U)`, `d_rem =
+/// round_div((W − AW) × 10 000, U)` ; unités nulles (R-181) et durée fixe
+/// (R-170) : durée réelle et reste de la tâche. `None` si la tâche n'est pas
+/// en cours ; hors du domaine des durées : échec (R-069).
+fn progress_durations(
+    task: &Task,
+    work: Work,
+    actual_work: Work,
+    units: Units,
+) -> Option<Result<(Minutes, Minutes), &'static str>> {
+    let f = crate::progress::facts(task);
+    if f.state != crate::progress::ProgressState::Started {
+        return None;
+    }
+    if task.task_type == TaskType::FixedDuration || units == Units::ZERO {
+        return Some(Ok((f.actual_duration, crate::progress::remaining_duration(task))));
+    }
+    let w = work.minutes().get().max(0);
+    let aw = actual_work.minutes().get().clamp(0, w);
+    let d = |m: i64| {
+        i128::from(m)
+            .checked_mul(10_000)
+            .and_then(|num| round_div(num, i128::from(units.get())))
+            .filter(|m| (0..=Duration::MAX_MINUTES).contains(m))
+            .map(Minutes::new)
+            .ok_or(OUT_OF_DOMAIN)
+    };
+    Some(d(aw).and_then(|act| Ok((act, d(w.saturating_sub(aw))?))))
 }
 
 /// Construction de [`Resolved`].
@@ -493,6 +528,7 @@ pub(super) fn resolve(
             contour: a.contour,
             work: a.work,
             units: a.units,
+            progress: progress_durations(task, a.work, a.actual_work, a.units),
         });
     }
     // Clés uniques (UID d'affectation) : tri instable sans effet sur l'ordre.
@@ -606,6 +642,16 @@ pub(super) struct Parts {
     outputs: Vec<Output>,
     /// Budget des combinaisons restant après `resolve` (mesure des unions).
     budget: Budget,
+    /// Feuilles en cours (R-209) : parts du reste de durée `d_rem` > 0
+    /// (sans délai : le délai court depuis le début de la tâche, déjà
+    /// passé ; une part sans reste ne place pas la reprise), triées par UID
+    /// d'affectation dans chaque tâche.
+    rem_items: Vec<Part>,
+    /// Plage de `rem_items` de la tâche en position `p`.
+    rem_ranges: BTreeMap<usize, (usize, usize)>,
+    /// `(d_act, d_rem)` de chaque affectation de travail d'une feuille en
+    /// cours.
+    rem_durations: BTreeMap<AssignmentUid, (Minutes, Minutes)>,
 }
 
 impl Parts {
@@ -640,6 +686,48 @@ impl Parts {
         self.rep.get(&p).copied()
     }
 
+    /// R-209 : part du reste de l'affectation de travail `res` d'une feuille
+    /// en cours en position `p` (échelle `scale`) : gardée si `d_rem` > 0,
+    /// durées `(d_act, d_rem)` notées ; échec hors du domaine (R-069).
+    fn push_remaining(&mut self, res: &Resolution, scale: u32, p: usize, diags: &mut Diagnostics) {
+        match res.progress {
+            Some(Ok((act, rem))) => {
+                if rem > Minutes::ZERO {
+                    self.rem_items.push(Part {
+                        assignment: res.uid,
+                        scale,
+                        delay: Minutes::ZERO,
+                        level: (Minutes::ZERO, false),
+                        d: rem,
+                    });
+                }
+                self.rem_durations.insert(res.uid, (act, rem));
+            }
+            Some(Err(code)) => {
+                diags.push(Diagnostic::AssignmentDurationOutOfDomain { assignment: res.uid });
+                self.fail.insert(p, code);
+            }
+            None => {}
+        }
+    }
+
+    /// Plage des parts du reste de la tâche en position `p`, ajoutées depuis
+    /// `first`.
+    fn close_remaining(&mut self, p: usize, first: usize) {
+        if self.rem_items.len() > first {
+            self.rem_ranges.insert(p, (first, self.rem_items.len()));
+        }
+    }
+
+    /// Parts du reste (`d_rem` > 0) de la feuille en cours en position
+    /// `p` (R-209) ; vide sans part.
+    pub fn remaining_of(&self, p: usize) -> &[Part] {
+        let Some(&(a, b)) = self.rem_ranges.get(&p) else {
+            return &[];
+        };
+        self.rem_items.get(a..b).unwrap_or_default()
+    }
+
     /// Durée de la tâche pour le réseau (lags en %, jalon, % achevé) : le
     /// plus grand des `d_a` (convention du lot L2) ; `None` sans part.
     pub fn duration(&self, p: usize) -> Option<Minutes> {
@@ -658,6 +746,10 @@ fn placed_by_parts(info: &TaskInfo, task: &Task) -> bool {
 }
 
 /// Étape 2 : parts des feuilles et échelles effectives, ajoutées à `scales`.
+#[allow(
+    clippy::too_many_lines,
+    reason = "un seul parcours des affectations résolues ; les parts du reste (J6) y sont rangées au passage"
+)]
 pub(super) fn attach<'a>(
     project: &Project,
     resolved: &'a Resolved,
@@ -724,6 +816,7 @@ pub(super) fn attach<'a>(
         let info = tasks.get(p)?;
         let task = project.tasks.at(p)?;
         let by_parts = placed_by_parts(info, task);
+        let rem_first = out.rem_items.len();
         while let Some(res) = resolved.items.get(k).filter(|i| i.task_pos == p) {
             k = k.checked_add(1)?;
             // R-183 : tâche inactive, aucune affectation rangée.
@@ -740,13 +833,15 @@ pub(super) fn attach<'a>(
                 match res.duration {
                     Ok(d) => {
                         part = Some(out.items.len());
+                        let scale = scale_of(res.cal, scales)?;
                         out.items.push(Part {
                             assignment: res.uid,
-                            scale: scale_of(res.cal, scales)?,
+                            scale,
                             delay: res.delay,
                             level: level_of(res.leveling),
                             d,
                         });
+                        out.push_remaining(res, scale, p, diags); // R-209
                     }
                     Err(code) => {
                         diags.push(Diagnostic::AssignmentDurationOutOfDomain { assignment: res.uid });
@@ -776,6 +871,7 @@ pub(super) fn attach<'a>(
         if let Some(&rep) = resolved.unions.get(&p).filter(|_| by_parts) {
             out.rep.insert(p, scale_of(rep, scales)?);
         }
+        out.close_remaining(p, rem_first);
         out.offsets.push(ix(out.items.len())?);
     }
     Some(out)
@@ -940,6 +1036,24 @@ impl<'n, 'a> Calc<'n, 'a> {
         Placer::of(&net.scales, parts, node.place, node.duration)
     }
 
+    /// Placement du reste de la feuille en cours `v` (R-204, R-209) : ses
+    /// parts du reste (`d_rem`, sans délai), sinon son échelle de placement
+    /// et sa durée restante ; feuille qui n'est pas en cours : son placement
+    /// ([`Self::placer`]).
+    pub(super) fn remaining_placer(&self, v: super::network::NodeIx) -> Result<Placer<'n, 'a>, Fail> {
+        let net: &'n super::network::Network<'a> = self.net;
+        let node = net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+        let Some(ip) = node.in_progress() else {
+            return self.placer(v);
+        };
+        if let Some(code) = net.parts.failure(node.task) {
+            return Err(Fail::Conversion(code));
+        }
+        let parts = net.parts.remaining_of(node.task);
+        let d = parts.iter().map(|part| part.d).max().unwrap_or(ip.remaining);
+        Placer::of(&net.scales, parts, node.place, d)
+    }
+
     /// Sortie : affectations placées (R-171, R-173, R-176, R-177) et durée
     /// calculée des feuilles à parts (mesure de l'union des intervalles
     /// travaillés, R-173), par position de tâche.
@@ -961,6 +1075,16 @@ impl<'n, 'a> Calc<'n, 'a> {
         for p in 0..net.tasks.len() {
             let parts = net.parts.of(p);
             if parts.len() < 2 && parts.first().is_none_or(Part::undelayed) {
+                continue;
+            }
+            // R-209 : une feuille en cours garde sa durée (D de
+            // l'avancement) ; ses parts sont placées en deux temps.
+            let running = net
+                .task(p)
+                .and_then(|t| t.exit)
+                .and_then(|v| net.node(v))
+                .is_some_and(|n| n.in_progress().is_some());
+            if running {
                 continue;
             }
             let Some(planned) = self.planned_start(p) else {
@@ -1042,6 +1166,10 @@ impl<'n, 'a> Calc<'n, 'a> {
     }
 
     /// `AssignmentSchedule` d'une affectation, si sa tâche est planifiée.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "un bras par rôle d'affectation (J5) et par état d'avancement (J6), rien à factoriser"
+    )]
     fn assignment_schedule(
         &self,
         o: &Output,
@@ -1085,7 +1213,17 @@ impl<'n, 'a> Calc<'n, 'a> {
         // début réel sur leur échelle, travail nul daté au début réel brut ;
         // partie réelle = dates planifiées.
         let completed = node.actual().is_some();
+        // R-209 : feuille en cours, affectation en deux parts.
+        let running = state.run.filter(|_| node.in_progress().is_some());
+        let mut split: Option<(Span, Option<Moment>)> = None;
         let (span, late, duration, calendar) = match o.part.and_then(|i| Some((i, net.parts.items.get(i)?))) {
+            Some((_, part)) if running.is_some() => {
+                let run = running?;
+                let (whole, late_span, minutes, actual_span, rest) =
+                    self.running_assignment(o.res.task_pos, part, res.work, run)?;
+                split = Some((actual_span, rest));
+                (whole, late_span, minutes, res.calendar)
+            }
             Some((_, part)) if completed && res.work == Work::ZERO => {
                 let at = Span {
                     start: planned.start,
@@ -1158,9 +1296,70 @@ impl<'n, 'a> Calc<'n, 'a> {
             work: res.work,
             effective_units,
             calendar,
-            actual: completed.then_some(span),
-            remaining_start: None,
+            actual: split.map(|(a, _)| a).or(completed.then_some(span)),
+            remaining_start: split.and_then(|(_, r)| r),
         })
+    }
+
+    /// R-209 : affectation de travail de part `part` de la feuille en
+    /// cours en position `p`, dates `run` : partie réelle depuis le début
+    /// réel (`d_act` sur son échelle, sans délai), reste depuis la reprise
+    /// (`d_rem`, sur son échelle ; nul : pas de reste, span = partie réelle) ;
+    /// travail nul : instant du début réel brut. Rend (span, dates au plus
+    /// tard, durée, partie réelle, début du reste).
+    #[allow(
+        clippy::type_complexity,
+        reason = "n-uplet local, défait aussitôt par l'unique appelant"
+    )]
+    fn running_assignment(
+        &self,
+        p: usize,
+        part: &Part,
+        work: Work,
+        run: super::Run,
+    ) -> Option<(Span, Option<Span>, Minutes, Span, Option<Moment>)> {
+        let net = self.net;
+        let point = Span {
+            start: run.actual_start,
+            finish: run.actual_start,
+        };
+        if work == Work::ZERO {
+            return Some((point, Some(point), Minutes::ZERO, point, None));
+        }
+        let (d_act, d_rem) = *net.parts.rem_durations.get(&part.assignment)?;
+        let actual = if d_act == Minutes::ZERO {
+            point
+        } else {
+            let act_part = Part {
+                delay: Minutes::ZERO,
+                level: (Minutes::ZERO, false),
+                d: d_act,
+                ..*part
+            };
+            Placer::part_span(&net.scales, &act_part, run.actual_start).ok()?
+        };
+        let duration = d_act.checked_add(d_rem).unwrap_or(part.d);
+        let Some(rem_part) = net
+            .parts
+            .remaining_of(p)
+            .iter()
+            .find(|r| r.assignment == part.assignment)
+        else {
+            return Some((actual, Some(actual), duration, actual, None));
+        };
+        let rem = Placer::part_span(&net.scales, rem_part, run.resume).ok()?;
+        let late = run
+            .late_resume
+            .and_then(|l| Placer::part_span(&net.scales, rem_part, l).ok())
+            .map(|l| Span {
+                start: actual.start,
+                finish: l.finish.max(actual.start),
+            });
+        let span = Span {
+            start: actual.start,
+            finish: rem.finish.max(actual.start),
+        };
+        Some((span, late, duration, actual, Some(rem.start)))
     }
 }
 

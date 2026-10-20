@@ -9,11 +9,12 @@
 //! (R-044 : début du projet, porte du parent, liens dans l'ordre de
 //! stockage).
 
-use super::constraint::{ConstraintRule, Mode, Side};
+use super::constraint::{ConstraintRule, InProgress, Mode, Side};
 use super::network::{Fail, NodeIx, NodeKind};
 use super::{Calc, Driver, Pass, PassRole, transfer};
 use crate::calendar::{Span, TimeScale};
 use crate::diagnostic::{Diagnostic, OverriddenBound};
+use crate::duration::Minutes;
 use crate::ids::TaskUid;
 use crate::model::{ConstraintKind, LinkType};
 use crate::time::Moment;
@@ -203,9 +204,10 @@ impl Calc<'_, '_> {
                     continue;
                 }
                 // R-039, R-040 : borne de fin convertie en borne de début
-                // (feuille affectée : min des débuts de ses parts, R-174).
+                // (feuille affectée : min des débuts de ses parts, R-174) ;
+                // feuille en cours : début du reste qui finit en `x` (R-205).
                 (Candidate::Finish(x), None) if kind == NodeKind::Leaf => {
-                    self.placer(v)?.backward_span(x)?.start
+                    self.remaining_placer(v)?.backward_span(x)?.start
                 }
                 (Candidate::Start(x) | Candidate::Finish(x), None) => x,
             };
@@ -314,6 +316,9 @@ impl Calc<'_, '_> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
         if let Some((start, finish)) = node.actual() {
             return self.actual_leaf(v, start, finish);
+        }
+        if let Some(ip) = node.in_progress() {
+            return self.running_leaf(v, ip);
         }
         let (place, constraint) = (node.place, node.constraint);
         let fixed = match node.fixed {
@@ -478,6 +483,140 @@ impl Calc<'_, '_> {
         Ok(())
     }
 
+    /// R-204, R-205 : feuille automatique en cours, une seule coupure
+    /// (ADR-0014 D2). Début réel saisi, ou implicite (R-200 : placement
+    /// depuis les bornes de début du réseau, résolu une fois par la passe
+    /// principale puis gardé, `progress.actual_start_missing`) ; `Stop` = fin
+    /// de la partie réelle placée depuis le début réel sur l'échelle de
+    /// placement (début réel si la durée réelle est nulle) ; reprise =
+    /// premier instant de placement du reste depuis
+    /// `max(Stop, reprise saisie, bornes)` ; fin = fin du reste (feuille
+    /// affectée : plus grande fin des restes de ses parts, R-209). Bornes :
+    /// fractionnement permis, toutes celles du réseau (début du projet,
+    /// porte, FS, SS, et FF/SF converties sur le reste) et le plancher SNET,
+    /// MSO ; sinon aucune, et chaque lien entrant dont la borne est violée
+    /// donne `progress.link_ignored` (info, hors repasse). Pilote
+    /// `Driver::Actual`, sans borne de pilote ; retard de nivellement ignoré
+    /// (il n'agit qu'avant le début). À rebours (passe avant secondaire,
+    /// R-207) : dates de la passe arrière principale, gardées.
+    fn running_leaf(&mut self, v: NodeIx, ip: InProgress) -> Result<(), Fail> {
+        let stored = self.state(v).and_then(|s| s.run);
+        if self.mode == Mode::FromFinish {
+            let run = stored.ok_or(Fail::Internal("tâche en cours sans dates à rebours"))?;
+            let s = self.state_mut(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+            s.early = Some(Span {
+                start: run.actual_start,
+                finish: run.finish,
+            });
+            s.driver = Driver::Actual;
+            s.driver_bound = None;
+            s.undelayed = None;
+            s.held = None;
+            return Ok(());
+        }
+        let b = self.bounds(v, None)?;
+        let uid = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?.uid;
+        let actual_start = match (ip.start, stored) {
+            (Some(start), _) => start,
+            (None, Some(run)) => run.actual_start,
+            (None, None) => {
+                self.emit(Diagnostic::ProgressActualStartMissing { task: uid });
+                self.placer(v)?.forward_span(b.start_side.0)?.start
+            }
+        };
+        let stop = self.stop_of(v, actual_start, ip.actual)?;
+        let mut from = ip.resume.map_or(stop, |r| r.max(stop));
+        if ip.split {
+            from = from.max(b.start);
+            if let Some(date) = self.net.node(v).and_then(|n| n.constraint).and_then(|c| c.date) {
+                from = from.max(date);
+            }
+        }
+        let rest = self.remaining_placer(v)?.forward_span(from)?;
+        let run = super::Run {
+            actual_start,
+            stop,
+            resume: rest.start.max(stop),
+            finish: rest.finish.max(stop),
+            late_resume: stored.and_then(|r| r.late_resume),
+        };
+        if !ip.split && self.role != PassRole::Replay {
+            self.links_ignored(v, run)?;
+        }
+        let s = self.state_mut(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+        s.early = Some(Span {
+            start: actual_start,
+            finish: run.finish,
+        });
+        s.run = Some(run);
+        s.undelayed = None;
+        s.held = None;
+        s.driver = Driver::Actual;
+        s.driver_bound = None;
+        s.degraded = b.degraded;
+        s.linked = b.linked;
+        Ok(())
+    }
+
+    /// R-204 : `Stop` d'une feuille en cours `v` de début réel
+    /// `actual_start` et de durée réelle `actual` : fin de la partie réelle
+    /// placée depuis le début réel sur l'échelle de placement ; le début réel
+    /// (brut) si la durée réelle est nulle.
+    pub(super) fn stop_of(&self, v: NodeIx, actual_start: Moment, actual: Minutes) -> Result<Moment, Fail> {
+        if actual <= Minutes::ZERO {
+            return Ok(actual_start);
+        }
+        let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+        let scale = self
+            .net
+            .scale(node.place)
+            .ok_or(Fail::Internal("échelle hors bornes"))?;
+        Ok(scale.forward_span(actual_start, actual)?.finish.max(actual_start))
+    }
+
+    /// R-205 : fractionnement non permis, `progress.link_ignored` pour
+    /// chaque lien entrant de la feuille en cours `v` (dates `run`) dont la
+    /// borne est violée : FS, SS si la borne dépasse la reprise en brut ; FF,
+    /// SF si la fin la précède en temps ouvré de l'échelle de placement. Une
+    /// borne qui ne se calcule pas ne signale rien.
+    fn links_ignored(&mut self, v: NodeIx, run: super::Run) -> Result<(), Fail> {
+        let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+        let scale = *self
+            .net
+            .scale(node.place)
+            .ok_or(Fail::Internal("échelle hors bornes"))?;
+        let incoming = self
+            .net
+            .incoming(v)
+            .ok_or(Fail::Internal("arcs entrants hors bornes"))?;
+        for i in incoming {
+            if self.net.is_cut(i) || self.is_dropped(i) {
+                continue;
+            }
+            let arc = *self.net.arc(i).ok_or(Fail::Internal("arc hors bornes"))?;
+            let Some(l) = arc.link else { continue };
+            let Some(se) = self.state(arc.from).and_then(|s| s.early) else {
+                continue;
+            };
+            let Ok(x) = self.link_bound(i, l, se) else {
+                continue;
+            };
+            let violated = match l.ty {
+                LinkType::FinishToStart | LinkType::StartToStart => x > run.resume,
+                LinkType::FinishToFinish | LinkType::StartToFinish => {
+                    scale.between(run.finish, x).is_ok_and(|m| m.get() > 0)
+                }
+            };
+            if violated {
+                self.emit(Diagnostic::ProgressLinkIgnored {
+                    predecessor: l.pred,
+                    successor: l.succ,
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// R-203 : `progress.link_overridden` pour chaque lien entrant de la
     /// feuille achevée `v` (dates réelles `a`) dont la borne est violée :
     /// FS, SS si la borne dépasse le début réel en brut ; FF, SF si la fin
@@ -590,7 +729,8 @@ impl Calc<'_, '_> {
             ConstraintRule::None
             | ConstraintRule::Opposite
             | ConstraintRule::Cap(_)
-            | ConstraintRule::Actual { .. } => {}
+            | ConstraintRule::Actual { .. }
+            | ConstraintRule::Progress(_) => {}
         }
         Ok((natural, driver))
     }

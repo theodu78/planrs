@@ -124,6 +124,28 @@ struct NodeState {
     actual: Option<Span>,
     /// Borne brute retenue pour le pilote (R-230, partie moteur).
     driver_bound: Option<Moment>,
+    /// Feuille en cours (R-204 à R-207) : partie réelle, reprise et fin
+    /// placées par la passe principale (début réel implicite résolu une
+    /// fois), début au plus tard du reste posé par la passe arrière.
+    run: Option<Run>,
+}
+
+/// Dates calculées d'une feuille en cours (R-204 à R-207, ADR-0014 D2) :
+/// une seule coupure, partie réelle `[actual_start, stop]`, reste placé
+/// depuis `resume`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Run {
+    /// Début réel (saisi, ou implicite, R-200).
+    actual_start: Moment,
+    /// Fin de la partie réelle (R-204), jamais stockée dans le modèle.
+    stop: Moment,
+    /// Début du reste (R-204, R-205).
+    resume: Moment,
+    /// Fin du reste, fin de la tâche.
+    finish: Moment,
+    /// Début au plus tard du reste (R-206) : ce que voient ses
+    /// prédécesseurs (FS, SS) ; à rebours, la reprise (R-207).
+    late_resume: Option<Moment>,
 }
 
 impl NodeState {
@@ -147,6 +169,7 @@ impl NodeState {
         free_slack: Minutes::ZERO,
         actual: None,
         driver_bound: None,
+        run: None,
     };
 }
 
@@ -232,8 +255,27 @@ impl Calc<'_, '_> {
     /// Le nœud `v` est une feuille achevée (R-203) : ses liens entrants ne
     /// plafonnent pas ses prédécesseurs (passe arrière, marge libre, R-051),
     /// S20 : « it can no longer affect the completion of successor tasks ».
+    /// Même lecture pour une feuille en cours sans fractionnement (R-205) :
+    /// ses liens entrants sont sans effet.
     fn actual_target(&self, v: NodeIx) -> bool {
-        self.net.node(v).is_some_and(|n| n.actual().is_some())
+        self.net
+            .node(v)
+            .is_some_and(|n| n.actual().is_some() || n.in_progress().is_some_and(|ip| !ip.split))
+    }
+
+    /// Dates au plus tôt de la cible `v` vues par ses prédécesseurs (marge
+    /// libre, R-049) : celles du nœud ; feuille en cours fractionnable
+    /// (R-206) : début = reprise (seule la partie restante dépend d'eux).
+    fn early_view(&self, v: NodeIx) -> Option<Span> {
+        let s = self.state(v)?;
+        let early = s.early?;
+        Some(match s.run {
+            Some(run) if self.net.node(v).is_some_and(|n| n.in_progress().is_some()) => Span {
+                start: run.resume,
+                finish: early.finish,
+            },
+            _ => early,
+        })
     }
 
     /// Arc `a` non appliqué en passe avant (R-069).
@@ -341,7 +383,10 @@ impl Calc<'_, '_> {
         let Some(node) = self.net.node(target) else {
             return true;
         };
-        if node.kind == network::NodeKind::Gate || node.duration == Minutes::ZERO {
+        // Feuille en cours sans reste (R-204) : son reste se lit comme un
+        // jalon.
+        let no_rest = node.in_progress().is_some_and(|ip| ip.remaining == Minutes::ZERO);
+        if node.kind == network::NodeKind::Gate || node.duration == Minutes::ZERO || no_rest {
             return true;
         }
         if node.place == sigma {

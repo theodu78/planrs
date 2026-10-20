@@ -222,16 +222,16 @@ fn contract_workspace_refusals() {
         GranularityJson::Quarter
     );
 
-    // `call_with` : squelette refusé, session intacte.
+    // `call_with` (corps au lot L3) : lecture servie ; ouvertures et
+    // `app.*` refusées, session intacte.
     let mut s = session();
     let before = s.project().clone();
-    let env = CallEnv {
-        now: now(),
-        lang: Language::En,
-        root: None,
-    };
-    let err = call_with(&mut s, &env, "project.summary", json!({})).unwrap_err();
-    assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE);
+    let env = CallEnv::new(now(), Language::En);
+    assert!(call_with(&mut s, &env, "project.summary", json!({})).is_ok());
+    let err = call_with(&mut s, &env, "project.open", json!({"path": "x.xml"})).unwrap_err();
+    assert_eq!(err.code, codes::CONTROL_NOT_RELAYABLE);
+    let err = call_with(&mut s, &env, "app.ui_state", json!({})).unwrap_err();
+    assert_eq!(err.code, codes::CONTROL_NOT_ATTACHED);
     assert_eq!(s.project(), &before);
 }
 

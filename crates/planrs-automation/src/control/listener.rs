@@ -1,18 +1,54 @@
-//! Écouteur minimal de l'application (lot L10) : `hello` et `query`
-//! (`project.summary`) sur une socket Unix, dans un fil dédié.
+//! Écouteurs de l'application sur une socket Unix, dans un fil dédié :
+//!
+//! - [`spawn_listener_in`] (J7, lot L3, ADR-0015 D9) : relais. Chaque
+//!   requête authentifiée (`query`, `execute`, `ui_state`, `screenshot`)
+//!   devient un [`RelayCall`] poussé dans la file de l'application, qui
+//!   répond par son canal ; l'écouteur ne touche jamais la session ;
+//! - [`spawn_hello_listener_in`] (J4, lot L10) : `hello` et `query`
+//!   (`project.summary`) seulement, sans relais (garde du fichier ; gardé
+//!   pour les tests des surfaces qui simulent une application).
 //!
 //! Chaque connexion commence par un `hello` porteur du jeton ; toute autre
-//! requête avant, ou un jeton faux, est refusée et la connexion fermée. En
-//! J4, `execute`, `undo`, `redo`, `history`, `ui_state` et `screenshot`
-//! répondent `control.unsupported` (relais des commandes en J7).
+//! requête avant, ou un jeton faux, est refusée et la connexion fermée
+//! (C-CTL-01).
 //!
-//! Windows : pas d'écouteur en J4 ([`ControlError::Unsupported`]).
+//! Windows : pas d'écouteur ([`ControlError::Unsupported`] ; règle des
+//! 24 h, ADR-0015).
 
 use std::fmt;
+use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use super::{ControlError, Rendezvous, decode_token, state_dir};
+use super::{ControlError, RelayCall, Rendezvous, Waker, decode_token, state_dir};
 use crate::view::SummaryView;
+
+/// Capacité conseillée de la file des appels relayés (64) : au-delà,
+/// l'écouteur répond `control.busy`.
+pub const RELAY_QUEUE: usize = 64;
+
+/// Délai d'un appel relayé, validation comprise (120 s, C-CTL-04).
+pub const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Réglages de l'écouteur du relais.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ListenerOptions {
+    /// Délai d'un appel depuis sa mise en file (validation comprise) ; à
+    /// l'expiration, `control.approval_timeout` et l'appel est retiré.
+    pub approval_timeout: Duration,
+    /// Attente de la réponse d'un appel que l'application a pris juste
+    /// avant l'expiration.
+    pub reply_grace: Duration,
+}
+
+impl Default for ListenerOptions {
+    fn default() -> Self {
+        Self {
+            approval_timeout: APPROVAL_TIMEOUT,
+            reply_grace: Duration::from_secs(10),
+        }
+    }
+}
 
 /// Écouteur en cours ; arrêté à sa destruction (socket supprimée).
 pub struct ListenerHandle {
@@ -92,7 +128,7 @@ pub fn spawn_hello_listener_in(
     let expected = decode_token(&token).ok_or(ControlError::InvalidToken)?;
     #[cfg(unix)]
     {
-        let (endpoint, running) = unix::spawn(dir, expected, summary)?;
+        let (endpoint, running) = unix::spawn(dir, expected, unix::Service::Hello(summary))?;
         Ok(ListenerHandle {
             endpoint,
             token,
@@ -107,27 +143,59 @@ pub fn spawn_hello_listener_in(
     }
 }
 
-/// Écouteur du relais J7 (ADR-0015 D9) : chaque requête authentifiée
-/// devient un [`super::RelayCall`] poussé dans `inbox`, puis `wake` réveille
-/// l'interface. Remplace [`spawn_hello_listener_in`] au lot L3.
+/// Écouteur du relais J7 (ADR-0015 D9, lot L3), réglages par défaut
+/// ([`ListenerOptions`]) : voir [`spawn_listener_with`].
 ///
 /// # Errors
 ///
-/// [`ControlError::InvalidToken`] ; squelette J7 L0 :
-/// [`ControlError::Unsupported`].
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "contrat J7 : l'écouteur du lot L3 garde le jeton, la file et le rappel"
-)]
+/// Celles de [`spawn_listener_with`].
 pub fn spawn_listener_in(
     dir: &std::path::Path,
     token: String,
-    inbox: std::sync::mpsc::SyncSender<super::RelayCall>,
-    wake: super::Waker,
+    inbox: SyncSender<RelayCall>,
+    wake: Waker,
 ) -> Result<ListenerHandle, ControlError> {
-    let _ = decode_token(&token).ok_or(ControlError::InvalidToken)?;
-    drop((dir, inbox, wake));
-    Err(ControlError::Unsupported)
+    spawn_listener_with(dir, token, inbox, wake, ListenerOptions::default())
+}
+
+/// Lance l'écouteur du relais, socket `<pid>-<n>.sock` (0600) dans `dir`
+/// (0700) : chaque requête authentifiée devient un [`RelayCall`] poussé
+/// dans `inbox` (file bornée de l'application ; pleine : `control.busy`,
+/// connexion maintenue), puis `wake` réveille l'interface. Les réponses de
+/// l'application (`pending_approval`, puis `ok` ou `err`) partent sur la
+/// même connexion. Sans réponse finale en `options.approval_timeout`,
+/// l'appel expire ([`super::CallState::expire`]), un `Cancel(id)` suit
+/// dans la file et l'agent reçoit `control.approval_timeout`.
+///
+/// # Errors
+///
+/// [`ControlError::InvalidToken`], [`ControlError::Invalid`] (chemin non
+/// UTF-8), [`ControlError::Io`] (dossier, socket, fil) ;
+/// [`ControlError::Unsupported`] hors Unix.
+pub fn spawn_listener_with(
+    dir: &std::path::Path,
+    token: String,
+    inbox: SyncSender<RelayCall>,
+    wake: Waker,
+    options: ListenerOptions,
+) -> Result<ListenerHandle, ControlError> {
+    let expected = decode_token(&token).ok_or(ControlError::InvalidToken)?;
+    #[cfg(unix)]
+    {
+        let service = unix::Service::Relay { inbox, wake, options };
+        let (endpoint, running) = unix::spawn(dir, expected, service)?;
+        Ok(ListenerHandle {
+            endpoint,
+            token,
+            running,
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (dir, expected, options);
+        drop((token, inbox, wake));
+        Err(ControlError::Unsupported)
+    }
 }
 
 #[cfg(unix)]
@@ -136,16 +204,20 @@ mod unix {
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::mpsc::{RecvTimeoutError, SyncSender, TrySendError, sync_channel};
     use std::sync::{Arc, Mutex, PoisonError};
     use std::thread::{self, JoinHandle};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
-    use serde_json::{Value, json};
+    use serde_json::{Map, Value, json};
 
     use super::super::{
-        ControlError, Frame, LineError, MAX_LINE_BYTES, Method, PROTOCOL_VERSION, Reply, codes, ensure_dir,
-        next_stem, read_line_bounded, to_line, token_matches,
+        CallState, ControlError, Frame, LineError, MAX_LINE_BYTES, Method, PROTOCOL_VERSION, RelayCall,
+        RelayKind, Reply, Waker, codes, ensure_dir, next_stem, read_line_bounded, to_line, token_matches,
     };
+    use super::ListenerOptions;
+    use crate::error::codes as tool_codes;
+    use crate::registry::{Kind, lookup};
     use crate::view::SummaryView;
 
     /// Connexions servies en même temps ; au-delà, refusées.
@@ -154,13 +226,28 @@ mod unix {
     const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
     /// Délai d'écriture d'une réponse.
     const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-    /// Lecture unique servie en J4.
+    /// Lecture servie par défaut (`query` sans `command`).
     const SUMMARY_COMMAND: &str = "project.summary";
+
+    /// Ce que sert l'écouteur.
+    pub(super) enum Service {
+        /// J4 : `hello` et le résumé tenu par l'application.
+        Hello(Arc<Mutex<Option<SummaryView>>>),
+        /// J7 : relais vers la file de l'application.
+        Relay {
+            /// File de l'application.
+            inbox: SyncSender<RelayCall>,
+            /// Réveil de l'interface.
+            wake: Waker,
+            /// Délais.
+            options: ListenerOptions,
+        },
+    }
 
     struct Shared {
         stop: AtomicBool,
         token: [u8; 32],
-        summary: Arc<Mutex<Option<SummaryView>>>,
+        service: Service,
         active: AtomicUsize,
     }
 
@@ -186,7 +273,7 @@ mod unix {
     pub(super) fn spawn(
         dir: &Path,
         token: [u8; 32],
-        summary: Arc<Mutex<Option<SummaryView>>>,
+        service: Service,
     ) -> Result<(String, Running), ControlError> {
         use std::os::unix::fs::PermissionsExt;
 
@@ -209,7 +296,7 @@ mod unix {
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
             token,
-            summary,
+            service,
             active: AtomicUsize::new(0),
         });
         let worker = Arc::clone(&shared);
@@ -261,6 +348,14 @@ mod unix {
         }
     }
 
+    /// Suite d'une requête lue.
+    enum Step {
+        /// Réponse immédiate, et si la connexion reste ouverte.
+        Reply(Reply, bool),
+        /// Appel à relayer à l'application.
+        Relay(u64, RelayKind),
+    }
+
     fn serve(stream: &UnixStream, shared: &Shared) {
         if stream.set_read_timeout(Some(IDLE_TIMEOUT)).is_err()
             || stream.set_write_timeout(Some(WRITE_TIMEOUT)).is_err()
@@ -286,9 +381,17 @@ mod unix {
             if shared.stop.load(Ordering::SeqCst) {
                 return;
             }
-            let (reply, keep_open) = respond(&line, &mut authenticated, shared);
-            if send(stream, &reply).is_err() || !keep_open {
-                return;
+            match respond(&line, &mut authenticated, shared) {
+                Step::Reply(reply, keep_open) => {
+                    if send(stream, &reply).is_err() || !keep_open {
+                        return;
+                    }
+                }
+                Step::Relay(id, kind) => {
+                    if relay(stream, shared, id, kind).is_err() {
+                        return;
+                    }
+                }
             }
         }
     }
@@ -298,8 +401,8 @@ mod unix {
         stream.write_all(&line)
     }
 
-    /// Réponse à une ligne, et si la connexion reste ouverte.
-    fn respond(line: &[u8], authenticated: &mut bool, shared: &Shared) -> (Reply, bool) {
+    /// Réponse à une ligne, ou appel à relayer.
+    fn respond(line: &[u8], authenticated: &mut bool, shared: &Shared) -> Step {
         let frame = match serde_json::from_slice::<Frame>(line) {
             Ok(frame) => frame,
             Err(e) => {
@@ -309,7 +412,7 @@ mod unix {
                     .and_then(|v| v.get("id").and_then(Value::as_u64))
                     .unwrap_or(0);
                 let reply = Reply::error(id, codes::INVALID_FRAME, format!("trame illisible : {e}"));
-                return (reply, *authenticated);
+                return Step::Reply(reply, *authenticated);
             }
         };
         let id = frame.id;
@@ -322,48 +425,52 @@ mod unix {
                     frame.v
                 ),
             );
-            return (reply, *authenticated);
+            return Step::Reply(reply, *authenticated);
         }
-        match frame.method {
-            Method::Hello => {
-                let given = frame.params.get("token").and_then(Value::as_str).unwrap_or("");
-                if token_matches(&shared.token, given) {
-                    *authenticated = true;
-                    (
-                        Reply::Ok {
-                            id,
-                            result: hello_result(),
-                        },
-                        true,
-                    )
-                } else {
-                    *authenticated = false;
-                    (Reply::error(id, codes::BAD_TOKEN, "jeton refusé"), false)
-                }
-            }
-            _ if !*authenticated => (
+        if frame.method == Method::Hello {
+            let given = frame.params.get("token").and_then(Value::as_str).unwrap_or("");
+            return if token_matches(&shared.token, given) {
+                *authenticated = true;
+                let result = hello_result(&shared.service);
+                Step::Reply(Reply::Ok { id, result }, true)
+            } else {
+                *authenticated = false;
+                Step::Reply(Reply::error(id, codes::BAD_TOKEN, "jeton refusé"), false)
+            };
+        }
+        if !*authenticated {
+            return Step::Reply(
                 Reply::error(id, codes::UNAUTHENTICATED, "hello avec jeton attendu en premier"),
                 false,
-            ),
-            Method::Query => (query(id, &frame.params, shared), true),
-            other => (
-                Reply::error(
-                    id,
-                    codes::UNSUPPORTED,
-                    format!(
-                        "méthode « {} » non prise en charge en J4 (relais en J7)",
-                        other.wire_name()
+            );
+        }
+        match &shared.service {
+            Service::Hello(summary) => match frame.method {
+                Method::Query => Step::Reply(query_summary(id, &frame.params, summary), true),
+                other => Step::Reply(
+                    Reply::error(
+                        id,
+                        codes::UNSUPPORTED,
+                        format!(
+                            "méthode « {} » non prise en charge par cet écouteur",
+                            other.wire_name()
+                        ),
                     ),
+                    true,
                 ),
-                true,
-            ),
+            },
+            Service::Relay { .. } => match relay_kind(frame.method, frame.params) {
+                Ok(kind) => Step::Relay(id, kind),
+                Err((code, message)) => Step::Reply(Reply::error(id, code, message), true),
+            },
         }
     }
 
-    fn hello_result() -> Value {
+    fn hello_result(service: &Service) -> Value {
+        let relay = matches!(service, Service::Relay { .. });
         let methods: Vec<&str> = Method::ALL
             .iter()
-            .filter(|m| m.available_in_j4())
+            .filter(|m| relay || m.available_in_j4())
             .map(|m| m.wire_name())
             .collect();
         json!({
@@ -375,8 +482,177 @@ mod unix {
         })
     }
 
-    /// `query` : `params` nul, `{}` ou `{"command":"project.summary"}`.
-    fn query(id: u64, params: &Value, shared: &Shared) -> Reply {
+    /// Paramètres en objet (`null` : objet vide) ; sinon refus.
+    fn object(params: Value) -> Result<Map<String, Value>, (&'static str, String)> {
+        match params {
+            Value::Null => Ok(Map::new()),
+            Value::Object(map) => Ok(map),
+            _ => Err((codes::INVALID_FRAME, "« params » doit être un objet".to_owned())),
+        }
+    }
+
+    /// Refuse les clés restantes.
+    fn no_more(map: &Map<String, Value>) -> Result<(), (&'static str, String)> {
+        match map.keys().next() {
+            None => Ok(()),
+            Some(k) => Err((codes::INVALID_FRAME, format!("champ inconnu « {k} »"))),
+        }
+    }
+
+    /// Appel relayé d'une requête authentifiée.
+    fn relay_kind(method: Method, params: Value) -> Result<RelayKind, (&'static str, String)> {
+        let mut map = object(params)?;
+        match method {
+            // Traité avant.
+            Method::Hello => Err((codes::INVALID_FRAME, "hello déjà traité".to_owned())),
+            Method::Query => {
+                let tool = match map.remove("command") {
+                    None | Some(Value::Null) => SUMMARY_COMMAND.to_owned(),
+                    Some(Value::String(c)) => c,
+                    Some(_) => {
+                        return Err((
+                            codes::INVALID_FRAME,
+                            "« command » doit être une chaîne".to_owned(),
+                        ));
+                    }
+                };
+                let params = map.remove("params").unwrap_or_else(|| Value::Object(Map::new()));
+                no_more(&map)?;
+                let readable = lookup(&tool).is_some_and(|s| matches!(s.kind, Kind::Read | Kind::Analysis));
+                if !readable {
+                    return Err((
+                        codes::UNSUPPORTED,
+                        format!("« {tool} » n'est pas une lecture : passer par execute"),
+                    ));
+                }
+                Ok(RelayKind::Execute { tool, params })
+            }
+            Method::Execute => {
+                let Some(Value::String(tool)) = map.remove("tool") else {
+                    return Err((codes::INVALID_FRAME, "« tool » (chaîne) attendu".to_owned()));
+                };
+                let params = map.remove("params").unwrap_or_else(|| Value::Object(Map::new()));
+                no_more(&map)?;
+                Ok(RelayKind::Execute { tool, params })
+            }
+            Method::UiState => {
+                no_more(&map)?;
+                Ok(RelayKind::UiState)
+            }
+            Method::Screenshot => {
+                let scale_down = match map.remove("scale_down") {
+                    None | Some(Value::Null) => 0,
+                    Some(v) => v.as_u64().map(|n| u8::try_from(n).unwrap_or(u8::MAX)).ok_or((
+                        codes::INVALID_FRAME,
+                        "« scale_down » doit être un entier".to_owned(),
+                    ))?,
+                };
+                no_more(&map)?;
+                Ok(RelayKind::Screenshot { scale_down })
+            }
+        }
+    }
+
+    /// Relaie un appel à l'application et transmet ses réponses ; rend
+    /// l'erreur d'écriture sur la connexion (connexion à fermer).
+    fn relay(stream: &UnixStream, shared: &Shared, id: u64, kind: RelayKind) -> std::io::Result<()> {
+        let Service::Relay { inbox, wake, options } = &shared.service else {
+            return send(stream, &Reply::error(id, codes::UNSUPPORTED, "relais non servi"));
+        };
+        let (tx, rx) = sync_channel::<Reply>(4);
+        let state = Arc::new(CallState::new());
+        let call = RelayCall {
+            id,
+            kind,
+            state: Arc::clone(&state),
+            reply: tx,
+        };
+        match inbox.try_send(call) {
+            Ok(()) => wake(),
+            Err(TrySendError::Full(_)) => {
+                return send(
+                    stream,
+                    &Reply::error(
+                        id,
+                        codes::BUSY,
+                        "file des appels de l'application pleine : réessayer",
+                    ),
+                );
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                return send(
+                    stream,
+                    &Reply::error(
+                        id,
+                        tool_codes::CONTROL_APP_GONE,
+                        "application en cours de fermeture",
+                    ),
+                );
+            }
+        }
+        let start = Instant::now();
+        let mut pending = false;
+        loop {
+            let left = options.approval_timeout.saturating_sub(start.elapsed());
+            match rx.recv_timeout(left) {
+                Ok(reply @ Reply::PendingApproval { .. }) => {
+                    pending = true;
+                    send(stream, &reply)?;
+                }
+                Ok(reply) => return send(stream, &reply),
+                Err(RecvTimeoutError::Disconnected) => {
+                    return send(
+                        stream,
+                        &Reply::error(id, codes::INTERNAL, "appel abandonné par l'application"),
+                    );
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    if state.expire() {
+                        cancel(inbox, wake, id);
+                        return send(stream, &expired(id, pending));
+                    }
+                    // Pris juste avant l'expiration : la réponse suit.
+                    return match rx.recv_timeout(options.reply_grace) {
+                        Ok(Reply::PendingApproval { .. }) | Err(_) => send(stream, &expired(id, pending)),
+                        Ok(reply) => send(stream, &reply),
+                    };
+                }
+            }
+        }
+    }
+
+    /// Réponse d'un appel expiré : validation attendue (`approval_timeout`)
+    /// ou application muette.
+    fn expired(id: u64, pending: bool) -> Reply {
+        if pending {
+            Reply::error(
+                id,
+                tool_codes::CONTROL_APPROVAL_TIMEOUT,
+                "aucune réponse de l'utilisateur dans le délai : rien n'a été appliqué",
+            )
+        } else {
+            Reply::error(id, tool_codes::CONTROL_APP_GONE, "l'application ne répond pas")
+        }
+    }
+
+    /// Signale à l'application l'abandon de l'appel `id` (bandeau retiré) ;
+    /// file pleine ou fermée : l'application voit l'appel expiré à la
+    /// prochaine image ([`CallState::is_pending`]).
+    fn cancel(inbox: &SyncSender<RelayCall>, wake: &Waker, id: u64) {
+        let (reply, _) = sync_channel(1);
+        let call = RelayCall {
+            id,
+            kind: RelayKind::Cancel(id),
+            state: Arc::new(CallState::new()),
+            reply,
+        };
+        if inbox.try_send(call).is_ok() {
+            wake();
+        }
+    }
+
+    /// `query` du J4 : `params` nul, `{}` ou `{"command":"project.summary"}`.
+    fn query_summary(id: u64, params: &Value, summary: &Mutex<Option<SummaryView>>) -> Reply {
         let command = match params {
             Value::Null => None,
             Value::Object(map) => match map.get("command") {
@@ -392,14 +668,10 @@ mod unix {
             return Reply::error(
                 id,
                 codes::UNSUPPORTED,
-                format!("lecture « {c} » non prise en charge en J4 (seule : {SUMMARY_COMMAND})"),
+                format!("lecture « {c} » non prise en charge par cet écouteur (seule : {SUMMARY_COMMAND})"),
             );
         }
-        let summary = shared
-            .summary
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
+        let summary = summary.lock().unwrap_or_else(PoisonError::into_inner).clone();
         match serde_json::to_value(summary) {
             Ok(result) => Reply::Ok { id, result },
             Err(e) => Reply::error(id, codes::INTERNAL, format!("résumé illisible : {e}")),

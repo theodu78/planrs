@@ -52,7 +52,7 @@ impl EditSource {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct HistoryEntry {
     pub label: Option<String>,
-    /// Origine du lot (J7 ; toujours `User` jusqu'au lot L3).
+    /// Origine du lot (J7, ADR-0015 D10).
     pub source: EditSource,
     pub ops: Batch,
     pub delta: Delta,
@@ -102,12 +102,14 @@ impl History {
         self.undo.len()
     }
 
-    /// Empile un lot commité (R-164) : vide la pile de rétablissement, puis
-    /// abandonne les plus anciennes entrées tant que le budget (octets ou
-    /// nombre) est dépassé, en gardant toujours la dernière.
+    /// Empile un lot commité (R-164) d'origine `source` : vide la pile de
+    /// rétablissement, puis abandonne les plus anciennes entrées tant que le
+    /// budget (octets ou nombre) est dépassé, en gardant toujours la
+    /// dernière.
     pub(crate) fn push(
         &mut self,
         label: Option<String>,
+        source: EditSource,
         ops: Batch,
         delta: Delta,
         bytes: usize,
@@ -117,7 +119,7 @@ impl History {
         self.last_id = self.last_id.saturating_add(1);
         self.undo.push_back(HistoryEntry {
             label,
-            source: EditSource::User,
+            source,
             ops,
             delta,
             bytes,

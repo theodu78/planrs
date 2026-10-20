@@ -1,14 +1,19 @@
 //! Canal de contrôle de l'application (ADR-0002) : protocole, rendez-vous,
-//! écouteur `hello` (hors wasm ; lot L10). En J4, le canal garde le fichier
-//! (pas de double écrivain) sans relayer les commandes.
+//! écouteur, relais des appels d'un agent (hors wasm ; lot L10 de J4,
+//! relais J7 aux lots L2 et L3).
 //!
 //! Déroulé (détail dans `docs/features/control.md`) :
-//! 1. l'application crée un jeton ([`new_token`]), lance l'écouteur
-//!    ([`spawn_hello_listener`]) puis publie son rendez-vous ([`publish`],
-//!    fichier 0600 dans un dossier 0700) ;
+//! 1. l'application crée un jeton ([`new_token`]), lance l'écouteur du
+//!    relais ([`spawn_listener_in`], file bornée vidée par l'interface)
+//!    puis publie son rendez-vous ([`publish`], fichier 0600 dans un
+//!    dossier 0700) ;
 //! 2. `planrs mcp`, avant d'ouvrir un fichier, appelle [`find_live_for`] :
-//!    un rendez-vous vivant qui tient ce fichier ⇒ `file.open_in_app` ;
-//! 3. à la fermeture, le garde et la poignée suppriment fichier et socket.
+//!    un rendez-vous vivant qui tient ce fichier ⇒ rattachement
+//!    ([`RelayClient`]) ou, en `--headless`, `file.open_in_app` ;
+//! 3. chaque appel relayé est exécuté par l'application sur la session de
+//!    son document (`workspace::call_with`), toute écriture après la
+//!    validation de l'utilisateur ;
+//! 4. à la fermeture, le garde et la poignée suppriment fichier et socket.
 
 mod client;
 mod frame;
@@ -24,7 +29,10 @@ pub use frame::{
     Frame, LineError, MAX_LINE_BYTES, Method, PROTOCOL_VERSION, Reply, WireError, codes, read_line_bounded,
     to_line,
 };
-pub use listener::{ListenerHandle, spawn_hello_listener, spawn_hello_listener_in, spawn_listener_in};
+pub use listener::{
+    APPROVAL_TIMEOUT, ListenerHandle, ListenerOptions, RELAY_QUEUE, spawn_hello_listener,
+    spawn_hello_listener_in, spawn_listener_in, spawn_listener_with,
+};
 pub use relay::{CallState, RelayCall, RelayKind, Waker};
 pub use rendezvous::{
     Rendezvous, RendezvousGuard, STATE_DIR_ENV, canonical_project, find_live_for, find_live_for_in, probe,

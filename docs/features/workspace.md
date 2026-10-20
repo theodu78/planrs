@@ -40,7 +40,7 @@ Routeur unique : un id du registre (`REGISTRY`), des paramètres JSON, une valeu
 
 - Ordre des ID, lignes vides exclues. `cursor` : UID de la dernière tâche de la page précédente (exclusif) ; `next_cursor` absent à la fin ; `total` = tâches retenues, toutes pages comprises. Curseur inconnu : `task.not_found` (champ `cursor`).
 - `limit` : 50 par défaut, 500 au plus (`limit.exceeded`), 0 refusé.
-- Filtres cumulés : `critical` ; `late` (J4 : fin planifiée après l'échéance ; J6 : avancement) ; `from`/`to` (jours inclus : fin le jour `from` ou après, début le jour `to` ou avant) ; `outline_max` ; `summary` (`true` récapitulatives, `false` feuilles) ; `resource` réservé (`command.not_yet_available`, J5). Une tâche non planifiée n'est retenue par aucun filtre de dates, ni par `critical`, ni par `late`.
+- Filtres cumulés : `critical` ; `late` (R-236 : fin planifiée après l'échéance ou après la fin de la ligne de base 0, non achevée à fin atteinte ou non commencée à début passé à la date d'état effective) ; `from`/`to` (jours inclus : fin le jour `from` ou après, début le jour `to` ou avant) ; `outline_max` ; `summary` (`true` récapitulatives, `false` feuilles) ; `resource` réservé (`command.not_yet_available`, J5). Une tâche non planifiée n'est retenue par aucun filtre de dates, ni par `critical`, ni par `late`.
 
 ## 4. Fichiers (`files`, hors wasm)
 

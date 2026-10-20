@@ -1598,3 +1598,10 @@ Règles J6 (ADR-0014 D8, D9) : `explain_date` (pilote et borne brute `driver_bou
 - **Source** : hypothèse (forme des vues ; ADR-0014 D8, D9).
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r235_progress_views.rs` (`r235_task_progress_view`, `r235_get_task_baselines`) ; `crates/planrs-automation/tests/views_j6.rs` (`views_golden`).
+
+## R-236 — Filtre `late` de `list_tasks`
+- **Formulation** (lot L8) : `task.list { late: true }` (MCP `list_tasks`, CLI `planrs tasks --late`) retient une tâche planifiée si (a) sa fin planifiée dépasse son échéance (J4), ou (b) sa fin planifiée dépasse la fin de sa ligne de base 0, ou (c) elle n'est pas achevée alors que sa fin planifiée est ≤ la date d'état effective (R-034, R-219 : saisie, sinon la date du jour du projet), ou (d) elle n'est pas commencée alors que son début planifié est < la date d'état. État d'avancement lu dans le `Schedule` (R-200 ; R-210 pour une récapitulative) ; une tâche non planifiée n'est jamais retenue. Remplace le filtre J4 (échéance seule).
+  - Exemple (S, début lun 02/11/2026, date d'état ven 13/11/2026 17:00) : U non commencée prévue jeu 12/11 ⇒ en retard ; V achevée ⇒ non ; tâche future (lun 16/11) ⇒ non, sauf échéance dépassée par sa fin ou fin au-delà de sa ligne 0 ; tâche commencée finissant ven 13/11 17:00 (= date d'état) ⇒ en retard, finissant après ⇒ non ; date d'état retirée (date du jour lun 02/11 08:00) ⇒ seuls (a) et (b) restent.
+- **Source** : hypothèse (critères de retard ; le filtre « Tâches en retard » de MS Project n'a pas été relu).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r236_late_filter.rs` (`r236_late_filter`).

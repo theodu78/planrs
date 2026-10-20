@@ -56,7 +56,9 @@ pub struct TaskListParams {
     /// Tâches critiques seulement.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub critical: bool,
-    /// Tâches en retard seulement (J4 : fin planifiée après l'échéance).
+    /// Tâches en retard seulement : fin planifiée après l'échéance ou après
+    /// la fin de la ligne de base 0, non achevée à fin passée ou non
+    /// commencée à début passé à la date d'état.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub late: bool,
     /// Tâches dont les dates planifiées touchent ce jour ou un jour suivant.

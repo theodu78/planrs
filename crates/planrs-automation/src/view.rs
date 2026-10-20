@@ -30,9 +30,9 @@ use std::collections::BTreeMap;
 use planrs_core::calendar::CompiledCalendar;
 use planrs_core::resource::{UsageError, usage as core_usage};
 use planrs_core::{
-    Assignment, Decimal, Diagnostic, Duration, DurationUnit, HasUid, LagValue, Minutes, Moment, Percent,
-    ProgressState, Project, Resource, ResourceKind, ResourceUid, Schedule, Severity, Subject, Task,
-    TaskBaseline, TaskRole, TaskSchedule, TaskUid, TimeBasis, Units, Work, round_div,
+    Assignment, BaselineNumber, Decimal, Diagnostic, Duration, DurationUnit, HasUid, LagValue, Minutes,
+    Moment, Percent, ProgressState, Project, Resource, ResourceKind, ResourceUid, Schedule, Severity,
+    Subject, Task, TaskBaseline, TaskRole, TaskSchedule, TaskUid, TimeBasis, Units, Work, round_div,
 };
 use serde::Serialize;
 
@@ -1250,8 +1250,9 @@ fn invalid(field: &str, why: &str) -> CommandError {
 /// Page de `task.list` : tâches dans l'ordre des ID (lignes vides
 /// exclues), filtrées puis coupées après le curseur.
 ///
-/// Filtres : `critical` (critique selon le moteur), `late` (J4 : fin
-/// planifiée après l'échéance), `from`/`to` (dates planifiées qui touchent
+/// Filtres : `critical` (critique selon le moteur), `late` (R-236 :
+/// échéance ou fin de la ligne 0 dépassée, ou retard à la date d'état),
+/// `from`/`to` (dates planifiées qui touchent
 /// la plage de jours, bornes comprises : début au plus tard le jour `to`,
 /// fin au plus tôt le jour `from`), `outline_max`, `summary`. Une tâche non
 /// planifiée n'est retenue par aucun filtre de dates ni par `critical` ou
@@ -1309,10 +1310,11 @@ pub fn list(session: &Session, p: &TaskListParams) -> Result<ListView, CommandEr
         }
     };
     let schedule = session.schedule();
+    let status = project.effective_status_date();
     let keep = |pos: usize, t: &Task| -> bool {
         let s = schedule.scheduled(t.uid());
         let critical_ok = !p.critical || s.is_some_and(|s| s.critical);
-        let late_ok = !p.late || s.is_some_and(|s| t.deadline.is_some_and(|d| s.finish > d));
+        let late_ok = !p.late || s.is_some_and(|s| is_late(t, s, status));
         let from_ok = p
             .from
             .is_none_or(|from| s.is_some_and(|s| s.finish.day() >= from));
@@ -1346,6 +1348,24 @@ pub fn list(session: &Session, p: &TaskListParams) -> Result<ListView, CommandEr
         next_cursor,
         total,
     })
+}
+
+/// R-236 : tâche planifiée en retard. Vrai si sa fin planifiée dépasse son
+/// échéance (J4) ou la fin de sa ligne de base 0, ou si, à la date d'état
+/// effective `status` (R-034), elle n'est pas achevée alors que sa fin
+/// planifiée est atteinte, ou pas commencée alors que son début planifié
+/// est passé. État d'avancement lu dans le `Schedule` (R-200, R-210).
+fn is_late(t: &Task, s: &TaskSchedule, status: Moment) -> bool {
+    let past_deadline = t.deadline.is_some_and(|d| s.finish > d);
+    let past_baseline = t
+        .baselines
+        .get(&BaselineNumber::PRIMARY)
+        .and_then(|b| b.finish)
+        .is_some_and(|f| s.finish > f);
+    let state = s.progress.map_or(ProgressState::NotStarted, |g| g.state);
+    let unfinished = state != ProgressState::Complete && s.finish <= status;
+    let unstarted = state == ProgressState::NotStarted && s.start < status;
+    past_deadline || past_baseline || unfinished || unstarted
 }
 
 /// Ressource `uid` du projet, sinon `resource.not_found` sur `field`.

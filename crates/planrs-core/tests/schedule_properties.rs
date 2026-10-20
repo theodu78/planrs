@@ -93,6 +93,15 @@
 //!   liens FS et SS ; comme pour P16, une borne de fin — lien FF, SF,
 //!   contrainte de fin — recule le début d'une tâche allongée, et un
 //!   successeur SS avec lui).
+//! - **P37** (J6, partie moteur) : sans avancement, aucun avancement
+//!   calculé ni diagnostic d'avancement, et changer la seule date d'état ne
+//!   change pas le planning (P13 à P36 restent vertes sans changement).
+//! - **P38** (J6, R-203) : une feuille achevée, après des éditions qui ne
+//!   touchent pas son avancement, a pour dates planifiées, au plus tôt et au
+//!   plus tard ses dates réelles, TS = FS = 0, n'est pas critique ; un
+//!   successeur FS sans décalage, automatique, sans contrainte qui l'impose,
+//!   commence au plus tôt après sa fin réelle ; implémentations rapide et de référence
+//!   identiques.
 //! - **P23** : symétrie avant/arrière (ADR-0010) sur un réseau plat, un
 //!   calendrier, décalages ouvrés, sans jalon, sans %, sans échéance :
 //!   liens retournés (FS → FS, SS → FF, FF → SS, SF → SF), contraintes
@@ -2565,5 +2574,189 @@ fn fixed_seeds_assignments() {
         p34(&generate(seed, CONSTRAINED), seed);
         p34(&generate_from_finish(seed, CONSTRAINED), seed);
         p35(seed);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P37, P38 (J6)
+// ---------------------------------------------------------------------------
+
+/// P37 (partie moteur) : un projet sans avancement n'a aucun avancement
+/// calculé, aucun diagnostic d'avancement, et la date d'état ne change rien.
+fn p37(p: &Project) {
+    let s = schedule(p);
+    for o in s.tasks.values() {
+        if let TaskOutcome::Scheduled(ts) = o {
+            assert_eq!(ts.progress, None);
+            assert!(!matches!(ts.driver, Driver::Actual));
+        }
+    }
+    assert!(s.project_summary.is_none_or(|ps| ps.progress.is_none()));
+    assert!(
+        !s.diagnostics.iter().any(|d| d.code().starts_with("progress.")),
+        "{:?}",
+        s.diagnostics
+    );
+    let mut q = p.clone();
+    let start = match p.anchor {
+        ScheduleAnchor::FromStart(m) | ScheduleAnchor::FromFinish(m) => m,
+    };
+    q.status_date = Some(start.checked_add(Minutes::new(7 * 1_440 + 75)).unwrap());
+    assert_eq!(schedule(&q), s);
+}
+
+/// Feuilles achevées tirées par P38 : ~30 % des feuilles planifiées (non
+/// dégradées) de `base`, dates réelles autour de leurs dates planifiées, à
+/// la minute (instants chômés compris).
+fn complete_some(p: &mut Project, base: &Schedule, r: &mut Rng) -> Vec<TaskUid> {
+    let mut done = Vec::new();
+    for uid in p.tasks.iter().map(Task::uid).collect::<Vec<_>>() {
+        let Some(ts) = planned(base, uid) else { continue };
+        if ts.role != TaskRole::Leaf || !r.chance(30) {
+            continue;
+        }
+        let start = ts
+            .start
+            .checked_add(Minutes::new(r.range(-2_000, 2_000)))
+            .unwrap();
+        let finish = start.checked_add(Minutes::new(r.range(0, 3_000))).unwrap();
+        let t = p.tasks.get_mut(uid).unwrap();
+        t.progress.actual_start = Some(start);
+        t.progress.actual_finish = Some(finish);
+        done.push(uid);
+    }
+    done
+}
+
+/// Contrôles de P38 sur le planning `s` de `p`, feuilles achevées `done`.
+fn p38_check(p: &Project, s: &Schedule, done: &[TaskUid], seed: u64) {
+    check_shape(p, s);
+    assert_eq!(
+        *s,
+        planrs_core::schedule::schedule_reference(p),
+        "P38, graine {seed} : rapide ≠ référence"
+    );
+    for &uid in done {
+        let t = p.tasks.get(uid).unwrap();
+        let Some(TaskOutcome::Scheduled(ts)) = s.get(uid) else {
+            continue;
+        };
+        let span = planrs_core::Span {
+            start: t.progress.actual_start.unwrap(),
+            finish: t.progress.actual_finish.unwrap(),
+        };
+        assert_eq!(
+            (ts.start, ts.finish),
+            (span.start, span.finish),
+            "P38, graine {seed}, {uid}"
+        );
+        assert_eq!(ts.early, span, "P38, graine {seed}, {uid}");
+        assert_eq!(ts.late, span, "P38, graine {seed}, {uid}");
+        assert_eq!(ts.total_slack, Minutes::ZERO, "P38, graine {seed}, {uid}");
+        assert_eq!(ts.free_slack, Minutes::ZERO, "P38, graine {seed}, {uid}");
+        assert!(!ts.critical, "P38, graine {seed}, {uid}");
+        assert_eq!(ts.driver, Driver::Actual, "P38, graine {seed}, {uid}");
+        assert_eq!(
+            ts.progress.map(|p| p.state),
+            Some(planrs_core::ProgressState::Complete),
+            "P38, graine {seed}, {uid}"
+        );
+    }
+    // Successeurs FS sans décalage depuis une achevée : automatiques, non
+    // achevés, sans contrainte qui leur impose une date (ASAP, ALAP, SNET,
+    // FNET seulement), non dégradés : début au plus tôt ≥ fin réelle (à
+    // rebours, les dates planifiées sont au plus tard et peuvent la
+    // précéder, marge négative).
+    for succ in &p.tasks {
+        let Some(ts) = planned(s, succ.uid()) else {
+            continue;
+        };
+        if ts.role != TaskRole::Leaf
+            || ts.manual
+            || done.contains(&succ.uid())
+            || !matches!(
+                succ.constraint.kind(),
+                ConstraintKind::AsSoonAsPossible
+                    | ConstraintKind::AsLateAsPossible
+                    | ConstraintKind::StartNoEarlierThan
+                    | ConstraintKind::FinishNoEarlierThan
+            )
+        {
+            continue;
+        }
+        for l in &succ.predecessors {
+            if l.kind != LinkType::FinishToStart || l.lag != Lag::ZERO || !done.contains(&l.predecessor) {
+                continue;
+            }
+            // Lien coupé pour rompre un cycle (R-065, via une récapitulative).
+            let cut = Diagnostic::LinkIgnoredInCycle {
+                predecessor: l.predecessor,
+                successor: succ.uid(),
+            };
+            let Some(pred) = planned(s, l.predecessor).filter(|_| !s.diagnostics.contains(&cut)) else {
+                continue;
+            };
+            assert!(
+                ts.early.start >= pred.finish,
+                "P38, graine {seed} : {} commence au plus tôt avant la fin réelle de {}",
+                succ.uid(),
+                l.predecessor
+            );
+        }
+    }
+}
+
+/// P38 : feuilles achevées tirées, puis éditions qui ne touchent pas leur
+/// avancement (durées des autres tâches, option « respecter les
+/// contraintes »).
+fn p38(seed: u64, from_finish: bool) {
+    let mut p = if from_finish {
+        generate_from_finish(seed, CONSTRAINED)
+    } else {
+        generate(seed, CONSTRAINED)
+    };
+    let base = schedule(&p);
+    let mut r = Rng((seed ^ 0x51_7CC1_B727_220A) | 1);
+    let done = complete_some(&mut p, &base, &mut r);
+    let s = schedule(&p);
+    p38_check(&p, &s, &done, seed);
+    for uid in p.tasks.iter().map(Task::uid).collect::<Vec<_>>() {
+        if done.contains(&uid) || !r.chance(40) {
+            continue;
+        }
+        let t = p.tasks.get_mut(uid).unwrap();
+        let minutes = Minutes::new(r.range(0, 4_800));
+        t.duration = Duration::new(minutes, DurationUnit::Day, t.duration.basis(), false).unwrap();
+    }
+    if r.chance(30) {
+        p.options.honor_constraints = !p.options.honor_constraints;
+    }
+    let s = schedule(&p);
+    p38_check(&p, &s, &done, seed);
+}
+
+proptest! {
+    #![proptest_config(capped(1_024))]
+
+    #[test]
+    fn p37_no_progress_unchanged(seed in any::<u64>()) {
+        p37(&generate(seed, CONSTRAINED));
+        p37(&generate_from_finish(seed, CONSTRAINED));
+    }
+
+    #[test]
+    fn p38_completed_leaf_pinned(seed in any::<u64>()) {
+        p38(seed, false);
+        p38(seed, true);
+    }
+}
+
+/// Graines fixes de P37 et P38.
+#[test]
+fn fixed_seeds_progress() {
+    for seed in 0..100 {
+        p37(&generate(seed, GENERAL));
+        p38(seed, false);
+        p38(seed, true);
     }
 }

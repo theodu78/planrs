@@ -183,9 +183,11 @@ fn core_contract(s: &Session) {
         panic!("tâche 1 planifiée attendue");
     };
     assert_eq!(t.progress, None);
-    assert_eq!(t.driver_bound, None);
+    // R-230 (lot L1) : la passe avant pose la borne brute du pilote ; seul
+    // ce champ s'ajoute au JSON d'un planning sans avancement.
+    assert_eq!(t.driver_bound, Some(t.early.start));
     let text = serde_json::to_string(schedule).unwrap();
-    assert!(!text.contains("driver_bound") && !text.contains("\"progress\""));
+    assert!(text.contains("driver_bound") && !text.contains("\"progress\""));
     assert!(!text.contains("remaining_start"));
 
     // Faits d'avancement (R-200) : tâche neuve non commencée.
@@ -203,7 +205,7 @@ fn core_contract(s: &Session) {
         x.steps.first(),
         Some(&Step::Driver {
             driver: Driver::ProjectStart,
-            raw: None
+            raw: t.driver_bound
         })
     );
     assert_eq!(

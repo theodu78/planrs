@@ -119,6 +119,11 @@ struct NodeState {
     total_slack: Minutes,
     /// Marge libre (R-049).
     free_slack: Minutes,
+    /// Feuille achevée (R-203) : dates réelles retenues (début implicite
+    /// résolu une fois, par la passe principale).
+    actual: Option<Span>,
+    /// Borne brute retenue pour le pilote (R-230, partie moteur).
+    driver_bound: Option<Moment>,
 }
 
 impl NodeState {
@@ -140,6 +145,8 @@ impl NodeState {
         pin: None,
         total_slack: Minutes::ZERO,
         free_slack: Minutes::ZERO,
+        actual: None,
+        driver_bound: None,
     };
 }
 
@@ -220,6 +227,13 @@ impl Calc<'_, '_> {
             .and_then(|n| n.twin)
             .and_then(|r| self.state(r));
         bad(s) || twin.is_some_and(bad)
+    }
+
+    /// Le nœud `v` est une feuille achevée (R-203) : ses liens entrants ne
+    /// plafonnent pas ses prédécesseurs (passe arrière, marge libre, R-051),
+    /// S20 : « it can no longer affect the completion of successor tasks ».
+    fn actual_target(&self, v: NodeIx) -> bool {
+        self.net.node(v).is_some_and(|n| n.actual().is_some())
     }
 
     /// Arc `a` non appliqué en passe avant (R-069).

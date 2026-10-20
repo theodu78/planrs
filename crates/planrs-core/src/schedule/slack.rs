@@ -124,10 +124,19 @@ impl Calc<'_, '_> {
                 continue;
             }
             let uid = node.uid;
+            let actual = node.actual().is_some();
             let Some(s) = self.state(v).copied() else { continue };
             let (Some(early), Some(late)) = (s.early, s.late) else {
                 continue;
             };
+            // R-203 : feuille achevée, TS = FS = 0.
+            if actual {
+                if let Some(st) = self.state_mut(v) {
+                    st.total_slack = Minutes::ZERO;
+                    st.free_slack = Minutes::ZERO;
+                }
+                continue;
+            }
             let fast = match &index {
                 Some(index) if !dirty => self.node_slack_fast(index, v, early, late),
                 _ => None,
@@ -170,7 +179,8 @@ impl Calc<'_, '_> {
         }
         let arc = *self.net.arc(a)?;
         let l = arc.link?;
-        if l.to_inactive {
+        // R-203 : un lien vers une feuille achevée ne compte pas.
+        if l.to_inactive || self.actual_target(arc.to) {
             return None;
         }
         let start_kind = matches!(l.ty, LinkType::StartToStart | LinkType::StartToFinish);
@@ -512,7 +522,7 @@ impl Calc<'_, '_> {
         let arc = *self.net.arc(a).ok_or(Fail::Internal("arc hors bornes"))?;
         let Some(l) = arc.link else { return Ok(None) };
         let start_kind = matches!(l.ty, LinkType::StartToStart | LinkType::StartToFinish);
-        if l.to_inactive || (start_kind && skip_start_kind) {
+        if l.to_inactive || (start_kind && skip_start_kind) || self.actual_target(arc.to) {
             return Ok(None);
         }
         // Successeur peu sûr : marge libre de repli (R-069).

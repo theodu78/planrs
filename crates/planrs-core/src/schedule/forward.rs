@@ -301,6 +301,7 @@ impl Calc<'_, '_> {
             finish: b.start,
         });
         s.driver = b.driver;
+        s.driver_bound = Some(b.start);
         s.degraded = b.degraded || (replay && s.degraded);
         s.linked = b.linked;
         Ok(())
@@ -311,6 +312,9 @@ impl Calc<'_, '_> {
     /// l'affichage, R-062).
     fn leaf(&mut self, v: NodeIx) -> Result<(), Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+        if let Some((start, finish)) = node.actual() {
+            return self.actual_leaf(v, start, finish);
+        }
         let (place, constraint) = (node.place, node.constraint);
         let fixed = match node.fixed {
             Some(r) => Some(r?),
@@ -325,6 +329,8 @@ impl Calc<'_, '_> {
         } else {
             None
         };
+        // R-230 : borne brute du pilote, avant le retard de nivellement.
+        let mut bound = undelayed.map_or(b.start, |(_, _, raw)| raw);
         // R-110 (miroir de R-051) : à rebours, option « plusieurs chemins
         // critiques » active, une feuille automatique sans prédécesseur
         // effectif commence au plus tôt à son début au plus tard.
@@ -337,6 +343,7 @@ impl Calc<'_, '_> {
         {
             b.start = l.start;
             b.driver = Driver::ProjectStart;
+            bound = l.start;
         }
         let (early, driver) = if let Some(f) = fixed {
             (f, Driver::Manual)
@@ -356,12 +363,24 @@ impl Calc<'_, '_> {
                 self.constrain(v, scale, natural, b.driver)?
             }
         };
+        // R-230 : pas de borne pour une manuelle ; une contrainte qui pilote
+        // donne sa date (type début) ou le début de son ancrage (type fin,
+        // converti comme une borne FF/SF) ; sinon la plus grande borne.
+        let driver_bound = match (driver, constraint) {
+            (Driver::Manual, _) => None,
+            (Driver::Constraint { .. }, Some(c)) => match c.date {
+                Some(date) if c.kind.is_start_side() && pin.is_none() => Some(date),
+                _ => Some(early.start),
+            },
+            _ => Some(bound),
+        };
         let replay = self.role == PassRole::Replay;
         let s = self.state_mut(v).ok_or(Fail::Internal("nœud hors bornes"))?;
         s.early = Some(early);
-        s.undelayed = undelayed.map(|(u, _)| u.min(early.start));
-        s.held = undelayed.map(|(_, h)| h);
+        s.undelayed = undelayed.map(|(u, _, _)| u.min(early.start));
+        s.held = undelayed.map(|(_, h, _)| h);
         s.driver = driver;
+        s.driver_bound = driver_bound;
         // Repasse : les drapeaux posés par la passe arrière sont gardés.
         s.degraded = b.degraded || (replay && s.degraded);
         s.linked = b.linked;
@@ -374,9 +393,10 @@ impl Calc<'_, '_> {
     /// l'échelle de placement ; une borne de fin (FF, SF), convertie en
     /// début, porte sur `ES'` (A6 UID 20, O27). Rend `ES` recalé sur le
     /// placement (début au plus tôt affiché) et le placement sans retard
-    /// depuis toutes les bornes (plafond des prédécesseurs en passe arrière),
-    /// `None` sans retard.
-    fn level(&self, v: NodeIx, b: &mut Bounds) -> Result<Option<(Moment, Span)>, Fail> {
+    /// depuis toutes les bornes (plafond des prédécesseurs en passe arrière)
+    /// et la borne brute du pilote retenu (R-230 : `ES` brut, ou la borne de
+    /// fin convertie si elle l'emporte), `None` sans retard.
+    fn level(&self, v: NodeIx, b: &mut Bounds) -> Result<Option<(Moment, Span, Moment)>, Fail> {
         let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
         let Some(delay) = self
             .project
@@ -399,11 +419,106 @@ impl Calc<'_, '_> {
         let held = placer.forward_span(b.start)?;
         let (es, es_driver) = b.start_side;
         let delayed = scale.add(es, delay.minutes)?;
-        (b.start, b.driver) = match b.finish_side {
-            Some((f, d)) if f > delayed => (f, d),
-            _ => (delayed, es_driver),
+        let raw;
+        (b.start, b.driver, raw) = match b.finish_side {
+            Some((f, d)) if f > delayed => (f, d, f),
+            _ => (delayed, es_driver, es),
         };
-        Ok(Some((placer.forward_span(es)?.start, held)))
+        Ok(Some((placer.forward_span(es)?.start, held, raw)))
+    }
+
+    /// R-203 : feuille achevée, épinglée sur ses dates réelles brutes
+    /// (`Driver::Actual`, aucune borne de pilote) ; liens entrants, porte,
+    /// contrainte et retard de nivellement ignorés. Début réel implicite
+    /// (R-200) : début placé depuis les bornes du réseau, résolu une fois
+    /// (passe principale) puis gardé, `progress.actual_start_missing`.
+    /// Chaque lien entrant dont la borne est violée donne
+    /// `progress.link_overridden` (hors repasse), jamais
+    /// `link.manual_not_honored`.
+    fn actual_leaf(&mut self, v: NodeIx, start: Option<Moment>, finish: Moment) -> Result<(), Fail> {
+        let stored = self.state(v).and_then(|s| s.actual);
+        // Bornes : lues pour le début implicite et pour les liens violés ;
+        // une borne qui ne se calcule pas ne fait échouer qu'un début
+        // implicite.
+        let bounds = if start.is_none() && stored.is_none() {
+            Some(self.bounds(v, None)?)
+        } else {
+            self.bounds(v, None).ok()
+        };
+        let span = match (stored, start) {
+            (Some(span), _) => span,
+            (None, Some(s)) => Span { start: s, finish },
+            (None, None) => {
+                let from = bounds.as_ref().map_or(self.start, |b| b.start);
+                let natural = self.placer(v)?.forward_span(from)?;
+                Span {
+                    start: natural.start.min(finish),
+                    finish,
+                }
+            }
+        };
+        let uid = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?.uid;
+        if start.is_none() {
+            self.emit(Diagnostic::ProgressActualStartMissing { task: uid });
+        }
+        if self.role != PassRole::Replay {
+            self.links_overridden(v, span)?;
+        }
+        let degraded = start.is_none() && bounds.as_ref().is_some_and(|b| b.degraded);
+        let linked = bounds.as_ref().is_some_and(|b| b.linked);
+        let s = self.state_mut(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+        s.early = Some(span);
+        s.actual = Some(span);
+        s.undelayed = None;
+        s.held = None;
+        s.driver = Driver::Actual;
+        s.driver_bound = None;
+        s.degraded = degraded;
+        s.linked = linked;
+        Ok(())
+    }
+
+    /// R-203 : `progress.link_overridden` pour chaque lien entrant de la
+    /// feuille achevée `v` (dates réelles `a`) dont la borne est violée :
+    /// FS, SS si la borne dépasse le début réel en brut ; FF, SF si la fin
+    /// réelle la précède en temps ouvré de l'échelle de placement. Une borne
+    /// qui ne se calcule pas ne signale rien.
+    fn links_overridden(&mut self, v: NodeIx, a: Span) -> Result<(), Fail> {
+        let node = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?;
+        let scale = *self
+            .net
+            .scale(node.place)
+            .ok_or(Fail::Internal("échelle hors bornes"))?;
+        let incoming = self
+            .net
+            .incoming(v)
+            .ok_or(Fail::Internal("arcs entrants hors bornes"))?;
+        for i in incoming {
+            if self.net.is_cut(i) || self.is_dropped(i) {
+                continue;
+            }
+            let arc = *self.net.arc(i).ok_or(Fail::Internal("arc hors bornes"))?;
+            let Some(l) = arc.link else { continue };
+            let Some(se) = self.state(arc.from).and_then(|s| s.early) else {
+                continue;
+            };
+            let Ok(x) = self.link_bound(i, l, se) else {
+                continue;
+            };
+            let violated = match l.ty {
+                LinkType::FinishToStart | LinkType::StartToStart => x > a.start,
+                LinkType::FinishToFinish | LinkType::StartToFinish => {
+                    scale.between(a.finish, x).is_ok_and(|m| m.get() > 0)
+                }
+            };
+            if violated {
+                self.emit(Diagnostic::ProgressLinkOverridden {
+                    predecessor: l.pred,
+                    successor: l.succ,
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Contrainte d'une feuille automatique en passe avant (ADR-0010), sur
@@ -472,7 +587,10 @@ impl Calc<'_, '_> {
                     return Ok((a, pinned));
                 }
             }
-            ConstraintRule::None | ConstraintRule::Opposite | ConstraintRule::Cap(_) => {}
+            ConstraintRule::None
+            | ConstraintRule::Opposite
+            | ConstraintRule::Cap(_)
+            | ConstraintRule::Actual { .. } => {}
         }
         Ok((natural, driver))
     }
@@ -592,6 +710,7 @@ impl Calc<'_, '_> {
         }
         let s = self.state_mut(v).ok_or(Fail::Internal("nœud hors bornes"))?;
         s.children = span;
+        s.driver_bound = None;
         if let Some(f) = fixed {
             s.early = Some(f);
             s.driver = Driver::Manual;

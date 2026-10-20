@@ -197,6 +197,10 @@ mod r197_task_update_extended;
 mod r198_mspdi_resource_read;
 mod r199_mspdi_resource_write;
 mod r200_progress_facts;
+mod r203_completed_leaf_pin;
+mod r208_manual_with_progress;
+mod r210_summary_progress_rollup;
+mod r230_driver_bound;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

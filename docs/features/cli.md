@@ -7,7 +7,7 @@
 | Commande | Ids du registre | Sortie |
 |---|---|---|
 | `planrs summary <plan> [--json]` | `project.open`, `project.summary` | `SummaryView` ; texte : nom, début, fin, durée, comptes |
-| `planrs tasks <plan> [--critical] [--late] [--from J] [--to J] [--resource ID] [--limit N] [--json]` | `task.list` | `ListView` ; texte : tableau ID, nom (indenté), durée, début, fin, marge totale, `*` si critique ; `--late` suit R-236 (J6 : échéance, ligne de base 0, date d'état) |
+| `planrs tasks <plan> [--critical] [--late] [--from J] [--to J] [--resource ID] [--limit N] [--json]` | `task.list` | `ListView` ; texte : tableau ID, nom (indenté), durée, début, fin, marge totale, `*` si critique ; `--late` suit R-236 (J6 : fin après l'échéance ou la ligne de base 0, non achevée à fin ≤ date d'état, non commencée à début < date d'état ; date d'état du projet, sinon la date du jour ; aide `--help` du même texte, `cli_tasks_late_help_follows_r236`) |
 | `planrs resources <plan> [--overallocated] [--json]` | `resource.list` | `ResourceListView` (toutes pages) ; texte : tableau ID, nom, type, capacité, travail, pic, `!` si surutilisée |
 | `planrs usage <plan> [--resource ID]… [--by day\|week\|month] [--from D] [--to D] [--json]` | `analysis.resource_usage` | `UsageView` ; texte : une section par ressource, une ligne par période (début, travail), `!` si surutilisée |
 | `planrs apply <plan> <ops.json> [--dry-run] [-o out.xml] [--json]` | `batch.apply`, `project.save` | `OutcomeView` ; texte : appliqué ou simulé, fin avant → après, tâches décalées, fichier écrit |

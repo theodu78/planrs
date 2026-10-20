@@ -115,7 +115,7 @@
 {"v":1,"seq":58,"tool":"project_summary","params":{}}
 {"v":1,"seq":58,"tool":"project_summary","params":null,"result":{"ok":{"critical":8,"dirty":true,"duration":{"minutes":18240,"text":"38j","unit":"day"},"errors":0,"finish":"2026-12-23T17:00","history_len":41,"links":10,"milestones":1,"name":"Chantier ressources","path":null,"start":"2026-11-02T08:00","summaries":0,"tasks":10,"warnings":0}}}
 {"v":1,"seq":59,"tool":"export_mspdi","params":{"path":"$TMP/resources_j5.xml"}}
-{"v":1,"seq":59,"tool":"export_mspdi","params":null,"result":{"ok":{"bytes":29299,"diagnostics":[],"dirty":true,"path":"$TMP/resources_j5.xml"}}}
+{"v":1,"seq":59,"tool":"export_mspdi","params":null,"result":{"ok":{"bytes":31268,"diagnostics":[],"dirty":true,"path":"$TMP/resources_j5.xml"}}}
 {"v":1,"seq":60,"tool":"open_project","params":{"path":"$TMP/resources_j5.xml"}}
 {"v":1,"seq":60,"tool":"open_project","params":null,"result":{"ok":{"diagnostics":[],"diagnostics_total":0,"summary":{"critical":8,"dirty":false,"duration":{"minutes":18240,"text":"38j","unit":"day"},"errors":0,"finish":"2026-12-23T17:00","history_len":0,"links":10,"milestones":1,"name":"Chantier ressources","path":"$TMP/resources_j5.xml","start":"2026-11-02T08:00","summaries":0,"tasks":10,"warnings":0}}}}
 {"v":1,"seq":61,"tool":"list_tasks","params":{"resource":1}}

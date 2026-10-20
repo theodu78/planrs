@@ -197,6 +197,11 @@ mod r197_task_update_extended;
 mod r198_mspdi_resource_read;
 mod r199_mspdi_resource_write;
 mod r200_progress_facts;
+mod r201_percent_input;
+mod r202_other_progress_inputs;
+mod r211_actual_work_progress;
+mod r212_physical_percent;
+mod r213_progress_edge_cases;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

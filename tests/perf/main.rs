@@ -291,7 +291,10 @@ fn assigned_leaves_network_shape() {
 /// échelles, environ 65 ms). Seuil bloquant de 250 ms en attendant
 /// l'arbitrage (`docs/decisions.md`, correctifs de la relecture finale
 /// (11)) : il rattrape une régression quadratique (O(S²) sur les échelles,
-/// O(P²) sur les parts), pas une dérive de quelques pour cent.
+/// O(P²) sur les parts), pas une dérive de quelques pour cent. J6, lot L9 :
+/// les 1 010 calendriers dérivés sans semaine propre sont compilés par
+/// surcharge de leur base (compilation 104 → 11 à 18 ms, calcul 178 → 110
+/// à 117 ms au minimum, binaires alternés sur serveurdvp chargé).
 const LEAVES_BUDGET: Duration = Duration::from_millis(250);
 
 /// Budget de `5000_assigned_leaves` : [`LEAVES_BUDGET`].
@@ -329,13 +332,101 @@ fn hostile_combined_calendars_bounded() {
         &hostile_combined_calendars(),
         Duration::from_secs(10),
     );
+    // Budget des combinaisons atteint (deux calendriers distincts), en plus
+    // de celui de la compilation (J6, lot L9 : 6,6 M segments pour un budget
+    // de 2 M, calendrier refusé = `calendar` égal à `other`).
     assert!(
-        s.diagnostics
-            .iter()
-            .any(|d| d.code() == "calendar.too_many_segments"),
-        "budget jamais atteint"
+        s.diagnostics.iter().any(|d| matches!(
+            d,
+            Diagnostic::CalendarTooManySegments { calendar, other, .. } if calendar != other
+        )),
+        "budget des combinaisons jamais atteint"
     );
     assert_eq!(s.assignments.len(), 1_000);
+    eprintln!("pic mémoire du processus : {}", peak_memory());
+}
+
+/// Pic de mémoire résidente du processus (`VmHWM`, Linux), pour le
+/// journal du job `perf` ; « inconnu » ailleurs. À lire sur un test lancé
+/// seul (`--exact`) : le pic est celui du processus entier.
+fn peak_memory() -> String {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("VmHWM:"))
+                .map(|l| l.trim_start_matches("VmHWM:").trim().to_owned())
+        })
+        .unwrap_or_else(|| "inconnu".to_owned())
+}
+
+/// Calendriers hostiles du modèle (J6, lot L9, dette de l'ADR-0013) :
+/// 1 000 calendriers dérivés du Standard, chacun chômé un jour sur deux sur
+/// tout le domaine (environ 60 000 segments, 2 Mo compilés : 2 Go sans
+/// budget) ; 1 000 tâches d'un jour, chacune sur l'un d'eux.
+fn hostile_model_calendars() -> Project {
+    use planrs_core::calendar::{Calendar, CalendarException, DaySetting, Recurrence};
+    use planrs_core::{CalendarUid, Day, DayRange};
+    let start: Moment = "2026-10-19T08:00".parse().unwrap();
+    let mut p = Project::new(ProjectInit {
+        name: "Calendriers du modèle hostiles".to_owned(),
+        anchor: ScheduleAnchor::FromStart(start),
+        current_date: start,
+        calendar_names: BuiltinCalendarNames::default(),
+    });
+    let domain = DayRange::new(Day::new(0).unwrap(), Day::new(60_630).unwrap()).unwrap();
+    for k in 0..1_000u32 {
+        let mut c = Calendar::new_derived(CalendarUid::new(100 + k), format!("C{k}"), CalendarUid::new(1));
+        c.add_exception(CalendarException {
+            name: "Un jour sur deux".to_owned(),
+            period: domain,
+            setting: DaySetting::NonWorking,
+            recurrence: Recurrence::Daily { every: 2 },
+            occurrences: None,
+        })
+        .unwrap();
+        p.calendars.push(c).unwrap();
+    }
+    let options = p.options;
+    for i in 0..1_000u32 {
+        let mut t = Task::new(TaskUid::new(i + 1), format!("T{i}"), &options);
+        t.duration =
+            TaskDuration::new(Minutes::new(480), DurationUnit::Day, TimeBasis::Working, false).unwrap();
+        t.calendar = Some(CalendarUid::new(100 + i));
+        p.tasks.push(t).unwrap();
+    }
+    p
+}
+
+/// Budget de compilation des calendriers du modèle (J6, lot L9, R-172
+/// amendée) : `Limits::compiled_segments` (2 M segments gardés, 16 M de
+/// travail) refuse les calendriers au-delà, `calendar.too_many_segments`,
+/// tâches en repli R-066 ; mémoire et temps bornés.
+#[test]
+#[ignore = "projet hostile, mesuré en release, job CI perf"]
+fn hostile_calendars_bounded() {
+    let s = once(
+        "calendriers du modèle hostiles",
+        &hostile_model_calendars(),
+        Duration::from_secs(10),
+    );
+    let refused = s
+        .diagnostics
+        .iter()
+        .filter(|d| {
+            matches!(
+                d,
+                Diagnostic::CalendarTooManySegments { calendar, other, .. } if calendar == other
+            )
+        })
+        .count();
+    assert!(refused > 900, "{refused} calendriers refusés");
+    assert!(s.diagnostics.iter().any(|d| d.code() == "task.calendar_fallback"));
+    assert!(s.tasks.len() >= 1_000);
+    eprintln!(
+        "{refused} calendriers refusés ; pic mémoire du processus : {}",
+        peak_memory()
+    );
 }
 
 /// Adversaire F1 de la relecture finale J5 : 100 000 affectations

@@ -444,6 +444,12 @@ pub struct Limits {
     /// (segments lus) est borné à 8 fois cette valeur. Au-delà,
     /// `calendar.too_many_segments` et repli (R-171, R-173).
     pub combined_segments: usize,
+    /// Segments des calendriers du modèle compilés par recalcul
+    /// (`CalendarSet::compile_with`, R-172 amendée), tous confondus ; le
+    /// travail de compilation est borné à 8 fois cette valeur. Au-delà,
+    /// `calendar.too_many_segments`, calendrier non compilé et repli de ses
+    /// tâches et ressources (R-066, R-171).
+    pub compiled_segments: usize,
 }
 
 impl Default for Limits {
@@ -451,6 +457,7 @@ impl Default for Limits {
         Self {
             expanded_arcs: network::DEFAULT_EXPANDED_ARC_BUDGET,
             combined_segments: placement::DEFAULT_COMBINED_SEGMENTS,
+            compiled_segments: crate::calendar::compiled::DEFAULT_COMPILED_SEGMENTS,
         }
     }
 }
@@ -502,7 +509,7 @@ fn run(project: &Project, limits: Limits, strategy: Strategy) -> Schedule {
     let start = anchor;
     let mut diags = Diagnostics::new();
     // Étape 0 : calendriers et replis (R-066).
-    let (set, compile_diags) = CalendarSet::compile(project);
+    let (set, compile_diags) = CalendarSet::compile_with(project, limits.compiled_segments);
     diags.extend(compile_diags);
     let fallback = match set.get(project.calendar) {
         Ok(c) if c.has_working_time() => None,

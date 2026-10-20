@@ -471,8 +471,11 @@ const DEEP_LINKS: usize = 10_000;
 /// Z_(i+2)` (FF) ; chaque feuille a des prédécesseurs FS ou SS parmi les
 /// 40 feuilles qui la précèdent, jusqu'à 10 000 liens. Chaque feuille hérite
 /// donc des arcs de tous ses ancêtres : la référence (J3) remonte jusqu'à
-/// 256 agrégats et 768 arcs par nœud.
-fn deep_hierarchy() -> Project {
+/// 256 agrégats et 768 arcs par nœud. Avec `progress`, les feuilles ont un
+/// % achevé de `(uid mod 11) × 10 %` (environ 9 sur 10 en cours, R-200) :
+/// variante `deep_hierarchy_progress` (relecture finale J6, J6-PERF-1) ;
+/// sans, la hiérarchie de J5.
+fn deep_hierarchy(progress: bool) -> Project {
     let start: Moment = "2026-11-02T08:00".parse().unwrap();
     let mut p = Project::new(ProjectInit {
         name: "Hiérarchie profonde".to_owned(),
@@ -507,7 +510,9 @@ fn deep_hierarchy() -> Project {
             let mut t = Task::new(TaskUid::new(uid), format!("F{i}.{j}"), &options);
             t.outline_level = OutlineLevel::new(u16::try_from(i + 1).unwrap()).unwrap();
             t.duration = day(i64::from(1 + (uid % 5)));
-            t.progress.percent_complete = Percent::new(i64::from(uid % 11) * 1_000).unwrap();
+            if progress {
+                t.progress.percent_complete = Percent::new(i64::from(uid % 11) * 1_000).unwrap();
+            }
             leaves.push(t.uid());
             tasks.push(t);
         }
@@ -593,41 +598,68 @@ fn deep_hierarchy() -> Project {
 
 /// La hiérarchie hostile a la forme annoncée, se calcule sans erreur, et
 /// les deux implémentations des marges et des % achevés (lot L15) y sont
-/// égales.
+/// égales, sans avancement et avec (feuilles en cours, R-206, J6-PERF-1).
 #[test]
 fn deep_hierarchy_shape() {
-    let p = deep_hierarchy();
-    assert_eq!(p.tasks.len(), 5_000);
-    let links: usize = p.tasks.iter().map(|t| t.predecessors.len()).sum();
-    assert_eq!(links, DEEP_LINKS);
-    assert_eq!(p.tasks.iter().map(|t| t.outline_level.get()).max(), Some(257));
-    let s = schedule(&p);
-    let errors: Vec<&Diagnostic> = s
-        .diagnostics
-        .iter()
-        .filter(|d| d.severity() == Severity::Error)
-        .collect();
-    assert!(errors.is_empty(), "{errors:?}");
-    let summaries = s
-        .tasks
-        .values()
-        .filter(|o| matches!(o, TaskOutcome::Scheduled(ts) if ts.role == TaskRole::Summary && !ts.degraded))
-        .count();
-    assert_eq!(summaries, 256);
-    assert_eq!(s, schedule_reference(&p));
+    for progress in [false, true] {
+        let p = deep_hierarchy(progress);
+        assert_eq!(p.tasks.len(), 5_000);
+        let links: usize = p.tasks.iter().map(|t| t.predecessors.len()).sum();
+        assert_eq!(links, DEEP_LINKS);
+        assert_eq!(p.tasks.iter().map(|t| t.outline_level.get()).max(), Some(257));
+        let s = schedule(&p);
+        let errors: Vec<&Diagnostic> = s
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity() == Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "{errors:?}");
+        let summaries = s
+            .tasks
+            .values()
+            .filter(
+                |o| matches!(o, TaskOutcome::Scheduled(ts) if ts.role == TaskRole::Summary && !ts.degraded),
+            )
+            .count();
+        assert_eq!(summaries, 256);
+        let running = s
+            .tasks
+            .values()
+            .filter(|o| {
+                matches!(o, TaskOutcome::Scheduled(ts)
+                    if ts.progress.is_some_and(|p| p.state == planrs_core::ProgressState::Started))
+            })
+            .count();
+        if progress {
+            assert!(running > 3_000, "{running} feuilles en cours");
+        } else {
+            assert_eq!(running, 0);
+        }
+        assert_eq!(s, schedule_reference(&p), "avancement : {progress}");
+    }
+}
+
+/// Budget de la hiérarchie hostile (lot L15) : 30 ms de médiane.
+fn deep_budget(name: &str, progress: bool) {
+    let p = deep_hierarchy(progress);
+    // Référence (J3), informative : le coût que la stratégie rapide évite.
+    let t = Instant::now();
+    black_box(schedule_reference(black_box(&p)));
+    eprintln!("schedule_reference ({name}) : {:?}", t.elapsed());
+    budget_of(name, &p, Duration::from_millis(30));
 }
 
 #[test]
 #[ignore = "budget mesuré en release, job CI perf"]
 fn perf_deep_hierarchy_256_5000() {
-    let p = deep_hierarchy();
-    // Référence (J3), informative : le coût que la stratégie rapide évite.
-    let t = Instant::now();
-    black_box(schedule_reference(black_box(&p)));
-    eprintln!("schedule_reference (hiérarchie profonde) : {:?}", t.elapsed());
-    budget_of(
-        "hiérarchie de 256 niveaux, 5 000 tâches",
-        &p,
-        Duration::from_millis(30),
-    );
+    deep_budget("hiérarchie de 256 niveaux, 5 000 tâches", false);
+}
+
+/// Même hiérarchie, feuilles en cours (relecture finale J6, J6-PERF-1) :
+/// une feuille en cours passe par la stratégie rapide des marges, même
+/// budget bloquant.
+#[test]
+#[ignore = "budget mesuré en release, job CI perf"]
+fn perf_deep_hierarchy_progress_256_5000() {
+    deep_budget("deep_hierarchy_progress, 256 niveaux, 5 000 tâches", true);
 }

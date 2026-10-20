@@ -139,10 +139,11 @@ impl Calc<'_, '_> {
             }
             // R-206 : feuille en cours, marge du reste (reprise contre début
             // au plus tard du reste, fin contre fin au plus tard) ; le début
-            // réel, fixe, ne compte pas. Calculée par la référence.
+            // réel, fixe, ne compte pas. Seul le premier terme de la marge
+            // totale change : la stratégie rapide la calcule aussi (J6-PERF-1).
             let running = node.in_progress().is_some().then_some(s.run).flatten();
             let fast = match &index {
-                Some(index) if !dirty && running.is_none() => self.node_slack_fast(index, v, early, late),
+                Some(index) if !dirty => self.node_slack_fast(index, v, early, late, running),
                 _ => None,
             };
             let result = match fast {
@@ -332,12 +333,20 @@ impl Calc<'_, '_> {
         v: NodeIx,
         early: Span,
         late: Span,
+        running: Option<super::Run>,
     ) -> Option<(Minutes, Minutes, bool)> {
         let node = self.net.node(v)?;
         let m = *self.net.scale(node.measure)?;
         let place = self.placer(v).ok()?;
+        // R-206 : feuille en cours, reprise contre début au plus tard du
+        // reste (même terme que la référence) ; les arcs restent ceux de
+        // l'index, mesurés depuis les dates au plus tôt.
+        let (es, ls) = match running {
+            Some(run) => (run.resume, run.late_resume.unwrap_or(run.resume)),
+            None => (early.start, late.start),
+        };
         let tf = m
-            .between(early.start, late.start)
+            .between(es, ls)
             .ok()?
             .min(m.between(early.finish, late.finish).ok()?);
         let chain = index.finish_chain.get(pos(v)?)?;

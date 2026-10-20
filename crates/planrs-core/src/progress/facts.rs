@@ -124,7 +124,9 @@ pub fn remaining_work(a: &Assignment) -> Work {
 }
 
 /// R-200 : % achevé dérivé = `round_div(réel × 10 000, D)`, borné à
-/// `[0, 10 000]` ; achevée : 10 000 ; D = 0 : 10 000 si achevée, sinon 0.
+/// `[0, 9 999]` pour une tâche non achevée (100 % ⇔ fin réelle, P39 : un
+/// réel de D − 1 sur D > 20 000 s'arrondirait à 10 000) ; achevée : 10 000 ;
+/// D = 0 : 10 000 si achevée, sinon 0.
 ///
 /// Exemple : D 2 400, réel 960 ⇒ 4 000.
 #[must_use]
@@ -139,7 +141,7 @@ pub fn percent_of_duration(task: &Task) -> Percent {
     }
     let num = i128::from(f.actual_duration.get()).saturating_mul(10_000);
     round_div(num, i128::from(d))
-        .map(|v| v.clamp(0, Percent::FULL.get()))
+        .map(|v| v.clamp(0, Percent::FULL.get().saturating_sub(1)))
         .and_then(|v| Percent::new(v).ok())
         .unwrap_or(Percent::ZERO)
 }
@@ -170,7 +172,11 @@ mod tests {
         t.progress.actual_duration = Minutes::new(600);
         assert_eq!(facts(&t).actual_duration, Minutes::new(480));
         assert_eq!(remaining_duration(&t), Minutes::ZERO);
-        assert_eq!(percent_of_duration(&t), Percent::FULL);
+        // Non achevée : jamais 100 % sans fin réelle (P39).
+        assert_eq!(percent_of_duration(&t), Percent::new(9_999).unwrap());
+        let mut big = task(30_000);
+        big.progress.actual_duration = Minutes::new(29_999);
+        assert_eq!(percent_of_duration(&big), Percent::new(9_999).unwrap());
         // Jalon commencé, non achevé : 0 % ; achevé : 100 %.
         let mut m = task(0);
         m.progress.actual_start = Some("2026-10-19T08:00".parse().unwrap());

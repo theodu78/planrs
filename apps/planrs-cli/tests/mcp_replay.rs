@@ -59,6 +59,9 @@ async fn replay_stdio(name: &str) {
             "--journal",
         ])
         .arg(&journal)
+        // `--headless` garde la garde ADR-0002 (J7) : dossier de
+        // rendez-vous vide, résultat indépendant du poste.
+        .env("PLANRS_CONTROL_DIR", tmp.path().join("control"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())

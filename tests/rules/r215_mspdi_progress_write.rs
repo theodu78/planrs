@@ -406,33 +406,33 @@ fn r215_summary_work_written() {
     let mut s1 = task(&p, 1, 0);
     stale(&mut s1);
     p.tasks.push(s1).unwrap();
-    let mut a = task(&p, 2, 960);
-    level(&mut a, 2);
-    a.work = work(960);
-    a.progress.actual_start = Some(moment("2026-10-19T08:00"));
-    a.progress.actual_duration = Minutes::new(480);
-    a.progress.actual_work = work(480);
-    p.tasks.push(a).unwrap();
-    let mut b = task(&p, 3, 480);
-    level(&mut b, 2);
-    b.work = work(480);
-    p.tasks.push(b).unwrap();
+    let mut leaf_a = task(&p, 2, 960);
+    level(&mut leaf_a, 2);
+    leaf_a.work = work(960);
+    leaf_a.progress.actual_start = Some(moment("2026-10-19T08:00"));
+    leaf_a.progress.actual_duration = Minutes::new(480);
+    leaf_a.progress.actual_work = work(480);
+    p.tasks.push(leaf_a).unwrap();
+    let mut leaf_b = task(&p, 3, 480);
+    level(&mut leaf_b, 2);
+    leaf_b.work = work(480);
+    p.tasks.push(leaf_b).unwrap();
     let mut s2 = task(&p, 4, 0);
     stale(&mut s2);
     p.tasks.push(s2).unwrap();
-    let mut c = task(&p, 5, 480);
-    level(&mut c, 2);
-    c.work = work(480);
-    p.tasks.push(c).unwrap();
+    let mut leaf_c = task(&p, 5, 480);
+    level(&mut leaf_c, 2);
+    leaf_c.work = work(480);
+    p.tasks.push(leaf_c).unwrap();
     for (uid, task, w, aw) in [(1, 2, 960, 480), (2, 3, 480, 0), (3, 5, 480, 0)] {
-        let mut x = Assignment::new(
+        let mut asg = Assignment::new(
             AssignmentUid::new(uid),
             TaskUid::new(task),
             Some(ResourceUid::new(1)),
         );
-        x.work = work(w);
-        x.actual_work = work(aw);
-        p.assignments.push(x).unwrap();
+        asg.work = work(w);
+        asg.actual_work = work(aw);
+        p.assignments.push(asg).unwrap();
     }
     let (xml, _) = by_engine(&p);
     let s1 = entity(&xml, "Task", 1);

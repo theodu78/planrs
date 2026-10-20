@@ -686,7 +686,11 @@ async fn replay_claude_run_3() {
     for t in ["update_progress", "explain_date", "what_if"] {
         assert!(tools.contains(&t), "{t} absent de l'essai n° 3 : {tools:?}");
     }
-    // Faits clés de l'essai du 2026-10-20 (`docs/features/mcp.md` § 6).
+    claude_run_3_facts(&scenario, &tools);
+}
+
+/// Faits clés de l'essai n° 3 du 2026-10-20 (`docs/features/mcp.md` § 6).
+fn claude_run_3_facts(scenario: &Scenario, tools: &[&str]) {
     assert_eq!(
         tools,
         [
@@ -714,7 +718,7 @@ async fn replay_claude_run_3() {
             .iter()
             .all(|c| error_code(c.expected.as_ref().unwrap()).is_none())
     );
-    let ok = |i: usize| ok_at(&scenario, i);
+    let ok = |i: usize| ok_at(scenario, i);
     // Date d'état posée au 13/11 17:00 par l'agent.
     assert_eq!(scenario.calls[3].params, json!({ "date": "2026-11-13T17:00" }));
     // Terrassement achevé (sort du chemin critique) ; Maçonnerie commencée
@@ -744,8 +748,8 @@ async fn replay_claude_run_3() {
     let variance = ok(10);
     assert_eq!(variance["project"]["derived"], json!(true));
     assert_eq!(minutes_of(&variance["project"]["variance"]["finish"]), 2_400);
-    assert_eq!(minutes_of(&task_of(&variance, 20)["variance"]["finish"]), 2_400);
-    assert_eq!(minutes_of(&task_of(&variance, 6)["variance"]["finish"]), 2_400);
+    assert_eq!(minutes_of(&task_of(variance, 20)["variance"]["finish"]), 2_400);
+    assert_eq!(minutes_of(&task_of(variance, 6)["variance"]["finish"]), 2_400);
     // Second plaquiste : simple ajout sans effet (tâches non pilotées par
     // l'effort) ; à 200 % ou piloté par l'effort, réception au 21/12
     // (− 2 j), Électricité puis Ventilation deviennent le chemin.

@@ -295,7 +295,8 @@ pub const FLOORS: [(&str, u32); 5] = [
     // A4 et A6 : tous les cas identiques (mesuré 44/44 et 35/35).
     ("shopmetrics.xml", 44),
     ("takeout-system-zh.xml", 35),
-    // A7 : 5/7 ; UID 2 et 3 divergent par l'avancement (J6), comme leurs
-    // cas de tâche ; `OverAllocated` indicatif (O31).
-    ("projinteg.xml", 5),
+    // A7 : 7/7 depuis J6 lot L1 (affectations des feuilles achevées UID 2
+    // et 3 placées depuis le début réel, R-209) ; `OverAllocated` indicatif
+    // (O31).
+    ("projinteg.xml", 7),
 ];

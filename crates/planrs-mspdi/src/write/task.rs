@@ -2,8 +2,7 @@
 //! manuel ; ID, numéro hiérarchique et drapeau `Summary` déduits.
 
 use planrs_core::{
-    Constraint, Duration, Lag, LagValue, Link, Minutes, Progress, Project, SchedulingMode, Subject, Task,
-    TaskUid, Work,
+    Constraint, Duration, Lag, LagValue, Link, Minutes, Project, SchedulingMode, Subject, Task, TaskUid, Work,
 };
 
 use super::computed::{TaskValues, Values};
@@ -131,20 +130,25 @@ fn outline_numbers(p: &Project) -> Vec<String> {
         .collect()
 }
 
-/// R-127 : durée et travail restants écrits. Une tâche non récapitulative
-/// sans aucun avancement saisi (`Progress` par défaut : créée par planrs ou
-/// relue sans valeur) reçoit ce que MS Project écrit toujours, reste =
-/// durée − réel = durée, et travail restant = travail (minutes entières,
-/// jamais négatives) ; sinon les valeurs saisies, telles quelles. Une
-/// récapitulative garde ses valeurs : sa durée est calculée (R-071), pas une
-/// entrée du modèle.
+/// R-127, R-214 : durée et travail restants écrits. Une feuille reçoit la
+/// dérivation (ADR-0014 D4 : vérité = réels) : reste = D − durée réelle
+/// effective (R-200, 0 pour une tâche achevée), travail restant = travail
+/// − travail réel (R-211), jamais négatifs ; sans avancement, la durée et
+/// le travail, comme MS Project les écrit. Une récapitulative garde ses
+/// valeurs : sa durée est calculée (R-071), pas une entrée du modèle.
 pub(crate) fn remaining(t: &Task, summary: bool) -> (Minutes, Work) {
     let p = &t.progress;
-    if summary || *p != Progress::default() {
+    if summary {
         return (p.remaining_duration, p.remaining_work);
     }
-    let duration = Minutes::new(t.duration.minutes().get().max(0));
-    (duration, t.work)
+    let rest = t
+        .work
+        .minutes()
+        .get()
+        .saturating_sub(p.actual_work.minutes().get())
+        .max(0);
+    let work = Work::new(Minutes::new(rest)).unwrap_or(Work::ZERO);
+    (planrs_core::progress::remaining_duration(t), work)
 }
 
 /// Durée écrite : calculée pour une feuille automatique affectée (R-199),
@@ -285,6 +289,15 @@ fn field(
         "PercentComplete" => percent(em, name, t.progress.percent_complete),
         "PercentWorkComplete" => percent(em, name, t.progress.percent_work_complete),
         "PhysicalPercentComplete" => percent(em, name, t.progress.physical_percent_complete),
+        // R-214, R-215 : `Stop` calculé ; `Resume` calculé, ou la reprise
+        // saisie d'une feuille en cours sans valeurs calculées.
+        "Stop" => em.opt_date(name, computed.and_then(|v| v.stop)),
+        "Resume" => em.opt_date(
+            name,
+            computed
+                .and_then(|v| v.resume)
+                .or_else(|| super::computed::model_resume(t, row.summary)),
+        ),
         "ActualStart" => em.opt_date(name, t.progress.actual_start),
         "ActualFinish" => em.opt_date(name, t.progress.actual_finish),
         "ActualDuration" => em.leaf_iso(name, t.progress.actual_duration.get()),

@@ -26,7 +26,7 @@ use crate::extras::{self, Anchor, ExtraKey, ORIGIN};
 use crate::resource::rate_amount;
 use crate::scalar::parse_decimal;
 use crate::schema::{Class, Parent, Profile, sequence};
-use crate::task::{TASK_DELAY_ELAPSED, computed_zero, delay_value};
+use crate::task::{TASK_DELAY_ELAPSED, computed_zero, delay_value, keeps_resume};
 use crate::write::{
     OrderProfile, WriteOptions, escape_text, hourly_rate_text, leveling_payload_int, remaining, sanitize_text,
 };
@@ -172,12 +172,16 @@ fn task(t: &mut Task, summary: bool, options: &WriteOptions) {
     if options.profile == OrderProfile::Strict {
         t.guid = None;
     }
-    // R-127 : reste dérivé d'une tâche sans avancement saisi, relu tel quel.
-    (t.progress.remaining_duration, t.progress.remaining_work) = remaining(t, summary);
     let pr = &mut t.progress;
     pr.percent_complete = whole_percent(pr.percent_complete);
     pr.percent_work_complete = whole_percent(pr.percent_work_complete);
     pr.physical_percent_complete = whole_percent(pr.physical_percent_complete);
+    // R-127, R-214 : restes d'une feuille dérivés (sur le % relu, au
+    // pour-cent) ; reprise gardée pour une feuille en cours seulement.
+    (t.progress.remaining_duration, t.progress.remaining_work) = remaining(t, summary);
+    if !keeps_resume(t, summary) {
+        t.progress.resume = None;
+    }
     let duration = t.duration;
     match &mut t.mode {
         SchedulingMode::Manual { duration: d, .. } => {

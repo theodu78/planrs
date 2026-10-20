@@ -23,7 +23,7 @@ use crate::recorded::RecordedAssignment;
 use crate::resource::units;
 use crate::scalar::tenths_to_minutes;
 use crate::schema::Parent;
-use crate::task::leveling_delay;
+use crate::task::{Replaced, leveling_delay};
 use crate::xml::Element;
 
 /// Chemin d'une affectation.
@@ -45,6 +45,7 @@ pub(crate) fn import(
     elements: &[Element<'_>],
     tasks: &BTreeSet<TaskUid>,
     recorded: &mut BTreeMap<AssignmentUid, RecordedAssignment>,
+    replaced: &mut Replaced,
     sink: &mut Sink<'_>,
 ) -> (Arena<AssignmentUid, Assignment>, u64) {
     let mut out = Arena::new();
@@ -75,7 +76,10 @@ pub(crate) fn import(
         let work = baseline::work(&f, "Work", sink);
         a.work = work.unwrap_or(Work::ZERO);
         a.actual_work = baseline::work(&f, "ActualWork", sink).unwrap_or(Work::ZERO);
-        a.remaining_work = baseline::work(&f, "RemainingWork", sink).unwrap_or(Work::ZERO);
+        // R-214 : travail restant relu remplacé par la dérivation (R-211).
+        let read_rest = baseline::work(&f, "RemainingWork", sink);
+        a.remaining_work = planrs_core::progress::remaining_work(&a);
+        replaced.note(read_rest, &a.remaining_work, f.at(), &f.path_of("RemainingWork"));
         a.delay = delay(&f, sink);
         a.leveling_delay = leveling_delay(&f, ASSIGNMENT_DELAY_ELAPSED, sink);
         recorded.insert(
@@ -84,6 +88,10 @@ pub(crate) fn import(
                 start: f.datetime("Start", sink),
                 finish: f.datetime("Finish", sink),
                 work,
+                actual_start: f.datetime("ActualStart", sink),
+                actual_finish: f.datetime("ActualFinish", sink),
+                stop: f.datetime("Stop", sink),
+                resume: f.datetime("Resume", sink),
             },
         );
         a.contour = code(&f, "WorkContour", codes::work_contour, sink).unwrap_or(WorkContour::Flat);

@@ -59,6 +59,12 @@ pub struct RecordedTask {
     pub duration: Option<Minutes>,
     /// Nombre d'affectations de la tâche (section `Assignments`, `TaskUID`).
     pub assignments: u32,
+    /// `Stop` : fin de la partie réelle (R-214, R-215).
+    pub stop: Option<Moment>,
+    /// `Resume` : reprise du reste, telle qu'écrite (R-214 ; celle d'une
+    /// feuille commencée non achevée est aussi lue dans le modèle,
+    /// `Progress::resume`).
+    pub resume: Option<Moment>,
 }
 
 /// Valeurs enregistrées d'une affectation (R-198) ; chaque champ est absent
@@ -71,6 +77,14 @@ pub struct RecordedAssignment {
     pub finish: Option<Moment>,
     /// `Work` (aussi lu dans le modèle, `Assignment::work`).
     pub work: Option<Work>,
+    /// `ActualStart` (R-214, R-215).
+    pub actual_start: Option<Moment>,
+    /// `ActualFinish`.
+    pub actual_finish: Option<Moment>,
+    /// `Stop` : fin de la partie réelle.
+    pub stop: Option<Moment>,
+    /// `Resume` : reprise du reste.
+    pub resume: Option<Moment>,
 }
 
 /// Valeurs enregistrées d'une ressource (R-198) ; chaque champ est absent

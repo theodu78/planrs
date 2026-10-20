@@ -13,18 +13,11 @@ use crate::schema::Parent;
 /// `ResourceUID` d'une affectation sans ressource (R-125, R-079).
 const NO_RESOURCE: &str = "-65535";
 
-/// Travail restant écrit d'une affectation (R-199, comme R-127 pour une
-/// tâche) : sans travail réel, celui que MS Project écrit toujours, reste =
-/// travail − réel = travail (le modèle n'est tenu à jour par aucune
-/// commande : 0 pour une affectation créée, périmé après un rééquilibrage) ;
-/// avec un travail réel saisi (avancement, J6), la valeur saisie telle
-/// quelle.
+/// Travail restant écrit d'une affectation (R-199, R-211, R-214) : la
+/// dérivation W − travail réel, jamais négative (ADR-0014 D4) ; sans
+/// travail réel, le travail, comme MS Project l'écrit toujours.
 pub(crate) fn remaining_work(a: &Assignment) -> Work {
-    if a.actual_work == Work::ZERO {
-        a.work
-    } else {
-        a.remaining_work
-    }
+    planrs_core::progress::remaining_work(a)
 }
 
 /// Écrit une affectation ; `values` : `Start`/`Finish` à écrire (R-198,
@@ -73,6 +66,11 @@ pub(crate) fn write(em: &mut Emitter, a: &Assignment, values: Option<&Values>, p
             "WorkContour" => em.leaf(name, &codes::work_contour_code(a.contour).to_string()),
             "Baseline" => baseline::assignment(em, &a.baselines, &planned, profile),
             "Start" => em.opt_date(name, computed.and_then(|v| v.start)),
+            // R-215 : réels et coupure de l'affectation, calculés.
+            "ActualStart" => em.opt_date(name, computed.and_then(|v| v.actual_start)),
+            "ActualFinish" => em.opt_date(name, computed.and_then(|v| v.actual_finish)),
+            "Stop" => em.opt_date(name, computed.and_then(|v| v.stop)),
+            "Resume" => em.opt_date(name, computed.and_then(|v| v.resume)),
             "Finish" => em.opt_date(name, computed.and_then(|v| v.finish)),
             "LevelingDelay" | "LevelingDelayFormat" => leveling::write(em, name, a.leveling_delay),
             _ => {}

@@ -120,6 +120,10 @@ pub(crate) struct TaskValues {
     /// R-199 : durée calculée d'une feuille automatique affectée (R-173),
     /// avec `Computed::Schedule` seulement (voir [`assigned_leaf_duration`]).
     pub(crate) leaf_duration: Option<Duration>,
+    /// `Stop` (R-215) ; relu avec `Computed::Recorded`.
+    pub(crate) stop: Option<Moment>,
+    /// `Resume` (R-214, R-215) ; relu avec `Computed::Recorded`.
+    pub(crate) resume: Option<Moment>,
 }
 
 /// Valeurs calculées d'une affectation, prêtes à écrire (R-198, R-199).
@@ -127,6 +131,11 @@ pub(crate) struct TaskValues {
 pub(crate) struct AssignmentValues {
     pub(crate) start: Option<Moment>,
     pub(crate) finish: Option<Moment>,
+    /// `ActualStart`, `ActualFinish`, `Stop`, `Resume` (R-215).
+    pub(crate) actual_start: Option<Moment>,
+    pub(crate) actual_finish: Option<Moment>,
+    pub(crate) stop: Option<Moment>,
+    pub(crate) resume: Option<Moment>,
     /// R-199 : `TimephasedData` propres à jeter (placement changé).
     pub(crate) drop_timephased: bool,
 }
@@ -232,7 +241,7 @@ fn from_task_schedule(s: &TaskSchedule, scale: Option<TimeScale<'_>>, summary: b
         critical: Some(s.critical),
         duration: (summary && !s.manual).then_some(s.duration.get()),
         work: summary.then_some(s.work),
-        leaf_duration: None,
+        ..TaskValues::default()
     }
 }
 
@@ -293,6 +302,7 @@ pub(crate) fn from_schedule(project: &Project, schedule: &Schedule) -> Values {
                 start: placed.map(|p| p.span.start),
                 finish: placed.map(|p| p.span.finish),
                 drop_timephased: super::timephased::stale(a, placed),
+                ..AssignmentValues::default()
             };
             (a.uid(), values)
         })
@@ -380,6 +390,10 @@ pub(crate) fn from_recorded(recorded: &RecordedSchedule) -> Values {
                 AssignmentValues {
                     start: r.start,
                     finish: r.finish,
+                    actual_start: r.actual_start,
+                    actual_finish: r.actual_finish,
+                    stop: r.stop,
+                    resume: r.resume,
                     drop_timephased: false,
                 },
             )
@@ -422,8 +436,18 @@ fn recorded_values(r: &RecordedTask) -> TaskValues {
         finish_slack: t(r.finish_slack),
         critical: r.critical,
         duration: r.duration.map(Minutes::get),
+        stop: r.stop,
+        resume: r.resume,
         ..TaskValues::default()
     }
+}
+
+/// R-214 : reprise saisie écrite sans valeurs calculées : celle d'une
+/// feuille commencée non achevée seulement (la seule relue dans le modèle).
+pub(crate) fn model_resume(t: &Task, summary: bool) -> Option<Moment> {
+    t.progress
+        .resume
+        .filter(|_| crate::task::keeps_resume(t, summary))
 }
 
 /// Le `Schedule` couvre exactement les tâches du projet (UID 0 exclu).

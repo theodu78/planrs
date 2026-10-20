@@ -186,8 +186,9 @@ fn r199_assignment_remaining_work_follows_work() {
     // RemainingWork d'une affectation sans travail réel = Work (MS Project
     // l'écrit toujours ; aucune commande ne tient le reste du modèle) :
     // affectation créée (reste 0 dans le modèle) ⇒ PT8H ; reste relu de
-    // 64 h périmé après un rééquilibrage à 32 h ⇒ PT32H ; avec un travail
-    // réel saisi (8 h), le reste saisi (30 h) est gardé.
+    // 64 h périmé après un rééquilibrage à 32 h ⇒ PT32H. Amendement J6
+    // (R-214, ADR-0014 D4) : avec un travail réel saisi (8 h), le reste est
+    // dérivé, W − réel = 24 h ; le reste saisi (30 h) n'est plus écrit.
     let mut p = new_project("2026-10-19T08:00");
     for uid in 1..=3 {
         let t = task(&p, uid, 480, 1, 0);
@@ -209,7 +210,7 @@ fn r199_assignment_remaining_work_follows_work() {
     };
     assert_eq!(remaining(1), "RemainingWork>PT8H0M0S");
     assert_eq!(remaining(2), "RemainingWork>PT32H0M0S");
-    assert_eq!(remaining(3), "RemainingWork>PT30H0M0S");
+    assert_eq!(remaining(3), "RemainingWork>PT24H0M0S");
 }
 
 #[test]

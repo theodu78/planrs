@@ -2,7 +2,7 @@
 //! calendriers, tâches, ressources, affectations et `Extras` du projet
 //! (R-120, R-123, R-130, R-132).
 
-use planrs_core::{Project, ScheduleAnchor};
+use planrs_core::{ProgressOptions, Project, ScheduleAnchor};
 
 use super::computed::Values;
 use super::emit::Emitter;
@@ -27,6 +27,9 @@ pub(crate) fn write(em: &mut Emitter, p: &Project, values: Option<&Values>, opti
         .any(|x| x.key.name == "CurrencyCode" && x.key.anchor == Anchor::None);
     let top = unscoped(&planned);
     children(em, Parent::Project, profile, &top, |em, name| {
+        if let Some(v) = progress_option(o.progress, name) {
+            return em.leaf(name, format_bool(v));
+        }
         match name {
             "SaveVersion" => em.leaf(name, &options.save_version.to_string()),
             "GUID" => em.opt_leaf(name, p.info.guid.map(|g| g.to_string())),
@@ -115,4 +118,18 @@ pub(crate) fn write(em: &mut Emitter, p: &Project, values: Option<&Values>, opti
             _ => {}
         }
     });
+}
+
+/// R-218 : valeur de l'option d'avancement `name` (réécrite telle quelle),
+/// `None` pour un autre élément.
+const fn progress_option(o: ProgressOptions, name: &str) -> Option<bool> {
+    Some(match name.as_bytes() {
+        b"SplitsInProgressTasks" => o.split_in_progress,
+        b"TaskUpdatesResource" => o.task_updates_resource,
+        b"MoveCompletedEndsBack" => o.move_completed_ends_back,
+        b"MoveRemainingStartsBack" => o.move_remaining_starts_back,
+        b"MoveRemainingStartsForward" => o.move_remaining_starts_forward,
+        b"MoveCompletedEndsForward" => o.move_completed_ends_forward,
+        _ => return None,
+    })
 }

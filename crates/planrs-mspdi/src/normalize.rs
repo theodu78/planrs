@@ -3,7 +3,9 @@
 //! `Project::validate` ; `normalize` est idempotente.
 //!
 //! Elle décrit exactement ce que l'aller-retour change (la liste « perdu » de
-//! la documentation) : pourcentages au pour-cent, décalages en pourcentage
+//! la documentation) : pourcentages au pour-cent, restes d'une feuille et
+//! d'une affectation dérivés (R-214), reprise saisie gardée pour une
+//! feuille en cours seulement, décalages en pourcentage
 //! au pas de 0,1 %, durée d'une récapitulative automatique (valeur
 //! calculée), chaînes (U+FFFD, troncature au `maxLength`), `Period` réécrite
 //! quotidienne (mêmes jours), `Extras` (invalides et origines étrangères

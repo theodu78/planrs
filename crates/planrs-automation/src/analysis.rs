@@ -27,7 +27,7 @@ use crate::json::DurationJson;
 use crate::outcome::SideEffect;
 use crate::session::{ApplyOptions, Session};
 use crate::text::{Language, TextContext};
-use crate::view::{DiagView, DiffView, ViewCtx, signed_minutes, work_out};
+use crate::view::{BaselineOut, DiagView, DiffView, ViewCtx, baseline_out, signed_minutes, work_out};
 use crate::workspace::ToolError;
 
 /// Tâches expliquées par un `what_if` au plus (R-234).
@@ -118,21 +118,6 @@ pub struct VarianceRow {
     /// (projet sans récapitulative stockée).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub derived: bool,
-}
-
-/// Valeurs d'une ligne de base.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct BaselineOut {
-    /// Début de base.
-    pub start: Option<String>,
-    /// Fin de base.
-    pub finish: Option<String>,
-    /// Durée de base ; absente si la ligne n'en a pas.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub duration: Option<DurationJson>,
-    /// Travail de base (heures) ; absent si la ligne n'en a pas.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub work: Option<DurationJson>,
 }
 
 /// Écarts signés (valeur − ligne de base), calculés par le moteur.
@@ -331,16 +316,6 @@ pub fn what_if(session: &Session, params: &WhatIfParams, lang: Language) -> Resu
         baseline_derived: line.as_ref().is_some_and(|l| l.derived),
         explanations,
     })
-}
-
-/// Valeurs d'une ligne de base en sortie.
-fn baseline_out(b: &TaskBaseline, text: &TextContext) -> BaselineOut {
-    BaselineOut {
-        start: b.start.map(|m| m.to_string()),
-        finish: b.finish.map(|m| m.to_string()),
-        duration: b.duration.map(|d| DurationJson::from_duration(&d, text)),
-        work: b.work.map(|w| work_out(w, text)),
-    }
 }
 
 /// Écarts en sortie : dates et durée dans l'unité `unit`, travail en

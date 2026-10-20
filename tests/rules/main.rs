@@ -231,6 +231,7 @@ mod r231_explain_finish;
 mod r232_explain_chain;
 mod r233_explain_summaries;
 mod r234_what_if;
+mod r235_progress_views;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

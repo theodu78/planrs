@@ -1,0 +1,127 @@
+{
+  "accepted": true,
+  "baseline_derived": true,
+  "baseline_finish": "2026-11-11T17:00",
+  "diff": {
+    "changed": [
+      {
+        "critical_after": true,
+        "critical_before": true,
+        "finish_after": "2026-11-12T17:00",
+        "finish_before": "2026-11-10T17:00",
+        "finish_delta_min": 2880,
+        "id_after": 2,
+        "id_before": 2,
+        "start_after": "2026-11-04T08:00",
+        "start_before": "2026-11-04T08:00",
+        "total_slack_after": {
+          "minutes": 0,
+          "text": "0j",
+          "unit": "day"
+        },
+        "total_slack_before": {
+          "minutes": 0,
+          "text": "0j",
+          "unit": "day"
+        },
+        "uid": 2
+      },
+      {
+        "critical_after": true,
+        "critical_before": true,
+        "finish_after": "2026-11-12T17:00",
+        "finish_before": "2026-11-10T17:00",
+        "finish_delta_min": 2880,
+        "id_after": 3,
+        "id_before": 3,
+        "start_after": "2026-11-12T17:00",
+        "start_before": "2026-11-10T17:00",
+        "total_slack_after": {
+          "minutes": 0,
+          "text": "0j",
+          "unit": "day"
+        },
+        "total_slack_before": {
+          "minutes": 0,
+          "text": "0j",
+          "unit": "day"
+        },
+        "uid": 3
+      }
+    ],
+    "changed_total": 2,
+    "critical_entered": [],
+    "critical_left": [],
+    "finish_after": "2026-11-12T17:00",
+    "finish_before": "2026-11-10T17:00",
+    "finish_delta": {
+      "minutes": 960,
+      "text": "2j",
+      "unit": "day"
+    },
+    "start_after": "2026-11-02T08:00",
+    "start_before": "2026-11-02T08:00",
+    "truncated": false
+  },
+  "explanations": [
+    {
+      "chain": [
+        {
+          "driver": {
+            "kind": "actual"
+          },
+          "finish": "2026-11-12T17:00",
+          "id": 2,
+          "name": "Maçonnerie",
+          "start": "2026-11-04T08:00",
+          "uid": 2
+        }
+      ],
+      "date": "2026-11-12T17:00",
+      "hypothesis": false,
+      "late": {
+        "critical": true,
+        "driver": {
+          "kind": "project_finish"
+        },
+        "finish": "2026-11-12T17:00",
+        "free_slack": {
+          "minutes": 0,
+          "text": "0j",
+          "unit": "day"
+        },
+        "start": "2026-11-12T17:00",
+        "total_slack": {
+          "minutes": 0,
+          "text": "0j",
+          "unit": "day"
+        }
+      },
+      "side": "start",
+      "steps": [
+        {
+          "driver": {
+            "kind": "link",
+            "link": "fs",
+            "predecessor": 2
+          },
+          "raw": "2026-11-12T17:00",
+          "step": "driver"
+        }
+      ],
+      "summary_en": "Réception starts on Thu 11/12/2026 17:00: finish of Maçonnerie (Thu 11/12/2026 17:00, FS link). Maçonnerie starts on Wed 11/04/2026 08:00: actual start.",
+      "summary_fr": "Réception commence le jeu 12/11/2026 17:00 : fin de Maçonnerie (jeu 12/11/2026 17:00, lien FS). Maçonnerie commence le mer 04/11/2026 08:00 : début réel.",
+      "task": {
+        "id": 3,
+        "name": "Réception",
+        "uid": 3
+      },
+      "truncated": false
+    }
+  ],
+  "project_finish_variance": {
+    "minutes": 480,
+    "text": "1j",
+    "unit": "day"
+  }
+}

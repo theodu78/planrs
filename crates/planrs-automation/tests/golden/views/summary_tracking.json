@@ -1,0 +1,28 @@
+{
+  "baselines": [
+    0
+  ],
+  "critical": 2,
+  "dirty": true,
+  "duration": {
+    "minutes": 3360,
+    "text": "7j",
+    "unit": "day"
+  },
+  "errors": 0,
+  "finish": "2026-11-10T17:00",
+  "history_len": 2,
+  "links": 2,
+  "milestones": 1,
+  "name": "Chantier",
+  "path": null,
+  "percent_complete": {
+    "text": "62,5%",
+    "value": 6250
+  },
+  "start": "2026-11-02T08:00",
+  "status_date": "2026-11-06T17:00",
+  "summaries": 0,
+  "tasks": 3,
+  "warnings": 0
+}

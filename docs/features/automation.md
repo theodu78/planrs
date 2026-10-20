@@ -38,7 +38,7 @@ Table triée par id (`task.add`), testée (unicité, ordre, schémas) : nom MCP 
 
 ## 6. Preuve de bout en bout (lot L18)
 
-Le rejeu `build_30` (`docs/features/mcp.md` § 5) traverse toute la couche : 30 tâches, 25 liens, contraintes, calendrier, `dry_run`, un lot refusé, undo/redo, enregistrement MSPDI, puis undo jusqu'au projet vide (P30 de bout en bout, `replay_build_30_undo_to_empty`).
+Le rejeu `build_30` (`docs/features/mcp.md` § 5) traverse toute la couche : 30 tâches, 25 liens, contraintes, calendrier, `dry_run`, un lot refusé, undo/redo, enregistrement MSPDI, puis undo jusqu'au projet vide (P30 de bout en bout, `replay_build_30_undo_to_empty`). J5 : `resources_j5` (ressources, affectations). J6 (lot L10) : `tracking_j6` traverse les commandes de suivi (`progress.update`, `progress.reschedule`, `baseline.set`, `project.set_status_date`), les analyses (`analysis.explain_date`, `analysis.what_if` par `Session::simulate`, `analysis.baseline_variance`) et l'historique, jusqu'à l'aller-retour MSPDI ([`tracking.md`](tracking.md) § 3).
 
 ## 7. Tests
 

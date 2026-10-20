@@ -51,6 +51,9 @@ pub struct Palette {
     pub message_error_bg: Color32,
     /// Fond du bandeau d'un avertissement (texte en `text_strong`).
     pub message_warning_bg: Color32,
+    /// Cadre de la cellule courante de la table (J7, lot L1) : contraste
+    /// ≥ 3:1 sur le fond, le fond alterné et la sélection.
+    pub cursor: Color32,
 }
 
 impl Palette {
@@ -76,6 +79,7 @@ impl Palette {
         summary_critical: Color32::from_rgb(0x8E, 0x1F, 0x1C),
         message_error_bg: Color32::from_rgb(0xFD, 0xEC, 0xEA),
         message_warning_bg: Color32::from_rgb(0xFF, 0xF4, 0xD6),
+        cursor: Color32::from_rgb(0x1F, 0x5F, 0xBF),
     };
 
     /// Palette sombre.
@@ -100,6 +104,7 @@ impl Palette {
         summary_critical: Color32::from_rgb(0xFF, 0x8A, 0x85),
         message_error_bg: Color32::from_rgb(0x3A, 0x14, 0x14),
         message_warning_bg: Color32::from_rgb(0x3A, 0x30, 0x12),
+        cursor: Color32::from_rgb(0x8A, 0xB4, 0xF8),
     };
 
     /// Palette du thème résolu.
@@ -223,6 +228,23 @@ mod tests {
         }
     }
 
+    /// J7 L1 : cadre du curseur lisible sur le fond, le fond alterné de la
+    /// table et la ligne sélectionnée (≥ 3:1, WCAG 1.4.11).
+    #[test]
+    fn palette_cursor_contrast() {
+        for (name, p) in palettes() {
+            let zebra = p.background.lerp_to_gamma(p.header_bg, 0.6);
+            for (label, bg) in [
+                ("fond", p.background),
+                ("fond alterné", zebra),
+                ("sélection", p.selection),
+            ] {
+                let ratio = contrast(p.cursor, bg);
+                assert!(ratio >= 3.0, "{name} : curseur sur {label} = {ratio:.2}");
+            }
+        }
+    }
+
     #[test]
     fn palette_critical_distinct_from_bar() {
         for (name, p) in palettes() {
@@ -266,6 +288,7 @@ mod tests {
                 p.summary_critical,
                 p.message_error_bg,
                 p.message_warning_bg,
+                p.cursor,
             ] {
                 assert_eq!(color.a(), 255, "{name} : {color:?}");
             }

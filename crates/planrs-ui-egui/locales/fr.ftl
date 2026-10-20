@@ -324,6 +324,10 @@ error-control-screenshot_unavailable = Capture indisponible : { $detail }
 error-control-screenshot_too_large = Capture trop grande : { $detail }
 
 # --- J7 L1 ---
+table-label = Table des tâches
+nav-cursor-label = Ligne { $id }, { $column }, { $value }
+nav-cursor-blank-label = Ligne vide, { $column }
+nav-cursor-empty-value = vide
 
 # --- J7 L2 ---
 

@@ -325,6 +325,10 @@ error-control-screenshot_unavailable = Screenshot unavailable: { $detail }
 error-control-screenshot_too_large = Screenshot too large: { $detail }
 
 # --- J7 L1 ---
+table-label = Task table
+nav-cursor-label = Row { $id }, { $column }, { $value }
+nav-cursor-blank-label = Blank row, { $column }
+nav-cursor-empty-value = empty
 
 # --- J7 L2 ---
 

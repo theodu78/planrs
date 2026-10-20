@@ -32,6 +32,7 @@ use planrs_core::{Day, Moment, PRODUCT_NAME, Project, Schedule, Severity, TaskUi
 use planrs_mspdi::ImportDiagnostic;
 
 use crate::action::{Action, ConfirmChoice};
+use crate::column::Column;
 use crate::document::{self, LoadedDocument, OpenError};
 use crate::edit::TableEdit;
 use crate::geom;
@@ -39,15 +40,18 @@ use crate::i18n::{Arg, Language, TextId, Texts, error_text_id};
 use crate::io::{
     FileService, NoFileService, OpenEvent, SaveEvent, SaveRequest, SaveTarget, suggested_file_name,
 };
+use crate::keymap::KeyState;
+use crate::nav::{self, GridPos, GridShape, NavMove, RowRef};
 use crate::rows::RowModel;
-use crate::selection::Selection;
+use crate::selection::{SelectMode, Selection};
 use crate::state::{StateLoadError, TABLE_WIDTH_MAX, TABLE_WIDTH_MIN, ThemePref, UiState};
 use crate::structure::PendingDelete;
 use crate::theme::Palette;
 use crate::timescale::{
     MAX_RANGE_DAYS, TimeAxis, TimeScaleZoom, ViewSpan, default_range, fit_zoom, zoom_anchor,
 };
-use crate::view::{self, DiagnosticsView, FrameCtx, FrameStats, Metrics, ViewTransient};
+use crate::view::table::table_id;
+use crate::view::{self, DiagnosticsView, FrameCtx, FrameStats, Metrics, Pane, ViewTransient};
 
 /// Nombre maximal de messages conservés dans le bandeau (les plus récents).
 pub const MAX_MESSAGES: usize = 3;
@@ -295,6 +299,11 @@ pub struct App {
     /// Clé du document au lancement du sélecteur : un document arrivé alors
     /// que le document courant a changé depuis redemande confirmation.
     open_confirmed_for: Option<(u64, u64)>,
+    /// Un menu ou une fenêtre surgissante était ouvert à la fin de l'image
+    /// précédente : la navigation au clavier est suspendue (les raccourcis
+    /// sont lus avant le dessin, quand egui ne sait pas encore si un menu
+    /// est ouvert).
+    popup_open: bool,
 }
 
 impl App {
@@ -332,6 +341,7 @@ impl App {
             save_rx,
             quit_confirmed: false,
             open_confirmed_for: None,
+            popup_open: false,
         }
     }
 
@@ -479,10 +489,15 @@ impl App {
 
     /// Ramène [`App::selected`] à la seule [`App::selection`] si la tâche
     /// active a changé par ailleurs (clic simple, tâche supprimée, nouveau
-    /// document).
+    /// document), puis pose la ligne du curseur sur la tâche active (la
+    /// ligne vide sans sélection, J7 lot L1).
     pub(crate) fn sync_selection(&mut self) {
         if self.selected.focus() != self.selection {
             self.selected = Selection::single(self.selection);
+        }
+        self.view.cursor.row = RowRef::from_selection(self.selection);
+        if self.selected.len() <= 1 {
+            self.view.cursor.anchor = None;
         }
     }
 
@@ -867,9 +882,14 @@ impl App {
         let document = OpenDocument::new(loaded, origin, opening);
         self.rows = Some(RowModel::build(&document, self.texts.format_labels()));
         self.diagnostics = DiagnosticsView::build(&document);
+        // Curseur sur la première ligne, colonne Nom, focus à la table
+        // (J7 lot L1) ; projet sans tâche : la ligne vide.
+        self.selection = self.rows.as_ref().and_then(|rows| rows.row(0)).map(|row| row.uid);
+        self.selected = Selection::single(self.selection);
         self.document = Some(document);
-        self.selection = None;
         self.view = self.fresh_view(true);
+        self.view.focus_table_pending = true;
+        self.sync_selection();
         // Une ouverture réussie rend caduques les erreurs et avertissements
         // d'ouverture précédents.
         let truncated = self.texts.get(TextId::RangeTruncated);
@@ -1107,10 +1127,18 @@ impl App {
             }
             Action::Structure(op) => self.run_structure(op),
             Action::ConfirmDelete(confirmed) => self.answer_delete(confirmed),
+            Action::Nav { mv, extend } => self.navigate(mv, extend),
+            Action::FocusPane(pane) => self.focus_pane(pane, ctx),
+            Action::TimescaleStep(n) => {
+                // Une graduation fine : un jour de l'échelle (H-UI-18).
+                self.scroll_gantt_by(self.state.zoom.px_per_day() * f32::from(n));
+            }
+            Action::TimescalePage(n) => self.scroll_gantt_by(self.current_gantt_width() * f32::from(n)),
+            Action::TimescaleToStart => self.scroll_gantt_to_project(false),
+            Action::TimescaleToEnd => self.scroll_gantt_to_project(true),
+            Action::ZoomBy(steps) => self.zoom_step(steps, self.gantt_center()),
             // Contrat J7 (lot L0) : actions câblées par leur lot.
-            other @ (Action::Nav { .. }
-            | Action::FocusPane(_)
-            | Action::SetView(_)
+            other @ (Action::SetView(_)
             | Action::SetGanttStyle(_)
             | Action::ShowDialog(_)
             | Action::ShowTaskInformation
@@ -1118,11 +1146,6 @@ impl App {
             | Action::ToggleColumn(_)
             | Action::SetColumnWidth { .. }
             | Action::ScrollTableX(_)
-            | Action::TimescaleStep(_)
-            | Action::TimescalePage(_)
-            | Action::TimescaleToStart
-            | Action::TimescaleToEnd
-            | Action::ZoomBy(_)
             | Action::Approve(_)
             | Action::Reject(_)
             | Action::OpenRecent(_)
@@ -1153,6 +1176,115 @@ impl App {
             .pick_and_open(ctx, now, title, filter, self.tx.clone());
     }
 
+    /// Défilement horizontal du Gantt de `delta` points (borné).
+    fn scroll_gantt_by(&mut self, delta: f32) {
+        if delta.is_finite() {
+            self.view.gantt_scroll_x += delta;
+        }
+        self.clamp_gantt_scroll();
+    }
+
+    /// Alt+Origine / Alt+Fin (H-UI-18) : début du projet au bord gauche du
+    /// Gantt, ou fin du projet au bord droit. Abscisses de l'axe (temps →
+    /// pixels) seulement.
+    fn scroll_gantt_to_project(&mut self, end: bool) {
+        let Some(document) = &self.document else {
+            return;
+        };
+        let axis = TimeAxis::new(document.range, self.state.zoom, 0.0);
+        let schedule = document.schedule();
+        let target = if end {
+            axis.x(schedule.project_finish) - self.current_gantt_width()
+        } else {
+            axis.x(schedule.project_start)
+        };
+        if target.is_finite() {
+            self.view.gantt_scroll_x = target;
+        }
+        self.clamp_gantt_scroll();
+    }
+
+    /// Donne le focus clavier à un volet (clic dans la table ou le Gantt,
+    /// fin de saisie) : la table reçoit le focus d'egui (sans le
+    /// redemander s'il l'a déjà, pour garder son verrou de focus), le Gantt
+    /// le lui retire.
+    fn focus_pane(&mut self, pane: Pane, ctx: &egui::Context) {
+        self.view.focus = pane;
+        ctx.memory_mut(|memory| match pane {
+            Pane::Table => {
+                if !memory.has_focus(table_id()) {
+                    memory.request_focus(table_id());
+                }
+            }
+            Pane::Gantt => memory.surrender_focus(table_id()),
+        });
+    }
+
+    /// Navigation au clavier (H-UI-13 à H-UI-17) : [`nav::step`] sur
+    /// (ligne, colonne visible), ligne vide comprise ; la sélection suit la
+    /// ligne du curseur (`extend` : plage depuis l'ancre, sans aller sur la
+    /// ligne vide) ; le défilement vertical suit le curseur avec une ligne
+    /// de marge ([`nav::ensure_visible`]).
+    fn navigate(&mut self, mv: NavMove, extend: bool) {
+        let Some(rows) = &self.rows else {
+            return;
+        };
+        let len = rows.len();
+        let visible: Vec<Column> = self.state.visible_columns().map(|state| state.column).collect();
+        let row = match self.selection {
+            Some(uid) => rows.index_of(uid).unwrap_or(0),
+            None => len,
+        };
+        let col = visible
+            .iter()
+            .position(|column| *column == self.view.cursor.column)
+            .unwrap_or(0);
+        let shape = GridShape {
+            rows: len.saturating_add(1),
+            cols: visible.len(),
+            page: nav::page_rows(self.view.last_body_height, view::ROW_H),
+        };
+        let mut target = nav::step(GridPos { row, col }, mv, shape);
+        let extend = extend && len > 0;
+        if extend {
+            // L'extension s'arrête à la dernière tâche.
+            target.row = target.row.min(len.saturating_sub(1));
+        }
+        if let Some(column) = visible.get(target.col) {
+            self.view.cursor.column = *column;
+        }
+        let uid = rows.row(target.row).map(|row| row.uid);
+        match uid {
+            Some(uid) if extend => {
+                let anchor = self.selected.anchor().or(self.selection).unwrap_or(uid);
+                let mut selected = Selection::single(Some(anchor));
+                selected.click(uid, SelectMode::Range, rows);
+                self.selected = selected;
+                self.selection = Some(uid);
+                self.view.cursor.anchor = Some(anchor);
+            }
+            _ => {
+                self.selection = uid;
+                self.selected = Selection::single(uid);
+            }
+        }
+        self.sync_selection();
+        if extend {
+            self.view.cursor.anchor = self.selected.anchor();
+        }
+        let view_h = self.view.last_body_height;
+        if let Some(y) = nav::ensure_visible(
+            self.view.last_scroll_y,
+            target.row,
+            view::ROW_H,
+            view_h,
+            shape.rows,
+        ) {
+            self.view.pending_scroll_y = Some(y);
+            self.view.last_scroll_y = y;
+        }
+    }
+
     /// Pas de zoom (Ctrl/Cmd + molette) ancré sous le pointeur, `anchor_x`
     /// étant relatif au bord gauche du Gantt.
     fn zoom_step(&mut self, steps: i8, anchor_x: f32) {
@@ -1163,6 +1295,21 @@ impl App {
         if to != self.state.zoom {
             self.zoom_to(to, anchor_x);
         }
+    }
+
+    /// Contextes actifs des raccourcis : document ouvert ; table focalisée
+    /// (focus d'egui et volet), sans saisie, menu, fenêtre ni confirmation
+    /// de suppression ouverts (ADR-0015 D2).
+    fn key_state(&self, ctx: &egui::Context) -> KeyState {
+        let document = self.document.is_some();
+        let table = document
+            && self.view.focus == Pane::Table
+            && ctx.memory(|memory| memory.has_focus(table_id()))
+            && self.view.edit.editing.is_none()
+            && !self.popup_open
+            && self.view.dialog.is_none()
+            && self.pending_delete.is_none();
+        KeyState { document, table }
     }
 
     /// Une image complète dans `ui` (appelée par [`crate::ui`]) : relève des
@@ -1178,10 +1325,14 @@ impl App {
         let metrics = Metrics::default();
         self.sync_selection();
         self.drop_stale_delete();
+        if self.view.focus_table_pending && self.document.is_some() {
+            self.view.focus_table_pending = false;
+            self.focus_pane(Pane::Table, &ctx);
+        }
         let mut actions = std::mem::take(&mut self.actions);
         // Raccourcis avant le dessin : la touche consommée n'atteint aucun
         // widget.
-        crate::keymap::dispatch(&ctx, self.document.is_some(), &mut actions);
+        crate::keymap::dispatch(&ctx, self.key_state(&ctx), &mut actions);
         let mut stats = FrameStats::default();
         // Nom du document du bandeau de confirmation, s'il y en a un.
         let confirm_name = self.confirm.as_ref().map(|_| {
@@ -1229,6 +1380,7 @@ impl App {
             }
         }
         self.last_frame = stats;
+        self.popup_open = ctx.any_popup_open();
         // Les actions sont appliquées après le dessin : une image de plus
         // montre leur effet (langue, zoom, document…). Les lots d'édition
         // d'abord (partition stable) : une saisie validée par la perte du
@@ -1391,7 +1543,11 @@ mod tests {
         app.open_bytes(crate::DEMO_MSPDI, super::DocOrigin::default());
         assert_eq!(app.document.as_ref().unwrap().opening, 2);
         assert!(app.messages().is_empty(), "{:?}", app.messages());
-        assert!(app.selection.is_none());
+        // J7 L1 : curseur (et sélection) sur la première ligne.
+        assert_eq!(
+            app.selection,
+            app.rows().and_then(|rows| rows.row(0)).map(|row| row.uid)
+        );
         assert!(app.view().needs_fit);
         assert_eq!(app.diagnostics_view(), &crate::view::DiagnosticsView::default());
     }

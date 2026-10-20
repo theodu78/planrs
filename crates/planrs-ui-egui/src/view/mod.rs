@@ -90,13 +90,27 @@ pub struct ViewTransient {
     /// pour les tests ; le réducteur ne travaille qu'en abscisses relatives
     /// au Gantt).
     pub last_gantt_left: f32,
-    /// Cellule courante de la table et saisie en cours (lot L12).
+    /// Saisie en cours dans la table (J4, lot L12).
     pub edit: TableEdit,
-    /// Cellule courante de la table (J7 ; remplace `TableEdit.blank` au lot
-    /// L1).
+    /// Cellule courante de la table (J7, lot L1) : sa ligne suit
+    /// `App::selection` (la ligne vide sans sélection), sa colonne est
+    /// posée par un clic, Tab ou les flèches.
     pub cursor: CellCursor<TaskUid, Column>,
     /// Volet qui a le focus clavier (J7, lot L1).
     pub focus: Pane,
+    /// Donner le focus clavier à la table à la prochaine image (ouverture
+    /// d'un document, J7 lot L1).
+    pub focus_table_pending: bool,
+    /// Défilement vertical de la table et du Gantt à l'image précédente
+    /// (haut de la fenêtre visible, en points depuis la ligne 0) : base du
+    /// suivi du curseur (H-UI-17).
+    pub last_scroll_y: f32,
+    /// Hauteur visible du corps à l'image précédente : pas d'une page et
+    /// suivi du curseur (H-UI-15, H-UI-17).
+    pub last_body_height: f32,
+    /// Hauteur du contenu défilé à l'image précédente (borne du
+    /// défilement imposé, connue d'egui avec une image de retard).
+    pub last_content_h: f32,
     /// Défilement horizontal de la table, en points (J7, lot L6).
     pub table_scroll_x: f32,
     /// Glisser d'une barre en cours (J7, lot L8).

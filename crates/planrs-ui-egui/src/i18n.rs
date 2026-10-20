@@ -373,6 +373,10 @@ text_ids! {
     ErrorControlScreenshotUnavailable => "error-control-screenshot_unavailable",
     ErrorControlScreenshotTooLarge => "error-control-screenshot_too_large",
     // --- J7 L1 ---
+    TableLabel => "table-label",
+    NavCursorLabel => "nav-cursor-label",
+    NavCursorBlankLabel => "nav-cursor-blank-label",
+    NavCursorEmptyValue => "nav-cursor-empty-value",
     // --- J7 L2 ---
     // --- J7 L3 ---
     // --- J7 L4 ---
@@ -718,6 +722,7 @@ mod tests {
             ("id", Arg::Str("3".into())),
             ("name", Arg::Str("Plans".into())),
             ("column", Arg::Str("Durée".into())),
+            ("value", Arg::Str("5 jours".into())),
         ]
     }
 

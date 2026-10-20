@@ -32,6 +32,10 @@ fn invalid(field: &str, why: &str) -> CommandError {
 /// `DefaultTaskType`, `NewTasksEffortDriven`) : seules les tâches créées
 /// ensuite les prennent (R-152) ; `null` refusé.
 pub(super) fn set_info(op: &ProjectInfoPatch, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
+    // Calendrier du projet (R-249) : contrat J7 L0, exécuté par le lot L5.
+    if !op.calendar.is_keep() {
+        return Err(CommandError::not_yet(7).with_field("calendar"));
+    }
     let default_task_type = match op.default_task_type {
         Patch::Keep => None,
         Patch::Set(t) => Some(TaskType::from(t)),

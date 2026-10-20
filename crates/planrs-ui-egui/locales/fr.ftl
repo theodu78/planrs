@@ -302,3 +302,50 @@ blank-row-label = Ligne vide (nouvelle tâche)
 cell-edit-label = Saisie : { $column }
 edit-error-unknown-id = Aucune tâche d'ID { $id }
 edit-error-not-editable = Colonne calculée, non modifiable
+
+## J7 — L0 : Codes de refus du contrat (ADR-0015)
+
+error-calendar-name_taken = Nom de calendrier déjà pris : { $detail }
+error-calendar-base_not_base = Base de calendrier invalide : { $detail }
+error-calendar-in_use = Calendrier utilisé : { $detail }
+error-gesture-not_draggable = Geste impossible sur cette barre : { $detail }
+error-usage-limit = Rapport d'utilisation trop grand : { $detail }
+error-control-rejected = Refusé dans l'application : { $detail }
+error-control-approval_timeout = Aucune réponse dans le délai : { $detail }
+error-control-not_relayable = Commande non relayable : { $detail }
+error-control-not_attached = Aucune application rattachée : { $detail }
+error-control-app_gone = Application fermée : { $detail }
+error-control-screenshot_unavailable = Capture indisponible : { $detail }
+error-control-screenshot_too_large = Capture trop grande : { $detail }
+
+# --- J7 L1 ---
+
+# --- J7 L2 ---
+
+# --- J7 L3 ---
+
+# --- J7 L4 ---
+
+# --- J7 L5 ---
+
+# --- J7 L6 ---
+
+# --- J7 L7 ---
+
+# --- J7 L8 ---
+
+# --- J7 L9 ---
+
+# --- J7 L10 ---
+
+# --- J7 L11 ---
+
+# --- J7 L12 ---
+
+# --- J7 L13 ---
+
+# --- J7 L14 ---
+
+# --- J7 L15 ---
+
+# --- J7 L16 ---

@@ -38,6 +38,33 @@ pub const MAX_RENDER_ROWS: u32 = 200;
 /// Largeur visée par l'échelle automatique d'un rendu.
 const AUTO_WIDTH_PX: u32 = 1_200;
 
+/// Environnement d'un appel sur une session tenue ailleurs (J7, ADR-0015
+/// D9 : l'application exécute les appels relayés sur la session de son
+/// document) : « maintenant » injecté, langue, racine des chemins.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CallEnv {
+    /// « Maintenant » (règle 5).
+    pub now: Moment,
+    /// Langue des messages.
+    pub lang: Language,
+    /// Racine des chemins (MCP HTTP), sinon aucune.
+    pub root: Option<PathBuf>,
+}
+
+/// Routeur de [`Workspace::call`] appliqué à `session` (J7, ADR-0015 D9) :
+/// un seul registre pour le local et le relais.
+///
+/// Squelette J7 L0 : refusé `command.not_yet_available` (lot L3, qui en
+/// fait le corps de [`Workspace::call`]).
+///
+/// # Errors
+///
+/// [`ToolError`] ; squelette : `command.not_yet_available`.
+pub fn call_with(session: &mut Session, env: &CallEnv, id: &str, params: Value) -> Result<Value, ToolError> {
+    let _ = (session, id, params);
+    Err(ToolError::from_command(&CommandError::not_yet(7), env.lang))
+}
+
 /// Espace de travail : au plus une session ouverte.
 #[derive(Debug)]
 pub struct Workspace {
@@ -154,6 +181,23 @@ fn to_value<T: Serialize>(v: &T) -> Result<Value, ToolError> {
         .map_err(|e| ToolError::simple(codes::PARAM_INVALID, format!("sérialisation impossible : {e}")))
 }
 
+/// Refus d'une entrée non servie ici : réservée à un jalon
+/// (`command.not_yet_available`) ou servie par une application rattachée
+/// seulement (`control.not_attached`, J7, C-CTL-10).
+fn check_available(available: Availability, id: &str, lang: Language) -> Result<(), ToolError> {
+    match available {
+        Availability::Now => Ok(()),
+        Availability::Milestone(m) => Err(ToolError::from_command(&CommandError::not_yet(m), lang)),
+        Availability::Attached => Err(ToolError::simple(
+            codes::CONTROL_NOT_ATTACHED,
+            format!(
+                "{} : {id}",
+                tr(lang, "aucune application rattachée", "no attached application")
+            ),
+        )),
+    }
+}
+
 /// Retire de `obj` le drapeau booléen `key` (absent : faux).
 fn take_flag(obj: &mut Map<String, Value>, key: &str, lang: Language) -> Result<bool, ToolError> {
     match obj.remove(key) {
@@ -248,9 +292,7 @@ impl Workspace {
                 format!("{} : {id}", tr(lang, "commande inconnue", "unknown command")),
             ));
         };
-        if let Availability::Milestone(m) = spec.available {
-            return Err(cmd(CommandError::not_yet(m)));
-        }
+        check_available(spec.available, id, lang)?;
         match id {
             "project.open" => self.open(&parse_params::<OpenProjectParams>(params).map_err(cmd)?),
             "project.new" => self.new_project(parse_params::<NewProjectParams>(params).map_err(cmd)?),
@@ -390,7 +432,14 @@ impl Workspace {
             ApplyMode::Commit
         };
         let outcome: ApplyOutcome = s
-            .apply_with(batch, mode, ApplyOptions { detail })
+            .apply_with(
+                batch,
+                mode,
+                ApplyOptions {
+                    detail,
+                    ..ApplyOptions::default()
+                },
+            )
             .map_err(|e| ToolError::from_command(&e, lang))?;
         to_value(&ViewCtx::new(s).outcome(&outcome))
     }

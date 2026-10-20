@@ -199,7 +199,10 @@ proptest! {
             let body: Vec<String> = ops.iter().map(|o| to_json(o, &uids)).collect();
             let json = format!(r#"{{"format_version":1,"ops":[{}]}}"#, body.join(","));
             let batch = Batch::from_json_str(&json).unwrap();
-            let options = ApplyOptions { detail };
+            let options = ApplyOptions {
+                detail,
+                ..ApplyOptions::default()
+            };
             let before = fingerprint(&s);
             let sim = s.simulate(&batch, options);
             prop_assert_eq!(&fingerprint(&s), &before);

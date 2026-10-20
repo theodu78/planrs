@@ -4,6 +4,11 @@
 //! (récurrence « période ») ; elle remplace une exception de même période,
 //! et toute autre exception qui partage un jour avec elle est un refus
 //! (pas de découpage implicite).
+//!
+//! Contrat J7 (lot L0, ADR-0015 D8) : `calendar.add`, `calendar.update`,
+//! `calendar.set_week`, `calendar.delete` (R-247, R-248), squelettes
+//! refusés `command.not_yet_available` jusqu'au lot L5 ; nom d'exception
+//! (R-165 amendée) refusé de même.
 
 use planrs_core::calendar::{
     Calendar, CalendarException as ModelException, CalendarKind, DayHours, DaySetting, Recurrence, TimeRange,
@@ -12,10 +17,14 @@ use planrs_core::{
     Assignment, AssignmentUid, CalendarModelError, CalendarUid, DayRange, Project, Subject, TimeOfDay,
 };
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
 use super::exec::Ctx;
 use super::extras_invalidation::{ASSIGNMENT_SCHEDULE_KEYS, drop_keys};
-use super::{CalendarException, CalendarExceptionKey, CalendarRef};
+use super::{CalendarException, CalendarExceptionKey, CalendarRef, Patch};
 use crate::error::{CommandError, CommandErrorKind, codes};
+use crate::json::DaySettingJson;
 use crate::outcome::SideEffect;
 
 /// `param.invalid` sur `field`.
@@ -116,6 +125,10 @@ fn drop_assignment_extras(ctx: &mut Ctx<'_>, cal: CalendarUid) {
 
 /// `calendar.set_exception` (R-165).
 pub(super) fn set_exception(op: &CalendarException, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
+    // Nom d'exception (R-165 amendée) : contrat J7 L0, lot L5.
+    if op.name.is_some() {
+        return Err(CommandError::not_yet(7).with_field("name"));
+    }
     let cal = resolve_calendar(ctx.project, op.cal)?;
     let period = DayRange::new(op.from, op.to).map_err(|e| invalid(e.to_string(), "to"))?;
     let setting = setting(&op.ranges)?;
@@ -185,4 +198,79 @@ pub(super) fn remove_exception(op: &CalendarExceptionKey, ctx: &mut Ctx<'_>) -> 
         .map_err(|e| invalid(e.to_string(), "from"))?;
     drop_assignment_extras(ctx, cal);
     Ok(())
+}
+
+/// `calendar.add` (J7, R-248) : nouveau calendrier de base (aucun de
+/// `base`, `copy_of`), dérivé de `base`, ou copie de `copy_of` (les deux :
+/// `param.invalid`). Contrat J7 L0 ; exécution : lot L5.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarAdd {
+    /// Nom (non vide, unique sans tenir compte de la casse).
+    pub name: String,
+    /// Calendrier de base dont le nouveau dérive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<u32>,
+    /// Calendrier copié (semaine, exceptions et base).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_of: Option<u32>,
+}
+
+/// `calendar.update` (J7, R-248) : nom et base ; absent gardé, `null` sur
+/// `base` : le calendrier devient un calendrier de base.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarUpdate {
+    /// Calendrier.
+    pub uid: u32,
+    /// Nom (`null` refusé).
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub name: Patch<String>,
+    /// Base.
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub base: Patch<u32>,
+}
+
+/// `calendar.set_week` (J7, R-247) : réglage de jours de la semaine type ;
+/// jours non cités inchangés.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarSetWeek {
+    /// Calendrier (UID ou `"project"`).
+    pub calendar: CalendarRef,
+    /// Jours réglés.
+    pub days: Vec<DaySettingJson>,
+}
+
+/// `calendar.delete` (J7, R-248) : refusé `calendar.in_use` si le
+/// calendrier sert (projet, tâche, ressource, base).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarDelete {
+    /// Calendrier.
+    pub uid: u32,
+}
+
+/// `calendar.add` : squelette J7 L0.
+pub(super) fn add(op: &CalendarAdd, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
+    let _ = (op, ctx);
+    Err(CommandError::not_yet(7))
+}
+
+/// `calendar.update` : squelette J7 L0.
+pub(super) fn update(op: &CalendarUpdate, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
+    let _ = (op, ctx);
+    Err(CommandError::not_yet(7))
+}
+
+/// `calendar.set_week` : squelette J7 L0.
+pub(super) fn set_week(op: &CalendarSetWeek, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
+    let _ = (op, ctx);
+    Err(CommandError::not_yet(7))
+}
+
+/// `calendar.delete` : squelette J7 L0.
+pub(super) fn delete(op: &CalendarDelete, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
+    let _ = (op, ctx);
+    Err(CommandError::not_yet(7))
 }

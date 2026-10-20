@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`calendar.set_week` (J7, R-247) : réglage de jours de la semaine type ;\njours non cités inchangés.",
+  "properties": {
+    "calendar": {
+      "description": "Calendrier (UID ou `\"project\"`).",
+      "oneOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "const": "project"
+        }
+      ]
+    },
+    "days": {
+      "description": "Jours réglés.",
+      "items": {
+        "additionalProperties": false,
+        "description": "Jour de la semaine type et son réglage (J7, R-247).",
+        "properties": {
+          "day": {
+            "description": "Jour.",
+            "oneOf": [
+              {
+                "const": "monday",
+                "description": "Lundi.",
+                "type": "string"
+              },
+              {
+                "const": "tuesday",
+                "description": "Mardi.",
+                "type": "string"
+              },
+              {
+                "const": "wednesday",
+                "description": "Mercredi.",
+                "type": "string"
+              },
+              {
+                "const": "thursday",
+                "description": "Jeudi.",
+                "type": "string"
+              },
+              {
+                "const": "friday",
+                "description": "Vendredi.",
+                "type": "string"
+              },
+              {
+                "const": "saturday",
+                "description": "Samedi.",
+                "type": "string"
+              },
+              {
+                "const": "sunday",
+                "description": "Dimanche.",
+                "type": "string"
+              }
+            ]
+          },
+          "setting": {
+            "description": "Réglage.",
+            "oneOf": [
+              {
+                "const": "inherit",
+                "description": "Hérité de la base (calendrier dérivé seulement).",
+                "type": "string"
+              },
+              {
+                "const": "non_working",
+                "description": "Chômé.",
+                "type": "string"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Ouvré sur ces plages (triées, disjointes, au plus 5).",
+                "properties": {
+                  "ranges": {
+                    "items": {
+                      "additionalProperties": false,
+                      "description": "Plage ouvrée d'un jour (J7, R-247) : `[from, to)`, `to` peut valoir\n`\"24:00\"` (contrôle : lot L5).",
+                      "properties": {
+                        "from": {
+                          "description": "Début (`\"08:00\"`).",
+                          "pattern": "^[0-9]{2}:[0-9]{2}$",
+                          "type": "string"
+                        },
+                        "to": {
+                          "description": "Fin (`\"12:00\"`, `\"24:00\"`).",
+                          "pattern": "^[0-9]{2}:[0-9]{2}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "from",
+                        "to"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "ranges"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "day",
+          "setting"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "calendar",
+    "days"
+  ],
+  "title": "CalendarSetWeek",
+  "type": "object"
+}

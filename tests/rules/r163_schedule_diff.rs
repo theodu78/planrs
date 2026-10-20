@@ -87,7 +87,10 @@ fn r163_diff_sorted_and_truncated() {
             None,
             &[set_days(1, 2)],
             ApplyMode::DryRun,
-            ApplyOptions { detail: true },
+            ApplyOptions {
+                detail: true,
+                ..ApplyOptions::default()
+            },
         )
         .unwrap();
     assert_eq!(o.diff.changed.len(), 15);

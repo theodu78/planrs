@@ -22,7 +22,7 @@ use crate::diag_delta::{blame, diagnostics_delta, state_diagnostics};
 pub use crate::diff::DEFAULT_DIFF_TASKS;
 use crate::diff::{ScheduleDiff, diff_schedules};
 use crate::error::{CommandError, CommandErrorKind, HistoryError, OpenError, codes};
-use crate::history::{History, HistoryView};
+use crate::history::{EditSource, History, HistoryView};
 use crate::outcome::{ApplyOutcome, SideEffect};
 use crate::text::{Language, TextContext};
 use crate::uid::UidAlloc;
@@ -116,6 +116,9 @@ pub struct ApplyOptions {
     /// Diff détaillé : jusqu'à `diff_detail_max` tâches au lieu de
     /// [`DEFAULT_DIFF_TASKS`] (R-163).
     pub detail: bool,
+    /// Origine du lot, inscrite dans l'historique (J7, ADR-0015 D10 ;
+    /// ignorée jusqu'au lot L3 : toute entrée vaut `User`).
+    pub source: EditSource,
 }
 
 /// Opération de test : closure sur le contexte d'exécution (voir

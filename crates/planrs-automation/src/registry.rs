@@ -4,9 +4,14 @@
 //!
 //! Entrées disponibles : J4, les huit entrées J5 (lot L8 de J5) et les six
 //! entrées J6 (contrat du lot L0, activées par les lots L7 et L8 de J6).
-//! Une entrée réservée à un jalon futur (`Availability::Milestone`) ne
-//! serait pas listée et serait refusée `command.not_yet_available` ; il
-//! n'y en a plus à la fin de J6. Le schéma de chaque
+//! Une entrée réservée à un jalon futur (`Availability::Milestone`) n'est
+//! pas listée et est refusée `command.not_yet_available` : les cinq
+//! écritures J7 (`calendar.add`, `calendar.update`, `calendar.set_week`,
+//! `calendar.delete`, `baseline.clear`, contrat J7 L0, activées par le lot
+//! L5). Les trois entrées `app.*` (genre [`Kind::Ui`]) ne sont servies que
+//! par une application rattachée (`Availability::Attached`, ADR-0015 D11) :
+//! non listées par une surface « headless », refusées
+//! `control.not_attached`. Le schéma de chaque
 //! entrée est celui de ses paramètres (JSON Schema 2020-12, sous-schémas en
 //! ligne, sans `$ref`) ; les surfaces y ajoutent `dry_run` ou `detail`.
 //! Schémas de référence : `tests/golden/schemas/<id>.json`.
@@ -16,14 +21,15 @@ use schemars::{JsonSchema, Schema};
 
 use crate::command::params::{
     ApplyBatchParams, ExplainParams, ExportMspdiParams, ImportCsvParams, NewProjectParams, NoParams,
-    OpenProjectParams, RenderGanttParams, ResourceListParams, SaveProjectParams, TaskGetParams,
-    TaskListParams, UsageParams, VarianceParams, WhatIfParams,
+    OpenProjectParams, RenderGanttParams, ResourceListParams, SaveProjectParams, ScreenshotParams,
+    TaskGetParams, TaskListParams, UiActionParams, UsageParams, VarianceParams, WhatIfParams,
 };
 use crate::command::{
-    AnchorSpec, AssignmentAdd, AssignmentKey, AssignmentUpdate, BaselineSet, CalendarException,
-    CalendarExceptionKey, LinkKey, LinkSpec, ProgressReschedule, ProgressUpdate, ProjectInfoPatch,
-    ResourceAdd, ResourceDelete, ResourceUpdate, SetConstraint, SetDeadline, SetStatusDate, TaskAdd,
-    TaskDelete, TaskMove, TaskOne, TaskUpdate,
+    AnchorSpec, AssignmentAdd, AssignmentKey, AssignmentUpdate, BaselineClear, BaselineSet, CalendarAdd,
+    CalendarDelete, CalendarException, CalendarExceptionKey, CalendarSetWeek, CalendarUpdate, LinkKey,
+    LinkSpec, ProgressReschedule, ProgressUpdate, ProjectInfoPatch, ResourceAdd, ResourceDelete,
+    ResourceUpdate, SetConstraint, SetDeadline, SetStatusDate, TaskAdd, TaskDelete, TaskMove, TaskOne,
+    TaskUpdate,
 };
 use crate::text::Language;
 
@@ -40,6 +46,9 @@ pub enum Kind {
     History,
     /// Fichiers (ouvrir, enregistrer, importer).
     File,
+    /// Interface de l'application rattachée (J7 : `app.*`), sans
+    /// historique ni effet sur le projet.
+    Ui,
 }
 
 /// Disponibilité d'une commande.
@@ -47,8 +56,12 @@ pub enum Kind {
 pub enum Availability {
     /// Disponible et listée.
     Now,
-    /// Réservée au jalon donné (5 ou 6), non listée.
+    /// Réservée au jalon donné, non listée.
     Milestone(u8),
+    /// Servie seulement par une application rattachée (canal de contrôle,
+    /// J7) : non listée par une surface « headless », refusée
+    /// `control.not_attached`.
+    Attached,
 }
 
 /// Entrée du registre.
@@ -129,6 +142,36 @@ const fn now(
     }
 }
 
+/// Entrée réservée au jalon `milestone` (non listée, refusée
+/// `command.not_yet_available`).
+const fn reserved(
+    milestone: u8,
+    id: &'static str,
+    mcp_name: &'static str,
+    kind: Kind,
+    schema: fn() -> Schema,
+    summary_fr: &'static str,
+    summary_en: &'static str,
+) -> CommandSpec {
+    let mut spec = now(id, mcp_name, kind, schema, summary_fr, summary_en);
+    spec.available = Availability::Milestone(milestone);
+    spec
+}
+
+/// Entrée d'interface servie par une application rattachée (genre
+/// [`Kind::Ui`], sans historique ni `dry_run`).
+const fn attached(
+    id: &'static str,
+    mcp_name: &'static str,
+    schema: fn() -> Schema,
+    summary_fr: &'static str,
+    summary_en: &'static str,
+) -> CommandSpec {
+    let mut spec = now(id, mcp_name, Kind::Ui, schema, summary_fr, summary_en);
+    spec.available = Availability::Attached;
+    spec
+}
+
 /// Registre, trié par id (vérifié par test).
 pub static REGISTRY: &[CommandSpec] = &[
     now(
@@ -171,6 +214,27 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Simule un lot sans changer le projet : diff, écart de fin à une ligne de base, explications.",
         "Simulate a batch without changing the project: diff, finish variance from a baseline, explanations.",
     ),
+    attached(
+        "app.screenshot",
+        "screenshot",
+        schema_of::<ScreenshotParams>,
+        "Capture PNG de la fenêtre de l'application rattachée (vérification visuelle).",
+        "PNG screenshot of the attached application window (visual check).",
+    ),
+    attached(
+        "app.ui",
+        "ui_action",
+        schema_of::<UiActionParams>,
+        "Action d'interface dans l'application rattachée : sélection, défilement, zoom, vue, thème, langue.",
+        "Interface action in the attached application: selection, scrolling, zoom, view, theme, language.",
+    ),
+    attached(
+        "app.ui_state",
+        "ui_state",
+        schema_of::<NoParams>,
+        "État de l'interface de l'application rattachée : vue, sélection, lignes visibles, document modifié.",
+        "Interface state of the attached application: view, selection, visible rows, modified document.",
+    ),
     now(
         "assignment.add",
         "assign_resource",
@@ -195,6 +259,15 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Modifie une affectation (unités, travail, quantité, retard).",
         "Update an assignment (units, work, quantity, delay).",
     ),
+    reserved(
+        7,
+        "baseline.clear",
+        "clear_baseline",
+        Kind::Write,
+        schema_of::<BaselineClear>,
+        "Efface une ligne de base (0 à 10) du projet ou d'une sélection de tâches.",
+        "Clear a baseline (0 to 10) from the project or a selection of tasks.",
+    ),
     now(
         "baseline.set",
         "set_baseline",
@@ -211,6 +284,24 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Applique un lot de commandes en une seule transaction (étiquettes \"$x\" entre commandes).",
         "Apply a batch of commands as one transaction (\"$x\" labels across commands).",
     ),
+    reserved(
+        7,
+        "calendar.add",
+        "add_calendar",
+        Kind::Write,
+        schema_of::<CalendarAdd>,
+        "Crée un calendrier : de base, dérivé d'une base, ou copie d'un calendrier existant.",
+        "Create a calendar: base, derived from a base, or copy of an existing calendar.",
+    ),
+    reserved(
+        7,
+        "calendar.delete",
+        "delete_calendar",
+        Kind::Write,
+        schema_of::<CalendarDelete>,
+        "Supprime un calendrier inutilisé (ni projet, ni tâche, ni ressource, ni base).",
+        "Delete an unused calendar (not the project's, a task's, a resource's or a base).",
+    ),
     now(
         "calendar.remove_exception",
         "remove_calendar_exception",
@@ -226,6 +317,24 @@ pub static REGISTRY: &[CommandSpec] = &[
         schema_of::<CalendarException>,
         "Crée ou remplace une exception de calendrier (jours chômés ou horaires).",
         "Create or replace a calendar exception (nonworking days or working times).",
+    ),
+    reserved(
+        7,
+        "calendar.set_week",
+        "set_work_week",
+        Kind::Write,
+        schema_of::<CalendarSetWeek>,
+        "Règle la semaine type d'un calendrier : jours hérités, chômés ou ouvrés sur des plages.",
+        "Set a calendar's work week: days inherited, nonworking or working on time ranges.",
+    ),
+    reserved(
+        7,
+        "calendar.update",
+        "update_calendar",
+        Kind::Write,
+        schema_of::<CalendarUpdate>,
+        "Renomme un calendrier ou change sa base.",
+        "Rename a calendar or change its base.",
     ),
     now(
         "history.list",

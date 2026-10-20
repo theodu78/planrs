@@ -33,6 +33,7 @@ pub mod error;
 pub mod explain;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod files;
+pub mod gesture;
 pub mod history;
 pub mod journal;
 pub mod json;
@@ -47,10 +48,10 @@ pub mod workspace;
 pub use command::{Batch, Command, Patch, Placement, TaskRef};
 pub use diff::{ScheduleDiff, TaskChange};
 pub use error::{CommandError, CommandErrorKind, HistoryError, OpenError};
-pub use history::HistoryView;
+pub use history::{EditSource, HistoryView};
 pub use outcome::{ApplyOutcome, SideEffect};
 pub use registry::{Availability, CommandSpec, Kind, REGISTRY};
 pub use session::{
     AnchorSpec, ApplyMode, ApplyOptions, DocOrigin, NewProject, Session, SessionLimits, Simulation,
 };
-pub use workspace::{ToolError, Workspace};
+pub use workspace::{CallEnv, ToolError, Workspace, call_with};

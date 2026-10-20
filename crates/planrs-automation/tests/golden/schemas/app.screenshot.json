@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`app.screenshot` (J7, ADR-0015 D11, disponibilité `Attached`) : PNG de\nla fenêtre, réduit de moitié `scale_down` fois (C-CTL-08).",
+  "properties": {
+    "scale_down": {
+      "description": "Réductions de moitié demandées (0 à 2 ; défaut 0).",
+      "format": "uint8",
+      "maximum": 2,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "title": "ScreenshotParams",
+  "type": "object"
+}

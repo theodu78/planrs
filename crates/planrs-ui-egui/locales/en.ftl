@@ -272,6 +272,7 @@ error-link-summary_descendant = Link between a summary task and its subtask: { $
 error-param-conflict = Mutually exclusive values: { $detail }
 error-param-invalid = Value refused: { $detail }
 error-param-mismatch = Contradictory values: { $detail }
+error-progress-duration_below_actual = Duration below the actual duration: { $detail }
 error-progress-inactive = Inactive task: { $detail }
 error-progress-invalid_order = Actual finish before actual start: { $detail }
 error-progress-summary_not_editable = Progress of a summary task: { $detail }

@@ -271,6 +271,7 @@ error-link-summary_descendant = Lien entre une récapitulative et sa sous-tâche
 error-param-conflict = Valeurs qui s'excluent : { $detail }
 error-param-invalid = Valeur refusée : { $detail }
 error-param-mismatch = Valeurs contradictoires : { $detail }
+error-progress-duration_below_actual = Durée sous la durée réelle : { $detail }
 error-progress-inactive = Tâche inactive : { $detail }
 error-progress-invalid_order = Fin réelle avant le début réel : { $detail }
 error-progress-summary_not_editable = Avancement d'une récapitulative : { $detail }

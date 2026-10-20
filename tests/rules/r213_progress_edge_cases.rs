@@ -43,3 +43,52 @@ fn r213_milestone_rounded() {
     assert_eq!(e.notes, []);
     assert_eq!(e.progress.actual_finish, Some(at(MON)));
 }
+
+/// R-213 (arbitrage du 2026-10-20) : `task.update duration` sous la durée
+/// réelle stockée est refusée (`progress.duration_below_actual`, champ
+/// `duration`, message FR/EN), projet intact ; égale à la durée réelle :
+/// acceptée.
+#[test]
+fn r213_duration_below_actual_refused() {
+    use planrs_automation::error::codes;
+    use planrs_automation::text::Language;
+    use planrs_tests::resource_edit::{duration, with_tasks};
+    use planrs_tests::task_edit::{apply as apply_ops, try_apply};
+    use serde_json::json;
+
+    let mut s = with_tasks(&[("A", "3j")]);
+    apply_ops(
+        &mut s,
+        json!([{ "op": "progress.update", "task": 1, "actual_duration": { "text": "2j" } }]),
+    );
+    let before = s.project().clone();
+    let err = try_apply(
+        &mut s,
+        json!([{ "op": "task.update", "uid": 1, "duration": { "text": "1j" } }]),
+    )
+    .unwrap_err();
+    assert_eq!(
+        (err.code, err.field.as_deref(), err.subject),
+        (
+            codes::PROGRESS_DURATION_BELOW_ACTUAL,
+            Some("duration"),
+            Some(planrs_core::Subject::Task(planrs_core::TaskUid::new(1)))
+        )
+    );
+    assert_eq!(s.project(), &before);
+    assert!(
+        err.message(Language::Fr)
+            .contains("inférieure à la durée réelle déjà saisie (960 min)"),
+        "{}",
+        err.message(Language::Fr)
+    );
+    assert!(
+        err.message(Language::En)
+            .contains("less than the actual duration already entered (960 min)")
+    );
+    apply_ops(
+        &mut s,
+        json!([{ "op": "task.update", "uid": 1, "duration": { "text": "2j" } }]),
+    );
+    assert_eq!(duration(&s, 1), 960);
+}

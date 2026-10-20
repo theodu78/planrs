@@ -330,6 +330,22 @@ pub(super) fn update(op: &TaskUpdate, ctx: &mut Ctx<'_>) -> Result<(), CommandEr
         Patch::Set(d) => Some(ctx.duration(d, "duration")?),
         Patch::Clear => return Err(invalid("duration", "durée attendue (la durée ne s'efface pas)")),
     };
+    // R-213 (arbitrage du 2026-10-20) : une durée sous la durée réelle
+    // stockée laisserait un avancement incohérent (réel > D) : refusée.
+    if let (Some(d), Some(t)) = (&duration, ctx.project.tasks.get(uid)) {
+        let actual = t.progress.actual_duration;
+        if actual > planrs_core::Minutes::ZERO && d.minutes() < actual {
+            return Err(CommandError::new(
+                codes::PROGRESS_DURATION_BELOW_ACTUAL,
+                CommandErrorKind::DurationBelowActual {
+                    actual: actual.get(),
+                    entered: d.minutes().get(),
+                },
+            )
+            .with_field("duration")
+            .with_subject(Subject::Task(uid)));
+        }
+    }
     let entered = entered_date(&op.start, &op.finish)?;
     let balance = j5_balance(
         op,

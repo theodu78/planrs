@@ -131,20 +131,25 @@ fn outline_numbers(p: &Project) -> Vec<String> {
         .collect()
 }
 
-/// R-127 : durée et travail restants écrits. Une tâche non récapitulative
-/// sans aucun avancement saisi (`Progress` par défaut : créée par planrs ou
-/// relue sans valeur) reçoit ce que MS Project écrit toujours, reste =
-/// durée − réel = durée, et travail restant = travail (minutes entières,
-/// jamais négatives) ; sinon les valeurs saisies, telles quelles. Une
-/// récapitulative garde ses valeurs : sa durée est calculée (R-071), pas une
-/// entrée du modèle.
+/// R-127, R-214 : durée et travail restants écrits. Une feuille reçoit la
+/// dérivation (ADR-0014 D4 : vérité = réels) : reste = D − durée réelle
+/// effective (R-200, 0 pour une tâche achevée), travail restant = travail
+/// − travail réel (R-211), jamais négatifs ; sans avancement, la durée et
+/// le travail, comme MS Project les écrit. Une récapitulative garde ses
+/// valeurs : sa durée est calculée (R-071), pas une entrée du modèle.
 pub(crate) fn remaining(t: &Task, summary: bool) -> (Minutes, Work) {
     let p = &t.progress;
-    if summary || *p != Progress::default() {
+    if summary {
         return (p.remaining_duration, p.remaining_work);
     }
-    let duration = Minutes::new(t.duration.minutes().get().max(0));
-    (duration, t.work)
+    let rest = t
+        .work
+        .minutes()
+        .get()
+        .saturating_sub(p.actual_work.minutes().get())
+        .max(0);
+    let work = Work::new(Minutes::new(rest)).unwrap_or(Work::ZERO);
+    (planrs_core::progress::remaining_duration(t), work)
 }
 
 /// Durée écrite : calculée pour une feuille automatique affectée (R-199),
@@ -155,17 +160,30 @@ fn duration_of(row: &Row<'_>) -> Duration {
         .unwrap_or(row.task.duration)
 }
 
-/// Restes écrits (R-127), sur la durée écrite (R-199) : l'image relue reste
-/// celle de `normalize` appliquée à `schedule_image`.
+/// Avancement écrit : celui du moteur (R-215), sinon celui du modèle.
+fn progress_of<'r>(row: &'r Row<'_>) -> &'r Progress {
+    row.values
+        .and_then(|v| v.progress.as_ref())
+        .unwrap_or(&row.task.progress)
+}
+
+/// Restes écrits (R-127), sur la durée (R-199) et l'avancement (R-215)
+/// écrits : l'image relue reste celle de `normalize` appliquée à
+/// `schedule_image`.
 fn remaining_of(row: &Row<'_>) -> (Minutes, Work) {
-    match row.values.and_then(|v| v.leaf_duration) {
-        Some(d) => {
-            let mut t = row.task.clone();
-            t.duration = d;
-            remaining(&t, row.summary)
-        }
-        None => remaining(row.task, row.summary),
+    let duration = row.values.and_then(|v| v.leaf_duration);
+    let progress = row.values.and_then(|v| v.progress);
+    if duration.is_none() && progress.is_none() {
+        return remaining(row.task, row.summary);
     }
+    let mut t = row.task.clone();
+    if let Some(d) = duration {
+        t.duration = d;
+    }
+    if let Some(p) = progress {
+        t.progress = p;
+    }
+    remaining(&t, row.summary)
 }
 
 /// `DurationFormat` d'une durée.
@@ -213,6 +231,9 @@ fn field(
 ) {
     let t = row.task;
     let computed = row.values;
+    if computed_field(em, name, computed) {
+        return;
+    }
     let date = |d: Option<planrs_core::Moment>| d.map(format_datetime);
     match name {
         "UID" => em.leaf_int(name, i64::from(t.uid().get())),
@@ -242,23 +263,6 @@ fn field(
                 em.opt_leaf(name, computed.and_then(|v| v.duration).map(format_iso_duration));
             }
         }
-        // R-122 : valeurs calculées.
-        "Start" => em.opt_date(name, computed.and_then(|v| v.start)),
-        "Finish" => em.opt_date(name, computed.and_then(|v| v.finish)),
-        "EarlyStart" => em.opt_date(name, computed.and_then(|v| v.early_start)),
-        "EarlyFinish" => em.opt_date(name, computed.and_then(|v| v.early_finish)),
-        "LateStart" => em.opt_date(name, computed.and_then(|v| v.late_start)),
-        "LateFinish" => em.opt_date(name, computed.and_then(|v| v.late_finish)),
-        "TotalSlack" => em.opt_int(name, computed.and_then(|v| v.total_slack)),
-        "FreeSlack" => em.opt_int(name, computed.and_then(|v| v.free_slack)),
-        "StartSlack" => em.opt_int(name, computed.and_then(|v| v.start_slack)),
-        "FinishSlack" => em.opt_int(name, computed.and_then(|v| v.finish_slack)),
-        "Critical" => em.opt_leaf(
-            name,
-            computed
-                .and_then(|v| v.critical)
-                .map(|b| format_bool(b).to_owned()),
-        ),
         // R-129 : toujours écrits pour une tâche manuelle, vides si absents.
         "ManualStart" | "ManualFinish" | "ManualDuration" => {
             if let Some((start, finish, duration)) = manual {
@@ -282,13 +286,21 @@ fn field(
         "Estimated" => em.leaf(name, format_bool(t.duration.is_estimated())),
         "Milestone" => em.leaf(name, format_bool(t.milestone)),
         "Summary" => em.leaf(name, format_bool(row.summary)),
-        "PercentComplete" => percent(em, name, t.progress.percent_complete),
-        "PercentWorkComplete" => percent(em, name, t.progress.percent_work_complete),
-        "PhysicalPercentComplete" => percent(em, name, t.progress.physical_percent_complete),
-        "ActualStart" => em.opt_date(name, t.progress.actual_start),
-        "ActualFinish" => em.opt_date(name, t.progress.actual_finish),
-        "ActualDuration" => em.leaf_iso(name, t.progress.actual_duration.get()),
-        "ActualWork" => em.leaf_iso(name, t.progress.actual_work.minutes().get()),
+        "PercentComplete" => percent(em, name, progress_of(row).percent_complete),
+        "PercentWorkComplete" => percent(em, name, progress_of(row).percent_work_complete),
+        "PhysicalPercentComplete" => percent(em, name, progress_of(row).physical_percent_complete),
+        // R-214, R-215 : `Resume` calculé, ou la reprise saisie d'une
+        // feuille en cours sans valeurs calculées.
+        "Resume" => em.opt_date(
+            name,
+            computed
+                .and_then(|v| v.resume)
+                .or_else(|| super::computed::model_resume(t, row.summary)),
+        ),
+        "ActualStart" => em.opt_date(name, progress_of(row).actual_start),
+        "ActualFinish" => em.opt_date(name, progress_of(row).actual_finish),
+        "ActualDuration" => em.leaf_iso(name, progress_of(row).actual_duration.get()),
+        "ActualWork" => em.leaf_iso(name, progress_of(row).actual_work.minutes().get()),
         "RemainingDuration" => em.leaf_iso(name, remaining_of(row).0.get()),
         "RemainingWork" => em.leaf_iso(name, remaining_of(row).1.minutes().get()),
         "ConstraintType" => em.leaf_int(name, codes::constraint_code(t.constraint.kind())),
@@ -311,6 +323,41 @@ fn field(
         "Baseline" => baseline::task(em, &t.baselines, planned, profile),
         _ => {}
     }
+}
+
+/// R-122, R-215, R-226 : écrit l'élément calculé `name` (dates, marges,
+/// criticité, `Stop`, écarts) ; faux si `name` n'en est pas un.
+fn computed_field(em: &mut Emitter, name: &'static str, computed: Option<&TaskValues>) -> bool {
+    match name {
+        "Start" => em.opt_date(name, computed.and_then(|v| v.start)),
+        "Finish" => em.opt_date(name, computed.and_then(|v| v.finish)),
+        "EarlyStart" => em.opt_date(name, computed.and_then(|v| v.early_start)),
+        "EarlyFinish" => em.opt_date(name, computed.and_then(|v| v.early_finish)),
+        "LateStart" => em.opt_date(name, computed.and_then(|v| v.late_start)),
+        "LateFinish" => em.opt_date(name, computed.and_then(|v| v.late_finish)),
+        "TotalSlack" => em.opt_int(name, computed.and_then(|v| v.total_slack)),
+        // R-226 : écarts (minutes × 1000).
+        "StartVariance" => em.opt_int(name, computed.and_then(|v| v.start_variance)),
+        "FinishVariance" => em.opt_int(name, computed.and_then(|v| v.finish_variance)),
+        "WorkVariance" => em.opt_leaf(
+            name,
+            computed
+                .and_then(|v| v.work_variance)
+                .map(super::computed::variance_text),
+        ),
+        "FreeSlack" => em.opt_int(name, computed.and_then(|v| v.free_slack)),
+        "StartSlack" => em.opt_int(name, computed.and_then(|v| v.start_slack)),
+        "FinishSlack" => em.opt_int(name, computed.and_then(|v| v.finish_slack)),
+        "Critical" => em.opt_leaf(
+            name,
+            computed
+                .and_then(|v| v.critical)
+                .map(|b| format_bool(b).to_owned()),
+        ),
+        "Stop" => em.opt_date(name, computed.and_then(|v| v.stop)),
+        _ => return false,
+    }
+    true
 }
 
 /// Date d'une contrainte datée.

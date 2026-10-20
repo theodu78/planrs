@@ -186,8 +186,9 @@ fn r199_assignment_remaining_work_follows_work() {
     // RemainingWork d'une affectation sans travail réel = Work (MS Project
     // l'écrit toujours ; aucune commande ne tient le reste du modèle) :
     // affectation créée (reste 0 dans le modèle) ⇒ PT8H ; reste relu de
-    // 64 h périmé après un rééquilibrage à 32 h ⇒ PT32H ; avec un travail
-    // réel saisi (8 h), le reste saisi (30 h) est gardé.
+    // 64 h périmé après un rééquilibrage à 32 h ⇒ PT32H. Amendement J6
+    // (R-214, ADR-0014 D4) : avec un travail réel saisi (8 h), le reste est
+    // dérivé, W − réel = 24 h ; le reste saisi (30 h) n'est plus écrit.
     let mut p = new_project("2026-10-19T08:00");
     for uid in 1..=3 {
         let t = task(&p, uid, 480, 1, 0);
@@ -209,7 +210,7 @@ fn r199_assignment_remaining_work_follows_work() {
     };
     assert_eq!(remaining(1), "RemainingWork>PT8H0M0S");
     assert_eq!(remaining(2), "RemainingWork>PT32H0M0S");
-    assert_eq!(remaining(3), "RemainingWork>PT30H0M0S");
+    assert_eq!(remaining(3), "RemainingWork>PT24H0M0S");
 }
 
 #[test]
@@ -280,7 +281,8 @@ fn row(kind: u8, start: &str, finish: &str, value: &str) -> ExtraEntry {
 }
 
 /// T1 1 j, lun 19/10, R1 8 h à profil modifié à la main, avec ses lignes de
-/// type 1 (lun 08:00-12:00, 13:00-17:00) et une ligne de type 2 (réel).
+/// type 1 (lun 08:00-12:00, 13:00-17:00) et une ligne de type 2 (réel,
+/// 1 h = son travail réel : gardée, R-215).
 fn contoured() -> Project {
     let mut p = new_project("2026-10-19T08:00");
     let t = task(&p, 1, 480, 1, 480);
@@ -289,8 +291,9 @@ fn contoured() -> Project {
     let a = assign(&mut p, 1, 1, 1, 480);
     let a = p.assignments.get_mut(a).unwrap();
     a.contour = WorkContour::Contoured;
-    // Reste = travail, comme MS Project l'écrit sans avancement.
-    a.remaining_work = a.work;
+    // Réel 1 h (la ligne de type 2) ; reste dérivé W − réel (R-214).
+    a.actual_work = work(60);
+    a.remaining_work = work(420);
     a.extras = Extras(vec![
         row(1, "2026-10-19T08:00:00", "2026-10-19T12:00:00", "PT4H0M0S"),
         row(1, "2026-10-19T13:00:00", "2026-10-19T17:00:00", "PT4H0M0S"),

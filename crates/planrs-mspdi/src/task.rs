@@ -4,6 +4,7 @@
 
 use std::collections::BTreeSet;
 
+use planrs_core::progress::{ProgressState, facts};
 use planrs_core::{
     CalendarUid, Constraint, Decimal, Diagnostic, Duration, DurationUnit, Lag, LagValue, LevelingDelay, Link,
     LinkType, Minutes, Moment, OutlineLevel, Percent, Priority, Project, ProjectOptions, SchedulingMode,
@@ -34,12 +35,57 @@ struct Read<'e> {
     duration: Duration,
 }
 
+/// R-214 : restes relus remplacés par la dérivation (R-200, R-211),
+/// comptés pour un seul `mspdi.progress_inconsistent` par fichier.
+#[derive(Debug, Default)]
+pub(crate) struct Replaced {
+    /// Valeurs relues remplacées.
+    count: u32,
+    /// Premier remplacement : position et chemin de l'élément.
+    first: Option<(u64, String)>,
+}
+
+impl Replaced {
+    /// Note un reste relu `read` remplacé par `derived` s'ils diffèrent
+    /// (élément `path` présent à la position `at`).
+    pub(crate) fn note<T: PartialEq>(&mut self, read: Option<T>, derived: &T, at: u64, path: &str) {
+        if read.is_some_and(|r| r != *derived) {
+            self.count = self.count.saturating_add(1);
+            if self.first.is_none() {
+                self.first = Some((at, path.to_owned()));
+            }
+        }
+    }
+
+    /// Émet `mspdi.progress_inconsistent { count }` (info, sujet : le
+    /// projet) s'il y a eu au moins un remplacement.
+    pub(crate) fn report(self, sink: &mut Sink<'_>) {
+        if let Some((at, path)) = self.first {
+            sink.push(
+                ImportCode::ProgressInconsistent { count: self.count },
+                Some(Subject::Project),
+                at,
+                &path,
+                None,
+            );
+        }
+    }
+}
+
+/// R-214 : la reprise saisie (`Progress::resume`) n'a de sens que pour une
+/// feuille commencée non achevée ; ailleurs, `Resume` n'est qu'une valeur
+/// calculée (gardée dans `RecordedSchedule`).
+pub(crate) fn keeps_resume(task: &Task, summary: bool) -> bool {
+    !summary && facts(task).state == ProgressState::Started
+}
+
 /// Importe les tâches dans `project` et leurs valeurs enregistrées dans
-/// `recorded`.
+/// `recorded` ; restes relus incohérents comptés dans `replaced` (R-214).
 pub(crate) fn import(
     elements: &[Element<'_>],
     project: &mut Project,
     recorded: &mut RecordedSchedule,
+    replaced: &mut Replaced,
     sink: &mut Sink<'_>,
 ) {
     let options = project.options;
@@ -117,6 +163,7 @@ pub(crate) fn import(
         row.task.predecessors = links(uid, &row.element.children, &known, &options, sink);
         if !is_summary {
             force_effort_driven(&mut row.task, &f, sink);
+            derive_progress(&mut row.task, &f, recorded.tasks.get(&uid), replaced);
         }
     }
     if let Some(summary) = &mut project.summary_task {
@@ -126,6 +173,28 @@ pub(crate) fn import(
     for row in rows {
         // UID uniques (filtrés plus haut) : l'ajout ne peut pas échouer.
         let _ = project.tasks.push(row.task);
+    }
+}
+
+/// R-214 : progression relue d'une feuille. Restes (`RemainingDuration`,
+/// `RemainingWork`) remplacés par la dérivation (R-200, R-211 : D − réel,
+/// W − réel), comptés s'ils diffèrent ; `PercentComplete` relu reste
+/// stocké, mais la durée réelle l'emporte (R-200). `Resume` d'une feuille
+/// commencée non achevée → `Progress::resume`.
+fn derive_progress(task: &mut Task, f: &Fields<'_>, rec: Option<&RecordedTask>, replaced: &mut Replaced) {
+    let (duration, work) = crate::write::remaining(task, false);
+    if !task.is_null {
+        let read_d = f
+            .has("RemainingDuration")
+            .then_some(task.progress.remaining_duration);
+        replaced.note(read_d, &duration, f.at(), &f.path_of("RemainingDuration"));
+        let read_w = f.has("RemainingWork").then_some(task.progress.remaining_work);
+        replaced.note(read_w, &work, f.at(), &f.path_of("RemainingWork"));
+    }
+    task.progress.remaining_duration = duration;
+    task.progress.remaining_work = work;
+    if keeps_resume(task, false) {
+        task.progress.resume = rec.and_then(|r| r.resume);
     }
 }
 
@@ -171,7 +240,23 @@ fn recorded_task(f: &Fields<'_>, sink: &mut Sink<'_>) -> RecordedTask {
         summary: f.bool("Summary", sink),
         duration: f.duration("Duration", sink).map(|(d, _)| Minutes::new(d.minutes)),
         assignments: 0,
+        stop: f.datetime("Stop", sink),
+        resume: f.datetime("Resume", sink),
+        start_variance: f.int("StartVariance", sink).map(|(v, _)| v),
+        finish_variance: f.int("FinishVariance", sink).map(|(v, _)| v),
+        work_variance: variance_decimal(f, "WorkVariance", sink),
     }
+}
+
+/// R-226 : `WorkVariance` relu (minutes × 1000, `xsd:float` sans
+/// exposant), décimal normalisé ; illisible → absent, signalé.
+pub(crate) fn variance_decimal(f: &Fields<'_>, name: &str, sink: &mut Sink<'_>) -> Option<Decimal> {
+    let (t, at) = f.scalar(name, sink)?;
+    let parsed = crate::scalar::parse_decimal(t);
+    if parsed.is_none() {
+        f.invalid(name, at, t, sink);
+    }
+    parsed.map(|d| d.value.normalized())
 }
 
 /// Construit une tâche (sans ses liens). Rend aussi sa durée telle qu'écrite.

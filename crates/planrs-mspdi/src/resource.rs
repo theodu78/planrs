@@ -56,6 +56,7 @@ pub(crate) fn import(
             RecordedResource {
                 work: baseline::work(&f, "Work", sink),
                 overallocated: f.bool("OverAllocated", sink),
+                work_variance: crate::task::variance_decimal(&f, "WorkVariance", sink),
             },
         );
         let baselines = baseline::resource(&element.children, f.subject(), sink);

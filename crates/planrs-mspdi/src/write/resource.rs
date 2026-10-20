@@ -138,6 +138,13 @@ pub(crate) fn write(
                     .and_then(|v| v.work)
                     .map(|w| format_iso_duration(w.minutes().get())),
             ),
+            // R-226 : écart de travail (minutes × 1000).
+            "WorkVariance" => em.opt_leaf(
+                name,
+                computed
+                    .and_then(|v| v.work_variance)
+                    .map(super::computed::variance_text),
+            ),
             "Baseline" => baseline::resource(em, &r.baselines, &planned, profile),
             _ => {}
         },

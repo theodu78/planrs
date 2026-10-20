@@ -223,6 +223,16 @@ fn documents() -> Vec<Written> {
             observed: text(write(&read.project, rec, &WriteOptions::default()).xml),
             payloads: payloads(&read.project),
         });
+        // J6 (R-215, R-226) : avancement, `Stop`/`Resume` et écarts écrits
+        // par le moteur.
+        let s = schedule(&read.project);
+        let engine = Computed::Schedule(&s);
+        out.push(Written {
+            name: format!("{} (moteur)", path.display()),
+            strict: text(write(&read.project, engine, &strict).xml),
+            observed: text(write(&read.project, engine, &WriteOptions::default()).xml),
+            payloads: payloads(&read.project),
+        });
     }
     out
 }

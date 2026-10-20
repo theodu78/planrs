@@ -1,14 +1,11 @@
-//! R-122 — Écriture : valeurs calculées et politique (`schedule_gaps`,
-//! `choose_computed`).
+//! R-122 — Écriture : valeurs calculées et politique (`choose_computed`).
 
 use planrs_core::{
     Assignment, AssignmentUid, CalendarUid, Duration, DurationUnit, ExtraEntry, Extras, LevelingDelay, Link,
     Minutes, Percent, Resource, ResourceUid, ScheduleAnchor, SchedulingMode, Task, TaskUid, TimeBasis,
     schedule,
 };
-use planrs_mspdi::write::{
-    Computed, ScheduleGap, WriteCode, WriteOptions, choose_computed, schedule_gaps, write,
-};
+use planrs_mspdi::write::{Computed, WriteCode, WriteOptions, choose_computed, write};
 use planrs_tests::moment;
 use planrs_tests::mspdi::{compact, new_project, reread, text};
 
@@ -123,46 +120,40 @@ fn r122_slack_in_tenths_inactive_and_manual() {
 
 #[test]
 fn r122_policy_with_progress() {
-    // Une tâche à 50 % : planning incomplet. Sans valeurs relues → omises,
-    // `mspdi.write.schedule_incomplete { [progress] }` ; avec → relues.
+    // Amendement J6 (R-215) : une tâche à 50 % n'est plus un manque, le
+    // moteur calcule l'avancement ; valeurs du moteur, avec ou sans valeurs
+    // relues, aucun diagnostic. Les valeurs relues restent réécrites telles
+    // quelles avec `Computed::Recorded`.
     let mut proj = new_project("2026-10-19T08:00");
     let mut a = task(&proj, 1, 2);
     a.progress.percent_complete = Percent::new(5_000).unwrap();
     proj.tasks.push(a).unwrap();
-    assert_eq!(schedule_gaps(&proj), [ScheduleGap::Progress]);
     let sched = schedule(&proj);
     let (computed, diags) = choose_computed(&proj, &sched, None);
-    assert!(matches!(computed, Computed::Omit));
-    assert_eq!(
-        diags
-            .iter()
-            .map(|d| (d.code.code(), d.code.clone()))
-            .collect::<Vec<_>>(),
-        [(
-            "mspdi.write.schedule_incomplete",
-            WriteCode::ScheduleIncomplete {
-                gaps: vec![ScheduleGap::Progress]
-            }
-        )]
-    );
-    let omitted = compact(&text(&write(&proj, computed, &WriteOptions::default())));
-    assert!(!omitted.contains("<EarlyStart>") && !omitted.contains("<FinishDate>"));
-    // Valeurs relues (fichier écrit par MS Project : ici, celles du
-    // moteur relues), réécrites telles quelles.
+    assert!(matches!(computed, Computed::Schedule(_)));
+    assert_eq!(diags, Vec::new());
+    let xml = compact(&text(&write(&proj, computed, &WriteOptions::default())));
+    assert!(xml.contains("<EarlyStart>") && xml.contains("<FinishDate>"));
     let first = reread(&write(&proj, Computed::Schedule(&sched), &WriteOptions::default()).xml);
     let (computed, diags) = choose_computed(&proj, &sched, Some(&first.recorded));
-    assert!(matches!(computed, Computed::Recorded(_)));
+    assert!(matches!(computed, Computed::Schedule(_)));
     assert_eq!(diags, Vec::new());
-    let again = reread(&write(&proj, computed, &WriteOptions::default()).xml);
+    let again = reread(
+        &write(
+            &proj,
+            Computed::Recorded(&first.recorded),
+            &WriteOptions::default(),
+        )
+        .xml,
+    );
     assert_eq!(again.recorded, first.recorded);
 }
 
 #[test]
-fn r122_gaps_only_progress() {
-    // R-122 amendée (J5, R-199) : une ressource de travail dotée d'un
-    // calendrier sur une feuille automatique et un retard de nivellement
-    // (modèle ou `Extras` hérité) ne sont plus des manques ; seul
-    // l'avancement en reste un.
+fn r122_no_gap_left() {
+    // R-122 amendée (J5, R-199 ; J6, R-215) : ressource dotée d'un
+    // calendrier, retard de nivellement (modèle ou `Extras` hérité) et
+    // avancement ne sont plus des manques : le moteur est toujours écrit.
     let mut proj = new_project("2026-10-19T08:00");
     proj.tasks.push(task(&proj, 1, 2)).unwrap();
     let mut r = Resource::new(ResourceUid::new(1), "R".to_owned());
@@ -187,16 +178,20 @@ fn r122_gaps_only_progress() {
             key: "LevelingDelay".to_owned(),
             payload: "<LevelingDelay>4800</LevelingDelay>".to_owned(),
         }]);
+        t.progress.actual_start = Some(moment("2026-10-19T08:00"));
     }
-    assert_eq!(schedule_gaps(&proj), []);
     let sched = schedule(&proj);
     let (computed, diags) = choose_computed(&proj, &sched, None);
     assert!(matches!(computed, Computed::Schedule(_)));
     assert_eq!(diags, Vec::new());
-    // Avancement : seul manque restant.
-    proj.tasks.get_mut(TaskUid::new(1)).unwrap().progress.actual_start = Some(moment("2026-10-19T08:00"));
-    assert_eq!(schedule_gaps(&proj), [ScheduleGap::Progress]);
-    assert_eq!(ScheduleGap::Progress.code(), "progress");
+    let out = write(&proj, computed, &WriteOptions::default());
+    assert!(
+        out.diagnostics
+            .iter()
+            .all(|d| d.code.code() != "mspdi.write.schedule_incomplete"),
+        "{:?}",
+        out.diagnostics
+    );
 }
 
 #[test]

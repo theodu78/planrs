@@ -101,15 +101,15 @@ If MS Project refuses the file, check **File › Options › Trust Center › Tr
 | Calendars: work week, exceptions (recurring included), dated work weeks | read and written back |
 | Resources, assignments (units, work, contour, delay) | read and written back |
 | Baselines 0 to 10 | read and written back |
-| Entered progress (% complete, actual dates and durations), notes | read and written back |
+| Entered progress (% complete, actual dates and durations, resume date of a task in progress), status-date options, notes | read and written back; remaining duration and work are derived (duration − actual, work − actual work), a stored value that disagrees is replaced and reported once (`mspdi.progress_inconsistent`) |
 | Manual and inactive tasks | read and written back, as they are |
 | Custom fields, outline codes, views, tables, filters, groups, cost rate tables, availability, detailed timephased data (except an assignment's scheduled work, see section 4) | **copied verbatim**, not interpreted |
 
 ## 4. What is recalculated or lost
 
-**Recalculated by MS Project on opening** (planrs does not write them): costs, earned value, variances, resource overallocation, resource work, assignment start and finish, an assignment's scheduled work distribution (`TimephasedData` type 1, dropped on reading unless the work contour was edited by hand).
+**Recalculated by MS Project on opening** (planrs does not write them): costs, earned value, an assignment's scheduled work distribution (`TimephasedData` type 1, dropped on reading unless the work contour was edited by hand; written back only while planrs places the assignment the same way). Assignment start and finish, resource work and overallocation, progress (stop and resume dates, actual parts of assignments) and variances (start, finish and work, against baseline 0, in minutes × 1000) are written by planrs from its engine; an assignment's start and finish variances are left out (their unit is not documented). An assignment's actual work distribution (`TimephasedData` types 2-3) is kept while it still adds up to its actual work.
 
-**Calculated dates.** planrs writes its own dates (early, late, slack, critical) when its engine can compute everything. If the project has progress, resource calendars or a leveling delay (not computed by planrs yet), it writes back the dates MS Project had saved if the project was not modified; otherwise it writes no calculated date and MS Project recomputes them on opening.
+**Calculated dates.** planrs writes its own dates (early, late, slack, critical), progress included: completed tasks keep their actual dates, a task in progress is split once at its stop date and resumes on its resume date. Status-date options other than MS Project's defaults ("move end of completed parts…", "updating task status updates resource status" off) are kept in the file but not applied, and reported on reading (`progress.option_unsupported`).
 
 **Lost in the round trip**:
 - the legacy form of calendar exceptions (`WeekDay` with `DayType 0`, which MS Project writes alongside the `Exceptions` form): planrs writes only the `Exceptions` form, read by MS Project 2007 and later; that MS Project regenerates the legacy form on save is an assumption, not verified (no licence);

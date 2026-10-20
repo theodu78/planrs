@@ -210,6 +210,12 @@ mod r210_summary_progress_rollup;
 mod r211_actual_work_progress;
 mod r212_physical_percent;
 mod r213_progress_edge_cases;
+mod r220_baseline_values;
+mod r221_baseline_scope;
+mod r222_baseline_rollup;
+mod r223_baseline_overwrite;
+mod r224_start_finish_variance;
+mod r225_duration_work_variance;
 mod r230_driver_bound;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention

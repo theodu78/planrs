@@ -10,6 +10,7 @@
 //!   mesure de chaque tâche (R-224, R-225).
 
 mod capture;
+mod measure;
 mod variance;
 
 pub use capture::{BaselineEdit, BaselineError, BaselineSpec, Rollup, Scope, apply, capture};

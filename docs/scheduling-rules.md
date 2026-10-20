@@ -1440,6 +1440,18 @@ Règles J6 (ADR-0014 D6, D7) : capture des valeurs du moteur (récapitulatives e
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r223_baseline_overwrite.rs` (`r223_exists_refused`, `r223_overwrite_copies_cost`, `r223_overwrite_drops_scoped_extras`).
 
+## R-224 — Écarts de début et de fin
+- **Formulation** : `planrs_core::baseline::variance` : écart = valeur − ligne de base, en minutes ouvrées signées (R-020, antisymétrique) sur l'échelle de mesure de la tâche (`measure_calendar_in`, R-113 ; repli sur le Standard intégré comme le moteur, R-066) ; feuille à durée écoulée : minutes civiles ; sans ligne de base, ou sans date de base : 0. Tâches planifiées dans l'ordre des UID ; projet = UID 0 (ligne lue sur la récapitulative stockée). Exemples (S) : T 1 j, ligne 0 lun 19/10 08:00 – 17:00, puis SNET mar 20/10 13:00 ⇒ début +720, fin +720 ; projet au ven 16/10, ligne relue au lun 19/10 ⇒ −480 et −480 ; feuille écoulée lun 08:00, base dim 08:00 ⇒ +1 440.
+- **Source** : support.microsoft.com, « Start Variance fields », « Finish Variance fields » (S59 : « Start Variance = Start - Baseline Start » ; « The Start Variance field contains "0 days" until the scheduled start date varies from the baseline start date. » ; « Finish Variance = Finish - Baseline Finish ») ; observé O42, O43 ; échelle de mesure : hypothèse.
+- **Statut** : `hypothèse` ; A4 (sans ligne de base : écarts de dates nuls) et A7 (ligne 0 égale aux valeurs courantes : écarts de début et de fin nuls sur les 26 tâches, UID 0 compris) reproduits.
+- **Tests** : `tests/rules/r224_start_finish_variance.rs` (`r224_start_variance_working_minutes`, `r224_negative_variance`, `r224_elapsed_leaf_civil_minutes`, `r224_no_baseline_zero`) ; P42.
+
+## R-225 — Écarts de durée et de travail ; projet, ressources, affectations
+- **Formulation** : durée : D calculée (`TaskSchedule::duration`) − D de base ; travail : W calculé − W de base ; une valeur de base absente compte 0 (sans ligne de base, l'écart de travail est W, O43, et l'écart de durée D). Projet = UID 0. Ressource (toutes, UID 0 exclu) : `ResourceLoad::work` − W de base. Affectation placée : W − W de base ; affectation fictive (sans ressource) : 0, son travail ne compte pas (corpus : 75 affectations fictives de travail non nul dans les 5 fichiers, toutes à `WorkVariance` 0, relues avec `python3 -I` en L4). Arithmétique bornée, jamais de débordement. Exemples (S) : ligne 0 de T à 40 h, travail porté à 48 h ⇒ +480 (tâche, UID 0, ressource, affectation), durée +480 ; sans ligne ⇒ travail 2 400 et durée 2 400 ; A4 UID 1 ⇒ 10 800 (180 h), R1 ⇒ 31 440 (524 h).
+- **Source** : S59 (« Work Variance = Work - Baseline Work » ; « Duration Variance = Duration - Baseline Duration ») ; observé O43 (A4, A6) et O42 (A7) ; affectations fictives : observé (corpus) ; reste : hypothèse.
+- **Statut** : `hypothèse` ; A4 (UID 1, R1) et A7 (écarts de travail nuls sur les tâches, l'UID 0, les ressources et les affectations) reproduits.
+- **Tests** : `tests/rules/r225_duration_work_variance.rs` (`r225_work_variance_without_baseline`, `r225_work_and_duration_variance`, `r225_fictive_assignment_zero`, `r225_corpus_a4_without_baseline`, `r225_corpus_a7_recorded_baseline_matches`) ; P42.
+
 ### Analyse (R-230 à R-236)
 
 Règles J6 (ADR-0014 D8, D9) : `explain_date` (pilote et borne brute `driver_bound`, recalage, retard de nivellement, avancement, durée, côté au plus tard, chaîne bornée, résumés par gabarit), `what_if` (`Session::simulate`, sans effet), vues et filtre `late`. Fiches écrites par les lots L1 (partie moteur de R-230), L7 et L8.

@@ -140,6 +140,8 @@ impl Calc<'_, '_> {
             late_driver: LateDriver::Rollup,
             degraded,
             work: Work::ZERO,
+            progress: None,
+            driver_bound: None,
         })
     }
 
@@ -171,6 +173,10 @@ impl Calc<'_, '_> {
 
     /// Résultat de la tâche en position `p`.
     /// `measured` : durée calculée d'une feuille à parts (R-173).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "construction d'un `TaskSchedule` champ par champ (champs J6 compris)"
+    )]
     fn outcome(
         &mut self,
         p: usize,
@@ -292,6 +298,8 @@ impl Calc<'_, '_> {
             late_driver,
             degraded,
             work: Work::ZERO,
+            progress: None,
+            driver_bound: None,
         })
     }
 

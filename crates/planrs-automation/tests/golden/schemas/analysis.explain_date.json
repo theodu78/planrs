@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`analysis.explain_date` (J6, R-230 à R-233) : pourquoi une tâche\ncommence (ou finit) à sa date ; calculé par le moteur à la demande.",
+  "properties": {
+    "depth": {
+      "description": "Profondeur de la chaîne des pilotes (défaut 5, de 1 à 50).",
+      "format": "uint8",
+      "maximum": 50,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "side": {
+      "anyOf": [
+        {
+          "description": "Date expliquée par `explain_date` (J6, R-230, R-231).",
+          "oneOf": [
+            {
+              "const": "start",
+              "description": "Début.",
+              "type": "string"
+            },
+            {
+              "const": "finish",
+              "description": "Fin.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Date expliquée (défaut : début)."
+    },
+    "task": {
+      "description": "Tâche (UID).",
+      "oneOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "required": [
+    "task"
+  ],
+  "title": "ExplainParams",
+  "type": "object"
+}

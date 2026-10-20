@@ -117,4 +117,19 @@ fn project_v1_golden_unchanged() {
     );
     let back: Project = serde_json::from_str(&json).unwrap();
     assert_eq!(back, p);
+
+    // Contrat J6 (lot L0) : reprise saisie (`Progress::resume`) et options
+    // de l'avancement absentes du JSON à leurs défauts ; posées, elles font
+    // l'aller-retour.
+    assert!(!GOLDEN.contains("resume") && !GOLDEN.contains("split_in_progress"));
+    let mut p: Project = serde_json::from_str(GOLDEN).unwrap();
+    assert!(p.tasks.iter().all(|t| t.progress.resume.is_none()));
+    assert!(p.options.progress.is_default());
+    p.tasks.get_mut(task).unwrap().progress.resume = Some(m("2026-10-20T08:00"));
+    p.options.progress.split_in_progress = false;
+    let json = serde_json::to_string(&p).unwrap();
+    assert!(json.contains(r#""resume":"2026-10-20T08:00""#), "{json}");
+    assert!(json.contains(r#""split_in_progress":false"#), "{json}");
+    let back: Project = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, p);
 }

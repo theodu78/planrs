@@ -80,4 +80,24 @@ pub enum SideEffect {
     /// Affectation fictive −65 535 retirée par l'affectation d'une vraie
     /// ressource (`assignment.add`, O24 ; J5).
     PlaceholderRemoved(AssignmentUid),
+    /// Ligne de base enregistrée (`baseline.set`, R-227 ; J6) : nombre de
+    /// lignes posées par genre d'entité.
+    BaselineSet {
+        /// Numéro de la ligne (0 à 10).
+        number: u8,
+        /// Tâches (récapitulatives et UID 0 compris).
+        tasks: u32,
+        /// Affectations.
+        assignments: u32,
+        /// Ressources.
+        resources: u32,
+    },
+    /// Tâche laissée telle quelle par `progress.reschedule` (R-217 ; J6) :
+    /// `reason` en code stable (`constraint`).
+    RescheduleSkipped {
+        /// Tâche.
+        task: TaskUid,
+        /// Raison.
+        reason: &'static str,
+    },
 }

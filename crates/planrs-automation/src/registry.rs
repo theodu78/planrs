@@ -4,22 +4,25 @@
 //!
 //! Entrées disponibles (J4, et les huit entrées J5 activées par le lot L8)
 //! et entrées réservées au jalon J6 (non listées, refusées
-//! `command.not_yet_available`). Le schéma de chaque
+//! `command.not_yet_available`) ; les six entrées J6 portent déjà le schéma
+//! de leur contrat (lot L0), activées par les lots L7 et L8. Le schéma de chaque
 //! entrée est celui de ses paramètres (JSON Schema 2020-12, sous-schémas en
 //! ligne, sans `$ref`) ; les surfaces y ajoutent `dry_run` ou `detail`.
 //! Schémas de référence : `tests/golden/schemas/<id>.json`.
 
 use schemars::generate::SchemaSettings;
-use schemars::{JsonSchema, Schema, json_schema};
+use schemars::{JsonSchema, Schema};
 
 use crate::command::params::{
-    ApplyBatchParams, ExportMspdiParams, ImportCsvParams, NewProjectParams, NoParams, OpenProjectParams,
-    RenderGanttParams, ResourceListParams, SaveProjectParams, TaskGetParams, TaskListParams, UsageParams,
+    ApplyBatchParams, ExplainParams, ExportMspdiParams, ImportCsvParams, NewProjectParams, NoParams,
+    OpenProjectParams, RenderGanttParams, ResourceListParams, SaveProjectParams, TaskGetParams,
+    TaskListParams, UsageParams, VarianceParams, WhatIfParams,
 };
 use crate::command::{
-    AnchorSpec, AssignmentAdd, AssignmentKey, AssignmentUpdate, CalendarException, CalendarExceptionKey,
-    LinkKey, LinkSpec, ProjectInfoPatch, ResourceAdd, ResourceDelete, ResourceUpdate, SetConstraint,
-    SetDeadline, SetStatusDate, TaskAdd, TaskDelete, TaskMove, TaskOne, TaskUpdate,
+    AnchorSpec, AssignmentAdd, AssignmentKey, AssignmentUpdate, BaselineSet, CalendarException,
+    CalendarExceptionKey, LinkKey, LinkSpec, ProgressReschedule, ProgressUpdate, ProjectInfoPatch,
+    ResourceAdd, ResourceDelete, ResourceUpdate, SetConstraint, SetDeadline, SetStatusDate, TaskAdd,
+    TaskDelete, TaskMove, TaskOne, TaskUpdate,
 };
 use crate::text::Language;
 
@@ -125,17 +128,14 @@ const fn now(
     }
 }
 
-/// Schéma d'une commande réservée : objet quelconque.
-fn reserved_schema() -> Schema {
-    json_schema!({ "type": "object" })
-}
-
-/// Entrée réservée (non listée).
+/// Entrée réservée (non listée) dont le schéma est fixé par le contrat
+/// (J6, lot L0) : activée par les lots L7 et L8.
 const fn reserved(
     id: &'static str,
     mcp_name: &'static str,
     kind: Kind,
     milestone: u8,
+    schema: fn() -> Schema,
     summary_fr: &'static str,
     summary_en: &'static str,
 ) -> CommandSpec {
@@ -148,7 +148,7 @@ const fn reserved(
         undoable: write,
         available: Availability::Milestone(milestone),
         since_format: 1,
-        schema: reserved_schema,
+        schema,
         summary_fr,
         summary_en,
     }
@@ -161,8 +161,9 @@ pub static REGISTRY: &[CommandSpec] = &[
         "baseline_variance",
         Kind::Analysis,
         6,
-        "Écarts à la ligne de base.",
-        "Baseline variance.",
+        schema_of::<VarianceParams>,
+        "Écarts à une ligne de base (début, fin, durée, travail), calculés par le moteur, paginés.",
+        "Variance from a baseline (start, finish, duration, work), computed by the engine, paginated.",
     ),
     now(
         "analysis.critical_path",
@@ -177,8 +178,9 @@ pub static REGISTRY: &[CommandSpec] = &[
         "explain_date",
         Kind::Analysis,
         6,
-        "Explique la date d'une tâche.",
-        "Explain a task date.",
+        schema_of::<ExplainParams>,
+        "Explique la date d'une tâche : pilote, contrainte, calendrier, avancement, chaîne des causes.",
+        "Explain a task date: driver, constraint, calendar, progress, chain of causes.",
     ),
     now(
         "analysis.resource_usage",
@@ -193,8 +195,9 @@ pub static REGISTRY: &[CommandSpec] = &[
         "what_if",
         Kind::Analysis,
         6,
-        "Simule un lot sans l'appliquer.",
-        "Simulate a batch without applying it.",
+        schema_of::<WhatIfParams>,
+        "Simule un lot sans changer le projet : diff, écart de fin à une ligne de base, explications.",
+        "Simulate a batch without changing the project: diff, finish variance from a baseline, explanations.",
     ),
     now(
         "assignment.add",
@@ -225,8 +228,9 @@ pub static REGISTRY: &[CommandSpec] = &[
         "set_baseline",
         Kind::Write,
         6,
-        "Enregistre une ligne de base.",
-        "Set a baseline.",
+        schema_of::<BaselineSet>,
+        "Enregistre une ligne de base (0 à 10) sur le projet ou une sélection, avec cumul facultatif.",
+        "Set a baseline (0 to 10) on the project or a selection, with optional roll-up.",
     ),
     now(
         "batch.apply",
@@ -301,12 +305,22 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Change the type or lag of a link.",
     ),
     reserved(
+        "progress.reschedule",
+        "reschedule_remaining",
+        Kind::Write,
+        6,
+        schema_of::<ProgressReschedule>,
+        "Replanifie le travail restant après une date (défaut : date d'état) ; dates réelles inchangées.",
+        "Reschedule remaining work after a date (default: status date); actual dates unchanged.",
+    ),
+    reserved(
         "progress.update",
         "update_progress",
         Kind::Write,
         6,
-        "Met à jour l'avancement.",
-        "Update progress.",
+        schema_of::<ProgressUpdate>,
+        "Met à jour l'avancement d'une tâche (% achevé, dates réelles, durées réelle et restante, travail réel).",
+        "Update a task's progress (% complete, actual dates, actual and remaining duration, actual work).",
     ),
     now(
         "project.export_mspdi",

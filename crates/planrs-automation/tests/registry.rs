@@ -123,11 +123,15 @@ fn registry_reserved_not_listed() {
         "analysis.explain_date",
         "analysis.what_if",
         "baseline.set",
+        "progress.reschedule",
         "progress.update",
     ]
     .into_iter()
     .collect();
+    // Contrat J6 (lot L0) : six entrées réservées, `progress.reschedule`
+    // créée.
     assert_eq!(reserved, expected);
+    assert_eq!(expected.len(), 6);
     for spec in REGISTRY.iter().filter(|s| !s.is_listed()) {
         assert_eq!(spec.available, Availability::Milestone(6));
     }
@@ -209,7 +213,8 @@ fn contains_key(v: &Value, key: &str) -> bool {
     }
 }
 
-/// Un fichier par commande listée. Chaque schéma : JSON Schema 2020-12,
+/// Un fichier par entrée du registre, listée ou réservée (les entrées
+/// réservées J6 portent le schéma de leur contrat, lot L0). Chaque schéma : JSON Schema 2020-12,
 /// objet au sommet sans combinateur (exigence des outils de l'API Claude),
 /// sans `$ref` (sous-schémas en ligne), convertible en `JsonObject` de rmcp
 /// (`serde_json::Map<String, Value>`, `rmcp::model::JsonObject`).
@@ -222,7 +227,7 @@ fn schemas_golden() {
     }
     let mut expected_files = BTreeSet::new();
     let mut stale = Vec::new();
-    for spec in listed() {
+    for spec in REGISTRY {
         let schema = serde_json::to_value((spec.schema)()).unwrap();
         let object: Map<String, Value> = serde_json::from_value(schema.clone())
             .unwrap_or_else(|_| panic!("{} : schéma non objet", spec.id));

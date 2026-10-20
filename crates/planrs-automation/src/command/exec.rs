@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use planrs_core::{Project, ResourceUid, Subject, TaskUid};
 
-use super::{Command, assignment, calendar, constraint, link, project, resource, task};
+use super::{Command, assignment, baseline, calendar, constraint, link, progress, project, resource, task};
 use crate::error::CommandError;
 use crate::outcome::SideEffect;
 use crate::text::TextContext;
@@ -71,6 +71,9 @@ impl Exec for Command {
             Self::AssignmentAdd(op) => assignment::add(op, ctx),
             Self::AssignmentUpdate(op) => assignment::update(op, ctx),
             Self::AssignmentRemove(op) => assignment::remove(op, ctx),
+            Self::ProgressUpdate(op) => progress::update(op, ctx),
+            Self::ProgressReschedule(op) => progress::reschedule(op, ctx),
+            Self::BaselineSet(op) => baseline::set(op, ctx),
         }
     }
 }

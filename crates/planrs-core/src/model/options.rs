@@ -50,6 +50,140 @@ pub struct ProjectOptions {
     /// S20 ; R-051). Faux par défaut. Absent d'un JSON : faux.
     #[serde(default)]
     pub multiple_critical_paths: bool,
+    /// Options de l'avancement et de la date d'état (J6, R-205, R-218).
+    /// Absentes du JSON quand elles valent leurs défauts : le format V1 et
+    /// sa référence restent inchangés.
+    #[serde(default, skip_serializing_if = "ProgressOptions::is_default")]
+    pub progress: ProgressOptions,
+}
+
+/// Options de l'avancement (J6, ADR-0014 D2, D3 ; S54 ; O36).
+///
+/// `split_in_progress` (`SplitsInProgressTasks`) agit au recalcul (R-205) ;
+/// `task_updates_resource` (`TaskUpdatesResource`) à la saisie (R-211). Les
+/// quatre options `Move*` de la date d'état (S54 : elles n'agissent qu'à la
+/// saisie) sont lues et réécrites ; seule la valeur `false` est calculée,
+/// `true` donne `progress.option_unsupported` (R-218).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "options indépendantes reprises de MSPDI (S2, S54), pas un état"
+)]
+pub struct ProgressOptions {
+    /// Fractionner les tâches en cours (`SplitsInProgressTasks`, vrai par
+    /// défaut).
+    #[serde(default = "yes")]
+    pub split_in_progress: bool,
+    /// Le % achevé de la tâche met à jour le travail réel des ressources
+    /// (`TaskUpdatesResource`, vrai par défaut).
+    #[serde(default = "yes")]
+    pub task_updates_resource: bool,
+    /// `MoveCompletedEndsBack` (faux par défaut).
+    #[serde(default)]
+    pub move_completed_ends_back: bool,
+    /// `MoveRemainingStartsBack` (faux par défaut).
+    #[serde(default)]
+    pub move_remaining_starts_back: bool,
+    /// `MoveRemainingStartsForward` (faux par défaut).
+    #[serde(default)]
+    pub move_remaining_starts_forward: bool,
+    /// `MoveCompletedEndsForward` (faux par défaut).
+    #[serde(default)]
+    pub move_completed_ends_forward: bool,
+}
+
+/// Défaut `true` d'un champ serde.
+const fn yes() -> bool {
+    true
+}
+
+impl Default for ProgressOptions {
+    /// Valeurs de MS Project pour un projet neuf, relevées dans les cinq
+    /// fichiers du corpus (O36) : fractionnement et mise à jour des
+    /// ressources actifs, options `Move*` inactives.
+    fn default() -> Self {
+        Self {
+            split_in_progress: true,
+            task_updates_resource: true,
+            move_completed_ends_back: false,
+            move_remaining_starts_back: false,
+            move_remaining_starts_forward: false,
+            move_completed_ends_forward: false,
+        }
+    }
+}
+
+impl ProgressOptions {
+    /// Vrai si toutes les options valent leur défaut (champ omis du JSON).
+    #[must_use]
+    #[allow(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "signature imposée par `skip_serializing_if`"
+    )]
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Options posées à une valeur que le calcul ne sait pas suivre
+    /// (R-218) : `Move*` à vrai, `task_updates_resource` à faux ; dans
+    /// l'ordre de [`ProgressOption`].
+    #[must_use]
+    pub fn unsupported(&self) -> Vec<ProgressOption> {
+        [
+            (ProgressOption::TaskUpdatesResource, !self.task_updates_resource),
+            (
+                ProgressOption::MoveCompletedEndsBack,
+                self.move_completed_ends_back,
+            ),
+            (
+                ProgressOption::MoveRemainingStartsBack,
+                self.move_remaining_starts_back,
+            ),
+            (
+                ProgressOption::MoveRemainingStartsForward,
+                self.move_remaining_starts_forward,
+            ),
+            (
+                ProgressOption::MoveCompletedEndsForward,
+                self.move_completed_ends_forward,
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(o, set)| set.then_some(o))
+        .collect()
+    }
+}
+
+/// Option d'avancement que le calcul ne suit pas quand elle quitte son
+/// défaut (R-218, `progress.option_unsupported`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgressOption {
+    /// `TaskUpdatesResource` à faux.
+    TaskUpdatesResource,
+    /// `MoveCompletedEndsBack` à vrai.
+    MoveCompletedEndsBack,
+    /// `MoveRemainingStartsBack` à vrai.
+    MoveRemainingStartsBack,
+    /// `MoveRemainingStartsForward` à vrai.
+    MoveRemainingStartsForward,
+    /// `MoveCompletedEndsForward` à vrai.
+    MoveCompletedEndsForward,
+}
+
+impl ProgressOption {
+    /// Nom de l'élément MSPDI (S2, S54).
+    #[must_use]
+    pub const fn mspdi_name(self) -> &'static str {
+        match self {
+            Self::TaskUpdatesResource => "TaskUpdatesResource",
+            Self::MoveCompletedEndsBack => "MoveCompletedEndsBack",
+            Self::MoveRemainingStartsBack => "MoveRemainingStartsBack",
+            Self::MoveRemainingStartsForward => "MoveRemainingStartsForward",
+            Self::MoveCompletedEndsForward => "MoveCompletedEndsForward",
+        }
+    }
 }
 
 impl Default for ProjectOptions {
@@ -73,6 +207,7 @@ impl Default for ProjectOptions {
             honor_constraints: true,
             critical_slack_limit_days: 0,
             multiple_critical_paths: false,
+            progress: ProgressOptions::default(),
         }
     }
 }
@@ -109,7 +244,7 @@ mod tests {
         reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
     )]
 
-    use super::ProjectOptions;
+    use super::{ProgressOption, ProgressOptions, ProjectOptions};
 
     #[test]
     fn cpm_options_default_when_absent() {
@@ -128,5 +263,47 @@ mod tests {
         };
         let json = serde_json::to_string(&custom).unwrap();
         assert_eq!(serde_json::from_str::<ProjectOptions>(&json).unwrap(), custom);
+    }
+
+    #[test]
+    fn progress_options_default_omitted_and_read() {
+        // Contrat J6 : options d'avancement absentes du JSON à leurs
+        // défauts (référence V1 inchangée), relues avec leurs défauts.
+        let v = serde_json::to_value(ProjectOptions::default()).unwrap();
+        assert!(v.get("progress").is_none());
+        let read: ProjectOptions = serde_json::from_value(v).unwrap();
+        assert_eq!(read.progress, ProgressOptions::default());
+        assert!(read.progress.split_in_progress && read.progress.task_updates_resource);
+        assert_eq!(read.progress.unsupported(), Vec::<ProgressOption>::new());
+        let custom = ProjectOptions {
+            progress: ProgressOptions {
+                split_in_progress: false,
+                task_updates_resource: false,
+                move_completed_ends_forward: true,
+                ..ProgressOptions::default()
+            },
+            ..ProjectOptions::default()
+        };
+        let json = serde_json::to_string(&custom).unwrap();
+        assert!(
+            json.contains(r#""progress":{"split_in_progress":false"#),
+            "{json}"
+        );
+        assert_eq!(serde_json::from_str::<ProjectOptions>(&json).unwrap(), custom);
+        assert_eq!(
+            custom.progress.unsupported(),
+            [
+                ProgressOption::TaskUpdatesResource,
+                ProgressOption::MoveCompletedEndsForward
+            ]
+        );
+        assert_eq!(
+            ProgressOption::MoveCompletedEndsForward.mspdi_name(),
+            "MoveCompletedEndsForward"
+        );
+        // Champ partiel : les autres prennent leur défaut.
+        let partial: ProgressOptions =
+            serde_json::from_str(r#"{"move_remaining_starts_back":true}"#).unwrap();
+        assert!(partial.split_in_progress && partial.move_remaining_starts_back);
     }
 }

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`baseline.set` (R-227) : enregistre la ligne de base `number` (0 à 10,\ndéfaut 0) sur le projet entier ou sur `tasks`.",
+  "properties": {
+    "number": {
+      "description": "Numéro de la ligne (0 à 10 ; défaut 0).",
+      "format": "uint8",
+      "maximum": 10,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "overwrite": {
+      "description": "Remplacer une ligne existante (sinon `baseline.exists`).",
+      "type": "boolean"
+    },
+    "rollup": {
+      "anyOf": [
+        {
+          "description": "Cumul d'une ligne de base vers les récapitulatives (J6, R-222 ; S58\n« Roll up baselines »).",
+          "oneOf": [
+            {
+              "const": "none",
+              "description": "Aucun cumul.",
+              "type": "string"
+            },
+            {
+              "const": "to_all_summaries",
+              "description": "« To all summary tasks ».",
+              "type": "string"
+            },
+            {
+              "const": "from_subtasks",
+              "description": "« From subtasks into selected summary task(s) ».",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Cumul vers les récapitulatives (défaut : aucun ; demande une\nsélection)."
+    },
+    "tasks": {
+      "description": "Tâches sélectionnées (défaut : projet entier).",
+      "items": {
+        "description": "Tâche : UID (entier) ou étiquette \"$x\" d'une tâche créée plus tôt dans le même lot.",
+        "oneOf": [
+          {
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+            "type": "string"
+          }
+        ]
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    }
+  },
+  "title": "BaselineSet",
+  "type": "object"
+}

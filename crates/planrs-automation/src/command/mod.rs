@@ -12,6 +12,7 @@
 //! d'exécution (`exec.rs`), L2.
 
 mod assignment;
+mod baseline;
 mod calendar;
 mod constraint;
 pub(crate) mod exec;
@@ -19,6 +20,7 @@ mod extras_invalidation;
 mod link;
 pub(crate) mod outline;
 pub mod params;
+mod progress;
 mod project;
 mod refs;
 mod resource;
@@ -33,12 +35,14 @@ use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+pub use self::baseline::BaselineSet;
+pub use self::progress::{ProgressReschedule, ProgressUpdate};
 use self::refs::label_refusal;
 pub use self::refs::{LABEL_PATTERN, define_label, is_valid_label, resolve_task};
 use crate::error::{CommandError, CommandErrorKind, codes};
 pub use crate::json::{
-    ConstraintKindJson, DurationJson, DurationUnitJson, GranularityJson, LagJson, LinkTypeJson,
-    ResourceKindJson, TaskTypeJson, UnitsJson,
+    ConstraintKindJson, DurationJson, DurationUnitJson, GranularityJson, LagJson, LinkTypeJson, PercentJson,
+    ResourceKindJson, RollupJson, SideJson, TaskTypeJson, UnitsJson,
 };
 use crate::json::{DaySchema, MomentSchema, TimeOfDaySchema};
 use crate::text::Language;
@@ -199,6 +203,20 @@ pub enum Command {
     /// Retire une affectation (R-196).
     #[serde(rename = "assignment.remove")]
     AssignmentRemove(AssignmentKey),
+    /// Met à jour l'avancement d'une tâche (R-216 ; contrat J6, réservée
+    /// jusqu'au lot L8 : hors du schéma des lots, refusée
+    /// `command.not_yet_available`).
+    #[serde(rename = "progress.update")]
+    #[schemars(skip)]
+    ProgressUpdate(ProgressUpdate),
+    /// Replanifie le travail restant (R-217 ; réservée jusqu'au lot L8).
+    #[serde(rename = "progress.reschedule")]
+    #[schemars(skip)]
+    ProgressReschedule(ProgressReschedule),
+    /// Enregistre une ligne de base (R-227 ; réservée jusqu'au lot L8).
+    #[serde(rename = "baseline.set")]
+    #[schemars(skip)]
+    BaselineSet(BaselineSet),
 }
 
 impl Command {
@@ -228,6 +246,9 @@ impl Command {
             Self::AssignmentAdd(_) => "assignment.add",
             Self::AssignmentUpdate(_) => "assignment.update",
             Self::AssignmentRemove(_) => "assignment.remove",
+            Self::ProgressUpdate(_) => "progress.update",
+            Self::ProgressReschedule(_) => "progress.reschedule",
+            Self::BaselineSet(_) => "baseline.set",
         }
     }
 }

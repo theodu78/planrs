@@ -104,7 +104,19 @@ async fn run(client: &Client, scenario: &Scenario, tmp: &Path) -> Vec<Value> {
 /// Rejeu complet avec journal ; rend le journal produit et la durée.
 async fn replay_with_journal(scenario: &Scenario, tmp: &TempDir) -> (Vec<Value>, String, Duration) {
     let journal = tmp.path().join("run.jsonl");
-    let (client, server) = connect(opts_at(now_of(&scenario.name), Some(&journal))).await;
+    replay_opened(scenario, tmp, journal, None).await
+}
+
+/// Comme [`replay_with_journal`], serveur lancé avec `--open open` si donné.
+async fn replay_opened(
+    scenario: &Scenario,
+    tmp: &TempDir,
+    journal: std::path::PathBuf,
+    open: Option<std::path::PathBuf>,
+) -> (Vec<Value>, String, Duration) {
+    let mut o = opts_at(now_of(&scenario.name), Some(&journal));
+    o.open = open;
+    let (client, server) = connect(o).await;
     let t0 = Instant::now();
     let got = run(&client, scenario, tmp.path()).await;
     let elapsed = t0.elapsed();
@@ -621,11 +633,12 @@ async fn replay_tracking_j6_saved_mspdi_matches() {
 /// `tests/mcp/scenarios/claude_run_3.jsonl` dès qu'il existe (l'essai est
 /// mené par la session principale). Le fichier de départ (export de l'étape
 /// « ligne de base 0 » de `tracking_j6`) est déposé en
-/// `$TMP/extension-bureaux.xml` avant le rejeu, `--now 2026-11-13T17:00`.
-/// Vérifié sur le journal : `open_project` du fichier de départ en premier,
-/// `update_progress`, `explain_date` et `what_if` utilisés, aucune date
-/// rédigée hors des résultats n'étant vérifiable ici (règle 3 : relue sur la
-/// réponse de Claude, consignée dans `mcp.md`).
+/// `$TMP/extension-bureaux.xml` avant le rejeu, `--now 2026-11-13T17:00` ;
+/// si le journal ne commence pas par son `open_project`, le serveur est
+/// lancé avec `--open` sur ce fichier (comme pendant l'essai). Vérifié sur
+/// le journal : `update_progress`, `explain_date` et `what_if` utilisés ; la
+/// règle 3 (aucune date rédigée hors des résultats) se relit sur la réponse
+/// de Claude, consignée dans `mcp.md`.
 #[tokio::test]
 async fn replay_claude_run_3() {
     let root = root();
@@ -636,12 +649,14 @@ async fn replay_claude_run_3() {
     }
     let scenario = Scenario::load(&root, name);
     let tmp = TempDir::new("claude3");
-    std::fs::copy(
-        tracking_baseline0_path(&root),
-        tmp.path().join(TRACKING_BASELINE0),
-    )
-    .unwrap();
-    let (got, produced, elapsed) = replay_with_journal(&scenario, &tmp).await;
+    let start = tmp.path().join(TRACKING_BASELINE0);
+    std::fs::copy(tracking_baseline0_path(&root), &start).unwrap();
+    let opened_by_tool = scenario.calls.first().is_some_and(|c| {
+        c.tool == "open_project" && c.params["path"] == json!(format!("$TMP/{TRACKING_BASELINE0}"))
+    });
+    let open = (!opened_by_tool).then_some(start);
+    let journal = tmp.path().join("run.jsonl");
+    let (got, produced, elapsed) = replay_opened(&scenario, &tmp, journal, open).await;
     if replay::blessing() {
         replay::bless(&root, &scenario, &produced, tmp.path(), None);
         return;
@@ -653,13 +668,6 @@ async fn replay_claude_run_3() {
         "rejeu de {name} en {elapsed:?}, budget {BUDGET:?}"
     );
     let tools: Vec<&str> = scenario.calls.iter().map(|c| c.tool.as_str()).collect();
-    assert_eq!(
-        (tools.first(), &scenario.calls[0].params["path"]),
-        (
-            Some(&"open_project"),
-            &json!(format!("$TMP/{TRACKING_BASELINE0}"))
-        )
-    );
     for t in ["update_progress", "explain_date", "what_if"] {
         assert!(tools.contains(&t), "{t} absent de l'essai n° 3 : {tools:?}");
     }

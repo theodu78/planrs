@@ -76,6 +76,15 @@ pub(crate) fn write(em: &mut Emitter, a: &Assignment, values: Option<&Values>, p
             "ActualFinish" => em.opt_date(name, computed.and_then(|v| v.actual_finish)),
             "Stop" => em.opt_date(name, computed.and_then(|v| v.stop)),
             "Resume" => em.opt_date(name, computed.and_then(|v| v.resume)),
+            // R-226 : écarts ; dates relues seulement (unité non documentée).
+            "StartVariance" => em.opt_int(name, computed.and_then(|v| v.start_variance)),
+            "FinishVariance" => em.opt_int(name, computed.and_then(|v| v.finish_variance)),
+            "WorkVariance" => em.opt_leaf(
+                name,
+                computed
+                    .and_then(|v| v.work_variance)
+                    .map(super::computed::variance_text),
+            ),
             "Finish" => em.opt_date(name, computed.and_then(|v| v.finish)),
             "LevelingDelay" | "LevelingDelayFormat" => leveling::write(em, name, a.leveling_delay),
             _ => {}

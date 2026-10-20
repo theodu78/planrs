@@ -9,8 +9,9 @@ use planrs_core::progress::ProgressState;
 use planrs_core::calendar::{CalendarSet, CompiledCalendar, TimeScale, standard};
 use planrs_core::schedule::measure_calendar_in;
 use planrs_core::{
-    Arena, AssignmentSchedule, AssignmentUid, Duration, Exclusion, Minutes, Moment, Progress, Project,
-    ResourceUid, Schedule, Task, TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis, Work,
+    Arena, AssignmentSchedule, AssignmentUid, BaselineNumber, Decimal, Duration, Exclusion, Minutes, Moment,
+    Progress, Project, ResourceUid, Schedule, Task, TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis,
+    Work,
 };
 
 use super::WriteDiagnostic;
@@ -80,6 +81,11 @@ pub(crate) struct TaskValues {
     pub(crate) stop: Option<Moment>,
     /// `Resume` (R-214, R-215) ; relu avec `Computed::Recorded`.
     pub(crate) resume: Option<Moment>,
+    /// R-226 : `StartVariance`, `FinishVariance` (minutes × 1000) et
+    /// `WorkVariance` (minutes × 1000, décimal).
+    pub(crate) start_variance: Option<i64>,
+    pub(crate) finish_variance: Option<i64>,
+    pub(crate) work_variance: Option<Decimal>,
 }
 
 /// Valeurs calculées d'une affectation, prêtes à écrire (R-198, R-199).
@@ -92,6 +98,11 @@ pub(crate) struct AssignmentValues {
     pub(crate) actual_finish: Option<Moment>,
     pub(crate) stop: Option<Moment>,
     pub(crate) resume: Option<Moment>,
+    /// R-226 : écarts ; `StartVariance`/`FinishVariance` relus seulement
+    /// (unité non documentée par pj15).
+    pub(crate) start_variance: Option<i64>,
+    pub(crate) finish_variance: Option<i64>,
+    pub(crate) work_variance: Option<Decimal>,
     /// R-199 : `TimephasedData` de type 1 à jeter (placement changé).
     pub(crate) drop_timephased: bool,
     /// R-215 : `TimephasedData` de réel (types 2-3) à jeter (travail réel
@@ -104,6 +115,8 @@ pub(crate) struct AssignmentValues {
 pub(crate) struct ResourceValues {
     pub(crate) work: Option<Work>,
     pub(crate) overallocated: Option<bool>,
+    /// R-226 : `WorkVariance` (minutes × 1000).
+    pub(crate) work_variance: Option<Decimal>,
 }
 
 /// Valeurs calculées de tout le projet.
@@ -314,16 +327,69 @@ pub(crate) fn from_schedule(project: &Project, schedule: &Schedule) -> Values {
                 ResourceValues {
                     work: Some(load.work),
                     overallocated: Some(load.overallocated),
+                    work_variance: None,
                 },
             )
         })
         .collect();
-    Values {
+    let mut values = Values {
         tasks,
         assignments,
         resources,
         project_start: Some(schedule.project_start),
         project_finish: Some(schedule.project_finish),
+    };
+    variances(&mut values, project, schedule, &scales.set);
+    values
+}
+
+/// R-226 : écart × 1000 (minutes × 1000 du schéma) ; débordement : omis.
+fn thousand(m: Minutes) -> Option<i64> {
+    m.get().checked_mul(1_000)
+}
+
+/// R-226 : écarts du moteur à la ligne de base 0 (R-224, R-225), au
+/// format du schéma (minutes × 1000) : tâches planifiées et UID 0
+/// (`StartVariance`, `FinishVariance` entiers, `WorkVariance` décimal),
+/// ressources (UID 0 exclu) et affectations placées (`WorkVariance`
+/// seulement : l'unité des écarts de dates d'affectation n'est pas
+/// documentée, ADR-0014 D7). Sans ligne de base : début et fin 0, travail =
+/// travail (O43).
+fn variances(values: &mut Values, project: &Project, schedule: &Schedule, set: &CalendarSet) {
+    let Ok(number) = BaselineNumber::new(0) else {
+        return;
+    };
+    let v = planrs_core::baseline::variance(project, schedule, set, number);
+    let work = |m: Minutes| thousand(m).map(Decimal::integer);
+    let root = schedule.project_summary.is_some().then_some(&v.project);
+    for tv in v.tasks.iter().chain(root) {
+        if let Some(t) = values.tasks.get_mut(&tv.uid) {
+            t.start_variance = thousand(tv.variance.start);
+            t.finish_variance = thousand(tv.variance.finish);
+            t.work_variance = work(tv.variance.work);
+        }
+    }
+    for (uid, m) in &v.resources {
+        values.resources.entry(*uid).or_default().work_variance = work(*m);
+    }
+    for (uid, m) in &v.assignments {
+        if let Some(a) = values.assignments.get_mut(uid) {
+            a.work_variance = work(*m);
+        }
+    }
+}
+
+/// R-226 : `WorkVariance` écrit avec au moins deux décimales, comme
+/// MS Project (`10800000.00`).
+pub(crate) fn variance_text(d: Decimal) -> String {
+    let n = d.normalized();
+    match 2_u8.checked_sub(n.scale()).filter(|k| *k > 0) {
+        Some(k) => 10_i64
+            .checked_pow(u32::from(k))
+            .and_then(|f| n.mantissa().checked_mul(f))
+            .and_then(|m| Decimal::new(m, 2).ok())
+            .map_or_else(|| n.to_string(), |x| x.to_string()),
+        None => n.to_string(),
     }
 }
 
@@ -428,6 +494,9 @@ pub(crate) fn from_recorded(recorded: &RecordedSchedule) -> Values {
                     actual_finish: r.actual_finish,
                     stop: r.stop,
                     resume: r.resume,
+                    start_variance: r.start_variance,
+                    finish_variance: r.finish_variance,
+                    work_variance: r.work_variance,
                     drop_timephased: false,
                     drop_actuals: false,
                 },
@@ -443,6 +512,7 @@ pub(crate) fn from_recorded(recorded: &RecordedSchedule) -> Values {
                 ResourceValues {
                     work: r.work,
                     overallocated: r.overallocated,
+                    work_variance: r.work_variance,
                 },
             )
         })
@@ -473,6 +543,9 @@ fn recorded_values(r: &RecordedTask) -> TaskValues {
         duration: r.duration.map(Minutes::get),
         stop: r.stop,
         resume: r.resume,
+        start_variance: r.start_variance,
+        finish_variance: r.finish_variance,
+        work_variance: r.work_variance,
         ..TaskValues::default()
     }
 }

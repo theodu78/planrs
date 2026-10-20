@@ -242,7 +242,21 @@ fn recorded_task(f: &Fields<'_>, sink: &mut Sink<'_>) -> RecordedTask {
         assignments: 0,
         stop: f.datetime("Stop", sink),
         resume: f.datetime("Resume", sink),
+        start_variance: f.int("StartVariance", sink).map(|(v, _)| v),
+        finish_variance: f.int("FinishVariance", sink).map(|(v, _)| v),
+        work_variance: variance_decimal(f, "WorkVariance", sink),
     }
+}
+
+/// R-226 : `WorkVariance` relu (minutes × 1000, `xsd:float` sans
+/// exposant), décimal normalisé ; illisible → absent, signalé.
+pub(crate) fn variance_decimal(f: &Fields<'_>, name: &str, sink: &mut Sink<'_>) -> Option<Decimal> {
+    let (t, at) = f.scalar(name, sink)?;
+    let parsed = crate::scalar::parse_decimal(t);
+    if parsed.is_none() {
+        f.invalid(name, at, t, sink);
+    }
+    parsed.map(|d| d.value.normalized())
 }
 
 /// Construit une tâche (sans ses liens). Rend aussi sa durée telle qu'écrite.

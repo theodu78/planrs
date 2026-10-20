@@ -231,6 +231,9 @@ fn field(
 ) {
     let t = row.task;
     let computed = row.values;
+    if computed_field(em, name, computed) {
+        return;
+    }
     let date = |d: Option<planrs_core::Moment>| d.map(format_datetime);
     match name {
         "UID" => em.leaf_int(name, i64::from(t.uid().get())),
@@ -260,23 +263,6 @@ fn field(
                 em.opt_leaf(name, computed.and_then(|v| v.duration).map(format_iso_duration));
             }
         }
-        // R-122 : valeurs calculées.
-        "Start" => em.opt_date(name, computed.and_then(|v| v.start)),
-        "Finish" => em.opt_date(name, computed.and_then(|v| v.finish)),
-        "EarlyStart" => em.opt_date(name, computed.and_then(|v| v.early_start)),
-        "EarlyFinish" => em.opt_date(name, computed.and_then(|v| v.early_finish)),
-        "LateStart" => em.opt_date(name, computed.and_then(|v| v.late_start)),
-        "LateFinish" => em.opt_date(name, computed.and_then(|v| v.late_finish)),
-        "TotalSlack" => em.opt_int(name, computed.and_then(|v| v.total_slack)),
-        "FreeSlack" => em.opt_int(name, computed.and_then(|v| v.free_slack)),
-        "StartSlack" => em.opt_int(name, computed.and_then(|v| v.start_slack)),
-        "FinishSlack" => em.opt_int(name, computed.and_then(|v| v.finish_slack)),
-        "Critical" => em.opt_leaf(
-            name,
-            computed
-                .and_then(|v| v.critical)
-                .map(|b| format_bool(b).to_owned()),
-        ),
         // R-129 : toujours écrits pour une tâche manuelle, vides si absents.
         "ManualStart" | "ManualFinish" | "ManualDuration" => {
             if let Some((start, finish, duration)) = manual {
@@ -303,9 +289,8 @@ fn field(
         "PercentComplete" => percent(em, name, progress_of(row).percent_complete),
         "PercentWorkComplete" => percent(em, name, progress_of(row).percent_work_complete),
         "PhysicalPercentComplete" => percent(em, name, progress_of(row).physical_percent_complete),
-        // R-214, R-215 : `Stop` calculé ; `Resume` calculé, ou la reprise
-        // saisie d'une feuille en cours sans valeurs calculées.
-        "Stop" => em.opt_date(name, computed.and_then(|v| v.stop)),
+        // R-214, R-215 : `Resume` calculé, ou la reprise saisie d'une
+        // feuille en cours sans valeurs calculées.
         "Resume" => em.opt_date(
             name,
             computed
@@ -338,6 +323,41 @@ fn field(
         "Baseline" => baseline::task(em, &t.baselines, planned, profile),
         _ => {}
     }
+}
+
+/// R-122, R-215, R-226 : écrit l'élément calculé `name` (dates, marges,
+/// criticité, `Stop`, écarts) ; faux si `name` n'en est pas un.
+fn computed_field(em: &mut Emitter, name: &'static str, computed: Option<&TaskValues>) -> bool {
+    match name {
+        "Start" => em.opt_date(name, computed.and_then(|v| v.start)),
+        "Finish" => em.opt_date(name, computed.and_then(|v| v.finish)),
+        "EarlyStart" => em.opt_date(name, computed.and_then(|v| v.early_start)),
+        "EarlyFinish" => em.opt_date(name, computed.and_then(|v| v.early_finish)),
+        "LateStart" => em.opt_date(name, computed.and_then(|v| v.late_start)),
+        "LateFinish" => em.opt_date(name, computed.and_then(|v| v.late_finish)),
+        "TotalSlack" => em.opt_int(name, computed.and_then(|v| v.total_slack)),
+        // R-226 : écarts (minutes × 1000).
+        "StartVariance" => em.opt_int(name, computed.and_then(|v| v.start_variance)),
+        "FinishVariance" => em.opt_int(name, computed.and_then(|v| v.finish_variance)),
+        "WorkVariance" => em.opt_leaf(
+            name,
+            computed
+                .and_then(|v| v.work_variance)
+                .map(super::computed::variance_text),
+        ),
+        "FreeSlack" => em.opt_int(name, computed.and_then(|v| v.free_slack)),
+        "StartSlack" => em.opt_int(name, computed.and_then(|v| v.start_slack)),
+        "FinishSlack" => em.opt_int(name, computed.and_then(|v| v.finish_slack)),
+        "Critical" => em.opt_leaf(
+            name,
+            computed
+                .and_then(|v| v.critical)
+                .map(|b| format_bool(b).to_owned()),
+        ),
+        "Stop" => em.opt_date(name, computed.and_then(|v| v.stop)),
+        _ => return false,
+    }
+    true
 }
 
 /// Date d'une contrainte datée.

@@ -92,6 +92,9 @@ pub(crate) fn import(
                 actual_finish: f.datetime("ActualFinish", sink),
                 stop: f.datetime("Stop", sink),
                 resume: f.datetime("Resume", sink),
+                start_variance: f.int("StartVariance", sink).map(|(v, _)| v),
+                finish_variance: f.int("FinishVariance", sink).map(|(v, _)| v),
+                work_variance: crate::task::variance_decimal(&f, "WorkVariance", sink),
             },
         );
         a.contour = code(&f, "WorkContour", codes::work_contour, sink).unwrap_or(WorkContour::Flat);

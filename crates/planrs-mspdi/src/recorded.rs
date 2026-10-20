@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use planrs_core::{AssignmentUid, Minutes, Moment, ResourceUid, TaskUid, Work};
+use planrs_core::{AssignmentUid, Decimal, Minutes, Moment, ResourceUid, TaskUid, Work};
 
 /// Dixièmes de minute, tels que MSPDI les écrit (`TotalSlack`, `FreeSlack`,
 /// `StartSlack`, `FinishSlack`). Exemple : 9 600 = 960 minutes.
@@ -65,6 +65,12 @@ pub struct RecordedTask {
     /// feuille commencée non achevée est aussi lue dans le modèle,
     /// `Progress::resume`).
     pub resume: Option<Moment>,
+    /// `StartVariance` : minutes × 1000 (R-226).
+    pub start_variance: Option<i64>,
+    /// `FinishVariance` : minutes × 1000 (R-226).
+    pub finish_variance: Option<i64>,
+    /// `WorkVariance` : minutes × 1000, décimal normalisé (R-226).
+    pub work_variance: Option<Decimal>,
 }
 
 /// Valeurs enregistrées d'une affectation (R-198) ; chaque champ est absent
@@ -85,6 +91,12 @@ pub struct RecordedAssignment {
     pub stop: Option<Moment>,
     /// `Resume` : reprise du reste.
     pub resume: Option<Moment>,
+    /// `StartVariance` (unité non documentée par pj15, R-226).
+    pub start_variance: Option<i64>,
+    /// `FinishVariance` (unité non documentée par pj15, R-226).
+    pub finish_variance: Option<i64>,
+    /// `WorkVariance` : minutes × 1000, décimal normalisé (R-226).
+    pub work_variance: Option<Decimal>,
 }
 
 /// Valeurs enregistrées d'une ressource (R-198) ; chaque champ est absent
@@ -95,4 +107,6 @@ pub struct RecordedResource {
     pub work: Option<Work>,
     /// `OverAllocated` (O31 : drapeau de MS Project, pas un oracle du pic).
     pub overallocated: Option<bool>,
+    /// `WorkVariance` : minutes × 1000, décimal normalisé (R-226).
+    pub work_variance: Option<Decimal>,
 }

@@ -367,16 +367,89 @@ fn cli_now_env_and_flag_precedence() {
     assert_eq!(got.0, 0);
 }
 
+/// UID de la tâche d'ID `id` du plan ouvert dans `ws`.
+fn task_uid_of_id(ws: &Workspace, id: u32) -> u32 {
+    let p = ws.session().unwrap().project();
+    p.task_by_id(planrs_core::TaskId::new(id)).unwrap().uid().get()
+}
+
 #[test]
-fn cli_explain_hidden_exit_2() {
+fn cli_explain_json() {
+    // `--json` : exactement la vue du MCP, ID converti en UID.
     let house = house_path();
-    let o = run(&["explain", s(&house), "--task", "3"]);
-    assert_eq!(code(&o), 2);
-    assert!(String::from_utf8_lossy(&o.stderr).contains("J6"));
+    let o = run(&["--now", NOW, "explain", s(&house), "--task", "3", "--json"]);
+    assert_eq!(code(&o), 0, "{}", String::from_utf8_lossy(&o.stderr));
+    let cli = stdout_json(&o);
+    let mut ws = workspace_with(&house, Language::Fr);
+    let uid = task_uid_of_id(&ws, 3);
+    let view = ws.call("analysis.explain_date", json!({ "task": uid })).unwrap();
+    assert_eq!(cli, view);
+    assert_eq!(cli["task"]["id"], json!(3));
+    assert_eq!(cli["side"], json!("start"));
+    // `--finish`, `--depth`.
+    let o = run(&[
+        "--now",
+        NOW,
+        "explain",
+        s(&house),
+        "--task",
+        "3",
+        "--finish",
+        "--depth",
+        "1",
+        "--json",
+    ]);
+    assert_eq!(code(&o), 0);
+    let view = ws
+        .call(
+            "analysis.explain_date",
+            json!({ "task": uid, "side": "finish", "depth": 1 }),
+        )
+        .unwrap();
+    assert_eq!(stdout_json(&o), view);
+    assert!(stdout_json(&o)["chain"].as_array().unwrap().len() <= 1);
+    // ID inconnu : refus (1), erreur structurée ; profondeur hors bornes :
+    // usage (2).
+    let o = run(&["--now", NOW, "explain", s(&house), "--task", "999", "--json"]);
+    assert_eq!(code(&o), 1);
+    assert_eq!(stdout_json(&o)["error"]["code"], json!("task.not_found"));
+    assert_eq!(
+        code(&run(&["explain", s(&house), "--task", "3", "--depth", "0"])),
+        2
+    );
+    assert_eq!(code(&run(&["explain", s(&house)])), 2);
+}
+
+#[test]
+fn cli_explain_text() {
+    // Texte : le résumé du moteur (dates de la vue), puis le côté au plus
+    // tard ; visible dans l'aide.
+    let house = house_path();
+    let o = run(&["--now", NOW, "explain", s(&house), "--task", "3"]);
+    assert_eq!(code(&o), 0, "{}", String::from_utf8_lossy(&o.stderr));
+    let text = String::from_utf8(o.stdout).unwrap();
+    let mut ws = workspace_with(&house, Language::Fr);
+    let uid = task_uid_of_id(&ws, 3);
+    let view = ws.call("analysis.explain_date", json!({ "task": uid })).unwrap();
+    assert!(text.starts_with(view["summary_fr"].as_str().unwrap()), "{text}");
+    assert!(text.contains(view["late"]["finish"].as_str().unwrap()), "{text}");
+    assert!(text.contains("Marge totale"), "{text}");
+    let o = run(&["--now", NOW, "--lang", "en", "explain", s(&house), "--task", "3"]);
+    assert_eq!(code(&o), 0);
+    let text = String::from_utf8(o.stdout).unwrap();
+    assert!(text.starts_with(view["summary_en"].as_str().unwrap()), "{text}");
     let o = run(&["--help"]);
     assert_eq!(code(&o), 0);
     let help = String::from_utf8(o.stdout).unwrap();
-    assert!(!help.contains("explain"), "{help}");
+    assert!(help.contains("explain"), "{help}");
+}
+
+#[test]
+fn cli_usage_errors_exit_2() {
+    let house = house_path();
+    let o = run(&["--help"]);
+    assert_eq!(code(&o), 0);
+    let help = String::from_utf8(o.stdout).unwrap();
     assert!(help.contains("summary") && help.contains("import-csv"), "{help}");
     // Usage : sous-commande inconnue, argument manquant.
     assert_eq!(code(&run(&["inconnue"])), 2);

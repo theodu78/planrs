@@ -10,16 +10,28 @@
 //! n'est rédigée hors du moteur (règle 3) : les résumés FR/EN sont des
 //! gabarits remplis par ces champs (R-233).
 //!
-//! Squelette L0 : contrôles d'entrée, première étape (pilote et borne
-//! brute) et côté au plus tard ; ni recalage, ni chaîne.
+//! Lot L7 : étapes de R-230 et R-231, chaîne de R-232 ; les résumés
+//! (R-233) sont rédigés par `planrs-automation` à partir de ces seuls
+//! champs. Seul calcul fait ici : la borne d'un lien entrant d'une feuille
+//! en cours, pour nommer la cause de sa reprise (le calendrier des
+//! décalages ouvrés est compilé à la demande, jamais sur le chemin du
+//! moteur).
+
+use std::cmp::Reverse;
+use std::collections::BTreeSet;
 
 use serde::Serialize;
 
-use super::types::{Driver, LateDriver, Schedule};
-use crate::calendar::Span;
-use crate::duration::Minutes;
+use super::types::{
+    AssignmentRole, AssignmentSchedule, Driver, EffectiveCalendar, LateDriver, ProgressSchedule, Schedule,
+    TaskRole, TaskSchedule,
+};
+use crate::calendar::{Calendar, CalendarKind, CompiledCalendar, Span, TimeScale};
+use crate::diagnostic::{Diagnostic, Severity, Subject};
+use crate::duration::{LagValue, Minutes, TimeBasis, percent_of};
 use crate::ids::{AssignmentUid, CalendarUid, TaskUid};
-use crate::model::{ConstraintKind, LevelingDelay, LinkType, Project};
+use crate::model::{ConstraintKind, LevelingDelay, Link, LinkType, Project, ScheduleAnchor, Task};
+use crate::progress::ProgressState;
 use crate::time::Moment;
 
 /// Profondeur de chaîne par défaut (R-232).
@@ -198,6 +210,14 @@ pub enum ExplainError {
 /// projet) dans le planning `s` de `p`, chaîne bornée à `depth` maillons
 /// (1 à [`MAX_DEPTH`]).
 ///
+/// Étapes (R-230, R-231) : pilote et borne brute ; recalage si la borne
+/// brute diffère du début au plus tôt ; retard de nivellement si le début
+/// planifié diffère du début au plus tôt ; dates réelles, puis reprise d'une
+/// feuille en cours ; contrainte de date qui ne lie pas ; repli ; côté fin,
+/// la durée placée (le reste d'une feuille en cours ; rien de plus pour une
+/// feuille achevée, dont la fin est réelle). Chaîne (R-232) : pilotes
+/// remontés depuis la tâche, sans répétition.
+///
 /// # Errors
 ///
 /// [`ExplainError`].
@@ -208,13 +228,21 @@ pub fn explain(
     side: Side,
     depth: u8,
 ) -> Result<Explanation, ExplainError> {
-    if uid != TaskUid::PROJECT_SUMMARY && p.tasks.get(uid).is_none() {
-        return Err(ExplainError::UnknownTask(uid));
-    }
+    let task = if uid == TaskUid::PROJECT_SUMMARY {
+        p.summary_task.as_ref()
+    } else {
+        Some(p.tasks.get(uid).ok_or(ExplainError::UnknownTask(uid))?)
+    };
     if !(1..=MAX_DEPTH).contains(&depth) {
         return Err(ExplainError::DepthOutOfRange(depth));
     }
-    let ts = s.scheduled(uid).ok_or(ExplainError::NotScheduled(uid))?;
+    let ts = *s.scheduled(uid).ok_or(ExplainError::NotScheduled(uid))?;
+    let ctx = Ctx { p, s, uid, task, ts };
+    let mut steps = ctx.start_steps();
+    if side == Side::Finish && !ctx.completed() {
+        steps.push(ctx.duration_step());
+    }
+    let (chain, truncated) = ctx.chain(depth);
     Ok(Explanation {
         task: uid,
         side,
@@ -222,10 +250,7 @@ pub fn explain(
             Side::Start => ts.start,
             Side::Finish => ts.finish,
         },
-        steps: vec![Step::Driver {
-            driver: ts.driver,
-            raw: ts.driver_bound,
-        }],
+        steps,
         late: LateState {
             late: ts.late,
             driver: ts.late_driver,
@@ -233,8 +258,446 @@ pub fn explain(
             free_slack: ts.free_slack,
             critical: ts.critical,
         },
-        chain: Vec::new(),
-        truncated: false,
-        hypothesis: false,
+        chain,
+        truncated,
+        hypothesis: ctx.hypothesis(),
     })
+}
+
+/// Contexte d'une explication : lectures seules du modèle et du planning.
+struct Ctx<'a> {
+    p: &'a Project,
+    s: &'a Schedule,
+    uid: TaskUid,
+    /// Tâche du modèle ; `None` pour l'UID 0 sans tâche relue.
+    task: Option<&'a Task>,
+    ts: TaskSchedule,
+}
+
+impl Ctx<'_> {
+    /// Feuille commencée : son avancement calculé.
+    fn leaf_progress(&self) -> Option<ProgressSchedule> {
+        self.ts
+            .progress
+            .filter(|g| self.ts.role == TaskRole::Leaf && g.state != ProgressState::NotStarted)
+    }
+
+    /// Feuille achevée (R-203, R-208).
+    fn completed(&self) -> bool {
+        self.leaf_progress()
+            .is_some_and(|g| g.state == ProgressState::Complete)
+    }
+
+    /// Feuille automatique en cours (R-204).
+    fn running(&self) -> Option<ProgressSchedule> {
+        self.leaf_progress()
+            .filter(|g| g.state == ProgressState::Started && !self.ts.manual)
+    }
+
+    /// R-230 : étapes du début, dans l'ordre.
+    fn start_steps(&self) -> Vec<Step> {
+        let ts = &self.ts;
+        let mut steps = vec![Step::Driver {
+            driver: ts.driver,
+            raw: ts.driver_bound,
+        }];
+        if let Some(raw) = ts.driver_bound
+            && raw != ts.early.start
+        {
+            steps.push(Step::Snap {
+                raw,
+                snapped: ts.early.start,
+                calendar: self.placement_calendar(Placement::Start),
+            });
+        }
+        if let Some(delay) = self.leveling_delay() {
+            steps.push(Step::LevelingDelay {
+                delay,
+                from: ts.early.start,
+                to: ts.start,
+            });
+        }
+        let mut cause = None;
+        if let Some(g) = self.leaf_progress() {
+            steps.push(Step::Actual {
+                start: g.actual_start,
+                finish: g.actual_finish,
+            });
+        }
+        if let Some(g) = self.running() {
+            let c = self.resume_cause(g);
+            cause = Some(c);
+            steps.push(Step::Resume {
+                stop: g.stop,
+                resume: g.resume,
+                cause: c,
+            });
+        }
+        if let Some((kind, date)) = self.constraint_not_binding(cause) {
+            steps.push(Step::ConstraintNotBinding { kind, date });
+        }
+        if ts.degraded {
+            steps.push(Step::Degraded {
+                code: self.degraded_code(),
+            });
+        }
+        steps
+    }
+
+    /// R-231 : durée placée ; reste d'une feuille en cours ; feuille à
+    /// parts : affectation de travail qui finit la dernière.
+    fn duration_step(&self) -> Step {
+        let minutes = self.running().map_or(self.ts.duration, |g| g.remaining_duration);
+        Step::Duration {
+            minutes,
+            calendar: self.placement_calendar(Placement::Finish),
+            longest: self.last_part().map(|(u, _)| u),
+        }
+    }
+
+    /// R-178 : retard de nivellement d'une feuille automatique qui décale
+    /// son début planifié (depuis le début seulement).
+    fn leveling_delay(&self) -> Option<LevelingDelay> {
+        let ts = &self.ts;
+        if ts.role != TaskRole::Leaf
+            || ts.manual
+            || ts.start == ts.early.start
+            || !matches!(self.p.anchor, ScheduleAnchor::FromStart(_))
+        {
+            return None;
+        }
+        self.task?.leveling_delay.filter(|l| l.minutes > Minutes::ZERO)
+    }
+
+    /// R-230 : contrainte datée d'une feuille qui ne pilote ni son début ni
+    /// sa reprise.
+    fn constraint_not_binding(&self, cause: Option<ResumeCause>) -> Option<(ConstraintKind, Moment)> {
+        if self.ts.role != TaskRole::Leaf {
+            return None;
+        }
+        let c = self.task?.constraint;
+        let date = c.date()?;
+        let kind = c.kind();
+        let drives = self.ts.driver == Driver::Constraint { kind }
+            || self.ts.late_driver == LateDriver::Constraint { kind }
+            || cause == Some(ResumeCause::Constraint(kind));
+        (!drives).then_some((kind, date))
+    }
+
+    /// Code stable d'un repli (R-069) : premier diagnostic d'erreur ou
+    /// d'avertissement de la tâche, sinon `task.unschedulable` (conversion
+    /// impossible en amont).
+    fn degraded_code(&self) -> &'static str {
+        self.s
+            .diagnostics
+            .iter()
+            .find(|d| d.subject() == Subject::Task(self.uid) && d.severity() <= Severity::Warning)
+            .map_or("task.unschedulable", Diagnostic::code)
+    }
+
+    /// Affectations de travail de la tâche (R-173), dans l'ordre des UID.
+    fn parts(&self) -> impl Iterator<Item = (AssignmentUid, &AssignmentSchedule)> + '_ {
+        let uid = self.uid;
+        self.s
+            .assignments
+            .iter()
+            .filter(move |(_, a)| a.task == uid && a.role == AssignmentRole::Work)
+            .map(|(u, a)| (*u, a))
+    }
+
+    /// Affectation de travail qui finit la dernière (la plus longue à
+    /// égalité, puis le plus petit UID) : elle fixe la fin (R-173).
+    fn last_part(&self) -> Option<(AssignmentUid, &AssignmentSchedule)> {
+        self.parts()
+            .max_by_key(|(u, a)| (a.span.finish, a.duration, Reverse(*u)))
+    }
+
+    /// Calendrier de placement cité (R-030, R-171, R-173) ; `None` en temps
+    /// écoulé ou sur le calendrier Standard intégré de repli (R-066). Feuille
+    /// à parts : calendrier effectif de l'affectation qui commence la
+    /// première (`Start`) ou finit la dernière (`Finish`) ; une intersection
+    /// cite le calendrier de la tâche.
+    fn placement_calendar(&self, at: Placement) -> Option<CalendarUid> {
+        if self.ts.role == TaskRole::Leaf {
+            if self
+                .task
+                .is_some_and(|t| t.duration.basis() == TimeBasis::Elapsed)
+            {
+                return None;
+            }
+            let part = match at {
+                Placement::Start => self.parts().min_by_key(|(u, a)| (a.span.start, *u)),
+                Placement::Finish => self.last_part(),
+            };
+            if let Some((_, a)) = part {
+                return match a.calendar {
+                    EffectiveCalendar::Task(c)
+                    | EffectiveCalendar::Resource(c)
+                    | EffectiveCalendar::Project(c)
+                    | EffectiveCalendar::Intersection { task: c, .. } => Some(c),
+                    EffectiveCalendar::Elapsed => None,
+                };
+            }
+        }
+        self.measure_calendar()
+    }
+
+    /// Calendrier propre de la tâche s'il est utilisable (aucun
+    /// `task.calendar_fallback`), sinon celui du projet (R-041, R-113).
+    fn measure_calendar(&self) -> Option<CalendarUid> {
+        self.measure_calendar_of(self.uid, self.task)
+    }
+
+    /// [`Ctx::measure_calendar`] de la tâche `uid`.
+    fn measure_calendar_of(&self, uid: TaskUid, task: Option<&Task>) -> Option<CalendarUid> {
+        let own = task
+            .filter(|t| uid != TaskUid::PROJECT_SUMMARY && !t.is_null)
+            .and_then(|t| t.calendar)
+            .filter(|&c| {
+                !self.s.diagnostics.iter().any(|d| {
+                    matches!(d, Diagnostic::TaskCalendarFallback { task, calendar }
+                        if *task == uid && *calendar == c)
+                })
+            });
+        own.or_else(|| project_calendar(self.p, self.s))
+    }
+
+    /// R-204, R-205 : cause de la reprise d'une feuille en cours. La
+    /// reprise est le premier instant de placement depuis
+    /// `max(Stop, reprise saisie, bornes, date SNET/MSO)` (bornes et date
+    /// seulement si le fractionnement est permis) : la cause est le terme
+    /// qui atteint ce maximum, dans l'ordre du moteur (reprise saisie,
+    /// liens dans l'ordre de stockage, contrainte), une égalité gardant le
+    /// premier ; un terme après la reprise n'est jamais retenu. Une borne FF
+    /// ou SF qui atteint la fin du reste vaut la reprise. Aucun terme :
+    /// `NextWorking`. Hypothèse (bornes relues sur les dates planifiées).
+    fn resume_cause(&self, g: ProgressSchedule) -> ResumeCause {
+        let (stop, resume) = (g.stop, g.resume);
+        let mut best = (stop, ResumeCause::NextWorking);
+        let mut take = |x: Moment, cause: ResumeCause| {
+            if x > best.0 && x <= resume {
+                best = (x, cause);
+            }
+        };
+        let Some(task) = self.task else {
+            return best.1;
+        };
+        if let Some(r) = task.progress.resume {
+            take(r, ResumeCause::Entered);
+        }
+        let split = self.p.options.progress.split_in_progress
+            && matches!(self.p.anchor, ScheduleAnchor::FromStart(_));
+        if !split {
+            return best.1;
+        }
+        let mut lag_scale = LagScale::Unresolved;
+        let cal = self.measure_calendar();
+        for link in &task.predecessors {
+            let Some(ps) = self.s.scheduled(link.predecessor) else {
+                continue;
+            };
+            let Some(x) = self.link_bound(link, ps, cal, &mut lag_scale) else {
+                continue;
+            };
+            let cause = ResumeCause::Link {
+                predecessor: link.predecessor,
+                link: link.kind,
+            };
+            match link.kind {
+                LinkType::FinishToStart | LinkType::StartToStart => take(x, cause),
+                LinkType::FinishToFinish | LinkType::StartToFinish => {
+                    if x >= self.ts.finish {
+                        take(resume, cause);
+                    }
+                }
+            }
+        }
+        let c = task.constraint;
+        if let (Some(date), kind @ (ConstraintKind::StartNoEarlierThan | ConstraintKind::MustStartOn)) =
+            (c.date(), c.kind())
+        {
+            take(date, ResumeCause::Constraint(kind));
+        }
+        best.1
+    }
+
+    /// Borne `g(ancre)` d'un lien entrant (R-037 à R-043) relue sur les
+    /// dates planifiées du prédécesseur ; décalage ouvré sur le calendrier
+    /// du successeur `cal` (R-041), compilé une fois dans `lag_scale`.
+    /// `None` si elle ne se calcule pas.
+    fn link_bound(
+        &self,
+        link: &Link,
+        ps: &TaskSchedule,
+        cal: Option<CalendarUid>,
+        lag_scale: &mut LagScale,
+    ) -> Option<Moment> {
+        let anchor = match link.kind {
+            LinkType::FinishToStart | LinkType::FinishToFinish => ps.finish,
+            LinkType::StartToStart | LinkType::StartToFinish => ps.start,
+        };
+        let lag = match link.lag.value {
+            LagValue::Time { minutes, .. } => minutes,
+            LagValue::Percent { percent } => percent_of(ps.duration, percent).ok()?,
+        };
+        if lag == Minutes::ZERO {
+            return Some(anchor);
+        }
+        match link.lag.basis {
+            TimeBasis::Elapsed => TimeScale::Elapsed.add(anchor, lag).ok(),
+            TimeBasis::Working => {
+                if matches!(lag_scale, LagScale::Unresolved) {
+                    *lag_scale = cal
+                        .and_then(|c| CompiledCalendar::compile(&self.p.calendars, c).ok())
+                        .map_or(LagScale::Missing, LagScale::Compiled);
+                }
+                match lag_scale {
+                    LagScale::Compiled(c) => TimeScale::Working(c).add(anchor, lag).ok(),
+                    LagScale::Unresolved | LagScale::Missing => None,
+                }
+            }
+        }
+    }
+
+    /// R-232 : chaîne des pilotes depuis la tâche, au plus `depth`
+    /// maillons, sans répétition (règle 10) ; `true` si elle est coupée.
+    fn chain(&self, depth: u8) -> (Vec<ChainLink>, bool) {
+        let mut seen = BTreeSet::from([self.uid]);
+        let mut out = Vec::new();
+        let (mut uid, mut driver, mut raw) = (self.uid, self.ts.driver, self.ts.driver_bound);
+        // Borne de porte par laquelle on arrive sur une récapitulative.
+        let mut gate: Option<Moment> = None;
+        loop {
+            let next = gate
+                .and_then(|r| self.gate_cause(uid, r))
+                .or_else(|| self.upstream(uid, driver));
+            let Some(next) = next else { break };
+            if !seen.insert(next) {
+                break;
+            }
+            if out.len() >= usize::from(depth) {
+                return (out, true);
+            }
+            let Some(ns) = self.s.scheduled(next) else {
+                break;
+            };
+            out.push(ChainLink {
+                uid: next,
+                start: ns.start,
+                finish: ns.finish,
+                driver: ns.driver,
+                raw: ns.driver_bound,
+            });
+            gate = match driver {
+                Driver::SummaryGate { .. } => raw,
+                _ => None,
+            };
+            (uid, driver, raw) = (next, ns.driver, ns.driver_bound);
+        }
+        (out, false)
+    }
+
+    /// Maillon amont d'un pilote : prédécesseur d'un lien, récapitulative
+    /// d'une porte, sous-tâche au début minimal d'un agrégat (la première
+    /// dans l'ordre des ID) ; aucun pour le début du projet, une contrainte,
+    /// des dates saisies ou réelles.
+    fn upstream(&self, uid: TaskUid, driver: Driver) -> Option<TaskUid> {
+        match driver {
+            Driver::Link { predecessor, .. } => Some(predecessor),
+            Driver::SummaryGate { summary } => Some(summary),
+            Driver::Rollup => self.earliest_child(uid),
+            Driver::ProjectStart | Driver::Manual | Driver::Constraint { .. } | Driver::Actual => None,
+        }
+    }
+
+    /// R-056 : cause de la porte de la récapitulative `summary` dont la
+    /// borne brute vaut `raw` : son premier lien FS ou SS entrant dont la
+    /// borne vaut `raw`, sinon aucune (début du projet, SNET, porte d'un
+    /// ancêtre : la chaîne reprend par l'agrégat).
+    fn gate_cause(&self, summary: TaskUid, raw: Moment) -> Option<TaskUid> {
+        let task = self.p.tasks.get(summary)?;
+        let mut scale = LagScale::Unresolved;
+        let cal = self.measure_calendar_of(summary, Some(task));
+        task.predecessors
+            .iter()
+            .filter(|l| matches!(l.kind, LinkType::FinishToStart | LinkType::StartToStart))
+            .find(|l| {
+                self.s
+                    .scheduled(l.predecessor)
+                    .and_then(|ps| self.link_bound(l, ps, cal, &mut scale))
+                    == Some(raw)
+            })
+            .map(|l| l.predecessor)
+    }
+
+    /// Sous-tâche planifiée de début minimal de la récapitulative `uid`
+    /// (UID 0 : toutes les tâches), la première dans l'ordre des ID.
+    fn earliest_child(&self, uid: TaskUid) -> Option<TaskUid> {
+        let tasks = &self.p.tasks;
+        let (from, level) = if uid == TaskUid::PROJECT_SUMMARY {
+            (0, None)
+        } else {
+            let pos = tasks.position(uid)?;
+            (pos.checked_add(1)?, Some(tasks.at(pos)?.outline_level))
+        };
+        let mut best: Option<(Moment, TaskUid)> = None;
+        for t in tasks.iter().skip(from) {
+            if t.is_null {
+                continue;
+            }
+            if level.is_some_and(|l| t.outline_level <= l) {
+                break;
+            }
+            if let Some(cs) = self.s.scheduled(t.uid())
+                && best.is_none_or(|(b, _)| cs.start < b)
+            {
+                best = Some((cs.start, t.uid()));
+            }
+        }
+        best.map(|(_, u)| u)
+    }
+
+    /// R-231 : l'explication repose sur R-206 (marge d'une tâche en cours,
+    /// ou plafond tiré de la partie restante d'un successeur en cours).
+    fn hypothesis(&self) -> bool {
+        let running = |uid: TaskUid| {
+            self.s.scheduled(uid).is_some_and(|t| {
+                t.role == TaskRole::Leaf
+                    && !t.manual
+                    && t.progress.is_some_and(|g| g.state == ProgressState::Started)
+            })
+        };
+        running(self.uid)
+            || matches!(self.ts.late_driver, LateDriver::Successor { successor, .. } if running(successor))
+    }
+}
+
+/// Extrémité de la tâche dont on cite le calendrier.
+#[derive(Clone, Copy)]
+enum Placement {
+    Start,
+    Finish,
+}
+
+/// Échelle des décalages ouvrés d'une tâche, compilée au besoin.
+enum LagScale {
+    Unresolved,
+    Missing,
+    Compiled(CompiledCalendar),
+}
+
+/// Calendrier du projet tel que le moteur l'utilise (R-113 : la base d'un
+/// calendrier du projet dérivé) ; `None` sous `project.calendar_fallback`
+/// (Standard intégré, R-066).
+fn project_calendar(p: &Project, s: &Schedule) -> Option<CalendarUid> {
+    if s.diagnostics
+        .iter()
+        .any(|d| matches!(d, Diagnostic::ProjectCalendarFallback { .. }))
+    {
+        return None;
+    }
+    match p.calendars.get(p.calendar).map(Calendar::kind) {
+        Some(CalendarKind::Derived { base, .. }) => Some(*base),
+        _ => Some(p.calendar),
+    }
 }

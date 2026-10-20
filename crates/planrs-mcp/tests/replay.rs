@@ -8,6 +8,9 @@
 //! 5 (budget < 2 s). La 4 (vrai binaire en stdio) est dans
 //! `apps/planrs-cli/tests/mcp_replay.rs`, la 6 (HTTP) dans
 //! `tests/replay_http.rs`. `PLANRS_BLESS=1` régénère les attendus (à relire).
+//!
+//! J6 (lot L10) : scénario de suivi `tracking_j6` (`--now 2026-11-02T08:00`)
+//! et harnais de l'essai réel n° 3 (`replay_claude_run_3`).
 
 #![allow(
     clippy::unwrap_used,
@@ -52,8 +55,17 @@ fn now() -> Moment {
     NOW.parse().unwrap()
 }
 
+/// « Maintenant » du rejeu du scénario `name`.
+fn now_of(name: &str) -> Moment {
+    replay::now_of(name).parse().unwrap()
+}
+
 fn opts(journal: Option<&Path>) -> ServeOptions {
-    let mut o = ServeOptions::new(now(), Language::Fr);
+    opts_at(now(), journal)
+}
+
+fn opts_at(now: Moment, journal: Option<&Path>) -> ServeOptions {
+    let mut o = ServeOptions::new(now, Language::Fr);
     o.ignore_app_guard = true;
     o.journal = journal.map(Path::to_path_buf);
     o
@@ -92,7 +104,19 @@ async fn run(client: &Client, scenario: &Scenario, tmp: &Path) -> Vec<Value> {
 /// Rejeu complet avec journal ; rend le journal produit et la durée.
 async fn replay_with_journal(scenario: &Scenario, tmp: &TempDir) -> (Vec<Value>, String, Duration) {
     let journal = tmp.path().join("run.jsonl");
-    let (client, server) = connect(opts(Some(&journal))).await;
+    replay_opened(scenario, tmp, journal, None).await
+}
+
+/// Comme [`replay_with_journal`], serveur lancé avec `--open open` si donné.
+async fn replay_opened(
+    scenario: &Scenario,
+    tmp: &TempDir,
+    journal: std::path::PathBuf,
+    open: Option<std::path::PathBuf>,
+) -> (Vec<Value>, String, Duration) {
+    let mut o = opts_at(now_of(&scenario.name), Some(&journal));
+    o.open = open;
+    let (client, server) = connect(o).await;
     let t0 = Instant::now();
     let got = run(&client, scenario, tmp.path()).await;
     let elapsed = t0.elapsed();
@@ -125,7 +149,7 @@ async fn replay_memory(name: &str, saved: Option<&str>) -> Scenario {
     if let Some(saved) = saved {
         let read = |p: &Path| {
             let bytes = std::fs::read(p).unwrap_or_else(|e| panic!("{} : {e}", p.display()));
-            planrs_mspdi::read(&bytes, &planrs_mspdi::ReadOptions::new(now()))
+            planrs_mspdi::read(&bytes, &planrs_mspdi::ReadOptions::new(now_of(name)))
                 .unwrap_or_else(|e| panic!("{} : {e}", p.display()))
                 .project
         };
@@ -268,6 +292,510 @@ async fn replay_resources_j5_memory() {
         Some("resource.has_assignments")
     );
     assert_reopened(&s);
+}
+
+/// Fichier de départ de l'essai réel n° 3 : export de l'étape « ligne de
+/// base 0 » du scénario `tracking_j6`, versionné à côté de son MSPDI final.
+const TRACKING_BASELINE0: &str = "extension-bureaux.xml";
+
+/// Chemin versionné du fichier de départ de l'essai réel n° 3.
+fn tracking_baseline0_path(root: &Path) -> std::path::PathBuf {
+    root.join("tests/mcp/expected/tracking_j6_baseline0.xml")
+}
+
+/// MSPDI `normalize` d'un fichier relu.
+fn normalized_mspdi(p: &Path, now: Moment) -> planrs_core::Project {
+    let bytes = std::fs::read(p).unwrap_or_else(|e| panic!("{} : {e}", p.display()));
+    let project = planrs_mspdi::read(&bytes, &planrs_mspdi::ReadOptions::new(now))
+        .unwrap_or_else(|e| panic!("{} : {e}", p.display()))
+        .project;
+    planrs_mspdi::normalize(&project, &planrs_mspdi::write::WriteOptions::default())
+}
+
+/// Scénario de suivi J6 (lot L10, `docs/plans/j6.md`, chiffres relus dans
+/// `docs/features/tracking.md` § 3) rejoué en mémoire, `--now
+/// 2026-11-02T08:00` : ligne de base 0, avancement au 13/11, refus, tâche
+/// commencée hors séquence, replanification du reste au 27/11, `what_if`,
+/// ligne de base 1 sur une sélection, historique, aller-retour MSPDI.
+#[tokio::test]
+async fn replay_tracking_j6_memory() {
+    let root = root();
+    let name = "tracking_j6";
+    let scenario = Scenario::load(&root, name);
+    let tmp = TempDir::new("memory");
+    let (got, produced, elapsed) = replay_with_journal(&scenario, &tmp).await;
+    let saved = tmp.path().join("tracking_j6.xml");
+    let start = tmp.path().join(TRACKING_BASELINE0);
+    if replay::blessing() {
+        replay::bless(&root, &scenario, &produced, tmp.path(), Some(&saved));
+        std::fs::copy(&start, tracking_baseline0_path(&root)).unwrap();
+        return;
+    }
+    replay::assert_results(&scenario, &got);
+    replay::assert_journal(&scenario, &produced, tmp.path());
+    assert!(
+        elapsed < BUDGET,
+        "rejeu de {name} en {elapsed:?}, budget {BUDGET:?}"
+    );
+    let now = now_of(name);
+    for (file, expected) in [
+        (&saved, replay::expected_xml_path(&root, name)),
+        (&start, tracking_baseline0_path(&root)),
+    ] {
+        assert_eq!(
+            normalized_mspdi(file, now),
+            normalized_mspdi(&expected, now),
+            "{name} : {} différent de l'attendu",
+            file.display()
+        );
+    }
+    assert_tracking(&scenario);
+}
+
+/// Vérifications du cahier (L10, point 3) sur les résultats attendus du
+/// scénario `tracking_j6` (les résultats rejoués leur sont égaux).
+fn assert_tracking(s: &Scenario) {
+    let at = |tool: &str, params: &Value| index_of(s, tool, params);
+    let ok = |i: usize| ok_at(s, i);
+    // Seuls trois appels sont refusés, avec les codes attendus.
+    let refused: Vec<(&str, &str)> = s
+        .calls
+        .iter()
+        .filter_map(|c| error_code(c.expected.as_ref().unwrap()).map(|e| (c.tool.as_str(), e)))
+        .collect();
+    assert_eq!(
+        refused,
+        [
+            ("set_baseline", "baseline.exists"),
+            ("update_progress", "progress.summary_not_editable"),
+            ("update_progress", "progress.invalid_order"),
+        ]
+    );
+    // Planning initial : 20 tâches, fin mer 16/12/2026 17:00.
+    let summary0 = ok(at("project_summary", &json!({})));
+    assert_eq!(
+        (
+            &summary0["tasks"],
+            &summary0["summaries"],
+            &summary0["milestones"],
+            &summary0["finish"]
+        ),
+        (&json!(20), &json!(3), &json!(2), &json!("2026-12-16T17:00"))
+    );
+    // Ligne de base 0 : tous les écarts nuls.
+    let v0 = ok(at("baseline_variance", &json!({})));
+    let zero = |v: &Value| v.as_object().unwrap().values().all(|x| minutes_of(x) == 0);
+    assert!(zero(&v0["project"]["variance"]), "{v0}");
+    assert!(
+        v0["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|t| zero(&t["variance"])),
+        "{v0}"
+    );
+    // Avancement au 13/11 : la tâche achevée sort du chemin critique.
+    let t1 = at(
+        "update_progress",
+        &json!({ "task": 2, "percent_complete": { "text": "100%" } }),
+    );
+    assert_eq!(ok(t1)["diff"]["critical_left"], json!([2]));
+    let cp = ok(at("critical_path", &json!({})));
+    let critical: Vec<&Value> = cp["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| &t["uid"])
+        .collect();
+    assert!(
+        !critical.contains(&&json!(2)) && critical.contains(&&json!(3)),
+        "{cp}"
+    );
+    // Écarts chiffrés à la main (tracking.md § 3) : un jour de retard sur la
+    // maçonnerie, un jour d'avance sur les réseaux, fin du projet + 1 j.
+    let i_v = index_of_nth(s, "baseline_variance", &json!({}), 1);
+    let v = ok(i_v);
+    assert_eq!(minutes_of(&v["project"]["variance"]["finish"]), 480, "{v}");
+    let mac = task_of(v, 3);
+    assert_eq!(
+        (
+            minutes_of(&mac["variance"]["start"]),
+            minutes_of(&mac["variance"]["finish"])
+        ),
+        (480, 480)
+    );
+    let res = task_of(v, 4);
+    assert_eq!(
+        (
+            minutes_of(&res["variance"]["finish"]),
+            minutes_of(&res["variance"]["duration"])
+        ),
+        (-480, -480)
+    );
+    // Charpente tirée par la maçonnerie (lien FS), elle-même au début réel.
+    let x5 = ok(at("explain_date", &json!({ "task": 8 })));
+    assert_eq!(
+        x5["steps"][0]["driver"],
+        json!({ "kind": "link", "link": "fs", "predecessor": 3 })
+    );
+    assert_eq!(x5["chain"][0]["uid"], json!(3));
+    assert_eq!(x5["chain"][0]["driver"], json!({ "kind": "actual" }));
+    // Jalon à 50 % ramené à 100 %, avec avertissement (dry_run).
+    let m = ok(at(
+        "update_progress",
+        &json!({ "task": 6, "percent_complete": { "text": "50%" }, "dry_run": true }),
+    ));
+    assert_eq!(m["committed"], json!(false));
+    assert_eq!(m["warnings"][0]["code"], json!("progress.milestone_rounded"));
+    // Menuiseries commencées hors séquence : réel, puis reprise tirée par le
+    // lien FS de la charpente.
+    let x6 = ok(at("explain_date", &json!({ "task": 9 })));
+    let kinds: Vec<&Value> = x6["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|st| &st["step"])
+        .collect();
+    assert_eq!(kinds, [&json!("driver"), &json!("actual"), &json!("resume")]);
+    assert_eq!(
+        x6["steps"][2]["cause"],
+        json!({ "kind": "link", "link": "fs", "predecessor": 8 })
+    );
+    assert_tracking_analysis(s);
+}
+
+/// Suite de [`assert_tracking`] : replanification, `what_if`, ligne de
+/// base 1, retards, historique.
+fn assert_tracking_analysis(s: &Scenario) {
+    let at = |tool: &str, params: &Value| index_of(s, tool, params);
+    let ok = |i: usize| ok_at(s, i);
+    // Replanification du reste au 27/11 : dry_run sans effet, même diff.
+    let dry = at("reschedule_remaining", &json!({ "dry_run": true }));
+    assert_eq!(ok(dry)["committed"], json!(false));
+    assert_eq!(ok(dry + 1)["committed"], json!(true));
+    assert_eq!(ok(dry)["diff"], ok(dry + 1)["diff"]);
+    let x2 = ok(at("explain_date", &json!({ "task": 3 })));
+    assert_eq!(x2["steps"][2]["cause"], json!({ "kind": "entered" }));
+    assert_eq!(x2["steps"][2]["resume"], json!("2026-11-30T08:00"));
+    // what_if : projet inchangé ; + 3 j sur une tâche critique, puis un
+    // second plaquiste, mesurés contre la ligne de base 0.
+    let w1 = index_of(
+        s,
+        "what_if",
+        &s.calls.iter().find(|c| c.tool == "what_if").unwrap().params,
+    );
+    assert_eq!(s.calls[w1 - 1].tool, "project_summary");
+    assert_eq!(s.calls[w1 + 2].tool, "project_summary");
+    assert_eq!(ok(w1 - 1), ok(w1 + 2), "what_if a modifié le projet");
+    let base = minutes_of(
+        &ok(index_of_nth(s, "baseline_variance", &json!({ "baseline": 0 }), 0))["project"]["variance"]["finish"],
+    );
+    let f1 = minutes_of(&ok(w1)["project_finish_variance"]);
+    let f2 = minutes_of(&ok(w1 + 1)["project_finish_variance"]);
+    assert_eq!((f1 - base, f2 - base), (1440, -960), "{base} {f1} {f2}");
+    for w in [w1, w1 + 1] {
+        assert_eq!(ok(w)["accepted"], json!(true));
+        assert_eq!(ok(w)["explanations"][0]["task"]["uid"], json!(20));
+    }
+    // Ligne de base 1 sur une sélection, cumulée vers les récapitulatives.
+    let v1 = ok(index_of_nth(s, "baseline_variance", &json!({ "baseline": 1 }), 0));
+    for uid in [7, 10, 14] {
+        assert!(!task_of(v1, uid)["baseline"].is_null(), "{uid} : {v1}");
+    }
+    for uid in [3, 8, 20] {
+        assert!(task_of(v1, uid)["baseline"].is_null(), "{uid} : {v1}");
+    }
+    // Retards : la maçonnerie, pas la tâche achevée ni les réseaux en avance.
+    let late = ok(at("list_tasks", &json!({ "late": true })));
+    let late: Vec<&Value> = late["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| &t["uid"])
+        .collect();
+    assert!(late.contains(&&json!(3)), "{late:?}");
+    assert!(
+        !late.contains(&&json!(2)) && !late.contains(&&json!(4)),
+        "{late:?}"
+    );
+    // Trois undo, trois redo.
+    let u = at("undo", &json!({}));
+    let lens: Vec<&Value> = (u..u + 6).map(|i| &ok(i)["history_len"]).collect();
+    assert_eq!(
+        lens,
+        [
+            &json!(10),
+            &json!(9),
+            &json!(8),
+            &json!(9),
+            &json!(10),
+            &json!(11)
+        ]
+    );
+}
+
+/// `tracking_j6` : `save_project`, `export_mspdi`, `open_project` sur
+/// l'export ; mêmes écarts, mêmes tâches, même résumé. Porte sur les
+/// résultats attendus du scénario, que `replay_tracking_j6_memory`,
+/// `_stdio` et `_http` comparent aux résultats rejoués.
+#[test]
+fn replay_tracking_j6_reopen_same_variances() {
+    let s = Scenario::load(&root(), "tracking_j6");
+    assert_tracking_reopened(&s);
+}
+
+/// `tracking_j6` : la réouverture du MSPDI exporté redonne les mêmes écarts
+/// (lignes 0 et 1), les mêmes tâches et le même résumé (hors chemin, état
+/// modifié, historique).
+fn assert_tracking_reopened(s: &Scenario) {
+    let ok = |i: usize| ok_at(s, i);
+    let opened = index_of(s, "open_project", &json!({ "path": "$TMP/export.xml" }));
+    let before = opened - 6;
+    let tools: Vec<&str> = (before..before + 4).map(|i| s.calls[i].tool.as_str()).collect();
+    assert_eq!(
+        tools,
+        [
+            "baseline_variance",
+            "baseline_variance",
+            "list_tasks",
+            "project_summary"
+        ]
+    );
+    for k in 0..3 {
+        assert_eq!(s.calls[opened + 1 + k].tool, s.calls[before + k].tool);
+        assert_eq!(s.calls[opened + 1 + k].params, s.calls[before + k].params);
+        assert_eq!(ok(opened + 1 + k), ok(before + k), "appel {}", opened + 2 + k);
+    }
+    let strip = |v: &Value| {
+        let mut v = v.clone();
+        for k in ["dirty", "path", "history_len"] {
+            v.as_object_mut().unwrap().remove(k);
+        }
+        v
+    };
+    assert_eq!(strip(ok(opened + 4)), strip(ok(before + 3)));
+}
+
+/// `tracking_j6`, vérification 2 du cahier J4 étendue : MSPDI enregistré
+/// relu sans erreur, 20 tâches, avancement, lignes de base 0 et 1 et date
+/// d'état relus, planning sans erreur, `normalize` égal à l'attendu.
+#[tokio::test]
+async fn replay_tracking_j6_saved_mspdi_matches() {
+    let root = root();
+    let name = "tracking_j6";
+    let scenario = Scenario::load(&root, name);
+    let tmp = TempDir::new("saved");
+    let (client, _server) = connect(opts_at(now_of(name), None)).await;
+    run(&client, &scenario, tmp.path()).await;
+    client.cancel().await.unwrap();
+    let bytes = std::fs::read(tmp.path().join("tracking_j6.xml")).unwrap();
+    let saved = planrs_mspdi::read(&bytes, &planrs_mspdi::ReadOptions::new(now_of(name))).unwrap();
+    let errors: Vec<_> = saved
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .collect();
+    assert!(errors.is_empty(), "import : {errors:?}");
+    let p = &saved.project;
+    let tasks: Vec<_> = p
+        .tasks
+        .iter()
+        .filter(|t| !t.is_null && t.uid().get() != 0)
+        .collect();
+    assert_eq!(tasks.len(), 20);
+    assert_eq!(
+        p.status_date,
+        Some("2026-11-27T17:00".parse().unwrap()),
+        "date d'état relue"
+    );
+    let by_uid = |uid: u32| tasks.iter().find(|t| t.uid().get() == uid).unwrap();
+    let mac = planrs_core::progress::facts(by_uid(3));
+    assert_eq!(mac.actual_start, Some("2026-11-03T08:00".parse().unwrap()));
+    assert_eq!(mac.actual_duration.get(), 2400);
+    assert_eq!(
+        planrs_core::progress::facts(by_uid(2)).state,
+        planrs_core::progress::ProgressState::Complete
+    );
+    let sched = planrs_core::schedule(p);
+    let errors: Vec<_> = sched
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity() == Severity::Error)
+        .collect();
+    assert!(errors.is_empty(), "planning : {errors:?}");
+    let w = planrs_mspdi::write::WriteOptions::default();
+    let expected = normalized_mspdi(&replay::expected_xml_path(&root, name), now_of(name));
+    assert_eq!(planrs_mspdi::normalize(p, &w), expected);
+}
+
+/// Essai réel n° 3 avec Claude (lot L10, point 5 ; `docs/features/mcp.md`
+/// § 6) : harnais prêt, branché sur le journal versionné
+/// `tests/mcp/scenarios/claude_run_3.jsonl` dès qu'il existe (l'essai est
+/// mené par la session principale). Le fichier de départ (export de l'étape
+/// « ligne de base 0 » de `tracking_j6`) est déposé en
+/// `$TMP/extension-bureaux.xml` avant le rejeu, `--now 2026-11-13T17:00` ;
+/// si le journal ne commence pas par son `open_project`, le serveur est
+/// lancé avec `--open` sur ce fichier (comme pendant l'essai). Vérifié sur
+/// le journal : `update_progress`, `explain_date` et `what_if` utilisés ; la
+/// règle 3 (aucune date rédigée hors des résultats) se relit sur la réponse
+/// de Claude, consignée dans `mcp.md`.
+#[tokio::test]
+async fn replay_claude_run_3() {
+    let root = root();
+    let name = "claude_run_3";
+    if !replay::scenario_path(&root, name).exists() {
+        eprintln!("replay_claude_run_3 : journal {name}.jsonl absent, essai n° 3 pas encore versionné");
+        return;
+    }
+    let scenario = Scenario::load(&root, name);
+    let tmp = TempDir::new("claude3");
+    let start = tmp.path().join(TRACKING_BASELINE0);
+    std::fs::copy(tracking_baseline0_path(&root), &start).unwrap();
+    let opened_by_tool = scenario.calls.first().is_some_and(|c| {
+        c.tool == "open_project" && c.params["path"] == json!(format!("$TMP/{TRACKING_BASELINE0}"))
+    });
+    let open = (!opened_by_tool).then_some(start);
+    let journal = tmp.path().join("run.jsonl");
+    let saved = tmp.path().join(TRACKING_BASELINE0);
+    let (got, produced, elapsed) = replay_opened(&scenario, &tmp, journal, open).await;
+    if replay::blessing() {
+        replay::bless(&root, &scenario, &produced, tmp.path(), Some(&saved));
+        return;
+    }
+    replay::assert_results(&scenario, &got);
+    replay::assert_journal(&scenario, &produced, tmp.path());
+    // MSPDI enregistré par l'agent (`save_project` sur le fichier ouvert) :
+    // `normalize` égal à l'attendu relu.
+    let read = |p: &Path| {
+        let bytes = std::fs::read(p).unwrap_or_else(|e| panic!("{} : {e}", p.display()));
+        planrs_mspdi::read(&bytes, &planrs_mspdi::ReadOptions::new(now_of(name)))
+            .unwrap_or_else(|e| panic!("{} : {e}", p.display()))
+            .project
+    };
+    let w = planrs_mspdi::write::WriteOptions::default();
+    assert_eq!(
+        planrs_mspdi::normalize(&read(&saved), &w),
+        planrs_mspdi::normalize(&read(&replay::expected_xml_path(&root, name)), &w),
+        "{name} : MSPDI enregistré différent de l'attendu"
+    );
+    assert!(
+        elapsed < BUDGET,
+        "rejeu de {name} en {elapsed:?}, budget {BUDGET:?}"
+    );
+    let tools: Vec<&str> = scenario.calls.iter().map(|c| c.tool.as_str()).collect();
+    for t in ["update_progress", "explain_date", "what_if"] {
+        assert!(tools.contains(&t), "{t} absent de l'essai n° 3 : {tools:?}");
+    }
+    claude_run_3_facts(&scenario, &tools);
+}
+
+/// Faits clés de l'essai n° 3 du 2026-10-20 (`docs/features/mcp.md` § 6).
+fn claude_run_3_facts(scenario: &Scenario, tools: &[&str]) {
+    assert_eq!(
+        tools,
+        [
+            "open_project",
+            "list_tasks",
+            "list_resources",
+            "set_status_date",
+            "get_task",
+            "get_task",
+            "update_progress",
+            "update_progress",
+            "reschedule_remaining",
+            "explain_date",
+            "baseline_variance",
+            "get_task",
+            "what_if",
+            "what_if",
+            "what_if",
+            "save_project"
+        ]
+    );
+    assert!(
+        scenario
+            .calls
+            .iter()
+            .all(|c| error_code(c.expected.as_ref().unwrap()).is_none())
+    );
+    let ok = |i: usize| ok_at(scenario, i);
+    // Date d'état posée au 13/11 17:00 par l'agent.
+    assert_eq!(scenario.calls[3].params, json!({ "date": "2026-11-13T17:00" }));
+    // Terrassement achevé (sort du chemin critique) ; Maçonnerie commencée
+    // le 03/11 à 50 % : réception 16/12 → 17/12 ; reste replanifié après
+    // la date d'état : 17/12 → 23/12 (+ 4 j).
+    assert_eq!(ok(6)["diff"]["critical_left"], json!([2]));
+    assert_eq!(ok(7)["diff"]["finish_after"], json!("2026-12-17T17:00"));
+    assert_eq!(ok(8)["diff"]["finish_after"], json!("2026-12-23T17:00"));
+    assert_eq!(minutes_of(&ok(8)["diff"]["finish_delta"]), 1_920);
+    // Maçonnerie : partie réelle jusqu'au lun 09/11, reprise lun 16/11
+    // (reprise saisie au 13/11 17:00), fin ven 20/11.
+    let mac = &ok(11)["progress"];
+    assert_eq!(mac["stop"], json!("2026-11-09T17:00"));
+    assert_eq!(mac["resume"], json!("2026-11-16T08:00"));
+    assert_eq!(ok(11)["finish"], json!("2026-11-20T17:00"));
+    // Pourquoi la réception bouge : chaîne des pilotes jusqu'à la
+    // Maçonnerie (FS de bout en bout).
+    let chain: Vec<Value> = ok(9)["chain"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["uid"].clone())
+        .collect();
+    assert_eq!(Value::Array(chain), json!([19, 17, 16, 14, 10, 9, 8, 3]));
+    assert_eq!(ok(9)["date"], json!("2026-12-23T17:00"));
+    // Écarts à la ligne 0 : projet (ligne déduite) et réception + 5 j.
+    let variance = ok(10);
+    assert_eq!(variance["project"]["derived"], json!(true));
+    assert_eq!(minutes_of(&variance["project"]["variance"]["finish"]), 2_400);
+    assert_eq!(minutes_of(&task_of(variance, 20)["variance"]["finish"]), 2_400);
+    assert_eq!(minutes_of(&task_of(variance, 6)["variance"]["finish"]), 2_400);
+    // Second plaquiste : simple ajout sans effet (tâches non pilotées par
+    // l'effort) ; à 200 % ou piloté par l'effort, réception au 21/12
+    // (− 2 j), Électricité puis Ventilation deviennent le chemin.
+    assert_eq!(minutes_of(&ok(12)["diff"]["finish_delta"]), 0);
+    for i in [13, 14] {
+        assert_eq!(ok(i)["diff"]["finish_after"], json!("2026-12-21T17:00"));
+        assert_eq!(minutes_of(&ok(i)["diff"]["finish_delta"]), -960);
+    }
+    let after: Vec<&Value> = ok(14)["explanations"][0]["chain"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| &c["uid"])
+        .collect();
+    assert!(
+        after.contains(&&json!(13)) && after.contains(&&json!(11)),
+        "{after:?}"
+    );
+    // Simulations sans effet : enregistrement du seul avancement.
+    assert_eq!(ok(15)["path"], json!(format!("$TMP/{TRACKING_BASELINE0}")));
+}
+
+/// Minutes d'une durée de vue (`{minutes, unit, text}`).
+fn minutes_of(v: &Value) -> i64 {
+    v["minutes"].as_i64().unwrap()
+}
+
+/// Tâche `uid` d'une vue paginée (`tasks`).
+fn task_of(v: &Value, uid: u64) -> Value {
+    v["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["uid"] == json!(uid))
+        .cloned()
+        .unwrap_or_else(|| panic!("tâche {uid} absente : {v}"))
+}
+
+/// Index du n-ième (à partir de 0) appel `tool` de paramètres `params`.
+fn index_of_nth(s: &Scenario, tool: &str, params: &Value, n: usize) -> usize {
+    s.calls
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.tool == tool && &c.params == params)
+        .nth(n)
+        .map_or_else(|| panic!("{tool} {params} n° {n} absent du scénario"), |(i, _)| i)
 }
 
 /// Index du premier appel `tool` de paramètres `params`.

@@ -279,14 +279,17 @@ fn workspace_no_session_error() {
         ("task.add", json!({ "name": "A" })),
         ("batch.apply", json!({ "ops": [] })),
         ("project.save", json!({})),
+        ("analysis.what_if", json!({ "ops": [] })),
+        ("analysis.baseline_variance", json!({})),
+        ("progress.update", json!({ "task": 1 })),
+        ("baseline.set", json!({})),
     ] {
         let err = ws.call(id, params).unwrap_err();
         assert_eq!(err.code, codes::SESSION_NONE, "{id}");
         assert!(err.message.contains("open_project"), "{id} : {}", err.message);
     }
-    // Commande réservée, id inconnu, paramètres mal formés.
-    let err = ws.call("analysis.what_if", json!({})).unwrap_err();
-    assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE);
+    // Id inconnu, paramètres mal formés (plus aucune commande réservée
+    // depuis le lot L8 de J6).
     assert_eq!(
         ws.call("task.nope", json!({})).unwrap_err().code,
         codes::PARAM_INVALID
@@ -570,7 +573,7 @@ fn workspace_render_gantt_bounded() {
 }
 
 /// Critère de fin L6 : `house.xml` ouvert, modifié, enregistré, relu :
-/// projets égaux par `normalize` (R-133).
+/// projets égaux par `normalize` (R-133) de l'image du moteur (R-215).
 #[test]
 fn workspace_open_save_reopen_equal() {
     let dir = TempDir::new("save");
@@ -602,7 +605,12 @@ fn workspace_open_save_reopen_equal() {
     assert!(saved["bytes"].as_u64().unwrap() > 0);
     let session = ws.session().unwrap();
     let options = planrs_mspdi::write::WriteOptions::default();
-    let expected = planrs_mspdi::normalize(session.project(), &options);
+    // Image écrite par le moteur (R-215 : restes et travail réel des
+    // récapitulatives calculés, relecture finale J6, J6-F2).
+    let expected = planrs_mspdi::normalize(
+        &planrs_mspdi::write::schedule_image(session.project(), session.schedule()),
+        &options,
+    );
 
     let mut again = Workspace::new(now(), Language::Fr);
     again
@@ -716,8 +724,9 @@ fn workspace_import_csv_roundtrip() {
 #[test]
 fn workspace_batch_version_checked_before_ops() {
     // ADR-0012 L3 (4) : un lot d'un format futur est refusé comme tel, même
-    // si ses opérations sont inconnues de cette version (`progress.update`,
-    // J6 ; `resource.add` est connue depuis le contrat J5).
+    // si ses opérations sont mal formées pour cette version
+    // (`progress.update` est connue depuis le contrat J6, mais sans champ
+    // `uid`).
     let mut ws = fresh(Language::Fr);
     let err = ws
         .call(

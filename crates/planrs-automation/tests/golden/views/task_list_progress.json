@@ -1,0 +1,141 @@
+{
+  "next_cursor": null,
+  "tasks": [
+    {
+      "constraint": null,
+      "critical": false,
+      "deadline": null,
+      "diagnostics": [],
+      "duration": {
+        "elapsed": false,
+        "estimated": false,
+        "minutes": 1440,
+        "text": "3j",
+        "unit": "day"
+      },
+      "finish": "2026-11-04T17:00",
+      "free_slack": {
+        "minutes": 0,
+        "text": "0j",
+        "unit": "day"
+      },
+      "id": 1,
+      "level": 1,
+      "milestone": false,
+      "name": "Terrassement",
+      "predecessors": [],
+      "progress": {
+        "percent": {
+          "text": "100%",
+          "value": 10000
+        },
+        "state": "complete"
+      },
+      "start": "2026-11-02T08:00",
+      "summary": false,
+      "total_slack": {
+        "minutes": 0,
+        "text": "0j",
+        "unit": "day"
+      },
+      "uid": 1
+    },
+    {
+      "constraint": null,
+      "critical": true,
+      "deadline": null,
+      "diagnostics": [],
+      "duration": {
+        "elapsed": false,
+        "estimated": false,
+        "minutes": 2400,
+        "text": "5j",
+        "unit": "day"
+      },
+      "finish": "2026-11-10T17:00",
+      "free_slack": {
+        "minutes": 0,
+        "text": "0j",
+        "unit": "day"
+      },
+      "id": 2,
+      "level": 1,
+      "milestone": false,
+      "name": "Maçonnerie",
+      "predecessors": [
+        {
+          "kind": "fs",
+          "pred": 1
+        }
+      ],
+      "progress": {
+        "percent": {
+          "text": "40%",
+          "value": 4000
+        },
+        "state": "started"
+      },
+      "resources": [
+        {
+          "name": "Maçon",
+          "uid": 1,
+          "units": {
+            "text": "100%",
+            "value": 10000
+          }
+        }
+      ],
+      "start": "2026-11-04T08:00",
+      "summary": false,
+      "total_slack": {
+        "minutes": 0,
+        "text": "0j",
+        "unit": "day"
+      },
+      "uid": 2,
+      "work": {
+        "minutes": 2400,
+        "text": "40h",
+        "unit": "hour"
+      }
+    },
+    {
+      "constraint": null,
+      "critical": true,
+      "deadline": null,
+      "diagnostics": [],
+      "duration": {
+        "elapsed": false,
+        "estimated": false,
+        "minutes": 0,
+        "text": "0j",
+        "unit": "day"
+      },
+      "finish": "2026-11-10T17:00",
+      "free_slack": {
+        "minutes": 0,
+        "text": "0j",
+        "unit": "day"
+      },
+      "id": 3,
+      "level": 1,
+      "milestone": true,
+      "name": "Réception",
+      "predecessors": [
+        {
+          "kind": "fs",
+          "pred": 2
+        }
+      ],
+      "start": "2026-11-10T17:00",
+      "summary": false,
+      "total_slack": {
+        "minutes": 0,
+        "text": "0j",
+        "unit": "day"
+      },
+      "uid": 3
+    }
+  ],
+  "total": 3
+}

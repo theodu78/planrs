@@ -33,7 +33,11 @@ pub struct TasksArgs {
     /// Tâches critiques seulement.
     #[arg(long)]
     pub critical: bool,
-    /// Tâches en retard seulement (fin après l'échéance).
+    /// Tâches en retard seulement (R-236) : fin planifiée après l'échéance
+    /// ou après la fin de la ligne de base 0 ; non achevée avec une fin
+    /// planifiée au plus tard à la date d'état ; non commencée avec un début
+    /// planifié avant la date d'état. Date d'état : celle du projet, sinon la
+    /// date du jour (`--now`).
     #[arg(long)]
     pub late: bool,
     /// Tâches qui finissent ce jour ou après (`AAAA-MM-JJ`).

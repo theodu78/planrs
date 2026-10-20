@@ -21,6 +21,7 @@
 //! Aucune entrée/sortie hors de `files` et `control` (absents en wasm) : du
 //! texte ou des octets en entrée, une valeur du modèle en sortie.
 
+pub mod analysis;
 pub mod command;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod control;
@@ -29,6 +30,7 @@ mod delta;
 mod diag_delta;
 pub mod diff;
 pub mod error;
+pub mod explain;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod files;
 pub mod history;
@@ -48,5 +50,7 @@ pub use error::{CommandError, CommandErrorKind, HistoryError, OpenError};
 pub use history::HistoryView;
 pub use outcome::{ApplyOutcome, SideEffect};
 pub use registry::{Availability, CommandSpec, Kind, REGISTRY};
-pub use session::{AnchorSpec, ApplyMode, ApplyOptions, DocOrigin, NewProject, Session, SessionLimits};
+pub use session::{
+    AnchorSpec, ApplyMode, ApplyOptions, DocOrigin, NewProject, Session, SessionLimits, Simulation,
+};
 pub use workspace::{ToolError, Workspace};

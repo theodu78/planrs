@@ -11,8 +11,8 @@ use planrs_core::{Day, Moment};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{Batch, Command};
-use crate::json::{DaySchema, GranularityJson, MomentSchema};
+use super::{Batch, Command, TaskRef};
+use crate::json::{DaySchema, GranularityJson, MomentSchema, SideJson};
 use crate::text::Language;
 
 /// Paramètres vides (`project.summary`, `analysis.critical_path`,
@@ -56,7 +56,9 @@ pub struct TaskListParams {
     /// Tâches critiques seulement.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub critical: bool,
-    /// Tâches en retard seulement (J4 : fin planifiée après l'échéance).
+    /// Tâches en retard seulement : fin planifiée après l'échéance ou après
+    /// la fin de la ligne de base 0, non achevée à fin passée ou non
+    /// commencée à début passé à la date d'état.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub late: bool,
     /// Tâches dont les dates planifiées touchent ce jour ou un jour suivant.
@@ -124,6 +126,64 @@ pub struct UsageParams {
     /// Ressources (UID) ; vide : toutes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resources: Vec<u32>,
+}
+
+/// `analysis.explain_date` (J6, R-230 à R-233) : pourquoi une tâche
+/// commence (ou finit) à sa date ; calculé par le moteur à la demande.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExplainParams {
+    /// Tâche (UID).
+    pub task: TaskRef,
+    /// Date expliquée (défaut : début).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side: Option<SideJson>,
+    /// Profondeur de la chaîne des pilotes (défaut 5, de 1 à 50).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 50))]
+    pub depth: Option<u8>,
+}
+
+/// `analysis.what_if` (J6, R-234) : simule un lot sur une copie, sans
+/// changer la session ; un lot refusé est rendu comme donnée.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WhatIfParams {
+    /// Opérations simulées, dans l'ordre (même forme que `apply_batch`).
+    pub ops: Vec<Command>,
+    /// Ligne de base de référence de l'écart de fin du projet (0 à 10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(max = 10))]
+    pub baseline: Option<u8>,
+    /// Tâches expliquées sur l'état simulé (au plus 5).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 5))]
+    pub explain: Vec<TaskRef>,
+    /// Diff détaillé.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub detail: bool,
+}
+
+/// `analysis.baseline_variance` (J6, R-228) : écarts à une ligne de base,
+/// ligne du projet puis tâches, paginés.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VarianceParams {
+    /// Ligne de base (0 à 10 ; défaut 0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(max = 10))]
+    pub baseline: Option<u8>,
+    /// Tâches à écart non nul seulement.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub only_varied: bool,
+    /// Reprise d'une page précédente (son `next_cursor` ; sens fixé par
+    /// le lot L8, R-228).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<u32>,
+    /// Taille de la page (défaut 50, au plus 500).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 500))]
+    pub limit: Option<u32>,
 }
 
 /// `task.get` : une tâche.

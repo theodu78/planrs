@@ -1,0 +1,354 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`progress.update` (R-216) : avancement d'une feuille. Champs absents :\ninchangés. Conflits refusés (`param.conflict`, R-202) : `percent_complete`\navec `actual_duration` ; `percent_complete` < 100 avec `actual_finish` ;\n`actual_finish` avec `remaining_duration` > 0 ; `percent_work_complete`\navec `actual_work`.",
+  "properties": {
+    "actual_duration": {
+      "additionalProperties": false,
+      "description": "Durée réelle (R-202).",
+      "properties": {
+        "elapsed": {
+          "description": "Durée écoulée (« 5ej »).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "estimated": {
+          "description": "Durée estimée (« 5j? »).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "minutes": {
+          "description": "Minutes (ouvrées, ou écoulées si `elapsed`).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "text": {
+          "description": "Texte à la manière de MS Project (« 5j », « 2d? »).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "description": "Unité d'une durée en JSON.",
+              "oneOf": [
+                {
+                  "const": "minute",
+                  "description": "Minute.",
+                  "type": "string"
+                },
+                {
+                  "const": "hour",
+                  "description": "Heure.",
+                  "type": "string"
+                },
+                {
+                  "const": "day",
+                  "description": "Jour.",
+                  "type": "string"
+                },
+                {
+                  "const": "week",
+                  "description": "Semaine.",
+                  "type": "string"
+                },
+                {
+                  "const": "month",
+                  "description": "Mois.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Unité d'affichage."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "actual_finish": {
+      "description": "Fin réelle (R-202 : 100 %, durée mesurée).",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "actual_start": {
+      "description": "Début réel (R-202).",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:00)?$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "actual_work": {
+      "additionalProperties": false,
+      "description": "Travail réel de la tâche, réparti sur ses affectations (R-211).",
+      "properties": {
+        "elapsed": {
+          "description": "Durée écoulée (« 5ej »).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "estimated": {
+          "description": "Durée estimée (« 5j? »).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "minutes": {
+          "description": "Minutes (ouvrées, ou écoulées si `elapsed`).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "text": {
+          "description": "Texte à la manière de MS Project (« 5j », « 2d? »).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "description": "Unité d'une durée en JSON.",
+              "oneOf": [
+                {
+                  "const": "minute",
+                  "description": "Minute.",
+                  "type": "string"
+                },
+                {
+                  "const": "hour",
+                  "description": "Heure.",
+                  "type": "string"
+                },
+                {
+                  "const": "day",
+                  "description": "Jour.",
+                  "type": "string"
+                },
+                {
+                  "const": "week",
+                  "description": "Semaine.",
+                  "type": "string"
+                },
+                {
+                  "const": "month",
+                  "description": "Mois.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Unité d'affichage."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "percent_complete": {
+      "additionalProperties": false,
+      "description": "% achevé (durée) (R-201).",
+      "properties": {
+        "text": {
+          "description": "Pourcentage en texte (`\"40%\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "Valeur en 1/100 de % (0 à 10 000).",
+          "format": "int64",
+          "maximum": 10000,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "percent_work_complete": {
+      "additionalProperties": false,
+      "description": "% travail achevé (R-211).",
+      "properties": {
+        "text": {
+          "description": "Pourcentage en texte (`\"40%\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "Valeur en 1/100 de % (0 à 10 000).",
+          "format": "int64",
+          "maximum": 10000,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "physical_percent_complete": {
+      "additionalProperties": false,
+      "description": "% physique (R-212, sans effet sur les dates).",
+      "properties": {
+        "text": {
+          "description": "Pourcentage en texte (`\"40%\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "Valeur en 1/100 de % (0 à 10 000).",
+          "format": "int64",
+          "maximum": 10000,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "remaining_duration": {
+      "additionalProperties": false,
+      "description": "Durée restante (R-202 : durée = réel + reste).",
+      "properties": {
+        "elapsed": {
+          "description": "Durée écoulée (« 5ej »).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "estimated": {
+          "description": "Durée estimée (« 5j? »).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "minutes": {
+          "description": "Minutes (ouvrées, ou écoulées si `elapsed`).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "text": {
+          "description": "Texte à la manière de MS Project (« 5j », « 2d? »).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "description": "Unité d'une durée en JSON.",
+              "oneOf": [
+                {
+                  "const": "minute",
+                  "description": "Minute.",
+                  "type": "string"
+                },
+                {
+                  "const": "hour",
+                  "description": "Heure.",
+                  "type": "string"
+                },
+                {
+                  "const": "day",
+                  "description": "Jour.",
+                  "type": "string"
+                },
+                {
+                  "const": "week",
+                  "description": "Semaine.",
+                  "type": "string"
+                },
+                {
+                  "const": "month",
+                  "description": "Mois.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Unité d'affichage."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "task": {
+      "description": "Tâche (feuille active).",
+      "oneOf": [
+        {
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "required": [
+    "task"
+  ],
+  "title": "ProgressUpdate",
+  "type": "object"
+}

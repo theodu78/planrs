@@ -1,6 +1,6 @@
-//! Rejeu des scénarios `build_30` et `resources_j5` (J5, lot L9) sur le
+//! Rejeu des scénarios `build_30`, `resources_j5` (J5, lot L9) et `tracking_j6` (J6, lot L10) sur le
 //! vrai binaire (lot L18, vérification 4) : `planrs --now 2026-10-19T08:00 --lang fr mcp
-//! --headless --journal J` lancé en processus fils, client rmcp sur ses
+//! --headless --journal J` (`--now 2026-11-02T08:00` pour `tracking_j6`) lancé en processus fils, client rmcp sur ses
 //! tubes (stdio). Mêmes résultats que le rejeu en mémoire
 //! (`crates/planrs-mcp/tests/replay.rs`), journal produit égal au scénario
 //! octet pour octet (déterminisme).
@@ -20,7 +20,7 @@ mod replay;
 use std::process::Stdio;
 use std::time::Duration;
 
-use replay::{NOW, Scenario, TempDir, logged, normalized, repo_root, substitute};
+use replay::{Scenario, TempDir, logged, normalized, now_of, repo_root, substitute};
 use rmcp::ServiceExt;
 use rmcp::model::CallToolRequestParams;
 use serde_json::Value;
@@ -36,6 +36,12 @@ async fn replay_resources_j5_stdio() {
     replay_stdio("resources_j5").await;
 }
 
+/// Scénario de suivi J6 (lot L10) : avancement, lignes de base, analyse.
+#[tokio::test]
+async fn replay_tracking_j6_stdio() {
+    replay_stdio("tracking_j6").await;
+}
+
 /// Rejoue le scénario `name` sur le binaire, en stdio.
 async fn replay_stdio(name: &str) {
     let root = repo_root(env!("CARGO_MANIFEST_DIR"));
@@ -43,7 +49,15 @@ async fn replay_stdio(name: &str) {
     let tmp = TempDir::new("stdio");
     let journal = tmp.path().join("run.jsonl");
     let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_planrs"))
-        .args(["--now", NOW, "--lang", "fr", "mcp", "--headless", "--journal"])
+        .args([
+            "--now",
+            now_of(name),
+            "--lang",
+            "fr",
+            "mcp",
+            "--headless",
+            "--journal",
+        ])
         .arg(&journal)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

@@ -14,13 +14,13 @@
 
 Format versionné unique pour la CLI (`planrs apply`), le MCP (`apply_batch` et chaque outil d'écriture, lot d'une commande), le canal et le journal : `{"format_version":1,"lang":"fr","ops":[{"op":"task.add",…}],"label":…}`, `deny_unknown_fields`, schémas `schemars` publiés par le registre.
 
-- Commandes (`Command`, `#[serde(tag = "op")]`) : `task.add`, `task.update`, `task.delete`, `task.move`, `task.indent`, `task.outdent`, `link.add`, `link.update`, `link.remove`, `task.set_constraint`, `task.set_deadline`, `project.set_info`, `project.set_anchor`, `project.set_status_date`, `calendar.set_exception`, `calendar.remove_exception`.
+- Commandes (`Command`, `#[serde(tag = "op")]`) : `task.add`, `task.update`, `task.delete`, `task.move`, `task.indent`, `task.outdent`, `link.add`, `link.update`, `link.remove`, `task.set_constraint`, `task.set_deadline`, `project.set_info`, `project.set_anchor`, `project.set_status_date`, `calendar.set_exception`, `calendar.remove_exception` ; J5 : `resource.*`, `assignment.*` ; J6 : `progress.update`, `progress.reschedule`, `baseline.set`.
 - Désignation (R-150) : UID (entier) ou étiquette `"$x"` posée par `"as":"$x"` sur un `task.add` plus tôt dans le même lot ; l'ID de ligne n'est jamais accepté (la CLI le convertit seule). UID alloués par `max + 1`, jamais réutilisés dans la session (R-151).
 - Durées et décalages : `{"minutes","unit","text"}` en sortie ; en entrée `text` seul (« 5j », « +2j », « 50% », « +1ej ») ou `minutes` seul, les deux devant concorder s'ils sont donnés (ADR-0012 D6). Dates ISO locales sans fuseau (`2026-11-02T08:00`).
 
 ## 3. Pipeline d'un lot (ADR-0012 D2 à D4)
 
-1. Le lot s'applique à un **clone** du projet, commande par commande (validation de chaque commande, `op_index` de la première refusée) ; au plus 10 000 opérations.
+1. Le lot s'applique à un **clone** du projet, commande par commande (validation de chaque commande, `op_index` de la première refusée) ; au plus 10 000 opérations. Les commandes qui lisent le planning (`progress.*`, `baseline.set`) partagent le dernier recalcul du clone tant qu'il ne change pas ; le travail de recalcul d'un lot est borné (`SessionLimits::max_batch_schedule_work`, 1 000 000 tâches et affectations recalculées, `limit.exceeded` `schedule_recomputes`, R-216, ADR-0014 relecture finale (10)).
 2. **Un recalcul** (`planrs_core::schedule`) en fin de lot.
 3. **Refus sur nouvelle erreur** (R-160) : le lot est refusé (`batch.would_create_errors`, avec `op_index` et les diagnostics) si une erreur absente avant apparaît (comparée par code et sujet ; un `link.cycle` n'est nouveau que si sa composante n'était contenue dans aucune d'avant). Les avertissements sont rendus sans bloquer.
 4. `Commit` : échange du clone et du projet, **delta par entité** (pré- et post-images des seules entités changées, R-164) poussé dans l'historique, `Extras` des entités modifiées invalidés (R-161), valeurs relues du fichier jetées au premier commit (R-162). `DryRun` : clone jeté, session intacte, aucune entrée d'historique.
@@ -38,16 +38,16 @@ Table triée par id (`task.add`), testée (unicité, ordre, schémas) : nom MCP 
 
 ## 6. Preuve de bout en bout (lot L18)
 
-Le rejeu `build_30` (`docs/features/mcp.md` § 5) traverse toute la couche : 30 tâches, 25 liens, contraintes, calendrier, `dry_run`, un lot refusé, undo/redo, enregistrement MSPDI, puis undo jusqu'au projet vide (P30 de bout en bout, `replay_build_30_undo_to_empty`).
+Le rejeu `build_30` (`docs/features/mcp.md` § 5) traverse toute la couche : 30 tâches, 25 liens, contraintes, calendrier, `dry_run`, un lot refusé, undo/redo, enregistrement MSPDI, puis undo jusqu'au projet vide (P30 de bout en bout, `replay_build_30_undo_to_empty`). J5 : `resources_j5` (ressources, affectations). J6 (lot L10) : `tracking_j6` traverse les commandes de suivi (`progress.update`, `progress.reschedule`, `baseline.set`, `project.set_status_date`), les analyses (`analysis.explain_date`, `analysis.what_if` par `Session::simulate`, `analysis.baseline_variance`) et l'historique, jusqu'à l'aller-retour MSPDI ([`tracking.md`](tracking.md) § 3).
 
 ## 7. Tests
 
 - Règles : `tests/rules/r150_*.rs` à `r165_*.rs` (`cargo test -p planrs-tests --test rules`).
-- Propriétés : `session_properties.rs` (P30 : undo restaure exactement, undo + redo identique), `session_properties_l5.rs`, `task_commands_properties.rs` ; contrats et registre : `contract.rs`, `registry.rs`, `commands.rs`, `project_commands.rs`, `workspace.rs` (`crates/planrs-automation/tests/`).
+- Propriétés : `session_properties.rs` (P30 : undo restaure exactement, undo + redo identique), `session_properties_l5.rs`, `session_properties_l8.rs` (P40 : `what_if` laisse la session identique, diff de `dry_run`), `task_commands_properties.rs` ; contrats et registre : `contract.rs`, `registry.rs`, `commands.rs`, `project_commands.rs`, `workspace.rs` (`crates/planrs-automation/tests/`).
 - Surfaces : `crates/planrs-mcp/tests/{memory,guard,http,replay,replay_http}.rs`, `apps/planrs-cli/tests/{cli,mcp_replay}.rs`.
 
 ## 8. Limites
 
 - Recalcul complet à chaque lot (pas d'incrémental) ; coût du clone mesuré en L2/L15, repli sur des pré-images instrumentées seulement si le budget de 50 ms saute.
-- Ressources, affectations, avancement et lignes de base : commandes réservées (J5, J6).
+- Ressources et affectations (J5), avancement et lignes de base (J6) : commandes disponibles ; `Session::simulate` (J6, R-234) partage avec `dry_run` l'étape `prepare` du pipeline (copie, commandes, recalcul, delta R-160, diff R-163).
 - Journal write-ahead réduit au journal de rejeu `--journal` ; reprise automatique après plantage en J7.

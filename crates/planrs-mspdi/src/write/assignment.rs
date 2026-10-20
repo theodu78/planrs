@@ -13,18 +13,11 @@ use crate::schema::Parent;
 /// `ResourceUID` d'une affectation sans ressource (R-125, R-079).
 const NO_RESOURCE: &str = "-65535";
 
-/// Travail restant écrit d'une affectation (R-199, comme R-127 pour une
-/// tâche) : sans travail réel, celui que MS Project écrit toujours, reste =
-/// travail − réel = travail (le modèle n'est tenu à jour par aucune
-/// commande : 0 pour une affectation créée, périmé après un rééquilibrage) ;
-/// avec un travail réel saisi (avancement, J6), la valeur saisie telle
-/// quelle.
+/// Travail restant écrit d'une affectation (R-199, R-211, R-214) : la
+/// dérivation W − travail réel, jamais négative (ADR-0014 D4) ; sans
+/// travail réel, le travail, comme MS Project l'écrit toujours.
 pub(crate) fn remaining_work(a: &Assignment) -> Work {
-    if a.actual_work == Work::ZERO {
-        a.work
-    } else {
-        a.remaining_work
-    }
+    planrs_core::progress::remaining_work(a)
 }
 
 /// Écrit une affectation ; `values` : `Start`/`Finish` à écrire (R-198,
@@ -37,9 +30,14 @@ pub(crate) fn write(em: &mut Emitter, a: &Assignment, values: Option<&Values>, p
     let planned = plan(em, "Assignment", Parent::Assignment, &a.extras, &numbers, profile);
     let mut top = unscoped(&planned);
     leveling::drop_legacy(&mut top, a.leveling_delay);
-    if computed.is_some_and(|v| v.drop_timephased) {
+    let drop_scheduled = computed.is_some_and(|v| v.drop_timephased);
+    let drop_actuals = computed.is_some_and(|v| v.drop_actuals);
+    if drop_scheduled || drop_actuals {
         let before = top.len();
-        top.retain(|p| !timephased::is_scheduled_work_key(&p.key, p.payload));
+        top.retain(|p| {
+            !((drop_scheduled && timephased::is_scheduled_work_key(&p.key, p.payload))
+                || (drop_actuals && timephased::is_actual_key(&p.key, p.payload)))
+        });
         let count = u32::try_from(before.saturating_sub(top.len())).unwrap_or(u32::MAX);
         if count > 0 {
             em.report(
@@ -73,6 +71,20 @@ pub(crate) fn write(em: &mut Emitter, a: &Assignment, values: Option<&Values>, p
             "WorkContour" => em.leaf(name, &codes::work_contour_code(a.contour).to_string()),
             "Baseline" => baseline::assignment(em, &a.baselines, &planned, profile),
             "Start" => em.opt_date(name, computed.and_then(|v| v.start)),
+            // R-215 : réels et coupure de l'affectation, calculés.
+            "ActualStart" => em.opt_date(name, computed.and_then(|v| v.actual_start)),
+            "ActualFinish" => em.opt_date(name, computed.and_then(|v| v.actual_finish)),
+            "Stop" => em.opt_date(name, computed.and_then(|v| v.stop)),
+            "Resume" => em.opt_date(name, computed.and_then(|v| v.resume)),
+            // R-226 : écarts ; dates relues seulement (unité non documentée).
+            "StartVariance" => em.opt_int(name, computed.and_then(|v| v.start_variance)),
+            "FinishVariance" => em.opt_int(name, computed.and_then(|v| v.finish_variance)),
+            "WorkVariance" => em.opt_leaf(
+                name,
+                computed
+                    .and_then(|v| v.work_variance)
+                    .map(super::computed::variance_text),
+            ),
             "Finish" => em.opt_date(name, computed.and_then(|v| v.finish)),
             "LevelingDelay" | "LevelingDelayFormat" => leveling::write(em, name, a.leveling_delay),
             _ => {}

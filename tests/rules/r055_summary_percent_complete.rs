@@ -68,3 +68,42 @@ fn r055_zero_durations_average() {
         .run();
     assert_eq!(run.at("S").percent_complete, pct(5_000));
 }
+
+#[test]
+fn r055_uses_effective_actual() {
+    // Amendement J6 (R-210) : le réel d'une feuille est son réel effectif
+    // (R-200). A 960 à 50 % stocké mais durée réelle saisie 720 ⇒ 720 (le
+    // réel gagne) ; B 480 achevée (fin réelle) sans durée réelle ni % ⇒ 480 ;
+    // S = (720 + 480) / 1 440 ⇒ 8 333.
+    let run = Net::new("2026-10-19T08:00")
+        .task("S", 0)
+        .task("A", 960)
+        .level("A", 2)
+        .with_task("A", |t| {
+            t.progress.percent_complete = pct(5_000);
+            t.progress.actual_duration = planrs_core::Minutes::new(720);
+        })
+        .task("B", 480)
+        .level("B", 2)
+        .with_task("B", |t| {
+            t.progress.actual_start = Some(planrs_tests::moment("2026-10-19T08:00"));
+            t.progress.actual_finish = Some(planrs_tests::moment("2026-10-19T17:00"));
+        })
+        .run();
+    assert_eq!(run.at("S").percent_complete, pct(8_333));
+    // Une feuille garde son % saisi.
+    assert_eq!(run.at("A").percent_complete, pct(5_000));
+    assert_eq!(run.at("B").percent_complete, Percent::ZERO);
+    // Une durée réelle saisie au-delà de la durée (achevée) borne le % à 100.
+    let run = Net::new("2026-10-19T08:00")
+        .task("S", 0)
+        .task("A", 480)
+        .level("A", 2)
+        .with_task("A", |t| {
+            t.progress.actual_start = Some(planrs_tests::moment("2026-10-19T08:00"));
+            t.progress.actual_finish = Some(planrs_tests::moment("2026-10-19T17:00"));
+            t.progress.actual_duration = planrs_core::Minutes::new(960);
+        })
+        .run();
+    assert_eq!(run.at("S").percent_complete, Percent::FULL);
+}

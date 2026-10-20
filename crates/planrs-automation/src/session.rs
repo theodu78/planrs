@@ -7,14 +7,16 @@
 use std::collections::BTreeMap;
 
 use planrs_core::calendar::BuiltinCalendarNames;
-use planrs_core::{Diagnostic, Moment, Project, ProjectInit, Schedule, ScheduleAnchor, Subject, TaskUid};
+use planrs_core::{
+    Diagnostic, Moment, Project, ProjectInit, ResourceUid, Schedule, ScheduleAnchor, Subject, TaskUid,
+};
 use planrs_mspdi::write::{WriteOptions, Written, choose_computed};
 use planrs_mspdi::{ImportDiagnostic, ReadOptions, RecordedSchedule};
 use serde::{Deserialize, Serialize};
 
 pub use crate::command::AnchorSpec;
 use crate::command::Batch;
-use crate::command::exec::{Ctx, Exec};
+use crate::command::exec::{BatchCache, Ctx, Exec};
 use crate::delta::{Dir, apply_delta, approx_bytes, diff_projects, json_len};
 use crate::diag_delta::{blame, diagnostics_delta, state_diagnostics};
 pub use crate::diff::DEFAULT_DIFF_TASKS;
@@ -66,6 +68,12 @@ pub struct SessionLimits {
     pub history_entries: usize,
     /// Tâches du diff détaillé (1 000).
     pub diff_detail_max: usize,
+    /// Travail de recalcul du planning permis dans un lot (relecture finale
+    /// J6, J6-PERF-2) : chaque recalcul du clone coûte son nombre de tâches
+    /// et d'affectations ; au-delà, `limit.exceeded` (`schedule_recomputes`).
+    /// Défaut : 1 000 000 (200 recalculs d'un projet de 5 000
+    /// tâches, 10 d'un projet de 100 000).
+    pub max_batch_schedule_work: u64,
 }
 
 impl Default for SessionLimits {
@@ -75,6 +83,7 @@ impl Default for SessionLimits {
             history_bytes: 64 * 1024 * 1024,
             history_entries: 1_000,
             diff_detail_max: 1_000,
+            max_batch_schedule_work: crate::command::exec::MAX_BATCH_SCHEDULE_WORK,
         }
     }
 }
@@ -87,6 +96,18 @@ pub enum ApplyMode {
     Commit,
     /// Simuler sur une copie : la session reste intacte.
     DryRun,
+}
+
+/// Résultat de [`Session::simulate`] (J6, R-234) : le résultat d'un
+/// `dry_run` et l'état simulé.
+#[derive(Clone, Debug)]
+pub struct Simulation {
+    /// Résultat, comme celui d'un `dry_run` (`committed` faux).
+    pub outcome: ApplyOutcome,
+    /// Projet après le lot simulé.
+    pub project: Project,
+    /// Planning après le lot simulé.
+    pub schedule: Schedule,
 }
 
 /// Options d'application d'un lot.
@@ -193,6 +214,43 @@ fn would_create_errors(
         field: None,
         subject: errors.first().map(Diagnostic::subject),
         kind: CommandErrorKind::WouldCreateErrors(errors),
+    }
+}
+
+/// Lot exécuté sur une copie, avant commit (voir `Session::prepare`).
+struct Prepared {
+    work: Project,
+    schedule: Schedule,
+    diagnostics: Vec<Diagnostic>,
+    uids: UidAlloc,
+    labels: BTreeMap<String, TaskUid>,
+    created: Vec<TaskUid>,
+    diff: ScheduleDiff,
+    warnings: Vec<Diagnostic>,
+    effects: Vec<SideEffect>,
+    resource_labels: BTreeMap<String, ResourceUid>,
+    created_resources: Vec<ResourceUid>,
+}
+
+impl Prepared {
+    /// Résultat d'un `dry_run` (ou d'une simulation : rien n'est appliqué)
+    /// et l'état simulé.
+    fn into_dry(self, history_len: usize) -> Simulation {
+        Simulation {
+            outcome: ApplyOutcome {
+                committed: false,
+                labels: self.labels,
+                created: self.created,
+                diff: self.diff,
+                warnings: self.warnings,
+                side_effects: self.effects,
+                history_len,
+                resource_labels: self.resource_labels,
+                created_resources: self.created_resources,
+            },
+            project: self.work,
+            schedule: self.schedule,
+        }
     }
 }
 
@@ -328,6 +386,35 @@ impl Session {
         self.run(&batch.ops, batch, mode, opts)
     }
 
+    /// Simule un lot sur une copie (J6, R-234, `what_if`) : même pipeline
+    /// que [`ApplyMode::DryRun`] (même résultat, même diff), plus l'état
+    /// après (projet et planning) pour expliquer des dates. L'emprunt
+    /// immuable garantit que la session ne change pas (P40). Lot vide :
+    /// l'état courant, inchangé.
+    ///
+    /// # Errors
+    ///
+    /// Comme [`Session::apply_with`] en `DryRun` : la session reste intacte.
+    pub fn simulate(&self, batch: &Batch, options: ApplyOptions) -> Result<Simulation, CommandError> {
+        if batch.format_version != 1 {
+            return Err(CommandError::new(
+                codes::BATCH_UNSUPPORTED_VERSION,
+                CommandErrorKind::UnsupportedVersion(batch.format_version),
+            ));
+        }
+        self.check_ops_limit(batch.ops.len())?;
+        if batch.ops.is_empty() {
+            return Ok(Simulation {
+                outcome: self.unchanged_outcome(),
+                project: self.project.clone(),
+                schedule: self.schedule.clone(),
+            });
+        }
+        Ok(self
+            .prepare(&batch.ops, batch, options)?
+            .into_dry(self.history.len()))
+    }
+
     /// Applique des opérations de test (closures sur le contexte
     /// d'exécution) par le même pipeline que [`Session::apply`]. Réservé
     /// aux tests du pipeline (P30, R-151 à R-164) tant que les commandes
@@ -354,15 +441,9 @@ impl Session {
         self.run(edits, &record, mode, opts)
     }
 
-    /// Pipeline commun (ordre exact du cahier J4, L2).
-    fn run<E: Exec>(
-        &mut self,
-        ops: &[E],
-        record: &Batch,
-        mode: ApplyMode,
-        options: ApplyOptions,
-    ) -> Result<ApplyOutcome, CommandError> {
-        if ops.len() > self.limits.max_ops_per_batch {
+    /// Refus `limit.exceeded` (`ops`) d'un lot trop long.
+    fn check_ops_limit(&self, n: usize) -> Result<(), CommandError> {
+        if n > self.limits.max_ops_per_batch {
             return Err(CommandError::new(
                 codes::LIMIT_EXCEEDED,
                 CommandErrorKind::Limit {
@@ -371,58 +452,38 @@ impl Session {
                 },
             ));
         }
+        Ok(())
+    }
+
+    /// Pipeline commun (ordre exact du cahier J4, L2).
+    fn run<E: Exec>(
+        &mut self,
+        ops: &[E],
+        record: &Batch,
+        mode: ApplyMode,
+        options: ApplyOptions,
+    ) -> Result<ApplyOutcome, CommandError> {
+        self.check_ops_limit(ops.len())?;
         if ops.is_empty() {
             return Ok(self.unchanged_outcome());
         }
-        let text = TextContext::for_project(&self.project, record.lang.unwrap_or(self.lang));
-        let mut work = self.project.clone();
-        let mut uids = self.uids.clone();
-        let mut labels = BTreeMap::new();
-        let mut effects = Vec::new();
-        let mut touched = BTreeMap::new();
-        let mut created = Vec::new();
-        let mut resource_labels = BTreeMap::new();
-        let mut created_resources = Vec::new();
-        for (i, op) in ops.iter().enumerate() {
-            let mut ctx = Ctx {
-                project: &mut work,
-                uids: &mut uids,
-                labels: &mut labels,
-                effects: &mut effects,
-                touched: &mut touched,
-                op_index: i,
-                text: &text,
-                created: &mut created,
-                resource_labels: &mut resource_labels,
-                created_resources: &mut created_resources,
-            };
-            op.exec(&mut ctx).map_err(|e| e.with_op_index(i))?;
-        }
-        let schedule = synced_schedule(&mut work);
-        let diagnostics = state_diagnostics(&work, &schedule);
-        let delta = diagnostics_delta(&self.diagnostics, &diagnostics);
-        if !delta.errors.is_empty() {
-            return Err(would_create_errors(delta.errors, &touched, ops.len()));
-        }
-        let n = if options.detail {
-            self.limits.diff_detail_max
-        } else {
-            DEFAULT_DIFF_TASKS
-        };
-        let diff = diff_schedules(&self.project, &self.schedule, &work, &schedule, n);
+        let prepared = self.prepare(ops, record, options)?;
         if mode == ApplyMode::DryRun {
-            return Ok(ApplyOutcome {
-                committed: false,
-                labels,
-                created,
-                diff,
-                warnings: delta.warnings,
-                side_effects: effects,
-                history_len: self.history.len(),
-                resource_labels,
-                created_resources,
-            });
+            return Ok(prepared.into_dry(self.history.len()).outcome);
         }
+        let Prepared {
+            work,
+            schedule,
+            diagnostics,
+            mut uids,
+            labels,
+            created,
+            diff,
+            warnings,
+            mut effects,
+            resource_labels,
+            created_resources,
+        } = prepared;
         let entity_delta = diff_projects(&self.project, &work);
         let bytes = approx_bytes(&entity_delta).saturating_add(json_len(record));
         uids.observe(&work);
@@ -448,9 +509,82 @@ impl Session {
             labels,
             created,
             diff,
-            warnings: delta.warnings,
+            warnings,
             side_effects: effects,
             history_len: self.history.len(),
+            resource_labels,
+            created_resources,
+        })
+    }
+
+    /// Exécute un lot non vide sur une copie, sans toucher la session :
+    /// commandes, recalcul, delta de diagnostics (R-160), diff (R-163).
+    /// Partagé par le commit, le `dry_run` et [`Session::simulate`].
+    fn prepare<E: Exec>(
+        &self,
+        ops: &[E],
+        record: &Batch,
+        options: ApplyOptions,
+    ) -> Result<Prepared, CommandError> {
+        let text = TextContext::for_project(&self.project, record.lang.unwrap_or(self.lang));
+        let mut work = self.project.clone();
+        let mut uids = self.uids.clone();
+        let mut labels = BTreeMap::new();
+        let mut effects = Vec::new();
+        let mut touched = BTreeMap::new();
+        let mut created = Vec::new();
+        let mut resource_labels = BTreeMap::new();
+        let mut created_resources = Vec::new();
+        let mut notes = Vec::new();
+        let mut cache = BatchCache::new(self.limits.max_batch_schedule_work);
+        for (i, op) in ops.iter().enumerate() {
+            let mut ctx = Ctx {
+                project: &mut work,
+                uids: &mut uids,
+                labels: &mut labels,
+                effects: &mut effects,
+                touched: &mut touched,
+                op_index: i,
+                text: &text,
+                created: &mut created,
+                resource_labels: &mut resource_labels,
+                created_resources: &mut created_resources,
+                base: &self.project,
+                base_schedule: &self.schedule,
+                notes: &mut notes,
+                cache: &mut cache,
+            };
+            op.exec(&mut ctx).map_err(|e| e.with_op_index(i))?;
+        }
+        let schedule = synced_schedule(&mut work);
+        let diagnostics = state_diagnostics(&work, &schedule);
+        let mut delta = diagnostics_delta(&self.diagnostics, &diagnostics);
+        // J6 : remarques des commandes (saisie d'avancement, ligne de base),
+        // jointes aux nouveautés du recalcul.
+        if !notes.is_empty() {
+            delta.warnings.extend(notes);
+            delta.warnings.sort();
+            delta.warnings.dedup();
+        }
+        if !delta.errors.is_empty() {
+            return Err(would_create_errors(delta.errors, &touched, ops.len()));
+        }
+        let n = if options.detail {
+            self.limits.diff_detail_max
+        } else {
+            DEFAULT_DIFF_TASKS
+        };
+        let diff = diff_schedules(&self.project, &self.schedule, &work, &schedule, n);
+        Ok(Prepared {
+            work,
+            schedule,
+            diagnostics,
+            uids,
+            labels,
+            created,
+            diff,
+            warnings: delta.warnings,
+            effects,
             resource_labels,
             created_resources,
         })
@@ -631,6 +765,12 @@ impl Session {
     #[must_use]
     pub fn diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics
+    }
+
+    /// Langue de la session (textes des durées, des dates).
+    #[must_use]
+    pub const fn lang(&self) -> Language {
+        self.lang
     }
 
     /// Contexte du texte du projet dans la langue de la session.

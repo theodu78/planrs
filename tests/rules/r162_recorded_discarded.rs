@@ -3,14 +3,13 @@
 use planrs_automation::text::Language;
 use planrs_automation::{DocOrigin, Session, SideEffect};
 use planrs_core::{Percent, TaskUid, schedule};
-use planrs_mspdi::write::{Computed, WriteCode, WriteOptions, choose_computed, write};
-use planrs_mspdi::{ReadOptions, read};
+use planrs_mspdi::write::{Computed, WriteOptions, choose_computed, write};
 use planrs_tests::moment;
 use planrs_tests::mspdi::new_project;
 use planrs_tests::session::{commit, push_tasks, rename};
 
-/// Document MSPDI d'un projet avec avancement (manque `progress` de R-122 :
-/// le planning de planrs ne suffit pas, les valeurs relues comptent).
+/// Document MSPDI d'un projet avec avancement (manque `progress` de R-122
+/// jusqu'en J5 ; depuis J6, R-215, le moteur le calcule).
 fn document_with_progress() -> Vec<u8> {
     let mut p = new_project("2026-11-02T08:00");
     push_tasks(&mut p, &[1, 2], 2);
@@ -34,15 +33,14 @@ fn open(bytes: &[u8]) -> Session {
 }
 
 #[test]
-fn r162_unmodified_save_uses_recorded() {
-    // Ouvert puis enregistré sans modification : octets de
-    // `Computed::Recorded` (valeurs relues réécrites telles quelles).
+fn r162_unmodified_save_uses_engine_values() {
+    // Amendement J6 (R-215, R-122) : plus aucun manque, le planning de
+    // planrs est écrit dès l'ouverture, valeurs relues ou non.
     let bytes = document_with_progress();
     let s = open(&bytes);
-    let doc = read(&bytes, &ReadOptions::new(moment("2026-10-17T08:00"))).unwrap();
     let expected = write(
-        &doc.project,
-        Computed::Recorded(&doc.recorded),
+        s.project(),
+        Computed::Schedule(s.schedule()),
         &WriteOptions::default(),
     );
     let out = s.save_bytes(&WriteOptions::default());
@@ -53,8 +51,7 @@ fn r162_unmodified_save_uses_recorded() {
 #[test]
 fn r162_first_commit_discards_recorded() {
     // Un `rename` puis undo : les valeurs relues ne reviennent pas ;
-    // l'écriture suit `choose_computed` sans elles (ici `Omit`, le manque
-    // `progress` subsiste).
+    // l'écriture suit `choose_computed` (valeurs du moteur, J6).
     let bytes = document_with_progress();
     let mut s = open(&bytes);
     let o = commit(&mut s, "r", &[rename(2, "B")]);
@@ -64,16 +61,10 @@ fn r162_first_commit_discards_recorded() {
     assert_eq!(o.side_effects.len(), 0);
     s.undo().unwrap();
     s.undo().unwrap();
-    let (computed, _) = choose_computed(s.project(), s.schedule(), None);
-    assert!(matches!(computed, Computed::Omit));
+    let (computed, diags) = choose_computed(s.project(), s.schedule(), None);
+    assert!(matches!(computed, Computed::Schedule(_)));
+    assert_eq!(diags, Vec::new());
     let expected = write(s.project(), computed, &WriteOptions::default());
     let out = s.save_bytes(&WriteOptions::default());
     assert_eq!(out.xml, expected.xml);
-    assert!(
-        out.diagnostics
-            .iter()
-            .any(|d| matches!(d.code, WriteCode::ScheduleIncomplete { .. })),
-        "{:?}",
-        out.diagnostics
-    );
 }

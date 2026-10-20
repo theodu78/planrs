@@ -130,12 +130,23 @@ fn registry_sorted_and_unique() {
     }
     // Entrées réservées (J6) présentes et non disponibles ; `resource.add`
     // activée en J5 (lot L8).
-    for id in ["analysis.explain_date", "analysis.what_if"] {
-        assert!(matches!(
-            lookup(id).unwrap().available,
-            Availability::Milestone(6)
-        ));
-    }
+    // `analysis.explain_date` activée en J6 (lot L7).
+    assert_eq!(
+        lookup("analysis.explain_date").unwrap().available,
+        Availability::Now
+    );
+    assert_eq!(lookup("analysis.what_if").unwrap().available, Availability::Now);
+    assert_eq!(
+        lookup("analysis.baseline_variance").unwrap().available,
+        Availability::Now
+    );
+    // Toutes les entrées J6 activées (lot L8) : plus aucune réservée.
+    assert_eq!(lookup("baseline.set").unwrap().available, Availability::Now);
+    assert!(
+        REGISTRY
+            .iter()
+            .all(|s| !matches!(s.available, Availability::Milestone(_)))
+    );
     assert_eq!(lookup("resource.add").unwrap().available, Availability::Now);
     assert!(lookup("task.nope").is_none());
 }

@@ -39,6 +39,24 @@ pub const TMP_TOKEN: &str = "$TMP";
 /// « Maintenant » figé des scénarios (`--now`).
 pub const NOW: &str = "2026-10-19T08:00";
 
+/// « Maintenant » figé du scénario de suivi J6 (`tracking_j6`, lot L10) :
+/// le jour du début du projet, pour que la date d'état par défaut tombe au
+/// début du chantier.
+pub const NOW_TRACKING: &str = "2026-11-02T08:00";
+
+/// « Maintenant » de l'essai réel n° 3 avec Claude (« Nous sommes le
+/// 13/11/2026 », `docs/features/mcp.md` § 6).
+pub const NOW_CLAUDE_RUN_3: &str = "2026-11-13T17:00";
+
+/// « Maintenant » du scénario `name` (`--now` du rejeu).
+pub fn now_of(name: &str) -> &'static str {
+    match name {
+        "tracking_j6" => NOW_TRACKING,
+        "claude_run_3" => NOW_CLAUDE_RUN_3,
+        _ => NOW,
+    }
+}
+
 /// Racine du dépôt (les deux crates qui incluent ce fichier sont à deux
 /// niveaux de la racine : `crates/planrs-mcp`, `apps/planrs-cli`).
 pub fn repo_root(manifest_dir: &str) -> PathBuf {

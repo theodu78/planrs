@@ -15,13 +15,16 @@ Routeur unique : un id du registre (`REGISTRY`), des paramètres JSON, une valeu
 | `task.list` | filtres, `cursor`, `limit` | `ListView` |
 | `task.get` | `uid` | `TaskView` (`task.not_found`, champ `uid`) |
 | `analysis.critical_path` | — | `CriticalPathView` : feuilles critiques dans l'ordre du calcul (R-035), au plus 500 |
+| `analysis.explain_date` | `task`, `side`, `depth` | `ExplainView` (R-230 à R-233, module `explain`) |
+| `analysis.what_if` | `ops`, `baseline`, `explain` (≤ 5), `detail` | `WhatIfView` (R-234, module `analysis`) : `Session::simulate`, session intacte, refus rendu comme donnée |
+| `analysis.baseline_variance` | `baseline`, `only_varied`, `cursor`, `limit` (50, ≤ 500) | `VarianceView` (R-228, module `analysis`) |
 | `render.gantt` | `from`, `to`, `zoom`, `critical_only`, `max_rows` (≤ 200, défaut 200) | `{svg, shown, hidden, truncated_days, truncated_bytes, bytes}` |
 | `history.undo`, `history.redo` | — | `OutcomeView` |
 | `history.list` | — | `HistoryView` |
 | écritures (`task.add`…) | schéma de la commande + `dry_run`, `detail` | `OutcomeView` ; lot d'une commande |
 | `batch.apply` | `ops`, `lang`, `label`, `format_version` (absent : 1 ; contrôlé avant `ops`, autre entier → `batch.unsupported_version`) + `dry_run`, `detail` | `OutcomeView` |
 
-- Commande réservée (J5, J6) : `command.not_yet_available` ; id inconnu ou paramètres mal formés : `param.invalid` ; sans session : `session.none` (message qui cite `open_project`, `new_project`, `import_csv`).
+- Commande réservée à un jalon futur : `command.not_yet_available` (aucune depuis le lot L8 de J6) ; id inconnu ou paramètres mal formés : `param.invalid` ; sans session : `session.none` (message qui cite `open_project`, `new_project`, `import_csv`).
 - Une écriture réussie hors `dry_run` crée une entrée d'historique (C-MCP-04, vérifié en L8) ; `dry_run` laisse la session intacte.
 - `project.import_csv` : projet planifié depuis « maintenant » (hypothèse : MS Project prend la date du jour pour un projet neuf), document sans chemin (l'enregistrer demande `path`).
 - `render.gantt` : un seul bord de plage donné ⇒ l'autre est le début ou la fin du projet ; `zoom: auto` ⇒ échelle ajustée à 1 200 px (H-R de `render`), thème clair, libellés dans la langue de l'espace.
@@ -30,8 +33,8 @@ Routeur unique : un id du registre (`REGISTRY`), des paramètres JSON, une valeu
 ## 2. Vues
 
 - Dates en ISO local sans fuseau (`"2026-11-02T08:00"`, R-075). Durées sous la forme unique `{"minutes","unit","text"}` (ADR-0012 D6). Une marge négative a des minutes négatives et un texte « -2j » (sortie seulement, jamais une entrée).
-- `TaskView` : `uid`, `id`, `name`, `level`, `summary`, `milestone`, `duration` (saisie pour une feuille ; temps ouvré calculé, R-054, pour une récapitulative), `start`, `finish`, `total_slack`, `free_slack` (unité par défaut du projet), `critical`, `constraint` (absente pour « dès que possible »), `deadline`, `predecessors` (`{pred, kind, lag?}`, `lag` absent s'il est nul), `diagnostics` (codes). Une tâche non planifiée (inactive, récapitulative vide…) n'a ni dates ni marges.
-- `SummaryView` : comptes hors lignes vides ; `critical` compte récapitulatives comprises (drapeau du moteur) ; `duration` = durée de la récapitulative du projet (R-068), à défaut le temps ouvré entre début et fin.
+- `TaskView` : `uid`, `id`, `name`, `level`, `summary`, `milestone`, `duration` (saisie pour une feuille ; temps ouvré calculé, R-054, pour une récapitulative), `start`, `finish`, `total_slack`, `free_slack` (unité par défaut du projet), `critical`, `constraint` (absente pour « dès que possible »), `deadline`, `predecessors` (`{pred, kind, lag?}`, `lag` absent s'il est nul), `diagnostics` (codes), `progress { state, percent }` (J6, R-235 ; omis si non commencée). Une tâche non planifiée (inactive, récapitulative vide…) n'a ni dates ni marges. `task.get` ajoute `progress` détaillé (réels, restes, `stop`, `resume`, % travail, % physique) et `baselines` (`{number, start, finish, duration?, work?}`, absentes sans ligne).
+- `SummaryView` : comptes hors lignes vides ; `critical` compte récapitulatives comprises (drapeau du moteur) ; `duration` = durée de la récapitulative du projet (R-068), à défaut le temps ouvré entre début et fin ; J6 (R-235) : `status_date` (date d'état effective, toujours présente), `percent_complete` (absent sans avancement), `baselines` (numéros présents, absent sans ligne).
 - `OutcomeView` : `committed`, `labels`, `created_uids` (aussi en `dry_run`), `created` (vues des tâches créées, vide en `dry_run` : elles n'existent que dans la copie jetée, leurs dates sont dans `diff`), `diff`, `warnings`, `side_effects`, `history_len`.
 - `DiffView` (R-163) : début et fin du projet avant/après, `finish_delta` = temps ouvré entre les deux fins sur le calendrier du projet (R-020, calendrier compilé du cœur ; en minutes écoulées si le calendrier ne se compile pas), `critical_entered`, `critical_left`, `changed_total`, `changed` (au plus 1 000), `truncated`.
 - Clés JSON triées (objets `serde_json::Value`), donc sortie déterministe.
@@ -40,7 +43,7 @@ Routeur unique : un id du registre (`REGISTRY`), des paramètres JSON, une valeu
 
 - Ordre des ID, lignes vides exclues. `cursor` : UID de la dernière tâche de la page précédente (exclusif) ; `next_cursor` absent à la fin ; `total` = tâches retenues, toutes pages comprises. Curseur inconnu : `task.not_found` (champ `cursor`).
 - `limit` : 50 par défaut, 500 au plus (`limit.exceeded`), 0 refusé.
-- Filtres cumulés : `critical` ; `late` (J4 : fin planifiée après l'échéance ; J6 : avancement) ; `from`/`to` (jours inclus : fin le jour `from` ou après, début le jour `to` ou avant) ; `outline_max` ; `summary` (`true` récapitulatives, `false` feuilles) ; `resource` réservé (`command.not_yet_available`, J5). Une tâche non planifiée n'est retenue par aucun filtre de dates, ni par `critical`, ni par `late`.
+- Filtres cumulés : `critical` ; `late` (R-236 : fin planifiée après l'échéance ou après la fin de la ligne de base 0, non achevée à fin atteinte ou non commencée à début passé à la date d'état effective) ; `from`/`to` (jours inclus : fin le jour `from` ou après, début le jour `to` ou avant) ; `outline_max` ; `summary` (`true` récapitulatives, `false` feuilles) ; `resource` réservé (`command.not_yet_available`, J5). Une tâche non planifiée n'est retenue par aucun filtre de dates, ni par `critical`, ni par `late`.
 
 ## 4. Fichiers (`files`, hors wasm)
 
@@ -55,6 +58,7 @@ Une ligne JSON compacte par entrée `{v, seq, tool, params, result?}` (`deny_unk
 ## 6. Contrats et tests (`crates/planrs-automation/tests/workspace.rs`)
 
 - **C-MCP-01** (dates du moteur) : `view_task_dates_from_engine` compare chaque date et marge de `task.list`/`task.get` à `Schedule::scheduled`, et les dates du résumé et du chemin critique.
-- **C-MCP-02** (forme figée) : `tests/golden/views/*.json` (`view_golden_summary_house`, `view_golden_outcome_add_task`), régénérés par `PLANRS_BLESS=1`.
+- **C-MCP-02** (forme figée) : `tests/golden/views/*.json` (`view_golden_summary_house`, `view_golden_outcome_add_task` ; J6 : `views_golden` de `views_j6.rs` pour `task_get_progress`, `task_list_progress`, `summary_tracking`, `baseline_variance`, `what_if`), régénérés par `PLANRS_BLESS=1`.
 - **C-MCP-03** (sortie bornée) : 500 tâches par page (`list_limit_over_500_refused`), 1 000 tâches de diff, 100 diagnostics par vue, 100 affectations par ressource et 100 ressources par tâche (J5, totaux `assignments_total`, `resources_total`), messages ≤ 2 000 caractères, 200 lignes de rendu.
+- J6 (lot L10) : les vues de suivi (`task.get` avec `progress` et `baselines`, `project.summary` avec `status_date` et `percent_complete`, `analysis.baseline_variance`, `analysis.explain_date`, `analysis.what_if`) sont aussi figées de bout en bout par le rejeu `tracking_j6` (`docs/features/mcp.md` § 5), réouverture du MSPDI exporté comprise (mêmes écarts, mêmes `task.list`).
 - Critère de fin du lot : `workspace_open_save_reopen_equal` (`house.xml` ouvert, modifié, enregistré, relu : projets égaux par `normalize`, R-133).

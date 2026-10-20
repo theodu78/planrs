@@ -32,7 +32,7 @@ pub use crate::schema::Profile as OrderProfile;
 use crate::schema::{Class, Parent, sequence};
 pub(crate) use assignment::remaining_work as assignment_remaining_work;
 pub(crate) use computed::leveling_delay as leveling_payload_int;
-pub use computed::{Computed, ScheduleGap, choose_computed, schedule_gaps, schedule_image};
+pub use computed::{Computed, choose_computed, schedule_image};
 use emit::Emitter;
 pub(crate) use emit::is_xml_char;
 pub(crate) use resource::hourly_rate_text;
@@ -138,15 +138,10 @@ pub enum WriteCode {
     /// Le `Schedule` ne correspond pas aux tâches du projet (autre projet,
     /// projet modifié) : aucune valeur calculée écrite.
     ScheduleMismatch,
-    /// Planning de planrs incomplet pour ce projet et aucune valeur relue :
-    /// valeurs calculées omises (R-122).
-    ScheduleIncomplete {
-        /// Manques.
-        gaps: Vec<ScheduleGap>,
-    },
-    /// R-199 : `TimephasedData` d'une affectation (sujet du diagnostic)
-    /// jetées, son placement par le moteur n'étant plus celui qu'elles
-    /// décrivent.
+    /// R-199, R-215 : `TimephasedData` d'une affectation (sujet du
+    /// diagnostic) jetées : son placement par le moteur n'est plus celui que
+    /// décrivent ses lignes de type 1, ou son travail réel n'est plus la
+    /// somme de ses lignes de type 2.
     TimephasedDropped {
         /// Nombre d'éléments `TimephasedData` jetés.
         count: u32,
@@ -163,7 +158,6 @@ impl WriteCode {
             Self::InvalidChar => "mspdi.write.invalid_char",
             Self::ExtraInvalid => "mspdi.write.extra_invalid",
             Self::ScheduleMismatch => "mspdi.write.schedule_mismatch",
-            Self::ScheduleIncomplete { .. } => "mspdi.write.schedule_incomplete",
             Self::TimephasedDropped { .. } => "mspdi.write.timephased_dropped",
         }
     }

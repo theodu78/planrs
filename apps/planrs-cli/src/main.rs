@@ -60,8 +60,7 @@ enum Command {
     ImportCsv(cmd::import_csv::ImportCsvArgs),
     /// Serveur MCP (stdio).
     Mcp(cmd::mcp::McpArgs),
-    /// Explication d'une date (J6).
-    #[command(hide = true)]
+    /// Explication d'une date : pilote, calendrier, avancement, chaîne.
     Explain(cmd::explain::ExplainArgs),
 }
 

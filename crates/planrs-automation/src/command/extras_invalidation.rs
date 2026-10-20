@@ -47,6 +47,9 @@ pub(crate) enum TaskChange {
     Work,
     /// Pilotage par l'effort : sans effet sur les dates.
     EffortDriven,
+    /// Avancement (J6, `progress.update`, `progress.reschedule`, R-161
+    /// amendée) : interruption de la tâche.
+    Progress,
 }
 
 /// Éléments de tâche MSPDI qui dépendent des dates calculées : répartition
@@ -61,6 +64,17 @@ pub(crate) const TASK_SCHEDULE_KEYS: &[&str] = &[
     "Resume",
     "Stop",
 ];
+
+/// Éléments de tâche MSPDI jetés quand son avancement change (R-161
+/// amendée, J6) : interruption calculée par MS Project (`Stop`, `Resume`,
+/// `ResumeValid`) ; la reprise saisie est une entrée du modèle
+/// (`Progress::resume`, R-204).
+pub(crate) const TASK_PROGRESS_KEYS: &[&str] = &["Resume", "ResumeValid", "Stop"];
+
+/// Types de `TimephasedData` d'une affectation qui portent son travail réel
+/// (S37 : 2 et 3) ; jetés quand son travail réel change (R-161 amendée,
+/// J6), gardés sinon.
+pub(crate) const ACTUAL_TIMEPHASED_TYPES: &[i64] = &[2, 3];
 
 /// Éléments d'affectation MSPDI jetés quand la durée de sa tâche change,
 /// qu'un calendrier qui la planifie change (R-165), ou que ses unités, son
@@ -80,7 +94,31 @@ pub(crate) const fn task_keys(change: TaskChange) -> &'static [&'static str] {
         | TaskChange::Active
         | TaskChange::Links
         | TaskChange::Outline => TASK_SCHEDULE_KEYS,
+        TaskChange::Progress => TASK_PROGRESS_KEYS,
     }
+}
+
+/// Type (`<Type>n</Type>`, enfant direct, préfixe d'espace de noms admis)
+/// d'une ligne `TimephasedData` gardée en `Extras` ; `None` si absent ou
+/// illisible. Lecture sans analyseur XML : les enfants d'une ligne sont
+/// plats (S5 : `Type`, `UID`, `Start`, `Finish`, `Unit`, `Value`).
+fn timephased_type(payload: &str) -> Option<i64> {
+    let mut rest = payload;
+    while let Some(at) = rest.find("Type>") {
+        let (head, tail) = rest.split_at(at);
+        rest = tail.get("Type>".len()..).unwrap_or("");
+        // Balise ouvrante `<Type>` ou `<p:Type>` (jamais `</Type>`).
+        let open = head.rfind('<').and_then(|lt| head.get(lt.saturating_add(1)..));
+        let Some(name) = open else {
+            continue;
+        };
+        if name.starts_with('/') || !(name.is_empty() || name.ends_with(':')) {
+            continue;
+        }
+        let text = rest.split('<').next().unwrap_or("");
+        return text.trim().parse().ok();
+    }
+    None
 }
 
 /// Retire de `extras` les entrées MSPDI dont la clé est dans `keys` ; rend
@@ -135,6 +173,30 @@ impl Ctx<'_> {
         }
     }
 
+    /// R-161 (amendée, J6) : le travail réel de l'affectation `uid` a
+    /// changé ; jette ses lignes `TimephasedData` de travail réel (types 2
+    /// et 3, [`ACTUAL_TIMEPHASED_TYPES`]) et signale le jet ; les autres
+    /// lignes (type 1, lignes de base `Baseline#n/`) restent.
+    pub(crate) fn drop_actual_timephased(&mut self, uid: AssignmentUid) {
+        let Some(assignment) = self.project.assignments.get_mut(uid) else {
+            return;
+        };
+        let mut dropped = false;
+        assignment.extras.0.retain(|e| {
+            let hit = e.origin == ORIGIN
+                && e.key == "TimephasedData"
+                && timephased_type(&e.payload).is_some_and(|t| ACTUAL_TIMEPHASED_TYPES.contains(&t));
+            dropped |= hit;
+            !hit
+        });
+        if dropped {
+            self.effects.push(SideEffect::ExtrasDropped {
+                subject: Subject::Assignment(uid),
+                keys: vec!["TimephasedData".to_owned()],
+            });
+        }
+    }
+
     /// R-161 (amendée, J5) : les unités, le travail, le délai ou la
     /// ressource de l'affectation `uid` ont changé ; jette sa répartition et
     /// signale le jet ; sans effet si rien n'est jeté.
@@ -156,13 +218,19 @@ impl Ctx<'_> {
 mod tests {
     use planrs_mspdi::schema::{Parent, sequence};
 
-    use super::{ASSIGNMENT_SCHEDULE_KEYS, TASK_SCHEDULE_KEYS, TaskChange, task_keys};
+    use super::{
+        ASSIGNMENT_SCHEDULE_KEYS, TASK_PROGRESS_KEYS, TASK_SCHEDULE_KEYS, TaskChange, task_keys,
+        timephased_type,
+    };
 
     #[test]
     fn r161_table_matches_mspdi_schema() {
         // Chaque clé jetée est un élément de la séquence MSPDI de son
         // entité : une faute de frappe ne jetterait jamais rien.
         for key in TASK_SCHEDULE_KEYS {
+            assert!(sequence(Parent::Task).slot(key).is_some(), "Task/{key}");
+        }
+        for key in TASK_PROGRESS_KEYS {
             assert!(sequence(Parent::Task).slot(key).is_some(), "Task/{key}");
         }
         for key in ASSIGNMENT_SCHEDULE_KEYS {
@@ -198,5 +266,29 @@ mod tests {
             ]
         );
         assert_eq!(ASSIGNMENT_SCHEDULE_KEYS, ["TimephasedData"]);
+        assert_eq!(task_keys(TaskChange::Progress), ["Resume", "ResumeValid", "Stop"]);
+    }
+
+    #[test]
+    fn r161_timephased_type_read() {
+        let row = |t: &str| {
+            format!("<TimephasedData><Type>{t}</Type><UID>1</UID><Start>x</Start></TimephasedData>")
+        };
+        assert_eq!(timephased_type(&row("2")), Some(2));
+        assert_eq!(timephased_type(&row(" 3 ")), Some(3));
+        assert_eq!(timephased_type(&row("x")), None);
+        assert_eq!(
+            timephased_type("<p:TimephasedData><p:Type>1</p:Type></p:TimephasedData>"),
+            Some(1)
+        );
+        assert_eq!(
+            timephased_type("<TimephasedData><UID>2</UID></TimephasedData>"),
+            None
+        );
+        assert_eq!(
+            timephased_type("<TimephasedData><SubType>2</SubType></TimephasedData>"),
+            None
+        );
+        assert_eq!(timephased_type(""), None);
     }
 }

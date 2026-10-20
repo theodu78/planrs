@@ -72,6 +72,42 @@ pub(super) enum ConstraintRule {
     Clamped(Side),
     /// MSO, MFO, option active : au plus tôt = au plus tard = ancrage.
     Pin(Side),
+    /// Épingle réelle d'une feuille achevée (J6, R-203, ADR-0014 D1) : dates
+    /// planifiées, au plus tôt et au plus tard = [début réel, fin réelle]
+    /// bruts ; liens entrants, porte, contrainte, retard de nivellement et
+    /// ALAP ignorés ; aucun plafond vers ses prédécesseurs. `start` : début
+    /// réel saisi, `None` s'il est implicite (R-200 : début au plus tôt du
+    /// réseau depuis le début, `backward_span(fin réelle, D)` à rebours).
+    Actual {
+        /// Début réel saisi.
+        start: Option<Moment>,
+        /// Fin réelle (au moins le début réel saisi).
+        finish: Moment,
+    },
+    /// Feuille automatique en cours (J6, R-204 à R-207, ADR-0014 D2) :
+    /// partie réelle fixe depuis le début réel, reste replacé depuis la
+    /// reprise ; la contrainte saisie ne joue plus que comme plancher de la
+    /// reprise (SNET, MSO, fractionnement permis), les autres sont ignorées
+    /// (`constraint.ignored_in_progress`).
+    Progress(InProgress),
+}
+
+/// Avancement d'une feuille en cours, figé à la construction du réseau
+/// (R-200, R-204, R-205).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct InProgress {
+    /// Début réel saisi ; `None` : implicite (début au plus tôt du réseau,
+    /// R-200).
+    pub start: Option<Moment>,
+    /// Durée réelle effective (R-200).
+    pub actual: Minutes,
+    /// Durée restante D − réel (R-200).
+    pub remaining: Minutes,
+    /// Reprise saisie (`Progress::resume`, R-204).
+    pub resume: Option<Moment>,
+    /// Fractionnement des tâches en cours permis (`split_in_progress`,
+    /// R-205).
+    pub split: bool,
 }
 
 /// R-099 : règle d'une contrainte de type `kind` sur une feuille automatique

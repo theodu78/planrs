@@ -8,8 +8,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use planrs_core::{
-    Arena, BuiltinCalendarNames, CalendarUid, ConversionFactors, ExtraEntry, Extras, Guid, Project,
-    ProjectInfo, ProjectInit, ProjectOptions, ScheduleAnchor, SchedulingMode, Subject, TaskType, TaskUid,
+    Arena, BuiltinCalendarNames, CalendarUid, ConversionFactors, Diagnostic, ExtraEntry, Extras, Guid,
+    ProgressOptions, Project, ProjectInfo, ProjectInit, ProjectOptions, ScheduleAnchor, SchedulingMode,
+    Subject, TaskType, TaskUid,
 };
 
 use crate::ReadOptions;
@@ -86,7 +87,8 @@ pub(crate) fn build(raw: &RawDocument<'_>, options: &ReadOptions, sink: &mut Sin
         ..RecordedSchedule::default()
     };
 
-    task::import(&raw.tasks, &mut project, &mut recorded, sink);
+    let mut replaced = task::Replaced::default();
+    task::import(&raw.tasks, &mut project, &mut recorded, &mut replaced, sink);
     honor_constraints_off(&f, &project, sink);
     project.resources = resource::import(
         &raw.resources,
@@ -95,8 +97,14 @@ pub(crate) fn build(raw: &RawDocument<'_>, options: &ReadOptions, sink: &mut Sin
         sink,
     );
     let tasks: BTreeSet<TaskUid> = recorded.tasks.keys().copied().collect();
-    let (assignments, dropped_timephased) =
-        assignment::import(&raw.assignments, &tasks, &mut recorded.assignments, sink);
+    let (assignments, dropped_timephased) = assignment::import(
+        &raw.assignments,
+        &tasks,
+        &mut recorded.assignments,
+        &mut replaced,
+        sink,
+    );
+    replaced.report(sink);
     for (uid, n) in assignment::count_by_task(&assignments) {
         if let Some(rec) = recorded.tasks.get_mut(&uid) {
             rec.assignments = n;
@@ -273,7 +281,44 @@ fn project_options(f: &Fields<'_>, sink: &mut Sink<'_>) -> ProjectOptions {
         // critique par défaut.
         critical_slack_limit_days: bounded_u32(f, "CriticalSlackLimit", 0..=u32::MAX, 0, sink),
         multiple_critical_paths: f.bool("MultipleCriticalPaths", sink).unwrap_or(false),
+        progress: progress_options(f, sink),
     }
+}
+
+/// R-214, R-218 : options de l'avancement (S54), lues telles quelles et
+/// réécrites ; absentes : défauts d'un projet neuf (O36). Une option que le
+/// calcul ne suit pas (`TaskUpdatesResource` à 0, une option `Move*` à 1)
+/// donne `progress.option_unsupported { option }` (info, une fois par
+/// option) : le calcul garde les valeurs par défaut.
+fn progress_options(f: &Fields<'_>, sink: &mut Sink<'_>) -> ProgressOptions {
+    let d = ProgressOptions::default();
+    let read = |name: &str, default: bool, sink: &mut Sink<'_>| f.bool(name, sink).unwrap_or(default);
+    let options = ProgressOptions {
+        split_in_progress: read("SplitsInProgressTasks", d.split_in_progress, sink),
+        task_updates_resource: read("TaskUpdatesResource", d.task_updates_resource, sink),
+        move_completed_ends_back: read("MoveCompletedEndsBack", d.move_completed_ends_back, sink),
+        move_remaining_starts_back: read("MoveRemainingStartsBack", d.move_remaining_starts_back, sink),
+        move_remaining_starts_forward: read(
+            "MoveRemainingStartsForward",
+            d.move_remaining_starts_forward,
+            sink,
+        ),
+        move_completed_ends_forward: read("MoveCompletedEndsForward", d.move_completed_ends_forward, sink),
+    };
+    for option in options.unsupported() {
+        let name = option.mspdi_name();
+        let (at, value) = f
+            .scalar(name, sink)
+            .map_or((f.at(), None), |(t, at)| (at, Some(t)));
+        f.report(
+            ImportCode::Core(Diagnostic::ProgressOptionUnsupported { option }),
+            name,
+            at,
+            value,
+            sink,
+        );
+    }
+    options
 }
 
 /// Calendrier du projet (`CalendarUID`).

@@ -41,9 +41,10 @@ pub struct RoundTrip {
     /// du moteur écrites, et dates des affectations relues égales au
     /// placement du moteur (R-199).
     pub project_identical_schedule: bool,
-    /// Valeurs du moteur écrites à la place de celles du fichier (R-199) :
-    /// travail des récapitulatives, durée des feuilles affectées,
-    /// affectations dont la répartition est jetée.
+    /// Valeurs du moteur écrites à la place de celles du fichier (R-199,
+    /// R-215) : travail des récapitulatives, durée des feuilles affectées,
+    /// affectations dont la répartition est jetée, tâches dont l'avancement
+    /// écrit diffère du modèle.
     pub schedule_overrides: BTreeMap<&'static str, usize>,
     /// Pour chaque entité, éléments réécrits dans l'ordre source.
     pub order_preserved: bool,
@@ -106,6 +107,7 @@ pub fn round_trip(entry: &Entry, doc: &MspdiDocument, source: &str) -> RoundTrip
     };
     schedule_overrides.insert("work", changed_tasks(&|a, b| a.work != b.work));
     schedule_overrides.insert("duration", changed_tasks(&|a, b| a.duration != b.duration));
+    schedule_overrides.insert("progress", progress_overrides(&doc.project, &image));
     schedule_overrides.insert(
         "timephased",
         by_engine
@@ -171,6 +173,18 @@ pub fn round_trip(entry: &Entry, doc: &MspdiDocument, source: &str) -> RoundTrip
     }
 }
 
+/// R-215 : tâches (UID 0 compris) dont l'avancement écrit par le moteur
+/// diffère du modèle relu (% dérivé, durée réelle effective, début réel
+/// implicite, agrégats des récapitulatives, reprise calculée).
+fn progress_overrides(read: &planrs_core::Project, image: &planrs_core::Project) -> usize {
+    read.summary_task
+        .iter()
+        .chain(read.tasks.iter())
+        .zip(image.summary_task.iter().chain(image.tasks.iter()))
+        .filter(|(a, b)| a.progress != b.progress)
+        .count()
+}
+
 /// Échecs du verdict : fichiers `msproject` non identiques avec leurs
 /// valeurs relues, ou réordonnés.
 #[must_use]
@@ -193,11 +207,11 @@ pub fn markdown(rows: &[RoundTrip]) -> String {
     let _ = writeln!(s, "\n## Aller-retour MSPDI\n");
     let _ = writeln!(
         s,
-        "Lecture → écriture (profil observé) → relecture (P25, R-133). « Projet » : projet relu = `normalize(projet lu)` (valeurs du moteur : `normalize(schedule_image(projet lu))`, dates des affectations relues = placement du moteur, R-199) ; « planning » : planning enregistré relu identique ; « ordre » : éléments réécrits dans l'ordre source ; « moteur » : valeurs du moteur écrites à la place de celles du fichier (travail de récapitulatives, durée de feuilles affectées, affectations dont la répartition est jetée). Relu identique par planrs n'est pas une vérification par MS Project.\n"
+        "Lecture → écriture (profil observé) → relecture (P25, R-133). « Projet » : projet relu = `normalize(projet lu)` (valeurs du moteur : `normalize(schedule_image(projet lu))`, dates des affectations relues = placement du moteur, R-199) ; « planning » : planning enregistré relu identique ; « ordre » : éléments réécrits dans l'ordre source ; « moteur » : valeurs du moteur écrites à la place de celles du fichier (travail de récapitulatives, durée de feuilles affectées, affectations dont la répartition est jetée, tâches dont l'avancement écrit diffère du modèle relu, R-215). Relu identique par planrs n'est pas une vérification par MS Project.\n"
     );
     let _ = writeln!(
         s,
-        "| Fichier | Projet (valeurs relues) | Planning enregistré | Projet (valeurs du moteur) | Moteur (travail, durée, répartitions) | Ordre | Extras (projet, calendriers, tâches, ressources, affectations) | Calculés écartés | Perdus | Diagnostics d'écriture |"
+        "| Fichier | Projet (valeurs relues) | Planning enregistré | Projet (valeurs du moteur) | Moteur (travail, durée, répartitions, avancement) | Ordre | Extras (projet, calendriers, tâches, ressources, affectations) | Calculés écartés | Perdus | Diagnostics d'écriture |"
     );
     let _ = writeln!(s, "|---|---|---|---|---|---|---|---|---|---|");
     for r in rows {
@@ -214,7 +228,7 @@ pub fn markdown(rows: &[RoundTrip]) -> String {
             .collect();
         let _ = writeln!(
             s,
-            "| {} | {} | {} | {} | {}, {}, {} | {} | {}, {}, {}, {}, {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {}, {}, {}, {} | {} | {}, {}, {}, {}, {} | {} | {} | {} |",
             r.file,
             yes(r.project_identical_recorded),
             yes(r.recorded_identical),
@@ -222,6 +236,7 @@ pub fn markdown(rows: &[RoundTrip]) -> String {
             r.schedule_overrides.get("work").copied().unwrap_or(0),
             r.schedule_overrides.get("duration").copied().unwrap_or(0),
             r.schedule_overrides.get("timephased").copied().unwrap_or(0),
+            r.schedule_overrides.get("progress").copied().unwrap_or(0),
             yes(r.order_preserved),
             ex("project"),
             ex("calendar"),

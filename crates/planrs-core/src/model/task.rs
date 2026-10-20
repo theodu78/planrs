@@ -318,6 +318,11 @@ pub struct Progress {
     pub actual_work: Work,
     /// Travail restant.
     pub remaining_work: Work,
+    /// Reprise saisie d'une tâche en cours (`Resume` relu ou posé par
+    /// `progress.reschedule`, R-204, R-214, R-217) ; `Stop` n'est jamais
+    /// stocké (ADR-0014 D2). Absente du JSON quand il n'y en a pas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<Moment>,
 }
 
 /// Tâche.

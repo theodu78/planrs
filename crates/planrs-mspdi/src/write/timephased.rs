@@ -31,6 +31,12 @@ const TIMEPHASED: &str = "TimephasedData";
 /// Type 1 : travail restant planifié de l'affectation (S37).
 const SCHEDULED_WORK: i64 = 1;
 
+/// Type 2 : travail réel de l'affectation (S37).
+const ACTUAL_WORK: i64 = 2;
+
+/// Type 3 : autre ligne de réel de l'affectation (S37 : types 2-3 réels).
+const ACTUAL_OTHER: i64 = 3;
+
 /// Vrai si l'`Extras` (`key`, `payload`) est une ligne de type 1 de
 /// l'affectation elle-même (hors ligne de base : `Baseline#n/…` gardées).
 pub(crate) fn is_scheduled_work(key: &str, payload: &str) -> bool {
@@ -42,6 +48,58 @@ pub(crate) fn is_scheduled_work_key(key: &ExtraKey, payload: &str) -> bool {
     key.scope.is_none()
         && key.name == TIMEPHASED
         && Row::parse(payload).is_some_and(|r| r.kind == Some(SCHEDULED_WORK))
+}
+
+/// R-215 : ligne de réel (types 2-3) de l'affectation elle-même (hors
+/// ligne de base).
+pub(crate) fn is_actual_key(key: &ExtraKey, payload: &str) -> bool {
+    key.scope.is_none()
+        && key.name == TIMEPHASED
+        && Row::parse(payload).is_some_and(|r| matches!(r.kind, Some(ACTUAL_WORK | ACTUAL_OTHER)))
+}
+
+/// Comme [`is_actual_key`], pour une clé texte.
+pub(crate) fn is_actual(key: &str, payload: &str) -> bool {
+    ExtraKey::parse(key).is_some_and(|k| is_actual_key(&k, payload))
+}
+
+/// R-215 : les lignes de réel (types 2-3) de `a` sont-elles à jeter ? Vrai
+/// s'il y en a et que la somme des `Value` des lignes de type 2 (un seul
+/// arrondi à la minute, R-001) diffère du travail réel du modèle, ou que
+/// l'une d'elles est illisible : le travail réel a changé depuis la
+/// lecture, elles ne le décrivent plus.
+pub(crate) fn actuals_stale(a: &Assignment) -> bool {
+    let rows: Vec<&str> = a
+        .extras
+        .0
+        .iter()
+        .filter(|e| e.origin == ORIGIN && is_actual(&e.key, &e.payload))
+        .map(|e| e.payload.as_str())
+        .collect();
+    if rows.is_empty() {
+        return false;
+    }
+    let mut nanos: i128 = 0;
+    for payload in &rows {
+        let Some(row) = Row::parse(payload) else {
+            return true;
+        };
+        if row.kind != Some(ACTUAL_WORK) {
+            continue;
+        }
+        let Some(v) = row
+            .value
+            .as_deref()
+            .and_then(|v| iso_duration_nanos(v.trim()).ok())
+        else {
+            return true;
+        };
+        let Some(sum) = nanos.checked_add(v) else {
+            return true;
+        };
+        nanos = sum;
+    }
+    planrs_core::round_div(nanos, ISO_NANOS_PER_MINUTE) != Some(a.actual_work.minutes().get())
 }
 
 /// R-199 : les lignes de type 1 de `a` sont-elles à jeter ? Vrai s'il y en

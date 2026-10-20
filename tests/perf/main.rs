@@ -13,6 +13,9 @@
 //! temps borné. Hiérarchie profonde hostile (ADR-0012, lot L15) : 256 niveaux
 //! de récapitulatives imbriquées, 5 000 tâches, 10 000 liens dont des FS,
 //! SS et FF depuis chaque récapitulative ; budget 30 ms de médiane.
+//! J6 : `5000_progress` (20 % de feuilles achevées, 30 % en cours dont la
+//! moitié hors séquence), budget bloquant de 50 ms ; `5000_assigned_progress`
+//! journalisé (garde-fou de 250 ms).
 //! Mesure seulement en release, par le job CI `perf` :
 //! `cargo test -p planrs-tests --release --test perf -- --ignored --nocapture`.
 
@@ -36,8 +39,8 @@ use planrs_core::{
     TaskUid, TimeBasis, schedule,
 };
 use planrs_tests::generate::{
-    assigned_leaves_network, assigned_network, constrained_network, from_finish_network,
-    hostile_combined_calendars, hostile_parts, large_network,
+    assigned_leaves_network, assigned_network, assigned_progress_network, constrained_network,
+    from_finish_network, hostile_combined_calendars, hostile_parts, large_network, progress_network,
 };
 
 /// Seuil d'échec de la médiane.
@@ -200,6 +203,59 @@ fn perf_5000_assigned() {
     budget("5000_assigned", &assigned_network(2026));
 }
 
+/// Réseau avec avancement (J6, ADR-0014 D10) : 5 000 tâches, 10 000 liens,
+/// ~20 % de feuilles achevées et ~30 % en cours dont la moitié hors
+/// séquence ; aucune erreur, aucune tâche dégradée ; déterministe.
+#[test]
+fn progress_network_shape() {
+    let p = progress_network(2026);
+    assert_eq!(p.tasks.len(), 5_000);
+    let s = schedule(&p);
+    let (mut done, mut running) = (0, 0);
+    for o in s.tasks.values() {
+        assert!(
+            matches!(o, TaskOutcome::Scheduled(ts) if !ts.degraded),
+            "tâche non planifiée ou dégradée : {o:?}"
+        );
+        let TaskOutcome::Scheduled(ts) = o else { continue };
+        if ts.role == TaskRole::Leaf {
+            match ts.progress.map(|p| p.state) {
+                Some(planrs_core::ProgressState::Complete) => done += 1,
+                Some(planrs_core::ProgressState::Started) => running += 1,
+                _ => {}
+            }
+        }
+    }
+    assert!((700..=1_200).contains(&done), "{done} achevées");
+    assert!((1_100..=1_700).contains(&running), "{running} en cours");
+    let errors: Vec<&Diagnostic> = s
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity() == Severity::Error)
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(progress_network(2026), p);
+}
+
+/// Budget J6 (ADR-0014 D10) : `5000_progress`, bloquant à 50 ms.
+#[test]
+#[ignore = "budget mesuré en release, job CI perf"]
+fn perf_5000_progress() {
+    budget("5000_progress", &progress_network(2026));
+}
+
+/// `5000_assigned_progress` (J6) : journalisé, sans seuil bloquant au-delà
+/// du garde-fou de `5000_assigned_leaves`.
+#[test]
+#[ignore = "mesuré en release, job CI perf"]
+fn perf_5000_assigned_progress() {
+    budget_of(
+        "5000_assigned_progress",
+        &assigned_progress_network(2026),
+        LEAVES_BUDGET,
+    );
+}
+
 /// Variante de la relecture finale J5 : chaque ressource a ses congés
 /// (1 000 calendriers de ressource distincts), 10 % des feuilles sur un
 /// calendrier propre : placement par parts sur deux échelles, unions et
@@ -235,7 +291,10 @@ fn assigned_leaves_network_shape() {
 /// échelles, environ 65 ms). Seuil bloquant de 250 ms en attendant
 /// l'arbitrage (`docs/decisions.md`, correctifs de la relecture finale
 /// (11)) : il rattrape une régression quadratique (O(S²) sur les échelles,
-/// O(P²) sur les parts), pas une dérive de quelques pour cent.
+/// O(P²) sur les parts), pas une dérive de quelques pour cent. J6, lot L9 :
+/// les 1 010 calendriers dérivés sans semaine propre sont compilés par
+/// surcharge de leur base (compilation 104 → 11 à 18 ms, calcul 178 → 110
+/// à 117 ms au minimum, binaires alternés sur serveurdvp chargé).
 const LEAVES_BUDGET: Duration = Duration::from_millis(250);
 
 /// Budget de `5000_assigned_leaves` : [`LEAVES_BUDGET`].
@@ -273,13 +332,101 @@ fn hostile_combined_calendars_bounded() {
         &hostile_combined_calendars(),
         Duration::from_secs(10),
     );
+    // Budget des combinaisons atteint (deux calendriers distincts), en plus
+    // de celui de la compilation (J6, lot L9 : 6,6 M segments pour un budget
+    // de 2 M, calendrier refusé = `calendar` égal à `other`).
     assert!(
-        s.diagnostics
-            .iter()
-            .any(|d| d.code() == "calendar.too_many_segments"),
-        "budget jamais atteint"
+        s.diagnostics.iter().any(|d| matches!(
+            d,
+            Diagnostic::CalendarTooManySegments { calendar, other, .. } if calendar != other
+        )),
+        "budget des combinaisons jamais atteint"
     );
     assert_eq!(s.assignments.len(), 1_000);
+    eprintln!("pic mémoire du processus : {}", peak_memory());
+}
+
+/// Pic de mémoire résidente du processus (`VmHWM`, Linux), pour le
+/// journal du job `perf` ; « inconnu » ailleurs. À lire sur un test lancé
+/// seul (`--exact`) : le pic est celui du processus entier.
+fn peak_memory() -> String {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("VmHWM:"))
+                .map(|l| l.trim_start_matches("VmHWM:").trim().to_owned())
+        })
+        .unwrap_or_else(|| "inconnu".to_owned())
+}
+
+/// Calendriers hostiles du modèle (J6, lot L9, dette de l'ADR-0013) :
+/// 1 000 calendriers dérivés du Standard, chacun chômé un jour sur deux sur
+/// tout le domaine (environ 60 000 segments, 2 Mo compilés : 2 Go sans
+/// budget) ; 1 000 tâches d'un jour, chacune sur l'un d'eux.
+fn hostile_model_calendars() -> Project {
+    use planrs_core::calendar::{Calendar, CalendarException, DaySetting, Recurrence};
+    use planrs_core::{CalendarUid, Day, DayRange};
+    let start: Moment = "2026-10-19T08:00".parse().unwrap();
+    let mut p = Project::new(ProjectInit {
+        name: "Calendriers du modèle hostiles".to_owned(),
+        anchor: ScheduleAnchor::FromStart(start),
+        current_date: start,
+        calendar_names: BuiltinCalendarNames::default(),
+    });
+    let domain = DayRange::new(Day::new(0).unwrap(), Day::new(60_630).unwrap()).unwrap();
+    for k in 0..1_000u32 {
+        let mut c = Calendar::new_derived(CalendarUid::new(100 + k), format!("C{k}"), CalendarUid::new(1));
+        c.add_exception(CalendarException {
+            name: "Un jour sur deux".to_owned(),
+            period: domain,
+            setting: DaySetting::NonWorking,
+            recurrence: Recurrence::Daily { every: 2 },
+            occurrences: None,
+        })
+        .unwrap();
+        p.calendars.push(c).unwrap();
+    }
+    let options = p.options;
+    for i in 0..1_000u32 {
+        let mut t = Task::new(TaskUid::new(i + 1), format!("T{i}"), &options);
+        t.duration =
+            TaskDuration::new(Minutes::new(480), DurationUnit::Day, TimeBasis::Working, false).unwrap();
+        t.calendar = Some(CalendarUid::new(100 + i));
+        p.tasks.push(t).unwrap();
+    }
+    p
+}
+
+/// Budget de compilation des calendriers du modèle (J6, lot L9, R-172
+/// amendée) : `Limits::compiled_segments` (2 M segments gardés, 16 M de
+/// travail) refuse les calendriers au-delà, `calendar.too_many_segments`,
+/// tâches en repli R-066 ; mémoire et temps bornés.
+#[test]
+#[ignore = "projet hostile, mesuré en release, job CI perf"]
+fn hostile_calendars_bounded() {
+    let s = once(
+        "calendriers du modèle hostiles",
+        &hostile_model_calendars(),
+        Duration::from_secs(10),
+    );
+    let refused = s
+        .diagnostics
+        .iter()
+        .filter(|d| {
+            matches!(
+                d,
+                Diagnostic::CalendarTooManySegments { calendar, other, .. } if calendar == other
+            )
+        })
+        .count();
+    assert!(refused > 900, "{refused} calendriers refusés");
+    assert!(s.diagnostics.iter().any(|d| d.code() == "task.calendar_fallback"));
+    assert!(s.tasks.len() >= 1_000);
+    eprintln!(
+        "{refused} calendriers refusés ; pic mémoire du processus : {}",
+        peak_memory()
+    );
 }
 
 /// Adversaire F1 de la relecture finale J5 : 100 000 affectations
@@ -324,8 +471,11 @@ const DEEP_LINKS: usize = 10_000;
 /// Z_(i+2)` (FF) ; chaque feuille a des prédécesseurs FS ou SS parmi les
 /// 40 feuilles qui la précèdent, jusqu'à 10 000 liens. Chaque feuille hérite
 /// donc des arcs de tous ses ancêtres : la référence (J3) remonte jusqu'à
-/// 256 agrégats et 768 arcs par nœud.
-fn deep_hierarchy() -> Project {
+/// 256 agrégats et 768 arcs par nœud. Avec `progress`, les feuilles ont un
+/// % achevé de `(uid mod 11) × 10 %` (environ 9 sur 10 en cours, R-200) :
+/// variante `deep_hierarchy_progress` (relecture finale J6, J6-PERF-1) ;
+/// sans, la hiérarchie de J5.
+fn deep_hierarchy(progress: bool) -> Project {
     let start: Moment = "2026-11-02T08:00".parse().unwrap();
     let mut p = Project::new(ProjectInit {
         name: "Hiérarchie profonde".to_owned(),
@@ -360,7 +510,9 @@ fn deep_hierarchy() -> Project {
             let mut t = Task::new(TaskUid::new(uid), format!("F{i}.{j}"), &options);
             t.outline_level = OutlineLevel::new(u16::try_from(i + 1).unwrap()).unwrap();
             t.duration = day(i64::from(1 + (uid % 5)));
-            t.progress.percent_complete = Percent::new(i64::from(uid % 11) * 1_000).unwrap();
+            if progress {
+                t.progress.percent_complete = Percent::new(i64::from(uid % 11) * 1_000).unwrap();
+            }
             leaves.push(t.uid());
             tasks.push(t);
         }
@@ -446,41 +598,177 @@ fn deep_hierarchy() -> Project {
 
 /// La hiérarchie hostile a la forme annoncée, se calcule sans erreur, et
 /// les deux implémentations des marges et des % achevés (lot L15) y sont
-/// égales.
+/// égales, sans avancement et avec (feuilles en cours, R-206, J6-PERF-1).
 #[test]
 fn deep_hierarchy_shape() {
-    let p = deep_hierarchy();
-    assert_eq!(p.tasks.len(), 5_000);
-    let links: usize = p.tasks.iter().map(|t| t.predecessors.len()).sum();
-    assert_eq!(links, DEEP_LINKS);
-    assert_eq!(p.tasks.iter().map(|t| t.outline_level.get()).max(), Some(257));
-    let s = schedule(&p);
-    let errors: Vec<&Diagnostic> = s
-        .diagnostics
-        .iter()
-        .filter(|d| d.severity() == Severity::Error)
-        .collect();
-    assert!(errors.is_empty(), "{errors:?}");
-    let summaries = s
-        .tasks
-        .values()
-        .filter(|o| matches!(o, TaskOutcome::Scheduled(ts) if ts.role == TaskRole::Summary && !ts.degraded))
-        .count();
-    assert_eq!(summaries, 256);
-    assert_eq!(s, schedule_reference(&p));
+    for progress in [false, true] {
+        let p = deep_hierarchy(progress);
+        assert_eq!(p.tasks.len(), 5_000);
+        let links: usize = p.tasks.iter().map(|t| t.predecessors.len()).sum();
+        assert_eq!(links, DEEP_LINKS);
+        assert_eq!(p.tasks.iter().map(|t| t.outline_level.get()).max(), Some(257));
+        let s = schedule(&p);
+        let errors: Vec<&Diagnostic> = s
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity() == Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "{errors:?}");
+        let summaries = s
+            .tasks
+            .values()
+            .filter(
+                |o| matches!(o, TaskOutcome::Scheduled(ts) if ts.role == TaskRole::Summary && !ts.degraded),
+            )
+            .count();
+        assert_eq!(summaries, 256);
+        let running = s
+            .tasks
+            .values()
+            .filter(|o| {
+                matches!(o, TaskOutcome::Scheduled(ts)
+                    if ts.progress.is_some_and(|p| p.state == planrs_core::ProgressState::Started))
+            })
+            .count();
+        if progress {
+            assert!(running > 3_000, "{running} feuilles en cours");
+        } else {
+            assert_eq!(running, 0);
+        }
+        assert_eq!(s, schedule_reference(&p), "avancement : {progress}");
+    }
+}
+
+/// Budget de la hiérarchie hostile (lot L15) : 30 ms de médiane.
+fn deep_budget(name: &str, progress: bool) {
+    let p = deep_hierarchy(progress);
+    // Référence (J3), informative : le coût que la stratégie rapide évite.
+    let t = Instant::now();
+    black_box(schedule_reference(black_box(&p)));
+    eprintln!("schedule_reference ({name}) : {:?}", t.elapsed());
+    budget_of(name, &p, Duration::from_millis(30));
 }
 
 #[test]
 #[ignore = "budget mesuré en release, job CI perf"]
 fn perf_deep_hierarchy_256_5000() {
-    let p = deep_hierarchy();
-    // Référence (J3), informative : le coût que la stratégie rapide évite.
+    deep_budget("hiérarchie de 256 niveaux, 5 000 tâches", false);
+}
+
+/// Même hiérarchie, feuilles en cours (relecture finale J6, J6-PERF-1) :
+/// une feuille en cours passe par la stratégie rapide des marges, même
+/// budget bloquant.
+#[test]
+#[ignore = "budget mesuré en release, job CI perf"]
+fn perf_deep_hierarchy_progress_256_5000() {
+    deep_budget("deep_hierarchy_progress, 256 niveaux, 5 000 tâches", true);
+}
+
+/// Lot de saisies d'avancement (relecture finale J6, J6-PERF-2) sur le
+/// grand réseau (5 000 tâches) : chaque `progress.update` qui suit une
+/// écriture recalcule le clone (le début implicite est le début planifié
+/// courant) ; 200 saisies, journalisé, garde-fou de 20 s. Un lot de 10 000
+/// saisies est refusé par le budget de recalcul du lot (`limit.exceeded`,
+/// `schedule_recomputes`, 200 recalculs au plus) en temps borné.
+#[test]
+#[ignore = "mesuré en release, job CI perf"]
+fn perf_batch_progress_updates() {
+    use planrs_automation::error::codes;
+    use planrs_automation::{ApplyMode, Batch};
+    let p = large_network(2026);
+    let plan = schedule(&p);
+    let uids: Vec<u32> = p
+        .tasks
+        .iter()
+        .map(planrs_core::Task::uid)
+        .filter(|u| matches!(plan.get(*u), Some(TaskOutcome::Scheduled(ts)) if ts.role == TaskRole::Leaf))
+        .map(TaskUid::get)
+        .collect();
+    let mut s = planrs_tests::session::session(p);
+    let batch = |n: usize| -> Batch {
+        let ops: Vec<serde_json::Value> = uids
+            .iter()
+            .cycle()
+            .take(n)
+            .map(|u| serde_json::json!({ "op": "progress.update", "task": u, "percent_complete": { "text": "10%" } }))
+            .collect();
+        planrs_tests::task_edit::batch(serde_json::Value::Array(ops))
+    };
     let t = Instant::now();
-    black_box(schedule_reference(black_box(&p)));
-    eprintln!("schedule_reference (hiérarchie profonde) : {:?}", t.elapsed());
-    budget_of(
-        "hiérarchie de 256 niveaux, 5 000 tâches",
-        &p,
-        Duration::from_millis(30),
-    );
+    let out = s.apply(&batch(200), ApplyMode::DryRun);
+    let took = t.elapsed();
+    eprintln!("lot de 200 progress.update (5 000 tâches) : {took:?}");
+    assert!(out.is_ok(), "{out:?}");
+    assert!(took <= Duration::from_secs(20), "{took:?}");
+    let t = Instant::now();
+    let err = s.apply(&batch(10_000), ApplyMode::DryRun).unwrap_err();
+    let took = t.elapsed();
+    eprintln!("lot de 10 000 progress.update refusé : {took:?}");
+    assert_eq!(err.code, codes::LIMIT_EXCEEDED);
+    assert!(took <= Duration::from_secs(60), "{took:?}");
+}
+
+/// `baseline_variance` page par page (relecture finale J6, J6-PERF-3) :
+/// 20 000 tâches à ligne de base 0, dont une tâche d'arrivée de 19 999
+/// prédécesseurs (FS). Chaque page ne construit que ses lignes (sans liens
+/// ni ressources) : médiane de 15 pages de 50 lignes, budget de 50 ms
+/// (avant : toutes les vues de tâches, liens compris, à chaque page ;
+/// serveurdvp : 92 ms avant, 17,6 ms après).
+#[test]
+#[ignore = "mesuré en release, job CI perf"]
+fn perf_baseline_variance_page() {
+    use planrs_automation::ApplyMode;
+    use planrs_automation::analysis::baseline_variance;
+    use planrs_automation::command::params::VarianceParams;
+    let start: Moment = "2026-11-02T08:00".parse().unwrap();
+    let mut p = Project::new(ProjectInit {
+        name: "Variance".to_owned(),
+        anchor: ScheduleAnchor::FromStart(start),
+        current_date: start,
+        calendar_names: BuiltinCalendarNames::default(),
+    });
+    let options = p.options;
+    let n = 20_000u32;
+    let day = TaskDuration::new(Minutes::new(480), DurationUnit::Day, TimeBasis::Working, false).unwrap();
+    for i in 1..n {
+        let mut t = Task::new(TaskUid::new(i), format!("T{i}"), &options);
+        t.duration = day;
+        p.tasks.push(t).unwrap();
+    }
+    let mut hub = Task::new(TaskUid::new(n), "Arrivée".to_owned(), &options);
+    hub.duration = day;
+    hub.predecessors = (1..n)
+        .map(|i| Link {
+            predecessor: TaskUid::new(i),
+            kind: LinkType::FinishToStart,
+            lag: Lag::ZERO,
+        })
+        .collect();
+    p.tasks.push(hub).unwrap();
+    let mut s = planrs_tests::session::session(p);
+    s.apply(
+        &planrs_tests::task_edit::batch(serde_json::json!([{ "op": "baseline.set", "number": 0 }])),
+        ApplyMode::Commit,
+    )
+    .unwrap();
+    let mut cursor = None;
+    let mut times = Vec::new();
+    for _ in 0..15 {
+        let params = VarianceParams {
+            baseline: Some(0),
+            only_varied: false,
+            cursor,
+            limit: Some(50),
+        };
+        let t = Instant::now();
+        let view = baseline_variance(&s, &params).unwrap();
+        times.push(t.elapsed());
+        assert_eq!(view.total, 20_000);
+        assert_eq!(view.tasks.len(), 50);
+        cursor = view.next_cursor;
+    }
+    times.sort_unstable();
+    let median = times[times.len() / 2];
+    eprintln!("baseline_variance (20 000 tâches, page de 50) : médiane {median:?}");
+    assert!(median <= Duration::from_millis(50), "{median:?}");
 }

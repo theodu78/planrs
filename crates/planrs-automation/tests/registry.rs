@@ -117,22 +117,36 @@ fn registry_brief_tools_present() {
 
 #[test]
 fn registry_reserved_not_listed() {
+    // Contrat J6 (lot L0) : six entrées réservées, `progress.reschedule`
+    // créée ; `analysis.explain_date` activée par le lot L7, les cinq
+    // autres par le lot L8 : plus aucune entrée réservée.
     let reserved: BTreeSet<&str> = REGISTRY.iter().filter(|s| !s.is_listed()).map(|s| s.id).collect();
-    let expected: BTreeSet<&str> = [
-        "analysis.baseline_variance",
-        "analysis.explain_date",
-        "analysis.what_if",
-        "baseline.set",
-        "progress.update",
-    ]
-    .into_iter()
-    .collect();
-    assert_eq!(reserved, expected);
-    for spec in REGISTRY.iter().filter(|s| !s.is_listed()) {
-        assert_eq!(spec.available, Availability::Milestone(6));
-    }
+    assert!(reserved.is_empty(), "{reserved:?}");
     assert!(listed().all(|s| s.available == Availability::Now));
-    assert_eq!(listed().count(), REGISTRY.len() - expected.len());
+    assert_eq!(listed().count(), REGISTRY.len());
+}
+
+/// Lot L8 J6 : les six outils J6 sont listés (44 outils en tout) ; les
+/// trois écritures acceptent `dry_run` et sont annulables, aucune n'est
+/// destructive ; les trois analyses sont des lectures calculées.
+#[test]
+fn registry_j6_tools_listed() {
+    for (name, kind) in [
+        ("update_progress", Kind::Write),
+        ("reschedule_remaining", Kind::Write),
+        ("set_baseline", Kind::Write),
+        ("explain_date", Kind::Analysis),
+        ("what_if", Kind::Analysis),
+        ("baseline_variance", Kind::Analysis),
+    ] {
+        let spec = by_mcp_name(name).unwrap();
+        assert!(spec.is_listed(), "{name}");
+        assert_eq!(spec.available, Availability::Now, "{name}");
+        assert_eq!(spec.kind, kind, "{name}");
+        assert_eq!(spec.dry_run, kind == Kind::Write, "{name}");
+        assert_eq!(spec.undoable, kind == Kind::Write, "{name}");
+    }
+    assert_eq!(listed().count(), 44);
 }
 
 /// Lot L8 (ADR-0013 D9) : les huit outils J5 sont listés, 38 outils en
@@ -153,7 +167,8 @@ fn registry_j5_tools_listed() {
         assert!(spec.is_listed(), "{name}");
         assert_eq!(spec.available, Availability::Now, "{name}");
     }
-    assert_eq!(listed().count(), 38);
+    // 38 outils en J5, 44 en J6 (`registry_j6_tools_listed`).
+    assert_eq!(listed().count(), 44);
     assert_eq!(by_mcp_name("list_resources").unwrap().kind, Kind::Read);
     assert_eq!(by_mcp_name("resource_usage").unwrap().kind, Kind::Analysis);
 }
@@ -209,7 +224,8 @@ fn contains_key(v: &Value, key: &str) -> bool {
     }
 }
 
-/// Un fichier par commande listée. Chaque schéma : JSON Schema 2020-12,
+/// Un fichier par entrée du registre, listée ou réservée (les entrées
+/// réservées J6 portent le schéma de leur contrat, lot L0). Chaque schéma : JSON Schema 2020-12,
 /// objet au sommet sans combinateur (exigence des outils de l'API Claude),
 /// sans `$ref` (sous-schémas en ligne), convertible en `JsonObject` de rmcp
 /// (`serde_json::Map<String, Value>`, `rmcp::model::JsonObject`).
@@ -222,7 +238,7 @@ fn schemas_golden() {
     }
     let mut expected_files = BTreeSet::new();
     let mut stale = Vec::new();
-    for spec in listed() {
+    for spec in REGISTRY {
         let schema = serde_json::to_value((spec.schema)()).unwrap();
         let object: Map<String, Value> = serde_json::from_value(schema.clone())
             .unwrap_or_else(|_| panic!("{} : schéma non objet", spec.id));

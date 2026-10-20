@@ -1,0 +1,109 @@
+{
+  "baselines": [
+    {
+      "duration": {
+        "elapsed": false,
+        "estimated": false,
+        "minutes": 2400,
+        "text": "5j",
+        "unit": "day"
+      },
+      "finish": "2026-11-11T17:00",
+      "number": 0,
+      "start": "2026-11-05T08:00",
+      "work": {
+        "minutes": 2400,
+        "text": "40h",
+        "unit": "hour"
+      }
+    }
+  ],
+  "constraint": null,
+  "critical": true,
+  "deadline": null,
+  "diagnostics": [],
+  "duration": {
+    "elapsed": false,
+    "estimated": false,
+    "minutes": 2400,
+    "text": "5j",
+    "unit": "day"
+  },
+  "finish": "2026-11-10T17:00",
+  "free_slack": {
+    "minutes": 0,
+    "text": "0j",
+    "unit": "day"
+  },
+  "id": 2,
+  "level": 1,
+  "milestone": false,
+  "name": "Maçonnerie",
+  "predecessors": [
+    {
+      "kind": "fs",
+      "pred": 1
+    }
+  ],
+  "progress": {
+    "actual_duration": {
+      "minutes": 960,
+      "text": "2j",
+      "unit": "day"
+    },
+    "actual_start": "2026-11-04T08:00",
+    "actual_work": {
+      "minutes": 960,
+      "text": "16h",
+      "unit": "hour"
+    },
+    "percent_complete": {
+      "text": "40%",
+      "value": 4000
+    },
+    "percent_work_complete": {
+      "text": "40%",
+      "value": 4000
+    },
+    "physical_percent_complete": {
+      "text": "0%",
+      "value": 0
+    },
+    "remaining_duration": {
+      "minutes": 1440,
+      "text": "3j",
+      "unit": "day"
+    },
+    "remaining_work": {
+      "minutes": 1440,
+      "text": "24h",
+      "unit": "hour"
+    },
+    "resume": "2026-11-06T08:00",
+    "state": "started",
+    "stop": "2026-11-05T17:00"
+  },
+  "resources": [
+    {
+      "name": "Maçon",
+      "uid": 1,
+      "units": {
+        "text": "100%",
+        "value": 10000
+      }
+    }
+  ],
+  "start": "2026-11-04T08:00",
+  "summary": false,
+  "total_slack": {
+    "minutes": 0,
+    "text": "0j",
+    "unit": "day"
+  },
+  "uid": 2,
+  "work": {
+    "minutes": 2400,
+    "text": "40h",
+    "unit": "hour"
+  }
+}

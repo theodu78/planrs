@@ -27,7 +27,13 @@
 	<MultipleCriticalPaths>0</MultipleCriticalPaths>
 	<NewTasksEffortDriven>0</NewTasksEffortDriven>
 	<NewTasksEstimated>1</NewTasksEstimated>
+	<SplitsInProgressTasks>1</SplitsInProgressTasks>
+	<TaskUpdatesResource>1</TaskUpdatesResource>
 	<WeekStartDay>1</WeekStartDay>
+	<MoveCompletedEndsBack>0</MoveCompletedEndsBack>
+	<MoveRemainingStartsBack>0</MoveRemainingStartsBack>
+	<MoveRemainingStartsForward>0</MoveRemainingStartsForward>
+	<MoveCompletedEndsForward>0</MoveCompletedEndsForward>
 	<CurrentDate>2026-10-19T08:00:00</CurrentDate>
 	<Calendars>
 		<Calendar>
@@ -343,6 +349,9 @@
 			<EarlyFinish>2026-11-10T17:00:00</EarlyFinish>
 			<LateStart>2026-11-02T08:00:00</LateStart>
 			<LateFinish>2026-11-12T08:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>
@@ -351,7 +360,7 @@
 			<PercentWorkComplete>0</PercentWorkComplete>
 			<ActualDuration>PT0H0M0S</ActualDuration>
 			<ActualWork>PT0H0M0S</ActualWork>
-			<RemainingDuration>PT0H0M0S</RemainingDuration>
+			<RemainingDuration>PT56H0M0S</RemainingDuration>
 			<RemainingWork>PT0H0M0S</RemainingWork>
 			<ConstraintType>0</ConstraintType>
 			<CalendarUID>-1</CalendarUID>
@@ -385,6 +394,9 @@
 			<EarlyFinish>2026-11-04T17:00:00</EarlyFinish>
 			<LateStart>2026-11-02T08:00:00</LateStart>
 			<LateFinish>2026-11-04T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>
@@ -427,6 +439,9 @@
 			<EarlyFinish>2026-11-05T17:00:00</EarlyFinish>
 			<LateStart>2026-11-10T08:00:00</LateStart>
 			<LateFinish>2026-11-10T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>14400</FreeSlack>
 			<TotalSlack>14400</TotalSlack>
 			<StartSlack>14400</StartSlack>
@@ -476,6 +491,9 @@
 			<EarlyFinish>2026-11-10T17:00:00</EarlyFinish>
 			<LateStart>2026-11-04T08:00:00</LateStart>
 			<LateFinish>2026-11-10T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>
@@ -525,6 +543,9 @@
 			<EarlyFinish>2026-11-10T17:00:00</EarlyFinish>
 			<LateStart>2026-11-12T08:00:00</LateStart>
 			<LateFinish>2026-11-12T08:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>
@@ -581,6 +602,9 @@
 			<EarlyFinish>2026-12-22T17:00:00</EarlyFinish>
 			<LateStart>2026-11-12T08:00:00</LateStart>
 			<LateFinish>2026-12-23T08:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>
@@ -589,7 +613,7 @@
 			<PercentWorkComplete>0</PercentWorkComplete>
 			<ActualDuration>PT0H0M0S</ActualDuration>
 			<ActualWork>PT0H0M0S</ActualWork>
-			<RemainingDuration>PT0H0M0S</RemainingDuration>
+			<RemainingDuration>PT232H0M0S</RemainingDuration>
 			<RemainingWork>PT0H0M0S</RemainingWork>
 			<ConstraintType>0</ConstraintType>
 			<CalendarUID>-1</CalendarUID>
@@ -630,6 +654,9 @@
 			<EarlyFinish>2026-11-17T17:00:00</EarlyFinish>
 			<LateStart>2026-11-12T08:00:00</LateStart>
 			<LateFinish>2026-11-17T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>
@@ -672,6 +699,9 @@
 			<EarlyFinish>2026-11-17T17:00:00</EarlyFinish>
 			<LateStart>2026-11-16T08:00:00</LateStart>
 			<LateFinish>2026-11-17T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>
@@ -721,6 +751,9 @@
 			<EarlyFinish>2026-11-25T17:00:00</EarlyFinish>
 			<LateStart>2026-11-18T08:00:00</LateStart>
 			<LateFinish>2026-11-25T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>
@@ -770,6 +803,9 @@
 			<EarlyFinish>2026-12-08T17:00:00</EarlyFinish>
 			<LateStart>2026-11-27T08:00:00</LateStart>
 			<LateFinish>2026-12-08T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>
@@ -819,6 +855,9 @@
 			<EarlyFinish>2026-12-15T17:00:00</EarlyFinish>
 			<LateStart>2026-12-09T08:00:00</LateStart>
 			<LateFinish>2026-12-15T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>
@@ -868,6 +907,9 @@
 			<EarlyFinish>2026-12-22T17:00:00</EarlyFinish>
 			<LateStart>2026-12-15T08:00:00</LateStart>
 			<LateFinish>2026-12-22T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>
@@ -917,6 +959,9 @@
 			<EarlyFinish>2026-12-22T17:00:00</EarlyFinish>
 			<LateStart>2026-12-23T08:00:00</LateStart>
 			<LateFinish>2026-12-23T08:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>
@@ -973,6 +1018,9 @@
 			<EarlyFinish>2027-01-20T17:00:00</EarlyFinish>
 			<LateStart>2026-12-17T08:00:00</LateStart>
 			<LateFinish>2027-02-09T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>14400</FreeSlack>
 			<TotalSlack>14400</TotalSlack>
 			<StartSlack>14400</StartSlack>
@@ -981,7 +1029,7 @@
 			<PercentWorkComplete>0</PercentWorkComplete>
 			<ActualDuration>PT0H0M0S</ActualDuration>
 			<ActualWork>PT0H0M0S</ActualWork>
-			<RemainingDuration>PT0H0M0S</RemainingDuration>
+			<RemainingDuration>PT224H0M0S</RemainingDuration>
 			<RemainingWork>PT0H0M0S</RemainingWork>
 			<ConstraintType>0</ConstraintType>
 			<CalendarUID>-1</CalendarUID>
@@ -1015,6 +1063,9 @@
 			<EarlyFinish>2026-12-17T17:00:00</EarlyFinish>
 			<LateStart>2026-12-17T08:00:00</LateStart>
 			<LateFinish>2026-12-22T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>14400</FreeSlack>
 			<TotalSlack>14400</TotalSlack>
 			<StartSlack>14400</StartSlack>
@@ -1065,6 +1116,9 @@
 			<EarlyFinish>2026-12-31T17:00:00</EarlyFinish>
 			<LateStart>2026-12-23T08:00:00</LateStart>
 			<LateFinish>2026-12-31T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>
@@ -1114,6 +1168,9 @@
 			<EarlyFinish>2026-12-30T17:00:00</EarlyFinish>
 			<LateStart>2027-02-01T08:00:00</LateStart>
 			<LateFinish>2027-02-08T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>134400</TotalSlack>
 			<StartSlack>134400</StartSlack>
@@ -1163,6 +1220,9 @@
 			<EarlyFinish>2026-12-31T17:00:00</EarlyFinish>
 			<LateStart>2027-02-03T08:00:00</LateStart>
 			<LateFinish>2027-02-09T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>134400</FreeSlack>
 			<TotalSlack>134400</TotalSlack>
 			<StartSlack>134400</StartSlack>
@@ -1212,6 +1272,9 @@
 			<EarlyFinish>2026-12-31T17:00:00</EarlyFinish>
 			<LateStart>2027-02-05T08:00:00</LateStart>
 			<LateFinish>2027-02-09T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>134400</FreeSlack>
 			<TotalSlack>134400</TotalSlack>
 			<StartSlack>134400</StartSlack>
@@ -1261,6 +1324,9 @@
 			<EarlyFinish>2027-01-07T17:00:00</EarlyFinish>
 			<LateStart>2027-01-01T08:00:00</LateStart>
 			<LateFinish>2027-01-07T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>
@@ -1310,6 +1376,9 @@
 			<EarlyFinish>2027-01-15T17:00:00</EarlyFinish>
 			<LateStart>2027-01-08T08:00:00</LateStart>
 			<LateFinish>2027-01-15T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>
@@ -1359,6 +1428,9 @@
 			<EarlyFinish>2027-01-20T17:00:00</EarlyFinish>
 			<LateStart>2027-01-18T08:00:00</LateStart>
 			<LateFinish>2027-01-20T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>
@@ -1408,6 +1480,9 @@
 			<EarlyFinish>2027-02-09T17:00:00</EarlyFinish>
 			<LateStart>2027-01-21T08:00:00</LateStart>
 			<LateFinish>2027-02-09T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>
@@ -1416,7 +1491,7 @@
 			<PercentWorkComplete>0</PercentWorkComplete>
 			<ActualDuration>PT0H0M0S</ActualDuration>
 			<ActualWork>PT0H0M0S</ActualWork>
-			<RemainingDuration>PT0H0M0S</RemainingDuration>
+			<RemainingDuration>PT112H0M0S</RemainingDuration>
 			<RemainingWork>PT0H0M0S</RemainingWork>
 			<ConstraintType>0</ConstraintType>
 			<CalendarUID>-1</CalendarUID>
@@ -1457,6 +1532,9 @@
 			<EarlyFinish>2027-01-27T17:00:00</EarlyFinish>
 			<LateStart>2027-02-03T08:00:00</LateStart>
 			<LateFinish>2027-02-09T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>19200</FreeSlack>
 			<TotalSlack>43200</TotalSlack>
 			<StartSlack>43200</StartSlack>
@@ -1499,6 +1577,9 @@
 			<EarlyFinish>2027-02-01T17:00:00</EarlyFinish>
 			<LateStart>2027-01-21T08:00:00</LateStart>
 			<LateFinish>2027-02-01T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>
@@ -1541,6 +1622,9 @@
 			<EarlyFinish>2027-02-05T17:00:00</EarlyFinish>
 			<LateStart>2027-02-02T08:00:00</LateStart>
 			<LateFinish>2027-02-05T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>
@@ -1590,6 +1674,9 @@
 			<EarlyFinish>2027-01-25T17:00:00</EarlyFinish>
 			<LateStart>2027-02-05T08:00:00</LateStart>
 			<LateFinish>2027-02-09T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>52800</FreeSlack>
 			<TotalSlack>52800</TotalSlack>
 			<StartSlack>52800</StartSlack>
@@ -1632,6 +1719,9 @@
 			<EarlyFinish>2027-01-26T17:00:00</EarlyFinish>
 			<LateStart>2027-02-04T08:00:00</LateStart>
 			<LateFinish>2027-02-09T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>48000</FreeSlack>
 			<TotalSlack>48000</TotalSlack>
 			<StartSlack>48000</StartSlack>
@@ -1681,6 +1771,9 @@
 			<EarlyFinish>2027-02-09T17:00:00</EarlyFinish>
 			<LateStart>2027-02-08T08:00:00</LateStart>
 			<LateFinish>2027-02-09T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>
@@ -1730,6 +1823,9 @@
 			<EarlyFinish>2027-02-09T17:00:00</EarlyFinish>
 			<LateStart>2027-02-09T17:00:00</LateStart>
 			<LateFinish>2027-02-09T17:00:00</LateFinish>
+			<StartVariance>0</StartVariance>
+			<FinishVariance>0</FinishVariance>
+			<WorkVariance>0.00</WorkVariance>
 			<FreeSlack>0</FreeSlack>
 			<TotalSlack>0</TotalSlack>
 			<StartSlack>0</StartSlack>

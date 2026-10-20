@@ -93,6 +93,21 @@ pub mod codes {
     pub const TASK_FIXED_WORK_EFFORT_DRIVEN: &str = "task.fixed_work_effort_driven";
     /// Champs qui s'excluent modifiés ensemble (durée et travail, R-197).
     pub const PARAM_CONFLICT: &str = "param.conflict";
+    /// Avancement saisi sur une récapitulative (J6, R-213).
+    pub const PROGRESS_SUMMARY_NOT_EDITABLE: &str = "progress.summary_not_editable";
+    /// Avancement saisi sur une tâche inactive (J6, R-213).
+    pub const PROGRESS_INACTIVE: &str = "progress.inactive";
+    /// Fin réelle avant le début réel (J6, R-202).
+    pub const PROGRESS_INVALID_ORDER: &str = "progress.invalid_order";
+    /// Durée saisie sous la durée réelle (J6, R-213, arbitrage du
+    /// 2026-10-20).
+    pub const PROGRESS_DURATION_BELOW_ACTUAL: &str = "progress.duration_below_actual";
+    /// Ligne de base déjà présente, sans `overwrite` (J6, R-223, R-227).
+    pub const BASELINE_EXISTS: &str = "baseline.exists";
+    /// Cumul d'une ligne de base sans sélection de tâches (J6, R-222).
+    pub const BASELINE_ROLLUP_NEEDS_SELECTION: &str = "baseline.rollup_needs_selection";
+    /// Tâche exclue du calcul : aucune date à expliquer (J6, R-230).
+    pub const EXPLAIN_NOT_SCHEDULED: &str = "explain.not_scheduled";
 }
 
 /// Commande refusée. L'état de la session est intact (atomicité du lot).
@@ -190,6 +205,30 @@ pub enum CommandErrorKind {
     FixedWorkEffortDriven,
     /// Champs qui s'excluent (J5) : les deux noms.
     ParamConflict(&'static str, &'static str),
+    /// Avancement d'une récapitulative (J6).
+    ProgressSummaryNotEditable,
+    /// Avancement d'une tâche inactive (J6).
+    ProgressInactive,
+    /// Fin réelle avant le début réel (J6).
+    ProgressInvalidOrder,
+    /// Durée saisie sous la durée réelle (J6, R-213).
+    DurationBelowActual {
+        /// Durée réelle stockée, minutes ouvrées.
+        actual: i64,
+        /// Durée saisie, minutes ouvrées.
+        entered: i64,
+    },
+    /// Ligne de base déjà présente (J6).
+    BaselineExists {
+        /// Numéro de la ligne.
+        number: u8,
+        /// Entités de la portée qui l'ont déjà.
+        count: u32,
+    },
+    /// Cumul sans sélection (J6).
+    BaselineRollupNeedsSelection,
+    /// Tâche non planifiée (J6).
+    ExplainNotScheduled(TaskUid),
 }
 
 impl CommandError {
@@ -490,6 +529,65 @@ fn kind_message(kind: &CommandErrorKind, lang: Language) -> String {
                 format!("« {a} » et « {b} » ne se modifient pas ensemble")
             } else {
                 format!("\"{a}\" and \"{b}\" cannot be changed together")
+            }
+        }
+        K::ProgressSummaryNotEditable => {
+            if fr {
+                "l'avancement d'une récapitulative se calcule depuis ses sous-tâches : il ne se saisit pas"
+                    .to_owned()
+            } else {
+                "the progress of a summary task is computed from its subtasks: it cannot be entered"
+                    .to_owned()
+            }
+        }
+        K::ProgressInactive => {
+            if fr {
+                "l'avancement d'une tâche inactive ne se saisit pas".to_owned()
+            } else {
+                "the progress of an inactive task cannot be entered".to_owned()
+            }
+        }
+        K::ProgressInvalidOrder => {
+            if fr {
+                "la fin réelle précède le début réel".to_owned()
+            } else {
+                "the actual finish is before the actual start".to_owned()
+            }
+        }
+        K::DurationBelowActual { actual, entered } => {
+            if fr {
+                format!(
+                    "durée de {entered} min inférieure à la durée réelle déjà saisie ({actual} min) : réduire d'abord l'avancement (progress.update)"
+                )
+            } else {
+                format!(
+                    "duration of {entered} min is less than the actual duration already entered ({actual} min): reduce the progress first (progress.update)"
+                )
+            }
+        }
+        K::BaselineExists { number, count } => {
+            if fr {
+                format!(
+                    "la ligne de base {number} existe déjà sur {count} élément(s) : la remplacer avec \"overwrite\": true"
+                )
+            } else {
+                format!(
+                    "baseline {number} already exists on {count} item(s): replace it with \"overwrite\": true"
+                )
+            }
+        }
+        K::BaselineRollupNeedsSelection => {
+            if fr {
+                "le cumul vers les récapitulatives demande une sélection de tâches (\"tasks\")".to_owned()
+            } else {
+                "rolling up to summary tasks requires a selection of tasks (\"tasks\")".to_owned()
+            }
+        }
+        K::ExplainNotScheduled(uid) => {
+            if fr {
+                format!("la tâche {uid} n'est pas planifiée : aucune date à expliquer")
+            } else {
+                format!("task {uid} is not scheduled: there is no date to explain")
             }
         }
     }

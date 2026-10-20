@@ -30,9 +30,9 @@ use std::collections::BTreeMap;
 use planrs_core::calendar::CompiledCalendar;
 use planrs_core::resource::{UsageError, usage as core_usage};
 use planrs_core::{
-    Assignment, Decimal, Diagnostic, Duration, DurationUnit, HasUid, LagValue, Minutes, Moment, Project,
-    Resource, ResourceKind, ResourceUid, Schedule, Severity, Subject, Task, TaskRole, TaskSchedule, TaskUid,
-    TimeBasis, Units, Work, round_div,
+    Assignment, BaselineNumber, Decimal, Diagnostic, Duration, DurationUnit, HasUid, LagValue, Minutes,
+    Moment, Percent, ProgressState, Project, Resource, ResourceKind, ResourceUid, Schedule, Severity,
+    Subject, Task, TaskBaseline, TaskRole, TaskSchedule, TaskUid, TimeBasis, Units, Work, round_div,
 };
 use serde::Serialize;
 
@@ -40,8 +40,8 @@ use crate::command::params::{ResourceListParams, TaskListParams, UsageParams};
 use crate::diff::{ScheduleDiff, TaskChange};
 use crate::error::{CommandError, CommandErrorKind, MAX_MESSAGE_CHARS, codes};
 use crate::json::{
-    ConstraintKindJson, DurationJson, GranularityJson, LagJson, LinkTypeJson, ResourceKindJson, TaskTypeJson,
-    UnitsJson,
+    ConstraintKindJson, DurationJson, GranularityJson, LagJson, LinkTypeJson, PercentJson, ResourceKindJson,
+    TaskTypeJson, UnitsJson,
 };
 use crate::outcome::{ApplyOutcome, SideEffect};
 use crate::session::Session;
@@ -70,6 +70,23 @@ pub const MAX_TASK_RESOURCES: usize = 100;
 /// (C-MCP-03, J5) : borne de surface, plus serrée que celle du cœur
 /// (1 000 × 1 000, R-188).
 pub const MAX_USAGE_CELLS: usize = 20_000;
+
+/// Champs d'une tâche repris par une ligne de `baseline_variance`
+/// ([`ViewCtx::task_brief`]), mêmes valeurs que [`TaskView`].
+pub(crate) struct TaskBrief {
+    /// ID (position).
+    pub id: u32,
+    /// Nom.
+    pub name: String,
+    /// Début planifié.
+    pub start: Option<String>,
+    /// Fin planifiée.
+    pub finish: Option<String>,
+    /// Durée.
+    pub duration: DurationJson,
+    /// Travail calculé, absent quand nul.
+    pub work: Option<DurationJson>,
+}
 
 /// Tâche, telle que le moteur l'a planifiée.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -119,6 +136,100 @@ pub struct TaskView {
     /// quand nul.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub work: Option<DurationJson>,
+    /// Avancement calculé par le moteur (J6, R-235) : état et % achevé ;
+    /// absent pour une tâche non commencée.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<TaskProgressOut>,
+}
+
+/// Avancement résumé d'une tâche, dans [`TaskView`] (J6, R-235).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TaskProgressOut {
+    /// État (`started`, `complete`).
+    pub state: ProgressState,
+    /// % achevé (R-200, R-210).
+    pub percent: PercentJson,
+}
+
+/// Avancement détaillé d'une tâche, dans [`TaskDetailView`] (J6, R-235) :
+/// valeurs du moteur (`ProgressSchedule`), % physique saisi.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ProgressDetailOut {
+    /// État.
+    pub state: ProgressState,
+    /// % achevé (durée).
+    pub percent_complete: PercentJson,
+    /// % travail achevé.
+    pub percent_work_complete: PercentJson,
+    /// % physique achevé (saisi, sans effet sur le calcul, R-212).
+    pub physical_percent_complete: PercentJson,
+    /// Début réel (saisi ou implicite, R-200).
+    pub actual_start: String,
+    /// Fin réelle ; absente si la tâche n'est pas achevée.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual_finish: Option<String>,
+    /// Durée réelle (unité de la tâche).
+    pub actual_duration: DurationJson,
+    /// Durée restante = D − réel.
+    pub remaining_duration: DurationJson,
+    /// Travail réel (heures) d'une feuille ; absent d'une récapitulative.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual_work: Option<DurationJson>,
+    /// Travail restant = W − réel (heures) d'une feuille.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remaining_work: Option<DurationJson>,
+    /// Fin de la partie réelle (`Stop`, R-204).
+    pub stop: String,
+    /// Reprise du reste (`Resume`, R-204).
+    pub resume: String,
+}
+
+/// Valeurs d'une ligne de base (J6, R-228, R-235).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct BaselineOut {
+    /// Début de base.
+    pub start: Option<String>,
+    /// Fin de base.
+    pub finish: Option<String>,
+    /// Durée de base ; absente si la ligne n'en a pas.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<DurationJson>,
+    /// Travail de base (heures) ; absent si la ligne n'en a pas.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work: Option<DurationJson>,
+}
+
+/// Ligne de base numérotée d'une tâche, dans [`TaskDetailView`] (J6).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct NumberedBaselineOut {
+    /// Numéro (0 à 10).
+    pub number: u8,
+    /// Valeurs.
+    #[serde(flatten)]
+    pub values: BaselineOut,
+}
+
+/// Valeurs d'une ligne de base en sortie.
+#[must_use]
+pub fn baseline_out(b: &TaskBaseline, text: &TextContext) -> BaselineOut {
+    BaselineOut {
+        start: b.start.map(iso),
+        finish: b.finish.map(iso),
+        duration: b.duration.map(|d| DurationJson::from_duration(&d, text)),
+        work: b.work.map(|w| work_out(w, text)),
+    }
+}
+
+/// % de sortie (J6) : `value` en 1/100 de % (10 000 = 100 %) et `text`
+/// (« 40% », « 12,5% »), relisible par [`PercentJson::to_percent`].
+#[must_use]
+pub fn percent_out(p: Percent, ctx: &TextContext) -> PercentJson {
+    PercentJson {
+        value: Some(p.get()),
+        text: Decimal::new(p.get(), 2)
+            .ok()
+            .map(|d| format!("{}%", format_decimal(d, ctx.decimal))),
+    }
 }
 
 /// Ressource affectée à une tâche, dans [`TaskView`] (J5).
@@ -144,6 +255,14 @@ pub struct TaskDetailView {
     /// une récapitulative (jamais pilotée, R-193).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scheduling: Option<SchedulingOut>,
+    /// Avancement détaillé (J6, R-235) ; absent pour une tâche non
+    /// commencée.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<ProgressDetailOut>,
+    /// Lignes de base de la tâche (0 à 10, au plus 11), par numéro ;
+    /// absentes du JSON quand il n'y en a pas (J6, R-235).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub baselines: Vec<NumberedBaselineOut>,
 }
 
 /// Type de tâche et pilotage par l'effort (S41, R-189, R-193).
@@ -208,6 +327,16 @@ pub struct SummaryView {
     pub history_len: usize,
     /// Chemin du fichier.
     pub path: Option<String>,
+    /// Date d'état effective (J6, R-219, R-235) : saisie, sinon la date du
+    /// jour du projet (ISO local).
+    pub status_date: String,
+    /// % achevé du projet (UID 0, R-210) ; absent sans avancement.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub percent_complete: Option<PercentJson>,
+    /// Numéros des lignes de base présentes (tâches, projet, affectations,
+    /// ressources), croissants ; absent quand il n'y en a pas.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub baselines: Vec<u8>,
 }
 
 /// Page de `task.list`.
@@ -760,9 +889,51 @@ impl<'a> ViewCtx<'a> {
             task_type: task.task_type.into(),
             effort_driven: task.effort_driven,
         });
+        let progress = self.progress_detail(task);
+        let baselines = task
+            .baselines
+            .iter()
+            .map(|(n, b)| NumberedBaselineOut {
+                number: n.get(),
+                values: baseline_out(b, &self.text),
+            })
+            .collect();
         Some(TaskDetailView {
             task: view,
             scheduling,
+            progress,
+            baselines,
+        })
+    }
+
+    /// Avancement détaillé d'une tâche commencée (R-235) : valeurs du
+    /// moteur ; % physique et travail réel saisis (feuille seulement).
+    fn progress_detail(&self, task: &Task) -> Option<ProgressDetailOut> {
+        let ts = self.schedule.scheduled(task.uid())?;
+        let g = ts.progress.filter(|g| g.state != ProgressState::NotStarted)?;
+        let unit = task.duration.unit();
+        let leaf = ts.role != TaskRole::Summary;
+        let actual_work = task.progress.actual_work;
+        let remaining_work = Minutes::new(
+            ts.work
+                .minutes()
+                .get()
+                .saturating_sub(actual_work.minutes().get())
+                .max(0),
+        );
+        Some(ProgressDetailOut {
+            state: g.state,
+            percent_complete: percent_out(g.percent_complete, &self.text),
+            percent_work_complete: percent_out(g.percent_work_complete, &self.text),
+            physical_percent_complete: percent_out(task.progress.physical_percent_complete, &self.text),
+            actual_start: iso(g.actual_start),
+            actual_finish: g.actual_finish.map(iso),
+            actual_duration: signed_minutes(g.actual_duration, unit, &self.text),
+            remaining_duration: signed_minutes(g.remaining_duration, unit, &self.text),
+            actual_work: leaf.then(|| work_out(actual_work, &self.text)),
+            remaining_work: leaf.then(|| signed_minutes(remaining_work, DurationUnit::Hour, &self.text)),
+            stop: iso(g.stop),
+            resume: iso(g.resume),
         })
     }
 
@@ -825,6 +996,34 @@ impl<'a> ViewCtx<'a> {
             diagnostics: self.task_diags.get(&uid).cloned().unwrap_or_default(),
             resources,
             resources_total,
+            work: scheduled
+                .map(|s| s.work)
+                .filter(|w| *w != Work::ZERO)
+                .map(|w| work_out(w, &self.text)),
+            progress: scheduled
+                .and_then(|s| s.progress)
+                .filter(|g| g.state != ProgressState::NotStarted)
+                .map(|g| TaskProgressOut {
+                    state: g.state,
+                    percent: percent_out(g.percent_complete, &self.text),
+                }),
+        }
+    }
+
+    /// Champs de [`Self::task_at`] lus par `baseline_variance` (ID, nom,
+    /// dates, durée, travail), sans les liens, ressources ni diagnostics
+    /// (relecture finale J6, J6-PERF-3).
+    pub(crate) fn task_brief(&self, pos: usize, task: &Task) -> TaskBrief {
+        let scheduled = self.schedule.scheduled(task.uid());
+        TaskBrief {
+            id: pos
+                .checked_add(1)
+                .and_then(|n| u32::try_from(n).ok())
+                .unwrap_or(u32::MAX),
+            name: task.name.clone(),
+            start: scheduled.map(|s| iso(s.start)),
+            finish: scheduled.map(|s| iso(s.finish)),
+            duration: self.duration(task, scheduled),
             work: scheduled
                 .map(|s| s.work)
                 .filter(|w| *w != Work::ZERO)
@@ -1050,7 +1249,31 @@ pub fn summary(session: &Session) -> SummaryView {
         dirty: session.is_dirty(),
         history_len: session.history().entries.len(),
         path: session.origin().path.clone(),
+        status_date: iso(project.effective_status_date()),
+        percent_complete: schedule
+            .project_summary
+            .as_ref()
+            .and_then(|s| s.progress)
+            .filter(|g| g.state != ProgressState::NotStarted)
+            .map(|g| percent_out(g.percent_complete, ctx.text())),
+        baselines: baseline_numbers(project),
     }
+}
+
+/// Numéros des lignes de base présentes dans le projet (tâches, UID 0,
+/// affectations, ressources), croissants, sans doublon (R-235).
+fn baseline_numbers(p: &Project) -> Vec<u8> {
+    let mut seen = std::collections::BTreeSet::new();
+    for t in p.tasks.iter().chain(p.summary_task.iter()) {
+        seen.extend(t.baselines.keys().map(|n| n.get()));
+    }
+    for a in &p.assignments {
+        seen.extend(a.baselines.keys().map(|n| n.get()));
+    }
+    for r in &p.resources {
+        seen.extend(r.baselines.keys().map(|n| n.get()));
+    }
+    seen.into_iter().collect()
 }
 
 /// Erreur `param.invalid` sur le champ `field`.
@@ -1065,8 +1288,9 @@ fn invalid(field: &str, why: &str) -> CommandError {
 /// Page de `task.list` : tâches dans l'ordre des ID (lignes vides
 /// exclues), filtrées puis coupées après le curseur.
 ///
-/// Filtres : `critical` (critique selon le moteur), `late` (J4 : fin
-/// planifiée après l'échéance), `from`/`to` (dates planifiées qui touchent
+/// Filtres : `critical` (critique selon le moteur), `late` (R-236 :
+/// échéance ou fin de la ligne 0 dépassée, ou retard à la date d'état),
+/// `from`/`to` (dates planifiées qui touchent
 /// la plage de jours, bornes comprises : début au plus tard le jour `to`,
 /// fin au plus tôt le jour `from`), `outline_max`, `summary`. Une tâche non
 /// planifiée n'est retenue par aucun filtre de dates ni par `critical` ou
@@ -1124,10 +1348,11 @@ pub fn list(session: &Session, p: &TaskListParams) -> Result<ListView, CommandEr
         }
     };
     let schedule = session.schedule();
+    let status = project.effective_status_date();
     let keep = |pos: usize, t: &Task| -> bool {
         let s = schedule.scheduled(t.uid());
         let critical_ok = !p.critical || s.is_some_and(|s| s.critical);
-        let late_ok = !p.late || s.is_some_and(|s| t.deadline.is_some_and(|d| s.finish > d));
+        let late_ok = !p.late || s.is_some_and(|s| is_late(t, s, status));
         let from_ok = p
             .from
             .is_none_or(|from| s.is_some_and(|s| s.finish.day() >= from));
@@ -1161,6 +1386,24 @@ pub fn list(session: &Session, p: &TaskListParams) -> Result<ListView, CommandEr
         next_cursor,
         total,
     })
+}
+
+/// R-236 : tâche planifiée en retard. Vrai si sa fin planifiée dépasse son
+/// échéance (J4) ou la fin de sa ligne de base 0, ou si, à la date d'état
+/// effective `status` (R-034), elle n'est pas achevée alors que sa fin
+/// planifiée est atteinte, ou pas commencée alors que son début planifié
+/// est passé. État d'avancement lu dans le `Schedule` (R-200, R-210).
+fn is_late(t: &Task, s: &TaskSchedule, status: Moment) -> bool {
+    let past_deadline = t.deadline.is_some_and(|d| s.finish > d);
+    let past_baseline = t
+        .baselines
+        .get(&BaselineNumber::PRIMARY)
+        .and_then(|b| b.finish)
+        .is_some_and(|f| s.finish > f);
+    let state = s.progress.map_or(ProgressState::NotStarted, |g| g.state);
+    let unfinished = state != ProgressState::Complete && s.finish <= status;
+    let unstarted = state == ProgressState::NotStarted && s.start < status;
+    past_deadline || past_baseline || unfinished || unstarted
 }
 
 /// Ressource `uid` du projet, sinon `resource.not_found` sur `field`.

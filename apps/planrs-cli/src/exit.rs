@@ -1,7 +1,7 @@
 //! Codes de sortie (C-MCP-08).
 //!
 //! 0 succès ; 1 commande refusée (erreur métier du moteur ou du registre) ;
-//! 2 usage (arguments, commande indisponible, `explain`) ; 3 fichier
+//! 2 usage (arguments, commande indisponible) ; 3 fichier
 //! (lecture, écriture, MSPDI ou CSV inexploitable).
 
 /// Succès.

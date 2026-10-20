@@ -12,6 +12,7 @@ use crate::diagnostic::Diagnostic;
 use crate::duration::{Minutes, Work};
 use crate::ids::{AssignmentUid, CalendarUid, ResourceUid, TaskUid};
 use crate::model::{ConstraintKind, LinkType};
+use crate::progress::ProgressState;
 use crate::quantity::{Percent, Units};
 use crate::time::Moment;
 
@@ -155,6 +156,50 @@ pub struct TaskSchedule {
     /// Absent du JSON quand nul.
     #[serde(default, skip_serializing_if = "is_zero_work")]
     pub work: Work,
+    /// Avancement calculé (J6, R-200, R-204, R-210) ; `None` pour une tâche
+    /// non commencée sans agrégat. Absent du JSON quand il n'y en a pas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<ProgressSchedule>,
+    /// Borne brute retenue pour le pilote, avant recalage sur le calendrier
+    /// (J6, R-230, base d'`explain_date`) : date du lien converti, date de
+    /// contrainte, début du projet ou borne de porte ; `None` pour
+    /// `Manual`, `Rollup` et `Actual`. Absente du JSON quand elle manque.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver_bound: Option<Moment>,
+}
+
+/// Avancement calculé d'une tâche planifiée (J6, ADR-0014 D2, D4).
+///
+/// `stop` est toujours calculé, jamais stocké ; une reprise saisie est
+/// stockée dans le modèle (`Progress::resume`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProgressSchedule {
+    /// État (R-200).
+    pub state: ProgressState,
+    /// Début réel, saisi ou implicite (R-200 : début au plus tôt du
+    /// réseau) ; récapitulative : min des débuts réels (R-210).
+    pub actual_start: Moment,
+    /// Fin réelle (tâche achevée ; récapitulative dont toutes les feuilles
+    /// le sont).
+    pub actual_finish: Option<Moment>,
+    /// Fin de la partie réelle (`Stop`, R-204) ; achevée : fin réelle.
+    pub stop: Moment,
+    /// Reprise du reste (`Resume`, R-204, R-205) ; achevée : fin réelle.
+    pub resume: Moment,
+    /// Durée réelle effective (R-200, R-210).
+    pub actual_duration: Minutes,
+    /// Durée restante = D − réel (R-200).
+    pub remaining_duration: Minutes,
+    /// % achevé dérivé (R-200, R-210), 1/10 000.
+    pub percent_complete: Percent,
+    /// % travail achevé (R-211, R-210), 1/10 000.
+    pub percent_work_complete: Percent,
+    /// Travail réel (R-210) : Σ travail réel des affectations de travail du
+    /// périmètre de R-184 (feuille : ses propres affectations) ; relecture
+    /// finale J6, J6-F2 : écrit `ActualWork` d'une récapitulative.
+    #[serde(default, skip_serializing_if = "is_zero_work")]
+    pub actual_work: Work,
 }
 
 /// Vrai pour un travail nul (champ omis du JSON).
@@ -198,6 +243,15 @@ pub struct AssignmentSchedule {
     pub effective_units: Units,
     /// Calendrier qui place l'affectation (R-171).
     pub calendar: EffectiveCalendar,
+    /// Partie réelle de l'affectation (J6, R-209) : `span` pour une tâche
+    /// achevée, [début réel, fin du réel] pour une tâche en cours ; `None`
+    /// pour une tâche non commencée. Absente du JSON quand elle manque.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual: Option<Span>,
+    /// Début du reste d'une affectation de tâche en cours (J6, R-209 :
+    /// depuis `Resume`). Absent du JSON quand il manque.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining_start: Option<Moment>,
 }
 
 /// Rôle d'une affectation dans le calcul.
@@ -307,6 +361,9 @@ pub enum Driver {
         #[serde(rename = "constraint")]
         kind: ConstraintKind,
     },
+    /// Début réel d'une tâche commencée (J6, R-203, R-204) : liens,
+    /// porte et contrainte ne déplacent plus son début.
+    Actual,
 }
 
 /// Cause de la fin au plus tard d'une tâche (R-047) : le premier plafond
@@ -353,4 +410,7 @@ pub enum LateDriver {
     Rollup,
     /// Repli : dates au plus tard = dates au plus tôt (R-069).
     Fallback,
+    /// Dates au plus tard = dates réelles d'une tâche achevée (J6, R-203),
+    /// ou au plus tôt d'une tâche en cours à rebours (R-207).
+    Actual,
 }

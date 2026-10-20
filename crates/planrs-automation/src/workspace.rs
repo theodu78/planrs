@@ -17,9 +17,9 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::command::params::{
-    ApplyBatchParams, ExportMspdiParams, ImportCsvParams, NewProjectParams, NoParams, OpenProjectParams,
-    RenderGanttParams, ResourceListParams, SaveProjectParams, TaskGetParams, TaskListParams, UsageParams,
-    ZoomJson,
+    ApplyBatchParams, ExplainParams, ExportMspdiParams, ImportCsvParams, NewProjectParams, NoParams,
+    OpenProjectParams, RenderGanttParams, ResourceListParams, SaveProjectParams, TaskGetParams,
+    TaskListParams, UsageParams, ZoomJson,
 };
 use crate::command::{AnchorSpec, Batch, Command, parse_params};
 use crate::error::{CommandError, CommandErrorKind, HistoryError, codes};
@@ -284,6 +284,10 @@ impl Workspace {
                 to_value(&v)
             }
             "resource.list" | "analysis.resource_usage" => self.resource_read(id, params),
+            "analysis.explain_date" => {
+                let p = parse_params::<ExplainParams>(params).map_err(cmd)?;
+                to_value(&crate::explain::explain_date(self.current()?, &p).map_err(cmd)?)
+            }
             "analysis.critical_path" => {
                 parse_params::<NoParams>(params).map_err(cmd)?;
                 to_value(&ViewCtx::new(self.current()?).critical_path())

@@ -173,11 +173,10 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Chemin critique : tâches critiques dans l'ordre, fin du projet.",
         "Critical path: critical tasks in order, project finish.",
     ),
-    reserved(
+    now(
         "analysis.explain_date",
         "explain_date",
         Kind::Analysis,
-        6,
         schema_of::<ExplainParams>,
         "Explique la date d'une tâche : pilote, contrainte, calendrier, avancement, chaîne des causes.",
         "Explain a task date: driver, constraint, calendar, progress, chain of causes.",

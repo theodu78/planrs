@@ -68,6 +68,9 @@ const J6_ENTRIES: [(&str, &str, Kind); 6] = [
     ("progress.update", "update_progress", Kind::Write),
 ];
 
+/// Entrées J6 déjà activées (lot L7 : `analysis.explain_date`).
+const ACTIVE: [&str; 1] = ["analysis.explain_date"];
+
 #[test]
 fn contract_compiles() {
     let mut s = session_with_task();
@@ -175,6 +178,9 @@ fn contract_compiles() {
     // Surfaces : entrées réservées, refusées par l'espace de travail.
     let mut ws = Workspace::new(now(), Language::Fr);
     for (id, _, _) in J6_ENTRIES {
+        if ACTIVE.contains(&id) {
+            continue;
+        }
         let err = ws.call(id, json!({})).unwrap_err();
         assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{id}");
     }
@@ -280,8 +286,13 @@ fn registry_sorted_and_unique() {
         assert_eq!(spec.mcp_name, name);
         assert_eq!(by_mcp_name(name).unwrap().id, id);
         assert_eq!(spec.kind, kind, "{id}");
-        assert_eq!(spec.available, Availability::Milestone(6), "{id}");
-        assert!(!spec.is_listed());
+        if ACTIVE.contains(&id) {
+            assert_eq!(spec.available, Availability::Now, "{id}");
+            assert!(spec.is_listed());
+        } else {
+            assert_eq!(spec.available, Availability::Milestone(6), "{id}");
+            assert!(!spec.is_listed());
+        }
         let schema = serde_json::to_value((spec.schema)()).unwrap();
         assert_eq!(schema["type"], json!("object"), "{id}");
         assert!(schema["properties"].is_object(), "{id} : schéma vide");

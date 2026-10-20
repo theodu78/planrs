@@ -37,7 +37,18 @@ impl Calc<'_, '_> {
             super::Strategy::Fast => self.percent_sums(),
             super::Strategy::Reference => None,
         };
-        let work = self.leaf_work();
+        // Sans aucun avancement saisi, ni travail par tâche ni agrégats
+        // (P37 : planning inchangé, coût nul sur les réseaux sans suivi).
+        let any_progress = self
+            .project
+            .tasks
+            .iter()
+            .any(|t| progress::facts(t).state != ProgressState::NotStarted);
+        let work = if any_progress {
+            self.leaf_work()
+        } else {
+            Vec::new()
+        };
         let mut tasks: BTreeMap<TaskUid, TaskOutcome> = BTreeMap::new();
         for (p, task) in self.project.tasks.iter().enumerate() {
             let outcome = if let Some(info) = self.net.task(p).cloned() {
@@ -63,7 +74,11 @@ impl Calc<'_, '_> {
             }
         }
         // R-210 : agrégats d'avancement des récapitulatives, puis de l'UID 0.
-        let root = self.progress_rollup(&mut tasks, &work);
+        let root = if any_progress {
+            self.progress_rollup(&mut tasks, &work)
+        } else {
+            Agg::default()
+        };
         let project_summary = self.project_summary(&tasks, sums.as_deref(), &root);
         Schedule {
             project_start: self.start,

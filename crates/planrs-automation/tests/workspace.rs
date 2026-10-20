@@ -279,14 +279,17 @@ fn workspace_no_session_error() {
         ("task.add", json!({ "name": "A" })),
         ("batch.apply", json!({ "ops": [] })),
         ("project.save", json!({})),
+        ("analysis.what_if", json!({ "ops": [] })),
+        ("analysis.baseline_variance", json!({})),
+        ("progress.update", json!({ "task": 1 })),
+        ("baseline.set", json!({})),
     ] {
         let err = ws.call(id, params).unwrap_err();
         assert_eq!(err.code, codes::SESSION_NONE, "{id}");
         assert!(err.message.contains("open_project"), "{id} : {}", err.message);
     }
-    // Commande réservée, id inconnu, paramètres mal formés.
-    let err = ws.call("analysis.what_if", json!({})).unwrap_err();
-    assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE);
+    // Id inconnu, paramètres mal formés (plus aucune commande réservée
+    // depuis le lot L8 de J6).
     assert_eq!(
         ws.call("task.nope", json!({})).unwrap_err().code,
         codes::PARAM_INVALID

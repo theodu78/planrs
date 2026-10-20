@@ -68,8 +68,16 @@ const J6_ENTRIES: [(&str, &str, Kind); 6] = [
     ("progress.update", "update_progress", Kind::Write),
 ];
 
-/// Entrées J6 déjà activées (lot L7 : `analysis.explain_date`).
-const ACTIVE: [&str; 1] = ["analysis.explain_date"];
+/// Entrées J6 activées : toutes depuis le lot L8 (`analysis.explain_date`
+/// au lot L7).
+const ACTIVE: [&str; 6] = [
+    "analysis.baseline_variance",
+    "analysis.explain_date",
+    "analysis.what_if",
+    "baseline.set",
+    "progress.reschedule",
+    "progress.update",
+];
 
 #[test]
 fn contract_compiles() {
@@ -120,12 +128,12 @@ fn contract_compiles() {
     assert_eq!(s.project(), &before);
     assert_eq!(s.generation(), generation);
 
-    // Simulation (lot L8) : squelette refusé, session intacte.
+    // Simulation (lot L8) : lot vide accepté, état inchangé, session
+    // intacte.
     let batch = Batch::from_json(json!({ "format_version": 1, "ops": [] })).unwrap();
-    assert_eq!(
-        s.simulate(&batch, ApplyOptions::default()).unwrap_err().code,
-        codes::COMMAND_NOT_YET_AVAILABLE
-    );
+    let sim = s.simulate(&batch, ApplyOptions::default()).unwrap();
+    assert!(!sim.outcome.committed);
+    assert_eq!(&sim.project, s.project());
     assert_eq!(s.generation(), generation);
 
     // Paramètres des analyses : lus, champs inconnus refusés.
@@ -175,14 +183,14 @@ fn contract_compiles() {
 
     core_contract(&s);
 
-    // Surfaces : entrées réservées, refusées par l'espace de travail.
+    // Surfaces (lot L8) : toutes les entrées J6 sont routées ; sans projet
+    // ouvert, l'espace de travail répond `session.none`, jamais
+    // `command.not_yet_available`.
     let mut ws = Workspace::new(now(), Language::Fr);
     for (id, _, _) in J6_ENTRIES {
-        if ACTIVE.contains(&id) {
-            continue;
-        }
+        assert!(ACTIVE.contains(&id), "{id}");
         let err = ws.call(id, json!({})).unwrap_err();
-        assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{id}");
+        assert_ne!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{id}");
     }
 }
 

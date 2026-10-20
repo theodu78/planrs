@@ -203,19 +203,14 @@ pub enum Command {
     /// Retire une affectation (R-196).
     #[serde(rename = "assignment.remove")]
     AssignmentRemove(AssignmentKey),
-    /// Met à jour l'avancement d'une tâche (R-216 ; contrat J6, réservée
-    /// jusqu'au lot L8 : hors du schéma des lots, refusée
-    /// `command.not_yet_available`).
+    /// Met à jour l'avancement d'une tâche (R-216).
     #[serde(rename = "progress.update")]
-    #[schemars(skip)]
     ProgressUpdate(ProgressUpdate),
-    /// Replanifie le travail restant (R-217 ; réservée jusqu'au lot L8).
+    /// Replanifie le travail restant (R-217).
     #[serde(rename = "progress.reschedule")]
-    #[schemars(skip)]
     ProgressReschedule(ProgressReschedule),
-    /// Enregistre une ligne de base (R-227 ; réservée jusqu'au lot L8).
+    /// Enregistre une ligne de base (R-227).
     #[serde(rename = "baseline.set")]
-    #[schemars(skip)]
     BaselineSet(BaselineSet),
 }
 

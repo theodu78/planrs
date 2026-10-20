@@ -19,7 +19,7 @@ use serde_json::{Map, Value};
 use crate::command::params::{
     ApplyBatchParams, ExplainParams, ExportMspdiParams, ImportCsvParams, NewProjectParams, NoParams,
     OpenProjectParams, RenderGanttParams, ResourceListParams, SaveProjectParams, TaskGetParams,
-    TaskListParams, UsageParams, ZoomJson,
+    TaskListParams, UsageParams, VarianceParams, WhatIfParams, ZoomJson,
 };
 use crate::command::{AnchorSpec, Batch, Command, parse_params};
 use crate::error::{CommandError, CommandErrorKind, HistoryError, codes};
@@ -288,6 +288,7 @@ impl Workspace {
                 let p = parse_params::<ExplainParams>(params).map_err(cmd)?;
                 to_value(&crate::explain::explain_date(self.current()?, &p).map_err(cmd)?)
             }
+            "analysis.what_if" | "analysis.baseline_variance" => self.analysis(id, params),
             "analysis.critical_path" => {
                 parse_params::<NoParams>(params).map_err(cmd)?;
                 to_value(&ViewCtx::new(self.current()?).critical_path())
@@ -351,6 +352,20 @@ impl Workspace {
         } else {
             let p = parse_params::<UsageParams>(params).map_err(cmd)?;
             to_value(&view::resource_usage(self.current()?, &p).map_err(cmd)?)
+        }
+    }
+
+    /// Analyses J6 (lot L8) : `analysis.what_if` (R-234),
+    /// `analysis.baseline_variance` (R-228).
+    fn analysis(&self, id: &str, params: Value) -> Result<Value, ToolError> {
+        let lang = self.lang;
+        let cmd = |e: CommandError| ToolError::from_command(&e, lang);
+        if id == "analysis.what_if" {
+            let p = parse_params::<WhatIfParams>(params).map_err(cmd)?;
+            to_value(&crate::analysis::what_if(self.current()?, &p, lang).map_err(cmd)?)
+        } else {
+            let p = parse_params::<VarianceParams>(params).map_err(cmd)?;
+            to_value(&crate::analysis::baseline_variance(self.current()?, &p).map_err(cmd)?)
         }
     }
 

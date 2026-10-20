@@ -25,7 +25,7 @@
       ]
     },
     "late": {
-      "description": "Tâches en retard seulement (J4 : fin planifiée après l'échéance).",
+      "description": "Tâches en retard seulement : fin planifiée après l'échéance ou après\nla fin de la ligne de base 0, non achevée à fin passée ou non\ncommencée à début passé à la date d'état.",
       "type": "boolean"
     },
     "limit": {

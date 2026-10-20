@@ -1,0 +1,191 @@
+{
+  "baseline": 0,
+  "next_cursor": null,
+  "project": {
+    "baseline": {
+      "finish": "2026-11-11T17:00",
+      "start": "2026-11-02T08:00"
+    },
+    "derived": true,
+    "duration": {
+      "minutes": 3360,
+      "text": "7j",
+      "unit": "day"
+    },
+    "finish": "2026-11-10T17:00",
+    "name": "Chantier",
+    "start": "2026-11-02T08:00",
+    "uid": 0,
+    "variance": {
+      "finish": {
+        "minutes": -480,
+        "text": "-1j",
+        "unit": "day"
+      },
+      "start": {
+        "minutes": 0,
+        "text": "0j",
+        "unit": "day"
+      }
+    },
+    "work": {
+      "minutes": 2400,
+      "text": "40h",
+      "unit": "hour"
+    }
+  },
+  "tasks": [
+    {
+      "baseline": {
+        "duration": {
+          "elapsed": false,
+          "estimated": false,
+          "minutes": 2400,
+          "text": "5j",
+          "unit": "day"
+        },
+        "finish": "2026-11-11T17:00",
+        "start": "2026-11-05T08:00",
+        "work": {
+          "minutes": 2400,
+          "text": "40h",
+          "unit": "hour"
+        }
+      },
+      "duration": {
+        "elapsed": false,
+        "estimated": false,
+        "minutes": 2400,
+        "text": "5j",
+        "unit": "day"
+      },
+      "finish": "2026-11-10T17:00",
+      "id": 2,
+      "name": "Maçonnerie",
+      "start": "2026-11-04T08:00",
+      "uid": 2,
+      "variance": {
+        "duration": {
+          "minutes": 0,
+          "text": "0j",
+          "unit": "day"
+        },
+        "finish": {
+          "minutes": -480,
+          "text": "-1j",
+          "unit": "day"
+        },
+        "start": {
+          "minutes": -480,
+          "text": "-1j",
+          "unit": "day"
+        },
+        "work": {
+          "minutes": 0,
+          "text": "0h",
+          "unit": "hour"
+        }
+      },
+      "work": {
+        "minutes": 2400,
+        "text": "40h",
+        "unit": "hour"
+      }
+    },
+    {
+      "baseline": {
+        "duration": {
+          "elapsed": false,
+          "estimated": false,
+          "minutes": 0,
+          "text": "0j",
+          "unit": "day"
+        },
+        "finish": "2026-11-11T17:00",
+        "start": "2026-11-11T17:00"
+      },
+      "duration": {
+        "elapsed": false,
+        "estimated": false,
+        "minutes": 0,
+        "text": "0j",
+        "unit": "day"
+      },
+      "finish": "2026-11-10T17:00",
+      "id": 3,
+      "name": "Réception",
+      "start": "2026-11-10T17:00",
+      "uid": 3,
+      "variance": {
+        "duration": {
+          "minutes": 0,
+          "text": "0j",
+          "unit": "day"
+        },
+        "finish": {
+          "minutes": -480,
+          "text": "-1j",
+          "unit": "day"
+        },
+        "start": {
+          "minutes": -480,
+          "text": "-1j",
+          "unit": "day"
+        },
+        "work": {
+          "minutes": 0,
+          "text": "0h",
+          "unit": "hour"
+        }
+      }
+    },
+    {
+      "baseline": {
+        "duration": {
+          "elapsed": false,
+          "estimated": false,
+          "minutes": 1440,
+          "text": "3j",
+          "unit": "day"
+        },
+        "finish": "2026-11-04T17:00",
+        "start": "2026-11-02T08:00"
+      },
+      "duration": {
+        "elapsed": false,
+        "estimated": false,
+        "minutes": 1440,
+        "text": "3j",
+        "unit": "day"
+      },
+      "finish": "2026-11-04T17:00",
+      "id": 1,
+      "name": "Terrassement",
+      "start": "2026-11-02T08:00",
+      "uid": 1,
+      "variance": {
+        "duration": {
+          "minutes": 0,
+          "text": "0j",
+          "unit": "day"
+        },
+        "finish": {
+          "minutes": 0,
+          "text": "0j",
+          "unit": "day"
+        },
+        "start": {
+          "minutes": 0,
+          "text": "0j",
+          "unit": "day"
+        },
+        "work": {
+          "minutes": 0,
+          "text": "0h",
+          "unit": "hour"
+        }
+      }
+    }
+  ],
+  "total": 3
+}

@@ -135,10 +135,18 @@ fn registry_sorted_and_unique() {
         lookup("analysis.explain_date").unwrap().available,
         Availability::Now
     );
-    assert!(matches!(
-        lookup("analysis.what_if").unwrap().available,
-        Availability::Milestone(6)
-    ));
+    assert_eq!(lookup("analysis.what_if").unwrap().available, Availability::Now);
+    assert_eq!(
+        lookup("analysis.baseline_variance").unwrap().available,
+        Availability::Now
+    );
+    // Toutes les entrées J6 activées (lot L8) : plus aucune réservée.
+    assert_eq!(lookup("baseline.set").unwrap().available, Availability::Now);
+    assert!(
+        REGISTRY
+            .iter()
+            .all(|s| !matches!(s.available, Availability::Milestone(_)))
+    );
     assert_eq!(lookup("resource.add").unwrap().available, Availability::Now);
     assert!(lookup("task.nope").is_none());
 }

@@ -224,11 +224,15 @@ mod r224_start_finish_variance;
 mod r225_duration_work_variance;
 mod r226_mspdi_variances_write;
 mod r227_baseline_set;
+mod r228_baseline_variance;
 mod r230_driver_bound;
 mod r230_explain_start;
 mod r231_explain_finish;
 mod r232_explain_chain;
 mod r233_explain_summaries;
+mod r234_what_if;
+mod r235_progress_views;
+mod r236_late_filter;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

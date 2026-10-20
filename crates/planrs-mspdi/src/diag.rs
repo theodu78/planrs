@@ -94,6 +94,13 @@ pub enum ImportCode {
     /// contrainte datée : les liens l'emportent sur les contraintes (R-089,
     /// R-099). Info, une fois.
     HonorConstraintsOff,
+    /// Restes relus (`RemainingDuration`, `RemainingWork`) différents de la
+    /// dérivation (R-200, R-211) : remplacés (J6, R-214, lot L5). Info, une
+    /// fois par fichier.
+    ProgressInconsistent {
+        /// Valeurs relues remplacées.
+        count: u32,
+    },
 }
 
 impl ImportCode {
@@ -114,6 +121,7 @@ impl ImportCode {
             Self::Core(d) => format!("core.{}", d.code()),
             Self::NotPreserved => "mspdi.not_preserved".to_owned(),
             Self::HonorConstraintsOff => "mspdi.honor_constraints_off".to_owned(),
+            Self::ProgressInconsistent { .. } => "mspdi.progress_inconsistent".to_owned(),
         }
     }
 
@@ -133,6 +141,7 @@ impl ImportCode {
             Self::Core(_) => 10,
             Self::NotPreserved => 11,
             Self::HonorConstraintsOff => 12,
+            Self::ProgressInconsistent { .. } => 13,
         }
     }
 
@@ -149,7 +158,9 @@ impl ImportCode {
             | Self::LinkIgnored { .. }
             | Self::Unsupported { .. } => Severity::Warning,
             Self::MissingRequired | Self::DanglingReference => Severity::Error,
-            Self::NotPreserved | Self::HonorConstraintsOff => Severity::Info,
+            Self::NotPreserved | Self::HonorConstraintsOff | Self::ProgressInconsistent { .. } => {
+                Severity::Info
+            }
             Self::Core(d) => d.severity(),
         }
     }
@@ -218,6 +229,7 @@ impl fmt::Display for ImportDiagnostic {
             ImportCode::LinkIgnored { reason } => write!(f, " ({})", reason.as_str())?,
             ImportCode::Unsupported { what } => write!(f, " ({what})")?,
             ImportCode::Truncated { dropped } => write!(f, " ({dropped} diagnostics supprimés)")?,
+            ImportCode::ProgressInconsistent { count } => write!(f, " ({count} restes relus remplacés)")?,
             _ => {}
         }
         if !self.element.is_empty() {
@@ -237,7 +249,7 @@ impl fmt::Display for ImportDiagnostic {
 }
 
 /// Nombre de rangs de [`ImportCode`] (plafond par code).
-const RANKS: usize = 13;
+const RANKS: usize = 14;
 
 /// Collecteur de diagnostics, avec l'index des lignes de l'entrée ; borné
 /// par [`MAX_DIAGNOSTICS`] et [`MAX_DIAGNOSTICS_PER_CODE`].
@@ -354,6 +366,11 @@ mod tests {
                 Severity::Warning,
             ),
             (ImportCode::NotPreserved, "mspdi.not_preserved", Severity::Info),
+            (
+                ImportCode::ProgressInconsistent { count: 2 },
+                "mspdi.progress_inconsistent",
+                Severity::Info,
+            ),
         ];
         for (code, text, severity) in cases {
             assert_eq!(code.code(), text);

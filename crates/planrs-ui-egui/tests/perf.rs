@@ -14,7 +14,17 @@
 //!   une médiane atteint 16 ms ou un 95e centile 32 ms.
 //! - `shapes_do_not_grow_with_task_count` (toujours exécuté, debug) : garde
 //!   déterministe de la virtualisation, indépendante de la vitesse de la
-//!   machine.
+//!   machine ; `frame_counts_equal_at_1000_and_5000_tasks` (J7 L1,
+//!   toujours exécuté) : formes, sommets et galleys égaux à ± 5 % à 1 000
+//!   et 5 000 tâches, curseur dessiné et déplacé au clavier.
+//! - J7 L1 (ignorés, release) : `nav_down_held` (↓ sur 300 images, une
+//!   touche par image), `nav_page_sweep` (Page bas jusqu'à la fin puis
+//!   Ctrl+Origine), mêmes seuils que ci-dessus ; `edit_latency` (20
+//!   validations de durée par Entrée sur des tâches réparties : image de la
+//!   validation, qui recalcule et reconstruit le `RowModel`, plus l'image
+//!   suivante), mesure publiée avec sa décomposition (recalcul,
+//!   `RowModel::build`, reste), porte au lot L16 (médiane < 100 ms, p95 <
+//!   150 ms).
 //!
 //! Le rendu GPU n'est pas chronométré (lavapipe en CI n'est pas
 //! représentatif). Le projet est un MSPDI généré en mémoire par ce fichier :
@@ -45,10 +55,15 @@ use std::fmt::Write as _;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
+use egui::epaint::{ClippedPrimitive, Primitive, Shape};
 use egui::{
-    Event, Modifiers, MouseWheelSource, MouseWheelUnit, Pos2, RawInput, Rect, TouchPhase, pos2, vec2,
+    Event, Key, Modifiers, MouseWheelSource, MouseWheelUnit, Pos2, RawInput, Rect, TouchPhase, pos2, vec2,
 };
 use planrs_core::Moment;
+use planrs_ui_egui::column::Column;
+use planrs_ui_egui::edit::{EditState, commit_edit};
+use planrs_ui_egui::nav::RowRef;
+use planrs_ui_egui::rows::{RowKind, RowModel};
 use planrs_ui_egui::timescale::TimeAxis;
 use planrs_ui_egui::view::{OVERSCAN, ROW_H};
 use planrs_ui_egui::{Action, App, DocOrigin, Env, LanguagePref, ThemePref, TimeScaleZoom, UiState};
@@ -212,10 +227,41 @@ fn app_with(summaries: usize, leaves: usize, max_links: usize) -> App {
     app
 }
 
+/// Relevé d'une image indépendant de la machine : formes de la vue
+/// principale, sommets tessellés, galleys (textes) émis.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Counts {
+    shapes: usize,
+    vertices: usize,
+    galleys: usize,
+}
+
+/// Textes d'une forme (récursif dans les vecteurs de formes).
+fn galleys_in(shape: &Shape) -> usize {
+    match shape {
+        Shape::Text(_) => 1,
+        Shape::Vec(shapes) => shapes.iter().map(galleys_in).sum(),
+        _ => 0,
+    }
+}
+
+/// Sommets des maillages tessellés.
+fn vertices_in(primitives: &[ClippedPrimitive]) -> usize {
+    primitives
+        .iter()
+        .map(|p| match &p.primitive {
+            Primitive::Mesh(mesh) => mesh.vertices.len(),
+            Primitive::Callback(_) => 0,
+        })
+        .sum()
+}
+
 /// Contexte egui nu et horloge simulée des images.
 struct Bench {
     ctx: egui::Context,
     time: f64,
+    /// Relevé de la dernière image.
+    last: Counts,
 }
 
 impl Bench {
@@ -223,12 +269,23 @@ impl Bench {
         Self {
             ctx: egui::Context::default(),
             time: 0.0,
+            last: Counts::default(),
         }
     }
 
     /// Une image ; rend la durée de `run_ui` + `tessellate`.
     fn frame(&mut self, app: &mut App, events: Vec<Event>) -> Duration {
         self.time += 1.0 / 60.0;
+        // Modificateurs de l'image : ceux de la touche, annoncés d'abord.
+        let modifiers = events
+            .iter()
+            .find_map(|e| match e {
+                Event::Key { modifiers, .. } => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let mut events = events;
+        events.insert(0, Event::ModifiersChanged(modifiers));
         let raw = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(SCREEN.0, SCREEN.1))),
             time: Some(self.time),
@@ -237,10 +294,15 @@ impl Bench {
         };
         let t0 = Instant::now();
         let mut output = self.ctx.run_ui(raw, |ui| planrs_ui_egui::ui(ui, app));
-        let primitives = self
-            .ctx
-            .tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point);
+        let shapes = std::mem::take(&mut output.shapes);
+        let galleys = shapes.iter().map(|c| galleys_in(&c.shape)).sum();
+        let primitives = self.ctx.tessellate(shapes, output.pixels_per_point);
         let elapsed = t0.elapsed();
+        self.last = Counts {
+            shapes: app.last_frame.shapes,
+            vertices: vertices_in(&primitives),
+            galleys,
+        };
         black_box(primitives);
         // Aucun moteur de rendu : les textures sont ignorées.
         output.textures_delta.clear();
@@ -415,6 +477,236 @@ fn shapes_do_not_grow_with_task_count() {
             rows.len() <= max_rows,
             "ligne {row} : {} lignes peintes > {max_rows}",
             rows.len()
+        );
+    }
+}
+
+/// Appui (et relâchement) d'une touche.
+fn key_events(key: Key, modifiers: Modifiers) -> Vec<Event> {
+    [true, false]
+        .into_iter()
+        .map(|pressed| Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers,
+        })
+        .collect()
+}
+
+/// Indice de la ligne du curseur (ligne vide : nombre de tâches).
+fn cursor_row(app: &App) -> usize {
+    let rows = app.rows().unwrap();
+    match app.view().cursor.row {
+        RowRef::Item(uid) => rows.index_of(uid).unwrap(),
+        RowRef::Blank => rows.len(),
+    }
+}
+
+/// Médiane et 95e centile d'une série (triée ici).
+fn stats(mut samples: Vec<Duration>) -> (Duration, Duration, Duration) {
+    samples.sort();
+    (
+        percentile(&samples, 50),
+        percentile(&samples, 95),
+        *samples.last().unwrap(),
+    )
+}
+
+/// Seuils de fluidité de la navigation (ADR-0015 D12).
+fn assert_budget(label: &str, samples: Vec<Duration>, counts: Counts) {
+    let n = samples.len();
+    let (median, p95, max) = stats(samples);
+    eprintln!(
+        "perf UI {label} ({n} images) : médiane {:.2} ms, p95 {:.2} ms, max {:.2} ms, {counts:?}",
+        ms(median),
+        ms(p95),
+        ms(max),
+    );
+    assert!(median < BUDGET, "{label} : médiane {median:?} ≥ {BUDGET:?}");
+    assert!(p95 < SPIKE, "{label} : p95 {p95:?} ≥ {SPIKE:?}");
+}
+
+/// Réseau de 5 000 tâches ouvert, zoom Semaine, focus à la table (donné à
+/// l'ouverture), images stabilisées.
+fn nav_bench() -> (App, Bench) {
+    let mut app = app_with(SUMMARIES, LEAVES_PER_SUMMARY, LINKS);
+    let mut bench = Bench::new();
+    bench.settle(&mut app);
+    app.dispatch(Action::SetZoom(TimeScaleZoom::Week));
+    bench.settle(&mut app);
+    assert_eq!(cursor_row(&app), 0);
+    (app, bench)
+}
+
+/// J7 L1 : ↓ maintenue, une touche par image sur 300 images.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn nav_down_held() {
+    let (mut app, mut bench) = nav_bench();
+    for _ in 0..WARMUP {
+        bench.frame(&mut app, key_events(Key::ArrowDown, Modifiers::NONE));
+    }
+    let start = cursor_row(&app);
+    let samples: Vec<Duration> = (0..300)
+        .map(|_| bench.frame(&mut app, key_events(Key::ArrowDown, Modifiers::NONE)))
+        .collect();
+    assert_eq!(cursor_row(&app), start + 300, "une ligne par image");
+    assert!(app.last_frame.table_rows.contains(&(start + 300)));
+    assert_budget("nav_down_held", samples, bench.last);
+}
+
+/// J7 L1 : Page bas jusqu'à la fin, puis Ctrl+Origine.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn nav_page_sweep() {
+    let (mut app, mut bench) = nav_bench();
+    let blank = app.rows().unwrap().len();
+    let mut samples = Vec::new();
+    while cursor_row(&app) < blank {
+        assert!(samples.len() < 1_000, "Page bas n'avance pas");
+        samples.push(bench.frame(&mut app, key_events(Key::PageDown, Modifiers::NONE)));
+    }
+    samples.push(bench.frame(&mut app, key_events(Key::Home, Modifiers::COMMAND)));
+    for _ in 0..3 {
+        samples.push(bench.frame(&mut app, Vec::new()));
+    }
+    assert_eq!(cursor_row(&app), 0);
+    assert_eq!(app.view().cursor.column, Column::Id);
+    assert_eq!(app.last_frame.table_rows.start, 0);
+    assert_budget("nav_page_sweep", samples, bench.last);
+}
+
+/// J7 L1 : latence d'édition (ADR-0015 D4) : validation d'une durée par
+/// Entrée → recalcul → `RowModel` → image suivante, sur 20 tâches
+/// réparties. Mesure publiée, sans porte (lot L16) ; décomposition par une
+/// copie de la session (même lot appliqué, `RowModel::build` seul).
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn edit_latency() {
+    let (mut app, mut bench) = nav_bench();
+    let labels = planrs_ui_egui::i18n::Texts::new(planrs_ui_egui::Language::Fr)
+        .format_labels()
+        .clone();
+    // Colonne Durée : deux crans à droite depuis l'ID.
+    app.dispatch(Action::Nav {
+        mv: planrs_ui_egui::nav::NavMove::RowStart,
+        extend: false,
+    });
+    for _ in 0..2 {
+        app.dispatch(Action::Nav {
+            mv: planrs_ui_egui::nav::NavMove::Right,
+            extend: false,
+        });
+    }
+    bench.settle(&mut app);
+    assert_eq!(app.view().cursor.column, Column::Duration);
+    let len = app.rows().unwrap().len();
+    let (mut total, mut apply, mut build) = (Vec::new(), Vec::new(), Vec::new());
+    for k in 0..20 {
+        let index = (7 + k * len / 20).min(len - 1);
+        let row = app.rows().unwrap().row(index).unwrap();
+        assert!(matches!(row.kind, RowKind::Leaf | RowKind::Milestone), "{index}");
+        let uid = row.uid;
+        app.dispatch(Action::ScrollToRow(index));
+        app.dispatch(Action::Select(Some(uid)));
+        bench.settle(&mut app);
+        // Décomposition, hors image, sur une copie du document.
+        let doc = app.document.as_ref().unwrap();
+        let state = EditState::typed(Some(uid), Column::Duration, "3j");
+        let batch = commit_edit(&state, &doc.session, planrs_automation::text::Language::Fr).unwrap();
+        let mut copy = doc.clone();
+        let t0 = Instant::now();
+        copy.session
+            .apply(&batch, planrs_automation::ApplyMode::Commit)
+            .unwrap();
+        apply.push(t0.elapsed());
+        let t0 = Instant::now();
+        black_box(RowModel::build(&copy, &labels));
+        build.push(t0.elapsed());
+        // Mesure : saisie ouverte par la frappe, puis Entrée et l'image
+        // suivante.
+        let generation = app.document.as_ref().unwrap().generation();
+        bench.frame(&mut app, vec![Event::Text("3j".to_owned())]);
+        assert!(app.view().edit.editing.is_some(), "saisie non ouverte ({index})");
+        let enter = bench.frame(&mut app, key_events(Key::Enter, Modifiers::NONE));
+        let next = bench.frame(&mut app, Vec::new());
+        assert_eq!(app.document.as_ref().unwrap().generation(), generation + 1);
+        assert!(app.messages().is_empty(), "{:?}", app.messages());
+        total.push(enter + next);
+    }
+    let (median, p95, max) = stats(total);
+    let (apply_median, _, _) = stats(apply);
+    let (build_median, _, _) = stats(build);
+    eprintln!(
+        "perf UI edit_latency (20 validations) : médiane {:.1} ms, p95 {:.1} ms, max {:.1} ms ; \
+         décomposition (médianes) : recalcul (Session::apply) {:.1} ms, RowModel::build {:.1} ms, \
+         reste (image, tessellation) {:.1} ms ; budget L16 : médiane < 100 ms, p95 < 150 ms",
+        ms(median),
+        ms(p95),
+        ms(max),
+        ms(apply_median),
+        ms(build_median),
+        (ms(median) - ms(apply_median) - ms(build_median)).max(0.0),
+    );
+}
+
+/// Relevé stabilisé après `events` (une image par lot d'événements).
+fn counts_after(app: &mut App, bench: &mut Bench, events: &[Vec<Event>]) -> Counts {
+    for e in events {
+        bench.frame(app, e.clone());
+    }
+    bench.settle(app);
+    bench.last
+}
+
+/// J7 L1 (garde indépendante de la machine) : à 1 000 et 5 000 tâches,
+/// défilées en haut au zoom Semaine, formes, sommets et galleys égaux à
+/// ± 5 %, au départ puis après des déplacements du curseur au clavier.
+#[test]
+fn frame_counts_equal_at_1000_and_5000_tasks() {
+    let scenarios: Vec<Vec<Vec<Event>>> = vec![
+        Vec::new(),
+        vec![
+            key_events(Key::ArrowDown, Modifiers::NONE),
+            key_events(Key::PageDown, Modifiers::NONE),
+            key_events(Key::Tab, Modifiers::NONE),
+            key_events(Key::PageDown, Modifiers::NONE),
+            key_events(Key::ArrowDown, Modifiers::SHIFT),
+        ],
+    ];
+    let mut measured = Vec::new();
+    for summaries in [50, SUMMARIES] {
+        let mut app = app_with(summaries, LEAVES_PER_SUMMARY, 2 * summaries * LEAVES_PER_SUMMARY);
+        let mut bench = Bench::new();
+        bench.settle(&mut app);
+        app.dispatch(Action::SetZoom(TimeScaleZoom::Week));
+        bench.settle(&mut app);
+        let x = app.view().gantt_scroll_x;
+        app.dispatch(Action::ScrollGanttX(-x));
+        bench.settle(&mut app);
+        let counts: Vec<Counts> = scenarios
+            .iter()
+            .map(|events| counts_after(&mut app, &mut bench, events))
+            .collect();
+        eprintln!("{} tâches : {counts:?}", app.rows().unwrap().len());
+        measured.push(counts);
+    }
+    let close = |a: usize, b: usize| a.abs_diff(b) * 20 <= a.max(b);
+    for (small, large) in measured[0].iter().zip(&measured[1]) {
+        assert!(
+            small.shapes > 0 && small.galleys > 0 && small.vertices > 0,
+            "{small:?}"
+        );
+        assert!(close(small.shapes, large.shapes), "formes {small:?} / {large:?}");
+        assert!(
+            close(small.vertices, large.vertices),
+            "sommets {small:?} / {large:?}"
+        );
+        assert!(
+            close(small.galleys, large.galleys),
+            "galleys {small:?} / {large:?}"
         );
     }
 }

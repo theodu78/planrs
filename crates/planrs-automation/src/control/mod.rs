@@ -19,7 +19,7 @@ mod rendezvous;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-pub use client::RelayClient;
+pub use client::{RELAY_MARGIN, RelayClient, RelayError};
 pub use frame::{
     Frame, LineError, MAX_LINE_BYTES, Method, PROTOCOL_VERSION, Reply, WireError, codes, read_line_bounded,
     to_line,

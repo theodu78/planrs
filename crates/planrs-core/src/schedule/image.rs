@@ -13,7 +13,8 @@
 //! reporter changerait le placement suivant) : la durée fixe (`d_a` = durée
 //! de la tâche, S41, R-170) et toute feuille dont une affectation de travail
 //! a des unités nulles (`d_a` = durée de la tâche, R-181 : reporter l'union
-//! l'allongerait à chaque recalcul).
+//! l'allongerait à chaque recalcul) ; une feuille achevée (J6, R-209 : sa
+//! durée est celle de l'avancement).
 
 use std::collections::BTreeSet;
 
@@ -21,15 +22,18 @@ use super::{AssignmentRole, Schedule, TaskOutcome, TaskRole, TaskSchedule};
 use crate::duration::Duration;
 use crate::ids::TaskUid;
 use crate::model::{Project, SchedulingMode, Task, TaskType};
+use crate::progress::ProgressState;
 use crate::quantity::Units;
 
 /// Feuilles dont la durée du modèle suit la durée calculée : placées par au
 /// moins une affectation de travail (rôle `Work`, R-173), sans affectation
-/// de travail à unités nulles (R-181).
+/// de travail à unités nulles (R-181). Amendement J6 (R-209) : une feuille
+/// achevée en sort, sa durée est celle de l'avancement (l'union de ses
+/// affectations placées depuis le début réel écraserait la mesure).
 #[must_use]
 pub fn placed_by_assignments(project: &Project, schedule: &Schedule) -> BTreeSet<TaskUid> {
     let mut placed = BTreeSet::new();
-    let mut zero = BTreeSet::new();
+    let mut excluded = BTreeSet::new();
     for a in &project.assignments {
         let Some(s) = schedule.assignments.get(&a.uid()) else {
             continue;
@@ -37,13 +41,21 @@ pub fn placed_by_assignments(project: &Project, schedule: &Schedule) -> BTreeSet
         if s.role != AssignmentRole::Work {
             continue;
         }
+        let completed = schedule
+            .scheduled(s.task)
+            .and_then(|t| t.progress)
+            .is_some_and(|p| p.state == ProgressState::Complete);
+        if completed {
+            excluded.insert(s.task);
+            continue;
+        }
         if a.units == Units::ZERO {
-            zero.insert(s.task);
+            excluded.insert(s.task);
         } else {
             placed.insert(s.task);
         }
     }
-    placed.retain(|t| !zero.contains(t));
+    placed.retain(|t| !excluded.contains(t));
     placed
 }
 

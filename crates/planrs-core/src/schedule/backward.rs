@@ -220,7 +220,9 @@ impl Calc<'_, '_> {
                         !self.net.is_cut(a)
                             && !self.is_dropped(a)
                             && self.net.arc(a).is_some_and(|arc| {
-                                arc.link.is_some_and(|l| !l.to_inactive) && self.applied_target(arc.to)
+                                arc.link.is_some_and(|l| !l.to_inactive)
+                                    && !self.actual_target(arc.to)
+                                    && self.applied_target(arc.to)
                             })
                     })
                 });
@@ -264,7 +266,8 @@ impl Calc<'_, '_> {
             }
             let arc = *net.arc(a).ok_or(Fail::Internal("arc hors bornes"))?;
             let Some(l) = arc.link else { continue };
-            if l.to_inactive {
+            // R-203 : une feuille achevée ne plafonne pas ses prédécesseurs.
+            if l.to_inactive || self.actual_target(arc.to) {
                 continue;
             }
             caps.unreliable |= self.unreliable(arc.to);
@@ -388,6 +391,10 @@ impl Calc<'_, '_> {
         let (uid, place, constraint, deadline, fixed) =
             (node.uid, node.place, node.constraint, node.deadline, node.fixed);
         let from_finish = self.mode == Mode::FromFinish;
+        // R-203, R-207 : feuille achevée, dates au plus tard = dates réelles.
+        if let Some((start, finish)) = node.actual() {
+            return self.actual_late(v, early, start, finish);
+        }
         // R-097, R-098 : une feuille épinglée (MSO, MFO, option active) a
         // ses dates au plus tard sur l'ancrage, sans plafond : une borne
         // violée s'exprime par la marge négative de l'amont.
@@ -483,6 +490,42 @@ impl Calc<'_, '_> {
             }
         }
         Ok((natural, lf.driver))
+    }
+
+    /// R-203 (R-207 à rebours) : dates au plus tard d'une feuille achevée =
+    /// ses dates réelles, cause `LateDriver::Actual`, sans aucun plafond (ni
+    /// fin du projet, ni successeur, ni contrainte, ni échéance). Début réel
+    /// implicite (R-200) : depuis le début, celui de la passe avant ; à
+    /// rebours, la passe arrière principale le résout une fois,
+    /// `backward_span(fin réelle, D).start` sur l'échelle de placement
+    /// (hypothèse), `progress.actual_start_missing`.
+    fn actual_late(
+        &mut self,
+        v: NodeIx,
+        early: Option<Span>,
+        start: Option<Moment>,
+        finish: Moment,
+    ) -> Result<(Span, LateDriver), Fail> {
+        let stored = self.state(v).and_then(|s| s.actual).or(early);
+        let span = match (stored, start) {
+            (Some(span), _) => span,
+            (None, Some(s)) => Span { start: s, finish },
+            (None, None) => {
+                let back = self.placer(v)?.backward_span(finish)?;
+                Span {
+                    start: back.start.min(finish),
+                    finish,
+                }
+            }
+        };
+        if start.is_none() {
+            let uid = self.net.node(v).ok_or(Fail::Internal("nœud hors bornes"))?.uid;
+            self.emit(Diagnostic::ProgressActualStartMissing { task: uid });
+        }
+        if let Some(s) = self.state_mut(v) {
+            s.actual = Some(span);
+        }
+        Ok((span, LateDriver::Actual))
     }
 
     /// Plafonds d'une feuille, dans l'ordre de R-047 (`C(parent)`,
@@ -594,7 +637,7 @@ impl Calc<'_, '_> {
             let Some(arc) = net.arc(arc_ix).copied() else {
                 continue;
             };
-            let Some(l) = arc.link.filter(|l| !l.to_inactive) else {
+            let Some(l) = arc.link.filter(|l| !l.to_inactive && !self.actual_target(arc.to)) else {
                 continue;
             };
             let Some(tl) = self
@@ -681,7 +724,8 @@ impl Calc<'_, '_> {
             ConstraintRule::None
             | ConstraintRule::Opposite
             | ConstraintRule::Floor(_)
-            | ConstraintRule::Pin(_) => false,
+            | ConstraintRule::Pin(_)
+            | ConstraintRule::Actual { .. } => false,
         }
     }
 
@@ -768,7 +812,9 @@ impl Calc<'_, '_> {
             let Some(child) = self.net.node(arc.to) else {
                 continue;
             };
-            if child.inactive {
+            // R-203 : une sous-tâche achevée ne plafonne pas la porte (ni,
+            // par elle, les prédécesseurs de la récapitulative).
+            if child.inactive || child.actual().is_some() {
                 continue;
             }
             unreliable |= self.unreliable(arc.to);

@@ -72,6 +72,18 @@ pub(super) enum ConstraintRule {
     Clamped(Side),
     /// MSO, MFO, option active : au plus tôt = au plus tard = ancrage.
     Pin(Side),
+    /// Épingle réelle d'une feuille achevée (J6, R-203, ADR-0014 D1) : dates
+    /// planifiées, au plus tôt et au plus tard = [début réel, fin réelle]
+    /// bruts ; liens entrants, porte, contrainte, retard de nivellement et
+    /// ALAP ignorés ; aucun plafond vers ses prédécesseurs. `start` : début
+    /// réel saisi, `None` s'il est implicite (R-200 : début au plus tôt du
+    /// réseau depuis le début, `backward_span(fin réelle, D)` à rebours).
+    Actual {
+        /// Début réel saisi.
+        start: Option<Moment>,
+        /// Fin réelle (au moins le début réel saisi).
+        finish: Moment,
+    },
 }
 
 /// R-099 : règle d'une contrainte de type `kind` sur une feuille automatique

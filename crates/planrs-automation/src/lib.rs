@@ -21,6 +21,7 @@
 //! Aucune entrée/sortie hors de `files` et `control` (absents en wasm) : du
 //! texte ou des octets en entrée, une valeur du modèle en sortie.
 
+pub mod analysis;
 pub mod command;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod control;

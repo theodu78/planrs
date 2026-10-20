@@ -134,7 +134,10 @@ mod tests {
             let props = schema.get("properties").and_then(Value::as_object);
             let has = |k: &str| props.is_some_and(|p| p.contains_key(k));
             assert_eq!(has("dry_run"), spec.kind == Kind::Write, "{}", spec.id);
-            assert_eq!(has("detail"), spec.kind == Kind::Write, "{}", spec.id);
+            // `what_if` (J6, R-234) porte son propre `detail` (diff détaillé
+            // du lot simulé), sans `dry_run`.
+            let detail = spec.kind == Kind::Write || spec.id == "analysis.what_if";
+            assert_eq!(has("detail"), detail, "{}", spec.id);
         }
     }
 }

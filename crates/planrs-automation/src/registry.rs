@@ -189,11 +189,10 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Utilisation des ressources : travail par période et surutilisation, calculés par le moteur.",
         "Resource usage: work per period and overallocation, computed by the engine.",
     ),
-    reserved(
+    now(
         "analysis.what_if",
         "what_if",
         Kind::Analysis,
-        6,
         schema_of::<WhatIfParams>,
         "Simule un lot sans changer le projet : diff, écart de fin à une ligne de base, explications.",
         "Simulate a batch without changing the project: diff, finish variance from a baseline, explanations.",

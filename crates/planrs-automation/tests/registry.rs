@@ -120,7 +120,6 @@ fn registry_reserved_not_listed() {
     let reserved: BTreeSet<&str> = REGISTRY.iter().filter(|s| !s.is_listed()).map(|s| s.id).collect();
     let expected: BTreeSet<&str> = [
         "analysis.baseline_variance",
-        "analysis.what_if",
         "baseline.set",
         "progress.reschedule",
         "progress.update",
@@ -128,9 +127,10 @@ fn registry_reserved_not_listed() {
     .into_iter()
     .collect();
     // Contrat J6 (lot L0) : six entrées réservées, `progress.reschedule`
-    // créée ; `analysis.explain_date` activée par le lot L7.
+    // créée ; `analysis.explain_date` activée par le lot L7,
+    // `analysis.what_if` par le lot L8.
     assert_eq!(reserved, expected);
-    assert_eq!(expected.len(), 5);
+    assert_eq!(expected.len(), 4);
     for spec in REGISTRY.iter().filter(|s| !s.is_listed()) {
         assert_eq!(spec.available, Availability::Milestone(6));
     }
@@ -156,8 +156,9 @@ fn registry_j5_tools_listed() {
         assert!(spec.is_listed(), "{name}");
         assert_eq!(spec.available, Availability::Now, "{name}");
     }
-    // 38 outils en J5, 39 avec `explain_date` (J6, lot L7).
-    assert_eq!(listed().count(), 39);
+    // 38 outils en J5, 39 avec `explain_date` (J6, lot L7), 40 avec
+    // `what_if` (lot L8).
+    assert_eq!(listed().count(), 40);
     assert_eq!(by_mcp_name("list_resources").unwrap().kind, Kind::Read);
     assert_eq!(by_mcp_name("resource_usage").unwrap().kind, Kind::Analysis);
 }

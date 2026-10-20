@@ -68,8 +68,9 @@ const J6_ENTRIES: [(&str, &str, Kind); 6] = [
     ("progress.update", "update_progress", Kind::Write),
 ];
 
-/// Entrées J6 déjà activées (lot L7 : `analysis.explain_date`).
-const ACTIVE: [&str; 1] = ["analysis.explain_date"];
+/// Entrées J6 déjà activées (lot L7 : `analysis.explain_date` ; lot L8 :
+/// `analysis.what_if`).
+const ACTIVE: [&str; 2] = ["analysis.explain_date", "analysis.what_if"];
 
 #[test]
 fn contract_compiles() {
@@ -120,12 +121,12 @@ fn contract_compiles() {
     assert_eq!(s.project(), &before);
     assert_eq!(s.generation(), generation);
 
-    // Simulation (lot L8) : squelette refusé, session intacte.
+    // Simulation (lot L8) : lot vide accepté, état inchangé, session
+    // intacte.
     let batch = Batch::from_json(json!({ "format_version": 1, "ops": [] })).unwrap();
-    assert_eq!(
-        s.simulate(&batch, ApplyOptions::default()).unwrap_err().code,
-        codes::COMMAND_NOT_YET_AVAILABLE
-    );
+    let sim = s.simulate(&batch, ApplyOptions::default()).unwrap();
+    assert!(!sim.outcome.committed);
+    assert_eq!(&sim.project, s.project());
     assert_eq!(s.generation(), generation);
 
     // Paramètres des analyses : lus, champs inconnus refusés.

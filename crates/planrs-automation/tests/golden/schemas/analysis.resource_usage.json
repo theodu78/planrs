@@ -3,6 +3,10 @@
   "additionalProperties": false,
   "description": "`analysis.resource_usage` (J5, R-188) : travail par période et par\nressource, calculé par le moteur à la demande.",
   "properties": {
+    "assignments": {
+      "description": "Ajoute une ligne par affectation et le total de chaque tâche\n(J7, R-245 ; défaut : non).",
+      "type": "boolean"
+    },
     "by": {
       "default": "week",
       "description": "Granularité des périodes (défaut : semaine).",
@@ -20,6 +24,11 @@
         {
           "const": "month",
           "description": "Mois.",
+          "type": "string"
+        },
+        {
+          "const": "quarter",
+          "description": "Trimestre civil (1er janvier, avril, juillet, octobre ; J7, R-246).",
           "type": "string"
         }
       ]

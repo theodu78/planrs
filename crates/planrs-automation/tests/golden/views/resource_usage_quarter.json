@@ -1,0 +1,50 @@
+{
+  "by": "quarter",
+  "periods": [
+    "2026-01-01T00:00",
+    "2026-04-01T00:00"
+  ],
+  "rows": [
+    {
+      "name": "Maçon",
+      "overallocated": [
+        true,
+        false
+      ],
+      "uid": 1,
+      "work": [
+        {
+          "minutes": 1200,
+          "text": "20h",
+          "unit": "hour"
+        },
+        {
+          "minutes": 960,
+          "text": "16h",
+          "unit": "hour"
+        }
+      ]
+    },
+    {
+      "name": "Ciment",
+      "overallocated": [
+        false,
+        false
+      ],
+      "uid": 2,
+      "work": [
+        {
+          "minutes": 150,
+          "text": "2,5h",
+          "unit": "hour"
+        },
+        {
+          "minutes": 150,
+          "text": "2,5h",
+          "unit": "hour"
+        }
+      ]
+    }
+  ],
+  "truncated": false
+}

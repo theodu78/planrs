@@ -1241,7 +1241,7 @@ Règles J5 (ADR-0013, cahier `docs/plans/j5.md` § 2.3) : placement affectation 
 
 ## R-188 — Utilisation par période
 - **Formulation** : `resource::usage(p, s, from, to, by, resources)`, calculée à la demande.
-  - Périodes civiles : jour (00:00), semaine (début `week_start_day`), mois (le 1er) ; la première contient `from`, la dernière commence avant `to` ; `periods` donne leurs débuts ; `to <= from` : aucune période.
+  - Périodes civiles : jour (00:00), semaine (début `week_start_day`), mois (le 1er), trimestre (R-246, J7) ; la première contient `from`, la dernière commence avant `to` ; `periods` donne leurs débuts ; `to <= from` : aucune période.
   - Travail d'une affectation dans une période = W × (temps ouvré de son échelle effective dans période ∩ `[from, to)` ∩ span) ÷ (temps ouvré du span), par différence de cumuls arrondis (R-001) : la somme sur les périodes qui couvrent le span vaut W. Span sans temps ouvré : tout W dans la période de son début.
   - Ressource inconnue ou de coût : travail nul ; matérielle : quantités ; affectation fictive jamais comptée.
   - Drapeau « surutilisée » si un intervalle de `ResourceLoad.overloads` coupe la période ; `truncated` si ces intervalles sont coupés pour une ressource demandée.
@@ -1634,3 +1634,22 @@ Règles J7 (ADR-0015 D5, cahier `docs/plans/j7.md` § 2.3, lot L8) : l'interface
 ### Utilisation et calendriers (R-245 à R-250)
 
 Règles J7 (ADR-0015 D7, D8, lots L4 et L5) : utilisation par affectation et totaux par tâche (R-245), trimestre civil (R-246), semaine type, création, modification et suppression des calendriers, calendrier du projet par commande (R-247 à R-249), effacement d'une ligne de base (R-250). Amende R-165 (nom d'exception, O44) et R-195 (taux stockés, O46). Fiches écrites par les lots L4 et L5, chacune avec ses tests. Sources S60, S62 à S65, S71, S72 ; observations O44 à O46.
+
+## R-245 — Utilisation par affectation, totaux par tâche
+- **Formulation** (lot L4) : `resource::usage_by_assignment(p, s, set, from, to, by, resources)`, calculée à la demande sur des calendriers déjà compilés (ADR-0015 D7).
+  - Une ligne par affectation que la ligne de sa ressource compte dans `usage` (R-188) : ressource demandée, connue, qui n'est pas de coût ; jamais une affectation fictive. Les affectations d'une ressource matérielle y figurent (quantités, comme sa ligne), celles des récapitulatives et des tâches manuelles aussi : la cible « affectation de travail (rôle `Work`) » du cahier briserait l'égalité ci-dessous dès qu'une telle affectation existe.
+  - Travail d'une ligne par période : celui de R-188 (même échelle effective, même prorata par différence de cumuls arrondis) ; d'où Σ des lignes d'une ressource = sa ligne d'`usage`, période par période, et un découpage en blocs (64 périodes pour l'interface) égal au calcul d'un seul tenant.
+  - Périodes rendues bornées à `[from, to)` (`Span`), lignes triées par (ressource, tâche, UID d'affectation), doublons de `resources` ignorés ; `to <= from` : aucune période, lignes vides.
+  - Total d'une tâche = Σ, période par période, de ses lignes à une **ressource de travail** (les quantités d'une ressource matérielle ne s'ajoutent pas à des heures, hypothèse) ; dans l'ordre des UID ; une tâche sans ligne de travail n'a pas de total.
+  - Plus de `MAX_ASSIGNMENT_ROWS` (10 000) lignes, ou bornes de R-188 dépassées (1 000 périodes, 1 000 ressources) ⇒ `UsageError::Limit` (`usage.limit`), jamais un rapport coupé.
+  - Exemple (S, lun 19/10/2026) : Maçon 100 % sur T1 (lun 19-mar 20/10, 16 h) et 50 % sur T2 (lun 19-ven 23/10, 20 h) ⇒ lun : T1 8 h, T2 4 h, Maçon 12 h (8 h disponibles : surutilisé, S60) ; semaine du 19/10 : 16 h + 20 h = 36 h ; Électricien 8 h sur T2 le lundi ⇒ total de T2 le lundi 12 h ; Ciment (matérielle) sur T1 : une ligne, hors du total de T1.
+- **Source** : S60 (surutilisation affichée par période) ; R-188 ; hypothèse (lignes comptées, total sans les quantités).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r245_assignment_usage.rs` (`r245_assignment_rows_sum_to_resource`, `r245_task_totals`, `r245_limit_refused`) ; P46 (`crates/planrs-core/tests/usage_properties.rs`, 1 024 cas : `p46_assignment_rows_sum_to_resource`, `p46_blocks_equal_whole`, `usage_with_equals_usage`).
+
+## R-246 — Granularité trimestre
+- **Formulation** (lot L4) : `Granularity::Quarter` (JSON `"quarter"`) : périodes civiles qui commencent les 1er janvier, avril, juillet et octobre à 00:00 ; la première contient `from` ; travail et surutilisation par période comme R-188. L'exercice fiscal (`FYStartDate`, `FiscalYearStart` du MSPDI, gardés à l'aller-retour) est sans effet. Plafond `MAX_PERIODS` (1 000) inchangé : tout le domaine des dates (1984-2149, R-003) tient en 664 trimestres.
+  - Exemple : du 15/02/2026 au 20/05/2026 ⇒ [01/01/2026, 01/04/2026[, [01/04/2026, 01/07/2026[ ; T de 4 j du lun 30/03 au jeu 02/04 sur S, 100 % ⇒ 16 h au T1, 16 h au T2.
+- **Source** : S62 (graduations de l'échelle de temps, case « Use fiscal year ») ; hypothèse (exercice fiscal ignoré).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r246_quarter.rs` (`r246_quarter_boundaries`, `r246_quarter_split_work`) ; `crates/planrs-automation/tests/views_j7.rs` (`view_usage_quarter_json`).

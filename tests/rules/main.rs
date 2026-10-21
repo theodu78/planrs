@@ -233,6 +233,8 @@ mod r233_explain_summaries;
 mod r234_what_if;
 mod r235_progress_views;
 mod r236_late_filter;
+mod r245_assignment_usage;
+mod r246_quarter;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

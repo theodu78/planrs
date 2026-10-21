@@ -1052,7 +1052,7 @@ Bloc réservé aux commandes d'édition de `planrs-automation` (session, lot de 
 
 ## R-158 — Début ou fin saisis → contrainte
 - **Formulation** : sur `task.add` et `task.update` (feuille automatique), au plus un de `start`, `finish` par opération (les deux → `param.invalid`, champ `finish` : chacun pose la contrainte de la tâche). Projet planifié depuis le début : `start = d` → « ne pas commencer avant » `d` (SNET) ; `finish = d` → « ne pas finir avant » `d` (FNET) (S30, comme `CsvDates::Constrain`). À rebours : SNLT, FNLT (hypothèse). `null` (effacé) → ASAP, ALAP à rebours (R-108). La contrainte en place, datée ou non, est remplacée ; `SideEffect::ConstraintSet { uid, kind }` à chaque date saisie. La date passe telle quelle : la normalisation (R-090) est celle du moteur. Exemple : `update 3 start 2026-11-04T08:00` → `StartNoEarlierThan(2026-11-04T08:00)` ; début planifié le 04/11 08:00 si aucun lien ne pousse plus tard, sinon la date du moteur (un `constraint.*` éventuel en avertissement).
-- **Source** : hypothèse (S30 ; ADR-0012 § 0 : dans `task.update` du registre, une seule sémantique pour MCP, CLI et interface).
+- **Source** : hypothèse (S30 ; ADR-0012 § 0 : dans `task.update` du registre, une seule sémantique pour MCP, CLI et interface) ; S66 (J7, lot L8) : « this constraint is applied when you type a start date for a task or drag a Gantt bar » — le déplacement d'une barre (R-240) passe par ce même `task.update { start }`.
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r158_entered_dates.rs` (`r158_*`).
 
@@ -1630,6 +1630,30 @@ Règles J6 (ADR-0014 D8, D9) : `explain_date` (pilote et borne brute `driver_bou
 ### Gestes (R-240 à R-244)
 
 Règles J7 (ADR-0015 D5, cahier `docs/plans/j7.md` § 2.3, lot L8) : l'interface ne produit qu'un écart en jours entiers (`TimeAxis::days_for_dx`) ; `planrs_automation::gesture` le traduit en lot ordinaire (`task.update`, `progress.update`, `link.add`) au lâcher. R-240 déplacer une barre (pose la contrainte de la saisie, S66), R-241 redimensionner, R-242 glisser l'avancement, R-243 tracer un lien ; R-244 réservée au collage de lignes (J8), sans fiche. Amende R-158 (source S66). Fiches écrites par le lot L8, chacune avec ses tests. Sources S66, S68 ; tâches commencées non déplaçables (arbitrage du 2026-10-20, hypothèse).
+
+## R-240 — Déplacer une barre
+- **Formulation** (lot L8) : `gesture::bar_move(s, uid, n)`, n = écart en jours entiers produit par l'interface (`TimeAxis::days_for_dx`). Feuille planifiée, non commencée (`ProgressState::NotStarted`), automatique ou manuelle, jalon compris ; sinon `gesture.not_draggable` (`NotDraggable::Summary`, `Started`, `Excluded`, `Blank`), tâche inconnue `task.not_found`. Début = début planifié + n × 1 440 min (jours calendaires, heure gardée) ⇒ lot `task.update { uid, start }` : R-158 pose SNET depuis le début, SNLT à rebours ; la date passe telle quelle (une date chômée est recalée par le moteur, R-090). n = 0 ⇒ aucun lot ; dépassement du domaine des dates ⇒ `GestureError::Overflow` (`limit.exceeded`). Tâche manuelle : le lot est rendu et refusé par le registre (`task.manual_unsupported`, R-157), affiché au bandeau. Aperçu (`gesture::preview`, `Move`) : `forward_span(début + n j, D)` sur l'échelle de mesure (R-113), sans recalcul ; exact pour une feuille sans lien, contrainte ni ressource (P49). Exemple (S) : T 2 j lun 19/10 08:00 – mar 20/10 17:00 ; n = 3 ⇒ SNET jeu 22/10 08:00, T jeu 22/10 08:00 – ven 23/10 17:00 ; n = 5 ⇒ SNET sam 24/10 08:00, T lun 26/10 08:00 – mar 27/10 17:00.
+- **Source** : S66 (« this constraint is applied when you type a start date for a task or drag a Gantt bar ») ; pas d'un jour, heure gardée, tâches commencées non déplaçables (arbitrage du 2026-10-20) : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r240_bar_move.rs` (`r240_move_sets_snet`, `r240_move_backward_project_snlt`, `r240_move_zero_no_batch`, `r240_started_not_draggable`, `r240_weekend_normalized_by_engine`, `r240_manual_refused_by_registry`, `r240_overflow_refused`) ; P49 (`crates/planrs-automation/tests/gesture_properties.rs`, `p49_move_round_trip`).
+
+## R-241 — Redimensionner une barre
+- **Formulation** (lot L8) : `gesture::bar_resize(s, set, uid, n)`. Feuille planifiée non jalon (`NotDraggable::Milestone`), non commencée. Cible = fin planifiée + n jours calendaires ; durée = temps ouvré [début planifié, cible] sur l'échelle de mesure de la tâche (`measure_calendar_in`, R-113 ; Standard intégré si le calendrier du projet est inutilisable, R-066), 0 si cible ≤ début ; durée écoulée : cible − début en minutes civiles ⇒ lot `task.update { uid, duration: { minutes, unit: unité courante, elapsed } }` (estimation « ? » retirée ; feuille affectée : équilibrage J5, R-189 ; durée nulle ⇒ jalon, R-157). n = 0 ⇒ aucun lot. Aperçu : durée calculée, `forward_span(début, durée)`. Exemple (S) : T 2 j lun 08:00 – mar 17:00 ; n = 3 ⇒ cible ven 23/10 17:00 ⇒ 2 400 min « 5 jours » ; n = −1 ⇒ 480 « 1 jour » ; n = −2 ⇒ cible dim 18/10 17:00 ⇒ 0, jalon ; T 2 jours écoulés, n = 1 ⇒ 4 320 min écoulées.
+- **Source** : hypothèse (geste de MS Project ; mesure de R-113).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r241_bar_resize.rs` (`r241_resize_working_time`, `r241_resize_to_zero_milestone`, `r241_elapsed_duration`, `r241_started_not_draggable`) ; P49 (`p49_resize_round_trip`).
+
+## R-242 — Glisser l'avancement
+- **Formulation** (lot L8) : `gesture::progress_drag(s, set, uid, n)`. Feuille planifiée, non récapitulative, de durée D > 0 (jalon ou D = 0 : `NotDraggable::Milestone`, aucune zone) ; une tâche commencée reste glissable. Point = début planifié + max(n, 0) jours calendaires ; point ≥ fin planifiée ⇒ 10 000 ; sinon travail = temps de [début, point] sur l'échelle de mesure (civil pour une durée écoulée), % = ⌊travail × 100 / D⌋ × 100 en `i128`, borné [0, 10 000] ⇒ lot `progress.update { task, percent_complete: { value } }` (R-201 ; le % stocké est celui que R-201 dérive de la durée réelle arrondie). Même % que le % saisi courant ⇒ aucun lot. Exemple (S) : T 4 j (1 920) lun 19/10 – jeu 22/10 ; n = 2 ⇒ 960 ⇒ 5 000 ; n = 1 ⇒ 2 500 ; T 3 j, n = 1 ⇒ 480 / 1 440 ⇒ 3 300 envoyé (réel 475 min, % dérivé 3 299).
+- **Source** : hypothèse (pourcentage entier par défaut, ADR-0015 § 0, règles 5 et 10).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r242_progress_drag.rs` (`r242_progress_floor_percent`, `r242_milestone_no_zone`, `r242_beyond_finish_complete`).
+
+## R-243 — Tracer un lien entre deux barres
+- **Formulation** (lot L8) : glisser depuis l'intérieur de la barre de A et lâcher sur la barre de B (autre ligne) ⇒ `gesture::link_drag(s, A, B)` = lot `link.add { pred: A, succ: B, kind: FS }`, sans décalage. A = B ⇒ `GestureError::SameTask` (`link.self`) ; ligne vide ou tâche exclue ⇒ `NotDraggable::Blank` / `Excluded` ; l'interface n'envoie alors aucun lot (lâcher dans le vide non plus). Refus du registre à l'application (R-156 : `link.duplicate`, cycle refusé par R-160 ; R-059 : `link.summary_descendant`) ⇒ bandeau, aucun changement. Exemple : A (ID 3) vers B (ID 7) ⇒ Prédécesseurs de 7 « 3 » ; le même geste une seconde fois ⇒ `link.duplicate`.
+- **Source** : S68 (« the default link type is finish-to-start » ; le glisser d'une barre à l'autre n'y est décrit que pour les vues Calendrier et Réseau : geste du Gantt par analogie, hypothèse).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r243_link_drag.rs` (`r243_link_fs_zero`, `r243_duplicate_refused`, `r243_cycle_refused`, `r243_summary_descendant_and_excluded`).
 
 ### Utilisation et calendriers (R-245 à R-250)
 

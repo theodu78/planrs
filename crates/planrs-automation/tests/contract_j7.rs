@@ -232,8 +232,9 @@ fn contract_workspace_refusals() {
     assert_eq!(s.project(), &before);
 }
 
-/// Squelettes des gestes (N12) : aucun lot, tâche inconnue et lien vers
-/// soi refusés, aperçu aux dates courantes.
+/// Gestes (N12, lot L8 : leurs règles R-240 à R-243 sont testées dans
+/// `tests/rules`) : écart nul sans lot, tâche inconnue et lien vers soi
+/// refusés, aperçu d'un écart nul aux dates courantes.
 #[test]
 fn contract_gestures() {
     let s = session();
@@ -241,9 +242,8 @@ fn contract_gestures() {
     let t1 = TaskUid::new(1);
     let nope = TaskUid::new(99);
     assert_eq!(gesture::bar_move(&s, t1, 0).unwrap(), None);
-    assert_eq!(gesture::bar_move(&s, t1, 3).unwrap(), None);
-    assert_eq!(gesture::bar_resize(&s, &set, t1, -1).unwrap(), None);
-    assert_eq!(gesture::progress_drag(&s, &set, t1, 1).unwrap(), None);
+    assert!(gesture::bar_move(&s, t1, 3).unwrap().is_some());
+    assert_eq!(gesture::bar_resize(&s, &set, t1, 0).unwrap(), None);
     assert_eq!(
         gesture::bar_move(&s, nope, 1).unwrap_err(),
         GestureError::UnknownTask(nope)
@@ -256,9 +256,9 @@ fn contract_gestures() {
         gesture::link_drag(&s, t1, t1).unwrap_err(),
         GestureError::SameTask
     );
-    assert_eq!(gesture::link_drag(&s, t1, TaskUid::new(2)).unwrap().ops.len(), 0);
+    assert_eq!(gesture::link_drag(&s, t1, TaskUid::new(2)).unwrap().ops.len(), 1);
     let t = s.schedule().scheduled(t1).unwrap();
-    let p = gesture::preview(&s, &set, t1, GestureKind::Move, 2).unwrap();
+    let p = gesture::preview(&s, &set, t1, GestureKind::Move, 0).unwrap();
     assert_eq!((p.start, p.finish), (t.start, t.finish));
     assert_eq!(
         GestureError::NotDraggable(t1, gesture::NotDraggable::Started).code(),

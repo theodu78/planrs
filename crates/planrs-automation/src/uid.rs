@@ -112,6 +112,28 @@ impl UidAlloc {
     }
 }
 
+impl UidAlloc {
+    /// Compteurs (tâche, ressource, affectation, calendrier) : journal de
+    /// reprise (J7, lot L15), pour qu'un rejeu alloue les mêmes UID.
+    pub const fn counters(&self) -> [u32; 4] {
+        [
+            self.last,
+            self.last_resource,
+            self.last_assignment,
+            self.last_calendar,
+        ]
+    }
+
+    /// Relève chaque compteur à au moins `c` (jamais de recul, R-151).
+    pub fn raise(&mut self, c: [u32; 4]) {
+        let [task, resource, assignment, calendar] = c;
+        self.last = self.last.max(task);
+        self.last_resource = self.last_resource.max(resource);
+        self.last_assignment = self.last_assignment.max(assignment);
+        self.last_calendar = self.last_calendar.max(calendar);
+    }
+}
+
 /// Plus grand UID de tâche présent, 0 si aucune tâche.
 fn max_task_uid(p: &Project) -> u32 {
     p.tasks.max_uid().map_or(0, TaskUid::get)

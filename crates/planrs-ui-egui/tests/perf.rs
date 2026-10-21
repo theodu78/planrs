@@ -32,6 +32,12 @@
 //!   barre, un point par image, aperçu `gesture::preview` recalculé quand
 //!   l'écart en jours change, aucun recalcul du planning), puis lâcher (un
 //!   seul lot) ; mêmes seuils.
+//! - J7 L11 : `usage_scroll` (ignoré, release) : utilisation des
+//!   ressources, 1 200 ressources, 5 000 tâches affectées, défilement
+//!   vertical (molette) puis horizontal (blocs neufs du moteur), mêmes
+//!   seuils ; pire image (un bloc neuf) < 32 ms. Garde toujours exécutée :
+//!   `usage_counts_equal_at_1000_and_5000_tasks` (formes, sommets et galleys
+//!   de la vue à ± 5 %).
 //!
 //! Le rendu GPU n'est pas chronométré (lavapipe en CI n'est pas
 //! représentatif). Le projet est un MSPDI généré en mémoire par ce fichier :
@@ -73,7 +79,9 @@ use planrs_ui_egui::nav::RowRef;
 use planrs_ui_egui::rows::{RowKind, RowModel};
 use planrs_ui_egui::timescale::TimeAxis;
 use planrs_ui_egui::view::{OVERSCAN, ROW_H};
-use planrs_ui_egui::{Action, App, DocOrigin, Env, LanguagePref, ThemePref, TimeScaleZoom, UiState};
+use planrs_ui_egui::{
+    Action, App, DocOrigin, Env, LanguagePref, ThemePref, TimeScaleZoom, UiState, ViewKind,
+};
 
 /// Taille de la fenêtre simulée.
 const SCREEN: (f32, f32) = (1920.0, 1080.0);
@@ -896,4 +904,162 @@ fn bar_drag() {
         app.messages()
     );
     assert_budget("bar_drag", samples, bench.last);
+}
+
+/// Ressources du réseau mesuré par `usage_scroll` (ADR-0015 § 0).
+const USAGE_RESOURCES: usize = 1_200;
+
+/// Réseau de [`network_xml`] dont chaque feuille (hors jalons) est affectée
+/// à 100 % à la ressource `k mod resources` (travail = durée).
+fn network_with_resources(summaries: usize, leaves: usize, max_links: usize, resources: usize) -> Vec<u8> {
+    let base = String::from_utf8(network_xml(summaries, leaves, max_links)).unwrap();
+    let body = base.strip_suffix("</Project>").unwrap();
+    let mut xml = String::with_capacity(base.len() + summaries * leaves * 200);
+    xml.push_str(body);
+    xml.push_str("<Resources>");
+    for r in 1..=resources {
+        write!(
+            xml,
+            "<Resource><UID>{r}</UID><ID>{r}</ID><Name>Équipe {r} — compagnons</Name><Type>1</Type>\
+             <MaxUnits>1</MaxUnits></Resource>"
+        )
+        .unwrap();
+    }
+    xml.push_str("</Resources><Assignments>");
+    let leaf_uid = |k: usize| (k / leaves) * (leaves + 1) + (k % leaves) + 2;
+    let mut uid = 0;
+    for k in 0..summaries * leaves {
+        if k % 97 == 96 {
+            continue;
+        }
+        uid += 1;
+        let hours = 4 + (k * 7) % 13;
+        write!(
+            xml,
+            "<Assignment><UID>{uid}</UID><TaskUID>{t}</TaskUID><ResourceUID>{r}</ResourceUID>\
+             <Units>1</Units><Work>PT{hours}H0M0S</Work></Assignment>",
+            t = leaf_uid(k),
+            r = k % resources + 1
+        )
+        .unwrap();
+    }
+    xml.push_str("</Assignments></Project>");
+    xml.into_bytes()
+}
+
+/// Application ouverte sur un réseau affecté, vue Utilisation des
+/// ressources, zoom `zoom`, défilée au début.
+fn usage_app(summaries: usize, resources: usize, zoom: TimeScaleZoom) -> (App, Bench) {
+    let state = UiState {
+        language: LanguagePref::Fr,
+        theme: ThemePref::Light,
+        ..UiState::default()
+    };
+    let mut app = App::new(state, Env::fixed(now()));
+    let origin = DocOrigin {
+        name: "utilisation.xml".to_owned(),
+        path: None,
+        demo: false,
+    };
+    let leaves = LEAVES_PER_SUMMARY;
+    let xml = network_with_resources(summaries, leaves, 2 * summaries * leaves, resources);
+    app.open_bytes(&xml, origin);
+    let document = app
+        .document
+        .as_ref()
+        .unwrap_or_else(|| panic!("réseau affecté refusé : {:?}", app.messages()));
+    assert_eq!(document.project().resources.len(), resources);
+    assert!(!document.schedule().assignments.is_empty());
+    let mut bench = Bench::new();
+    bench.settle(&mut app);
+    app.dispatch(Action::SetView(ViewKind::ResourceUsage));
+    app.dispatch(Action::SetZoom(zoom));
+    bench.settle(&mut app);
+    let x = app.view().gantt_scroll_x;
+    app.dispatch(Action::ScrollGanttX(-x));
+    bench.settle(&mut app);
+    assert_eq!(app.state.view, ViewKind::ResourceUsage);
+    (app, bench)
+}
+
+/// J7 L11 (garde indépendante de la machine) : utilisation des ressources
+/// à 1 000 et 5 000 tâches (60 ressources, mêmes premières tâches), en haut
+/// puis après des déplacements au clavier : formes, sommets et galleys
+/// égaux à ± 5 % (virtualisation des lignes et des périodes).
+#[test]
+fn usage_counts_equal_at_1000_and_5000_tasks() {
+    let moves = vec![
+        key_events(Key::ArrowDown, Modifiers::NONE),
+        key_events(Key::PageDown, Modifiers::NONE),
+        key_events(Key::Tab, Modifiers::NONE),
+    ];
+    let mut measured = Vec::new();
+    for summaries in [50, SUMMARIES] {
+        let (mut app, mut bench) = usage_app(summaries, 60, TimeScaleZoom::Week);
+        let start = bench.last;
+        let after = counts_after(&mut app, &mut bench, &moves);
+        let cells = app.view().usage.last_cells.len();
+        eprintln!("utilisation, {summaries} récapitulatives : {start:?} {after:?}, {cells} cellules");
+        assert!(cells > 0, "aucune cellule");
+        measured.push([start, after]);
+    }
+    let close = |a: usize, b: usize| a.abs_diff(b) * 20 <= a.max(b);
+    for (small, large) in measured[0].iter().zip(&measured[1]) {
+        assert!(small.shapes > 0 && small.galleys > 0, "{small:?}");
+        assert!(close(small.shapes, large.shapes), "formes {small:?} / {large:?}");
+        assert!(
+            close(small.vertices, large.vertices),
+            "sommets {small:?} / {large:?}"
+        );
+        assert!(
+            close(small.galleys, large.galleys),
+            "galleys {small:?} / {large:?}"
+        );
+    }
+}
+
+/// J7 L11 : utilisation des ressources, 1 200 ressources, 5 000 tâches
+/// affectées ; molette verticale (120 images) puis défilement horizontal au
+/// zoom Jour (120 images, un bloc neuf toutes les ~8 images) ; médiane
+/// < 16 ms, p95 < 32 ms, pire image (bloc neuf) < 32 ms.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn usage_scroll() {
+    let (mut app, mut bench) = usage_app(SUMMARIES, USAGE_RESOURCES, TimeScaleZoom::Week);
+    for _ in 0..WARMUP {
+        bench.frame(&mut app, wheel_events(-WHEEL_STEP));
+    }
+    let first = app.view().usage.last_scroll_y;
+    let queries = app.view().usage.cache.queries();
+    let vertical: Vec<Duration> = (0..120)
+        .map(|_| bench.frame(&mut app, wheel_events(-WHEEL_STEP)))
+        .collect();
+    assert!(
+        app.view().usage.last_scroll_y > first,
+        "la molette n'a pas fait défiler"
+    );
+    let fetched_v = app.view().usage.cache.queries() - queries;
+    assert_budget("usage_scroll vertical", vertical.clone(), bench.last);
+
+    app.dispatch(Action::SetZoom(TimeScaleZoom::Day));
+    bench.settle(&mut app);
+    let x = app.view().gantt_scroll_x;
+    app.dispatch(Action::ScrollGanttX(-x));
+    bench.settle(&mut app);
+    let queries = app.view().usage.cache.queries();
+    let horizontal: Vec<Duration> = (0..120)
+        .map(|_| {
+            app.dispatch(Action::ScrollGanttX(300.0));
+            bench.frame(&mut app, Vec::new())
+        })
+        .collect();
+    let fetched_h = app.view().usage.cache.queries() - queries;
+    assert!(fetched_h > 2, "aucun bloc neuf ({fetched_h})");
+    let worst = *horizontal.iter().chain(&vertical).max().unwrap();
+    eprintln!(
+        "perf UI usage_scroll : blocs neufs {fetched_v} (vertical), {fetched_h} (horizontal), pire image {:.2} ms",
+        ms(worst)
+    );
+    assert_budget("usage_scroll horizontal", horizontal, bench.last);
+    assert!(worst < SPIKE, "bloc neuf : {worst:?} ≥ {SPIKE:?}");
 }

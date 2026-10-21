@@ -608,6 +608,15 @@ text_ids! {
     MenuRecentEmpty => "menu-recent-empty",
     MenuRecentMissing => "menu-recent-missing",
     // --- J7 L15 ---
+    RecoveryTitle => "recovery-title",
+    RecoveryCheckpointed => "recovery-checkpointed",
+    RecoveryRestore => "recovery-restore",
+    RecoveryDiscard => "recovery-discard",
+    RecoveryLater => "recovery-later",
+    RecoveryPartial => "recovery-partial",
+    RecoveryFailed => "recovery-failed",
+    RecoveryDiscardFailed => "recovery-discard-failed",
+    RecoveryJournalCut => "recovery-journal-cut",
     // --- J7 L16 ---
 }
 

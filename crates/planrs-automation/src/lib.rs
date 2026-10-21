@@ -38,6 +38,8 @@ pub mod history;
 pub mod journal;
 pub mod json;
 pub mod outcome;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod recovery;
 pub mod registry;
 pub mod session;
 pub mod text;

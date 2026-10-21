@@ -600,5 +600,20 @@ menu-recent-empty = Aucun fichier récent
 menu-recent-missing = { $name } (introuvable)
 
 # --- J7 L15 ---
+recovery-title = Récupérer « { $name } » ({ $count ->
+        [one] { $count } modification
+       *[other] { $count } modifications
+    }) ?
+recovery-checkpointed = Les modifications antérieures au dernier point de reprise ne pourront plus être annulées.
+recovery-restore = Restaurer
+recovery-discard = Ignorer
+recovery-later = Plus tard
+recovery-partial = Récupération partielle de « { $name } » : { $count ->
+        [one] { $count } modification rejouée
+       *[other] { $count } modifications rejouées
+    }, la suivante est refusée : { $detail }
+recovery-failed = Récupération de « { $name } » impossible : { $detail }
+recovery-discard-failed = Suppression du journal de reprise impossible : { $detail }
+recovery-journal-cut = Reprise après plantage interrompue pour ce document : { $detail }. L'édition continue ; enregistrez régulièrement.
 
 # --- J7 L16 ---

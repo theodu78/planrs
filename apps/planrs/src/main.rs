@@ -27,6 +27,14 @@
 //! arabe…) est cherché dans les polices du système (fontconfig, CoreText,
 //! DirectWrite), sans police embarquée (ADR-0015, décision J8).
 //!
+//! Reprise après plantage (J7, lot L15) : au démarrage, les journaux
+//! orphelins du dossier de reprise (`recovery_dir`) qui portent des
+//! modifications sont proposés par un bandeau (Restaurer, Ignorer, Plus
+//! tard), les autres supprimés ; puis chaque document ouvert tient son
+//! journal ([`Recorder`]), supprimé à sa fermeture propre. Un plantage, ou
+//! « Quitter » du Dock sur macOS (non interceptable, voir plus bas), laisse
+//! le journal : rien n'est perdu au démarrage suivant.
+//!
 //! macOS : le menu applicatif par défaut de winit est retiré
 //! ([`event_loop_hook`]). Son entrée « Quitter » (Cmd+Q) appelle
 //! `terminate:`, qui ferme la fenêtre sans `CloseRequested` : le garde des
@@ -44,9 +52,10 @@ use planrs_automation::control::{
     ControlError, ListenerHandle, RELAY_QUEUE, RelayCall, Rendezvous, RendezvousGuard, Waker,
     canonical_project, new_token, publish_in, spawn_listener_in, state_dir,
 };
+use planrs_automation::recovery::{Recorder, orphans, recovery_dir};
 use planrs_core::{Moment, PRODUCT_NAME};
 use planrs_ui_egui::relay::ScreenshotConfig;
-use planrs_ui_egui::{DocumentObserver, Env, Language, OpenDocument, PlanrsApp, RfdFileService};
+use planrs_ui_egui::{App, DocumentObserver, Env, Language, OpenDocument, PlanrsApp, RfdFileService};
 
 /// « Maintenant » en heure locale, tronqué à la minute. Hors du domaine des
 /// dates du cœur (1984-2149), repli sur un instant fixe, signalé.
@@ -179,6 +188,21 @@ fn event_loop_hook() -> Option<eframe::EventLoopBuilderHook> {
     }
 }
 
+/// Reprise après plantage : orphelins de `root` proposés (ceux sans
+/// modification supprimés), puis journal de chaque document dans `root`.
+fn start_recovery(app: &mut App, root: PathBuf) {
+    let (offered, stale): (Vec<_>, Vec<_>) = orphans(&root)
+        .into_iter()
+        .partition(planrs_automation::recovery::Orphan::worth_restoring);
+    for orphan in stale {
+        if let Err(error) = orphan.discard() {
+            eprintln!("{PRODUCT_NAME} : journal de reprise non supprimé ({error})");
+        }
+    }
+    app.offer_recovery(offered);
+    app.set_recovery(Box::new(Recorder::in_dir(root)));
+}
+
 /// Usage affiché pour un argument refusé.
 const USAGE: &str = "usage : planrs-desktop [fichier.xml]";
 
@@ -242,6 +266,12 @@ fn main() -> ExitCode {
             let (control, inbox) = ControlRendezvous::new(Arc::new(move || ctx.request_repaint()));
             app.app_mut().control_inbox(inbox);
             app.app_mut().enable_screenshots(ScreenshotConfig::default());
+            match recovery_dir() {
+                Some(root) => start_recovery(app.app_mut(), root),
+                None => {
+                    eprintln!("{PRODUCT_NAME} : reprise après plantage indisponible (aucun dossier d'état)");
+                }
+            }
             app.app_mut().set_observer(Box::new(control));
             // Après l'observateur : le rendez-vous suit le fichier ouvert.
             if let Some(path) = &startup {
@@ -363,6 +393,51 @@ mod tests {
         );
         let message = &app.messages().last().unwrap().text;
         assert!(message.contains("tronqué.xml"), "{message}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Démarrage : un orphelin modifié est proposé, un orphelin sans
+    /// modification supprimé ; le document ouvert ensuite tient son journal
+    /// (verrou tenu : pas un orphelin), supprimé à sa fermeture.
+    #[test]
+    fn desktop_start_recovery_offers_and_cleans() {
+        use planrs_automation::recovery::{Journal, orphans};
+        use planrs_ui_egui::{Action, App, Env, UiState};
+
+        let root = std::env::temp_dir().join(format!("planrs-l15-start-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let now = "2027-01-15T08:00".parse().unwrap();
+        let mut session = document::load(planrs_ui_egui::DEMO_MSPDI, now).unwrap().session;
+        // Sans modification : supprimé ; base non enregistrée : proposé.
+        drop(Journal::create(&root, &session).unwrap());
+        session.mark_unsaved();
+        drop(Journal::create(&root, &session).unwrap());
+        assert_eq!(orphans(&root).len(), 2);
+
+        let mut app = App::new(UiState::default(), Env::fixed(now));
+        super::start_recovery(&mut app, root.clone());
+        assert_eq!(app.recovery_offers().len(), 1);
+        assert!(app.recovery_offers().iter().all(|o| !o.saved));
+        assert_eq!(orphans(&root).len(), 1, "orphelin sans modification supprimé");
+        app.open_demo();
+        assert_eq!(
+            std::fs::read_dir(&root).unwrap().count(),
+            2,
+            "journal du document"
+        );
+        assert_eq!(orphans(&root).len(), 1, "journal vivant vu orphelin");
+        app.dispatch(Action::CloseDocument);
+        let ctx = eframe::egui::Context::default();
+        let mut output = ctx.run_ui(eframe::egui::RawInput::default(), |ui| {
+            planrs_ui_egui::ui(ui, &mut app);
+        });
+        output.textures_delta.clear();
+        assert!(app.document.is_none());
+        assert_eq!(
+            std::fs::read_dir(&root).unwrap().count(),
+            1,
+            "journal supprimé à la fermeture"
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 

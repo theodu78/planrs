@@ -237,6 +237,9 @@ enum Pending {
     Install(Box<(LoadedDocument, DocOrigin)>),
     /// Ouvrir un fichier par son chemin (fichier récent, J7 lot L14).
     OpenPath(String),
+    /// Restaurer un journal orphelin (reprise après plantage, J7 lot L15).
+    #[cfg(not(target_arch = "wasm32"))]
+    Restore(String),
 }
 
 /// Enregistrement en cours.
@@ -333,6 +336,14 @@ pub struct App {
     /// [`App::control_inbox`].
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) relay: Option<crate::relay::Relay>,
+    /// Journal de reprise après plantage (desktop, J7 lot L15) : branché
+    /// par [`App::set_recovery`], suit le document à chaque changement.
+    #[cfg(not(target_arch = "wasm32"))]
+    recovery: Option<Box<dyn planrs_automation::recovery::RecoveryLog>>,
+    /// Journaux orphelins proposés par le bandeau de reprise (le premier est
+    /// affiché), posés par [`App::offer_recovery`].
+    #[cfg(not(target_arch = "wasm32"))]
+    orphans: Vec<planrs_automation::recovery::Orphan>,
 }
 
 impl App {
@@ -373,6 +384,10 @@ impl App {
             popup_open: false,
             #[cfg(not(target_arch = "wasm32"))]
             relay: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            recovery: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            orphans: Vec::new(),
         }
     }
 
@@ -384,10 +399,13 @@ impl App {
     }
 
     /// Signale le document courant à l'observateur.
+    /// Le journal de reprise suit aussi le document (desktop).
     pub(crate) fn notify_observer(&mut self) {
         if let Some(observer) = &mut self.observer {
             observer.document_changed(self.document.as_ref());
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.record_recovery();
     }
 
     /// Langue des textes du moteur (messages d'erreur des commandes).
@@ -610,6 +628,8 @@ impl App {
             Pending::NewProject => self.new_project(),
             Pending::Quit => {
                 self.quit_confirmed = true;
+                #[cfg(not(target_arch = "wasm32"))]
+                self.recovery_closed();
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             Pending::Install(boxed) => {
@@ -617,6 +637,8 @@ impl App {
                 self.install(loaded, origin);
             }
             Pending::OpenPath(path) => self.open_path(&path),
+            #[cfg(not(target_arch = "wasm32"))]
+            Pending::Restore(id) => self.restore_orphan(&id),
         }
     }
 
@@ -764,6 +786,10 @@ impl App {
         } else if self.document_dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirm = Some(Pending::Quit);
+        } else {
+            // Fermeture acceptée, rien à perdre : journal supprimé.
+            #[cfg(not(target_arch = "wasm32"))]
+            self.recovery_closed();
         }
     }
 
@@ -1297,9 +1323,10 @@ impl App {
             Action::SetGanttStyle(style) => self.state.gantt_style = style,
             Action::SetView(kind) => self.set_view(kind),
             Action::OpenRecent(index) => self.open_recent(index, ctx),
-            other @ Action::Recover(_) => {
-                log::debug!("action J7 pas encore câblée : {other:?}");
-            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Action::Recover(choice) => self.recover(choice, ctx),
+            #[cfg(target_arch = "wasm32")]
+            other @ Action::Recover(_) => log::debug!("reprise après plantage absente du web : {other:?}"),
             Action::ToggleColumn(column) => self.toggle_column(column),
             Action::SetColumnWidth { column, width } => {
                 self.state.set_column_width(column, width);
@@ -1945,6 +1972,8 @@ impl App {
         let mut stats = FrameStats::default();
         #[cfg(not(target_arch = "wasm32"))]
         let approval = self.approval_banner();
+        #[cfg(not(target_arch = "wasm32"))]
+        let recovery_offer = self.recovery_offer();
         // Nom du document du bandeau de confirmation, s'il y en a un.
         let confirm_name = self.confirm.as_ref().map(|_| {
             self.document
@@ -1980,6 +2009,7 @@ impl App {
                         .and_then(|relay| crate::relay::banner_for(relay, take_focus))
                 });
                 view::approval::approval_banner(ui, &mut fc, banner);
+                view::recovery::recovery_banner(ui, &mut fc, recovery_offer);
             }
             if self.state.diagnostics_open {
                 view::diagnostics::panel(ui, &mut fc);
@@ -2049,6 +2079,160 @@ fn show_errors(state: &mut TaskInfoState, errors: Vec<FieldError>) {
         state.tab = first;
     }
     state.errors = errors;
+}
+
+/// Reprise après plantage (desktop, J7 lot L15).
+#[cfg(not(target_arch = "wasm32"))]
+impl App {
+    /// Branche le journal de reprise : il suit aussitôt le document courant,
+    /// puis chaque ouverture, changement, enregistrement et fermeture.
+    pub fn set_recovery(&mut self, log: Box<dyn planrs_automation::recovery::RecoveryLog>) {
+        self.recovery = Some(log);
+        self.record_recovery();
+    }
+
+    /// Propose les journaux orphelins qui portent des modifications (bandeau
+    /// de reprise, un à la fois).
+    pub fn offer_recovery(&mut self, orphans: Vec<planrs_automation::recovery::Orphan>) {
+        self.orphans = orphans
+            .into_iter()
+            .filter(planrs_automation::recovery::Orphan::worth_restoring)
+            .collect();
+    }
+
+    /// Orphelin affiché par le bandeau de reprise (le premier).
+    fn recovery_offer(&self) -> Option<crate::view::recovery::RecoveryOffer<'_>> {
+        self.orphans
+            .first()
+            .map(|o| crate::view::recovery::RecoveryOffer {
+                id: &o.id,
+                name: &o.name,
+                entries: o.entries,
+                checkpointed: o.checkpointed,
+            })
+    }
+
+    /// Journaux orphelins encore proposés.
+    #[must_use]
+    pub fn recovery_offers(&self) -> &[planrs_automation::recovery::Orphan] {
+        &self.orphans
+    }
+
+    /// Journalise l'état du document ; une écriture impossible (disque
+    /// plein) coupe le journal et s'affiche une fois, sans jamais bloquer
+    /// l'édition.
+    fn record_recovery(&mut self) {
+        let Some(log) = &mut self.recovery else {
+            return;
+        };
+        let now = (self.env.now)();
+        log.record(
+            self.document
+                .as_ref()
+                .map(|document| (document.opening, &document.session)),
+            now,
+        );
+        if let Some(detail) = log.take_issue() {
+            let text = self
+                .texts
+                .get_args(TextId::RecoveryJournalCut, &[("detail", Arg::Str(detail.into()))]);
+            self.push_message(Severity::Warning, text);
+        }
+    }
+
+    /// Réponse au bandeau de reprise après plantage (J7, lot L15) :
+    /// Restaurer (après confirmation si le document courant est modifié),
+    /// Ignorer (journal supprimé) ou Plus tard (bandeau retiré, journaux
+    /// gardés pour le prochain démarrage).
+    fn recover(&mut self, choice: crate::action::RecoverChoice, ctx: &egui::Context) {
+        match choice {
+            crate::action::RecoverChoice::Restore(id) => self.request(Pending::Restore(id), ctx),
+            crate::action::RecoverChoice::Discard(id) => {
+                let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.orphans)
+                    .into_iter()
+                    .partition(|o| o.id == id);
+                self.orphans = kept;
+                for orphan in gone {
+                    if let Err(error) = orphan.discard() {
+                        self.report_recovery_discard(&error);
+                    }
+                }
+            }
+            crate::action::RecoverChoice::Later => self.orphans.clear(),
+        }
+    }
+
+    /// Fermeture propre de l'application : journal supprimé.
+    fn recovery_closed(&mut self) {
+        if let Some(log) = &mut self.recovery {
+            log.closed();
+        }
+    }
+
+    /// Suppression d'un journal impossible : message.
+    fn report_recovery_discard(&mut self, error: &std::io::Error) {
+        let text = self.texts.get_args(
+            TextId::RecoveryDiscardFailed,
+            &[("detail", Arg::Str(error.to_string().into()))],
+        );
+        self.push_message(Severity::Warning, text);
+    }
+
+    /// Restaure l'orphelin `id` : rejeu du journal, document installé et
+    /// marqué modifié (son contenu n'est pas sur le disque), journal
+    /// orphelin supprimé (le document a déjà le sien). Un rejeu arrêté sur
+    /// une entrée refusée restaure ce qui précède et le dit ; un journal
+    /// illisible reste proposé (Ignorer le supprime).
+    fn restore_orphan(&mut self, id: &str) {
+        let Some(orphan) = self.orphans.iter().find(|o| o.id == id).cloned() else {
+            return;
+        };
+        let lang = self.text_language();
+        match planrs_automation::recovery::replay(&orphan, lang) {
+            Ok((mut session, report)) => {
+                self.orphans.retain(|o| o.id != id);
+                session.mark_unsaved();
+                let range = default_range(session.project(), session.schedule());
+                let loaded = LoadedDocument {
+                    session,
+                    import_diagnostics: Vec::new(),
+                    range: range.span,
+                    range_truncated: range.truncated,
+                };
+                let origin = DocOrigin {
+                    name: orphan.name.clone(),
+                    path: orphan.path.clone(),
+                    demo: false,
+                };
+                self.install(loaded, origin);
+                if let Err(error) = orphan.discard() {
+                    self.report_recovery_discard(&error);
+                }
+                if report.stopped_at.is_some() {
+                    let count = i64::try_from(report.applied).unwrap_or(i64::MAX);
+                    let text = self.texts.get_args(
+                        TextId::RecoveryPartial,
+                        &[
+                            ("name", Arg::Str(orphan.name.as_str().into())),
+                            ("count", Arg::Count(count)),
+                            ("detail", Arg::Str(report.error.unwrap_or_default().into())),
+                        ],
+                    );
+                    self.push_message(Severity::Warning, text);
+                }
+            }
+            Err(error) => {
+                let text = self.texts.get_args(
+                    TextId::RecoveryFailed,
+                    &[
+                        ("name", Arg::Str(orphan.name.as_str().into())),
+                        ("detail", Arg::Str(error.to_string().into())),
+                    ],
+                );
+                self.push_titled(Severity::Error, None, text);
+            }
+        }
+    }
 }
 
 /// Titre de la fenêtre pour `document` (voir [`App::window_title`]). Le web

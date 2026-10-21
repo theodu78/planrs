@@ -92,6 +92,17 @@ impl History {
         self.undo.back().map_or(self.base, |e| e.id)
     }
 
+    /// Dernier identifiant attribué (journal de reprise, J7 lot L15) : il
+    /// ne change qu'à un nouveau commit.
+    pub(crate) const fn last_id(&self) -> u64 {
+        self.last_id
+    }
+
+    /// Dernière entrée annulable (journal de reprise, J7 lot L15).
+    pub(crate) fn top(&self) -> Option<&HistoryEntry> {
+        self.undo.back()
+    }
+
     /// Vrai si l'état `id` est encore atteignable par annuler/rétablir.
     pub(crate) fn reachable(&self, id: u64) -> bool {
         id == self.base || self.undo.iter().chain(&self.redo).any(|e| e.id == id)

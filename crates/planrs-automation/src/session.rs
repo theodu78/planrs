@@ -696,6 +696,50 @@ impl Session {
         self.history.view()
     }
 
+    /// Identifiant de l'état courant dans l'historique (journal de reprise,
+    /// J7 lot L15) : identifiant de la dernière entrée annulable, sinon
+    /// celui de la base ; un commit en attribue un nouveau, plus grand que
+    /// tous les précédents.
+    #[must_use]
+    pub fn history_position(&self) -> u64 {
+        self.history.position()
+    }
+
+    /// Dernier identifiant d'état attribué par un commit (journal de
+    /// reprise, J7 lot L15) : inchangé par une annulation ou un
+    /// rétablissement, ce qui distingue un nouveau lot d'un lot rétabli.
+    #[must_use]
+    pub const fn history_last_id(&self) -> u64 {
+        self.history.last_id()
+    }
+
+    /// Dernier lot annulable (journal de reprise, J7 lot L15) :
+    /// identifiant de l'état après lui, lot tel qu'appliqué, origine.
+    #[must_use]
+    pub fn last_applied(&self) -> Option<(u64, &Batch, EditSource)> {
+        self.history.top().map(|e| (e.id, &e.ops, e.source))
+    }
+
+    /// Compteurs d'UID (tâche, ressource, affectation, calendrier) : plus
+    /// grands UID connus de la session, alloués compris (R-151, R-195).
+    #[must_use]
+    pub const fn uid_counters(&self) -> [u32; 4] {
+        self.uids.counters()
+    }
+
+    /// Relève les compteurs d'UID à au moins `counters` (rejeu d'un journal
+    /// de reprise, J7 lot L15) : un UID alloué puis annulé avant le point de
+    /// reprise n'est pas rendu une seconde fois. Jamais de recul.
+    pub fn raise_uid_counters(&mut self, counters: [u32; 4]) {
+        self.uids.raise(counters);
+    }
+
+    /// Marque le document comme modifié (rejeu d'un journal de reprise,
+    /// J7 lot L15) : l'état enregistré n'est plus atteignable.
+    pub fn mark_unsaved(&mut self) {
+        self.saved_at = None;
+    }
+
     /// Vrai si l'état diffère du dernier enregistrement (R-164).
     #[must_use]
     pub fn is_dirty(&self) -> bool {

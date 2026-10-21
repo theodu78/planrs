@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "`baseline.clear` (J7, R-250) : efface la ligne de base `number` (0 à\n10, défaut 0) du projet entier ou de `tasks`. Contrat J7 L0 ; exécution :\nlot L5.",
+  "description": "`baseline.clear` (J7, R-250) : efface la ligne de base `number` (0 à\n10, défaut 0) du projet entier ou de `tasks`.",
   "properties": {
     "number": {
       "description": "Numéro de la ligne (0 à 10 ; défaut 0).",

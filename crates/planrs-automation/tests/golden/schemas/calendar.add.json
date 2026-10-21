@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "`calendar.add` (J7, R-248) : nouveau calendrier de base (aucun de\n`base`, `copy_of`), dérivé de `base`, ou copie de `copy_of` (les deux :\n`param.invalid`). Contrat J7 L0 ; exécution : lot L5.",
+  "description": "`calendar.add` (J7, R-248) : nouveau calendrier de base (aucun de\n`base`, `copy_of`), dérivé de `base`, ou copie de `copy_of` (les deux :\n`param.invalid`).",
   "properties": {
     "base": {
       "description": "Calendrier de base dont le nouveau dérive.",

@@ -604,7 +604,8 @@ async fn mcp_eof_before_initialize_is_clean() {
     assert_eq!(serve_on(r, w, opts()).await, Ok(()));
 }
 
-/// J6 (lot L8) : les outils de suivi listés (44 outils), `update_progress`,
+/// J6 (lot L8) : les outils de suivi listés (44 outils en J6, 49 depuis le
+/// lot L5 de J7), `update_progress`,
 /// `set_baseline`, `baseline_variance` et `what_if` en contenu structuré ;
 /// `what_if` ne change pas la session et rend un refus comme donnée ;
 /// consignes du serveur.
@@ -628,7 +629,7 @@ async fn mcp_tracking_tools_structured() {
     .await;
     let (a, b) = (out["labels"]["$a"].clone(), out["labels"]["$b"].clone());
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 44);
+    assert_eq!(tools.len(), 49);
     for name in [
         "update_progress",
         "reschedule_remaining",

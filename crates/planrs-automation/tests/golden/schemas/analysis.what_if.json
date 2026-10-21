@@ -1264,6 +1264,15 @@
                   "null"
                 ]
               },
+              "calendar": {
+                "description": "Calendrier du projet (J7, R-249 ; UID d'un calendrier existant, de\nbase ou dérivé, `null` refusé).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "category": {
                 "description": "Catégorie.",
                 "type": [
@@ -1424,6 +1433,13 @@
                 "description": "Premier jour.",
                 "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
                 "type": "string"
+              },
+              "name": {
+                "description": "Nom de l'exception (J7, R-165 amendée, ≤ 512 caractères, O44 ;\nabsent : nom gardé à un remplacement, vide à une création).",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "op": {
                 "const": "calendar.set_exception",
@@ -1630,6 +1646,72 @@
                   "null"
                 ]
               },
+              "cost_per_use": {
+                "additionalProperties": false,
+                "description": "Coût par utilisation (J7, R-195 amendée ; montant seul, `per`\nrefusé).",
+                "properties": {
+                  "amount": {
+                    "description": "Montant en centièmes (`planrs_core::Money`).",
+                    "format": "int64",
+                    "type": "integer"
+                  },
+                  "per": {
+                    "anyOf": [
+                      {
+                        "description": "Unité d'un taux en JSON (J7, R-195 amendée ; `planrs_core::RateUnit`,\nformat d'origine `StandardRateFormat` gardé, O46).",
+                        "oneOf": [
+                          {
+                            "const": "minute",
+                            "description": "Par minute.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "hour",
+                            "description": "Par heure.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "day",
+                            "description": "Par jour.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "week",
+                            "description": "Par semaine.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "month",
+                            "description": "Par mois.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "year",
+                            "description": "Par an.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "material_unit",
+                            "description": "Par unité de matériau (ressource matérielle).",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Unité du taux (défaut : heure ; unité de matériau pour une ressource\nmatérielle)."
+                  }
+                },
+                "required": [
+                  "amount"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
               "group": {
                 "description": "Groupe.",
                 "type": [
@@ -1729,6 +1811,138 @@
               "op": {
                 "const": "resource.update",
                 "type": "string"
+              },
+              "overtime_rate": {
+                "additionalProperties": false,
+                "description": "Taux des heures supplémentaires (J7, R-195 amendée ; ressource de\ntravail).",
+                "properties": {
+                  "amount": {
+                    "description": "Montant en centièmes (`planrs_core::Money`).",
+                    "format": "int64",
+                    "type": "integer"
+                  },
+                  "per": {
+                    "anyOf": [
+                      {
+                        "description": "Unité d'un taux en JSON (J7, R-195 amendée ; `planrs_core::RateUnit`,\nformat d'origine `StandardRateFormat` gardé, O46).",
+                        "oneOf": [
+                          {
+                            "const": "minute",
+                            "description": "Par minute.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "hour",
+                            "description": "Par heure.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "day",
+                            "description": "Par jour.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "week",
+                            "description": "Par semaine.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "month",
+                            "description": "Par mois.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "year",
+                            "description": "Par an.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "material_unit",
+                            "description": "Par unité de matériau (ressource matérielle).",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Unité du taux (défaut : heure ; unité de matériau pour une ressource\nmatérielle)."
+                  }
+                },
+                "required": [
+                  "amount"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "standard_rate": {
+                "additionalProperties": false,
+                "description": "Taux standard (J7, R-195 amendée : stocké tel quel, jamais\ncalculé ; `null` : 0).",
+                "properties": {
+                  "amount": {
+                    "description": "Montant en centièmes (`planrs_core::Money`).",
+                    "format": "int64",
+                    "type": "integer"
+                  },
+                  "per": {
+                    "anyOf": [
+                      {
+                        "description": "Unité d'un taux en JSON (J7, R-195 amendée ; `planrs_core::RateUnit`,\nformat d'origine `StandardRateFormat` gardé, O46).",
+                        "oneOf": [
+                          {
+                            "const": "minute",
+                            "description": "Par minute.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "hour",
+                            "description": "Par heure.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "day",
+                            "description": "Par jour.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "week",
+                            "description": "Par semaine.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "month",
+                            "description": "Par mois.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "year",
+                            "description": "Par an.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "material_unit",
+                            "description": "Par unité de matériau (ressource matérielle).",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Unité du taux (défaut : heure ; unité de matériau pour une ressource\nmatérielle)."
+                  }
+                },
+                "required": [
+                  "amount"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
               },
               "uid": {
                 "description": "Ressource.",
@@ -2781,6 +2995,279 @@
               },
               "tasks": {
                 "description": "Tâches sélectionnées (défaut : projet entier).",
+                "items": {
+                  "description": "Tâche : UID (entier) ou étiquette \"$x\" d'une tâche créée plus tôt dans le même lot.",
+                  "oneOf": [
+                    {
+                      "maximum": 4294967295,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    {
+                      "pattern": "^\\$[A-Za-z0-9_-]{1,64}$",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Crée un calendrier (R-248 ; J7).",
+            "properties": {
+              "base": {
+                "description": "Calendrier de base dont le nouveau dérive.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "copy_of": {
+                "description": "Calendrier copié (semaine, exceptions et base).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "Nom (non vide, unique sans tenir compte de la casse).",
+                "type": "string"
+              },
+              "op": {
+                "const": "calendar.add",
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "name"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Renomme un calendrier ou change sa base (R-248 ; J7).",
+            "properties": {
+              "base": {
+                "description": "Base.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "Nom (`null` refusé).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "op": {
+                "const": "calendar.update",
+                "type": "string"
+              },
+              "uid": {
+                "description": "Calendrier.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "op",
+              "uid"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Règle la semaine type d'un calendrier (R-247 ; J7).",
+            "properties": {
+              "calendar": {
+                "description": "Calendrier (UID ou `\"project\"`).",
+                "oneOf": [
+                  {
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "const": "project"
+                  }
+                ]
+              },
+              "days": {
+                "description": "Jours réglés.",
+                "items": {
+                  "additionalProperties": false,
+                  "description": "Jour de la semaine type et son réglage (J7, R-247).",
+                  "properties": {
+                    "day": {
+                      "description": "Jour.",
+                      "oneOf": [
+                        {
+                          "const": "monday",
+                          "description": "Lundi.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "tuesday",
+                          "description": "Mardi.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "wednesday",
+                          "description": "Mercredi.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "thursday",
+                          "description": "Jeudi.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "friday",
+                          "description": "Vendredi.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "saturday",
+                          "description": "Samedi.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "sunday",
+                          "description": "Dimanche.",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "setting": {
+                      "description": "Réglage.",
+                      "oneOf": [
+                        {
+                          "const": "inherit",
+                          "description": "Hérité de la base (calendrier dérivé seulement).",
+                          "type": "string"
+                        },
+                        {
+                          "const": "non_working",
+                          "description": "Chômé.",
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "description": "Ouvré sur ces plages (triées, disjointes, au plus 5).",
+                          "properties": {
+                            "ranges": {
+                              "items": {
+                                "additionalProperties": false,
+                                "description": "Plage ouvrée d'un jour (J7, R-247) : `[from, to)`, `to` peut valoir\n`\"24:00\"` (contrôle : lot L5).",
+                                "properties": {
+                                  "from": {
+                                    "description": "Début (`\"08:00\"`).",
+                                    "pattern": "^[0-9]{2}:[0-9]{2}$",
+                                    "type": "string"
+                                  },
+                                  "to": {
+                                    "description": "Fin (`\"12:00\"`, `\"24:00\"`).",
+                                    "pattern": "^[0-9]{2}:[0-9]{2}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "from",
+                                  "to"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "ranges"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "day",
+                    "setting"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "op": {
+                "const": "calendar.set_week",
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "calendar",
+              "days"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Supprime un calendrier (R-248 ; J7).",
+            "properties": {
+              "op": {
+                "const": "calendar.delete",
+                "type": "string"
+              },
+              "uid": {
+                "description": "Calendrier.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "op",
+              "uid"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Efface une ligne de base (R-250 ; J7).",
+            "properties": {
+              "number": {
+                "description": "Numéro de la ligne (0 à 10 ; défaut 0).",
+                "format": "uint8",
+                "maximum": 10,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "op": {
+                "const": "baseline.clear",
+                "type": "string"
+              },
+              "tasks": {
+                "description": "Tâches sélectionnées (défaut : projet entier, ressources comprises).",
                 "items": {
                   "description": "Tâche : UID (entier) ou étiquette \"$x\" d'une tâche créée plus tôt dans le même lot.",
                   "oneOf": [

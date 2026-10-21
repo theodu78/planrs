@@ -312,6 +312,52 @@ fn normalized_mspdi(p: &Path, now: Moment) -> planrs_core::Project {
     planrs_mspdi::normalize(&project, &planrs_mspdi::write::WriteOptions::default())
 }
 
+/// Scénario J7 (lot L5, `docs/plans/j7.md`) rejoué en mémoire : semaine
+/// type (samedi matin du Maçon, R-247), copie d'un calendrier et nom
+/// d'exception (R-248, R-165), calendrier du projet (R-249), taux stockés
+/// (R-195), suppression refusée puis acceptée (R-248), ligne de base
+/// effacée sur une sélection, puis rien à effacer (R-250) ; MSPDI
+/// enregistré égal à l'attendu par `normalize`.
+#[tokio::test]
+async fn replay_calendars_j7_memory() {
+    let s = replay_memory("calendars_j7", Some("calendars_j7.xml")).await;
+    if replay::blessing() {
+        return;
+    }
+    let refused: Vec<(&str, &str)> = s
+        .calls
+        .iter()
+        .filter_map(|c| error_code(c.expected.as_ref().unwrap()).map(|e| (c.tool.as_str(), e)))
+        .collect();
+    assert_eq!(
+        refused,
+        [
+            ("set_work_week", "param.invalid"),
+            ("add_calendar", "calendar.name_taken"),
+            ("delete_calendar", "calendar.in_use"),
+        ]
+    );
+    let ok = |i: usize| ok_at(&s, i);
+    let week = |dry: bool| {
+        let mut p = json!({ "calendar": 4, "days": [{ "day": "saturday", "setting": { "ranges": [{ "from": "08:00", "to": "12:00" }] } }] });
+        if dry {
+            p["dry_run"] = json!(true);
+        }
+        index_of(&s, "set_work_week", &p)
+    };
+    // `dry_run` et appel validé : même diff (fin de Maçonnerie lun 26/10
+    // 17:00 → 12:00, Enduits avancée d'une demi-journée).
+    assert_eq!(ok(week(true))["diff"], ok(week(false))["diff"]);
+    assert_eq!(ok(week(true))["committed"], json!(false));
+    let add = index_of(&s, "add_calendar", &json!({ "name": "Équipe B", "copy_of": 1 }));
+    assert_eq!(ok(add)["side_effects"], json!([{ "calendar_created": 5 }]));
+    let none = index_of(&s, "clear_baseline", &json!({ "number": 3 }));
+    assert_eq!(
+        ok(none)["warnings"][0]["code"],
+        json!("baseline.nothing_to_clear")
+    );
+}
+
 /// Scénario de suivi J6 (lot L10, `docs/plans/j6.md`, chiffres relus dans
 /// `docs/features/tracking.md` § 3) rejoué en mémoire, `--now
 /// 2026-11-02T08:00` : ligne de base 0, avancement au 13/11, refus, tâche

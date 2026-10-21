@@ -686,7 +686,8 @@ pub enum RateUnitJson {
 pub struct RateJson {
     /// Montant en centièmes (`planrs_core::Money`).
     pub amount: i64,
-    /// Unité du taux (défaut : heure).
+    /// Unité du taux (défaut : heure ; unité de matériau pour une ressource
+    /// matérielle).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub per: Option<RateUnitJson>,
 }

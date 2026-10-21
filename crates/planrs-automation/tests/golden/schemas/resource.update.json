@@ -12,6 +12,72 @@
         "null"
       ]
     },
+    "cost_per_use": {
+      "additionalProperties": false,
+      "description": "Coût par utilisation (J7, R-195 amendée ; montant seul, `per`\nrefusé).",
+      "properties": {
+        "amount": {
+          "description": "Montant en centièmes (`planrs_core::Money`).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "per": {
+          "anyOf": [
+            {
+              "description": "Unité d'un taux en JSON (J7, R-195 amendée ; `planrs_core::RateUnit`,\nformat d'origine `StandardRateFormat` gardé, O46).",
+              "oneOf": [
+                {
+                  "const": "minute",
+                  "description": "Par minute.",
+                  "type": "string"
+                },
+                {
+                  "const": "hour",
+                  "description": "Par heure.",
+                  "type": "string"
+                },
+                {
+                  "const": "day",
+                  "description": "Par jour.",
+                  "type": "string"
+                },
+                {
+                  "const": "week",
+                  "description": "Par semaine.",
+                  "type": "string"
+                },
+                {
+                  "const": "month",
+                  "description": "Par mois.",
+                  "type": "string"
+                },
+                {
+                  "const": "year",
+                  "description": "Par an.",
+                  "type": "string"
+                },
+                {
+                  "const": "material_unit",
+                  "description": "Par unité de matériau (ressource matérielle).",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Unité du taux (défaut : heure ; unité de matériau pour une ressource\nmatérielle)."
+        }
+      },
+      "required": [
+        "amount"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "group": {
       "description": "Groupe.",
       "type": [
@@ -105,6 +171,138 @@
       "description": "Notes.",
       "type": [
         "string",
+        "null"
+      ]
+    },
+    "overtime_rate": {
+      "additionalProperties": false,
+      "description": "Taux des heures supplémentaires (J7, R-195 amendée ; ressource de\ntravail).",
+      "properties": {
+        "amount": {
+          "description": "Montant en centièmes (`planrs_core::Money`).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "per": {
+          "anyOf": [
+            {
+              "description": "Unité d'un taux en JSON (J7, R-195 amendée ; `planrs_core::RateUnit`,\nformat d'origine `StandardRateFormat` gardé, O46).",
+              "oneOf": [
+                {
+                  "const": "minute",
+                  "description": "Par minute.",
+                  "type": "string"
+                },
+                {
+                  "const": "hour",
+                  "description": "Par heure.",
+                  "type": "string"
+                },
+                {
+                  "const": "day",
+                  "description": "Par jour.",
+                  "type": "string"
+                },
+                {
+                  "const": "week",
+                  "description": "Par semaine.",
+                  "type": "string"
+                },
+                {
+                  "const": "month",
+                  "description": "Par mois.",
+                  "type": "string"
+                },
+                {
+                  "const": "year",
+                  "description": "Par an.",
+                  "type": "string"
+                },
+                {
+                  "const": "material_unit",
+                  "description": "Par unité de matériau (ressource matérielle).",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Unité du taux (défaut : heure ; unité de matériau pour une ressource\nmatérielle)."
+        }
+      },
+      "required": [
+        "amount"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "standard_rate": {
+      "additionalProperties": false,
+      "description": "Taux standard (J7, R-195 amendée : stocké tel quel, jamais\ncalculé ; `null` : 0).",
+      "properties": {
+        "amount": {
+          "description": "Montant en centièmes (`planrs_core::Money`).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "per": {
+          "anyOf": [
+            {
+              "description": "Unité d'un taux en JSON (J7, R-195 amendée ; `planrs_core::RateUnit`,\nformat d'origine `StandardRateFormat` gardé, O46).",
+              "oneOf": [
+                {
+                  "const": "minute",
+                  "description": "Par minute.",
+                  "type": "string"
+                },
+                {
+                  "const": "hour",
+                  "description": "Par heure.",
+                  "type": "string"
+                },
+                {
+                  "const": "day",
+                  "description": "Par jour.",
+                  "type": "string"
+                },
+                {
+                  "const": "week",
+                  "description": "Par semaine.",
+                  "type": "string"
+                },
+                {
+                  "const": "month",
+                  "description": "Par mois.",
+                  "type": "string"
+                },
+                {
+                  "const": "year",
+                  "description": "Par an.",
+                  "type": "string"
+                },
+                {
+                  "const": "material_unit",
+                  "description": "Par unité de matériau (ressource matérielle).",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Unité du taux (défaut : heure ; unité de matériau pour une ressource\nmatérielle)."
+        }
+      },
+      "required": [
+        "amount"
+      ],
+      "type": [
+        "object",
         "null"
       ]
     },

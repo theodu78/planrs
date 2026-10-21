@@ -1,9 +1,9 @@
 //! Contrat J7 (lot L0, ADR-0015) : types, squelettes et registre. Les
 //! commandes nouvelles (`calendar.add`, `calendar.update`,
 //! `calendar.set_week`, `calendar.delete`, `baseline.clear`) se lisent et
-//! se relisent, hors du schéma des lots, et sont refusées
-//! `command.not_yet_available` ; les champs ajoutés aux commandes
-//! existantes (calendrier du projet, taux, nom d'exception) aussi ; les
+//! se relisent ; servies depuis le lot L5 (règles R-247 à R-250 dans
+//! `tests/rules`), comme les champs ajoutés aux commandes existantes
+//! (calendrier du projet, taux, nom d'exception) ; les
 //! entrées `app.*` sont refusées `control.not_attached` sans application ;
 //! les squelettes (gestes, utilisation par affectation, trimestre,
 //! `call_with`) répondent sans paniquer ni rien changer.
@@ -75,7 +75,7 @@ fn contract_compiles() {
     let generation = s.generation();
 
     // Commandes nouvelles et champs nouveaux : lus, relus à l'identique,
-    // refusés sans effet.
+    // servis depuis le lot L5 (simulés ici, jamais `not_yet_available`).
     let ops = [
         json!({"op": "calendar.add", "name": "Équipe B", "copy_of": 1}),
         json!({"op": "calendar.add", "name": "Dérivé", "base": 1}),
@@ -99,9 +99,10 @@ fn contract_compiles() {
         let again: Batch = serde_json::from_value(serde_json::to_value(&batch).unwrap()).unwrap();
         assert_eq!(again, batch, "aller-retour {i}");
         assert_eq!(batch.ops[0].id(), op["op"].as_str().unwrap());
-        let err = s.apply(&batch, ApplyMode::Commit).unwrap_err();
-        assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{i}");
-        assert_eq!(err.op_index, Some(0), "{i}");
+        if let Err(err) = s.apply(&batch, ApplyMode::DryRun) {
+            assert_ne!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{i}");
+            assert_eq!(err.op_index, Some(0), "{i}");
+        }
     }
     let Command::CalendarSetWeek(week) = &one(&ops[3]).ops[0] else {
         panic!("calendar.set_week attendu");
@@ -157,16 +158,18 @@ fn contract_compiles() {
     s.apply(&rename, ApplyMode::DryRun).unwrap();
 }
 
-/// Les champs J7 des commandes existantes restent hors de leur schéma
-/// (contrat L0 : schémas de référence J6 inchangés) ; les nouvelles
-/// commandes restent hors du schéma des lots.
+/// Lot L5 : les champs J7 des commandes existantes entrent dans leur
+/// schéma ; les nouvelles commandes entrent dans le schéma des lots et
+/// sont listées.
 #[test]
-fn contract_schemas_unchanged_until_l5() {
+fn contract_schemas_after_l5() {
     let props =
         |id: &str| serde_json::to_value((lookup(id).unwrap().schema)()).unwrap()["properties"].clone();
-    assert!(props("project.set_info").get("calendar").is_none());
-    assert!(props("resource.update").get("standard_rate").is_none());
-    assert!(props("calendar.set_exception").get("name").is_none());
+    assert!(props("project.set_info").get("calendar").is_some());
+    for field in ["standard_rate", "overtime_rate", "cost_per_use"] {
+        assert!(props("resource.update").get(field).is_some(), "{field}");
+    }
+    assert!(props("calendar.set_exception").get("name").is_some());
     let batch = serde_json::to_string(&(lookup("batch.apply").unwrap().schema)()).unwrap();
     for id in [
         "calendar.add",
@@ -176,19 +179,19 @@ fn contract_schemas_unchanged_until_l5() {
         "baseline.clear",
     ] {
         assert!(
-            !batch.contains(&format!("\"{id}\"")),
-            "{id} dans le schéma des lots"
+            batch.contains(&format!("\"{id}\"")),
+            "{id} absent du schéma des lots"
         );
         let spec = lookup(id).unwrap();
-        assert_eq!(spec.available, Availability::Milestone(7), "{id}");
+        assert_eq!(spec.available, Availability::Now, "{id}");
         assert_eq!(spec.kind, Kind::Write, "{id}");
         assert!(props(id).is_object(), "{id} : schéma vide");
     }
 }
 
-/// `app.*` sans application : `control.not_attached` ; une entrée réservée :
-/// `command.not_yet_available` ; le trimestre de `resource_usage` est
-/// servi depuis le lot L4 (R-246, `views_j7.rs`).
+/// `app.*` sans application : `control.not_attached` ; `calendar.add` est
+/// servi depuis le lot L5 ; le trimestre de `resource_usage` depuis le lot
+/// L4 (R-246, `views_j7.rs`).
 #[test]
 fn contract_workspace_refusals() {
     let mut w = Workspace::new(now(), Language::Fr);
@@ -197,8 +200,7 @@ fn contract_workspace_refusals() {
         let err = w.call(id, json!({})).unwrap_err();
         assert_eq!(err.code, codes::CONTROL_NOT_ATTACHED, "{id}");
     }
-    let err = w.call("calendar.add", json!({"name": "B"})).unwrap_err();
-    assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE);
+    w.call("calendar.add", json!({"name": "B"})).unwrap();
     w.call("analysis.resource_usage", json!({"by": "quarter"}))
         .unwrap();
     w.call("analysis.resource_usage", json!({"by": "week"})).unwrap();

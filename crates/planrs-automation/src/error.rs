@@ -5,7 +5,7 @@
 //! par le MCP, la CLI et l'interface (clé de traduction `.ftl`), et un
 //! message en français ou en anglais ([`CommandError::message`]).
 
-use planrs_core::{Diagnostic, ModelError, ResourceUid, Subject, TaskUid};
+use planrs_core::{CalendarUid, Diagnostic, ModelError, ResourceUid, Subject, TaskUid};
 use planrs_mspdi::MspdiError;
 
 use crate::text::{Language, TextError};
@@ -253,7 +253,42 @@ pub enum CommandErrorKind {
     BaselineRollupNeedsSelection,
     /// Tâche non planifiée (J6).
     ExplainNotScheduled(TaskUid),
+    /// Nom de calendrier déjà pris, sans tenir compte de la casse (J7,
+    /// R-248) : le calendrier qui le porte.
+    CalendarNameTaken {
+        /// Nom demandé.
+        name: String,
+        /// Calendrier qui porte déjà ce nom.
+        existing: CalendarUid,
+    },
+    /// Base désignée qui n'est pas un calendrier de base (J7, R-248).
+    CalendarBaseNotBase {
+        /// Base désignée.
+        base: CalendarUid,
+    },
+    /// Calendrier de base qui sert de base à d'autres : il ne peut pas
+    /// devenir dérivé (J7, R-248).
+    CalendarServesAsBase {
+        /// Calendrier.
+        calendar: CalendarUid,
+        /// Calendriers qui en dérivent.
+        count: usize,
+    },
+    /// Calendrier utilisé : suppression refusée (J7, R-248).
+    CalendarInUse {
+        /// Calendrier.
+        calendar: CalendarUid,
+        /// Utilisateurs (projet, tâches, ressources, calendriers dérivés),
+        /// au plus [`MAX_LISTED_CALENDAR_USERS`], dans cet ordre.
+        users: Vec<Subject>,
+        /// Nombre d'utilisateurs en tout.
+        total: usize,
+    },
 }
+
+/// Utilisateurs d'un calendrier listés au plus par `calendar.in_use` (J7,
+/// R-248).
+pub const MAX_LISTED_CALENDAR_USERS: usize = 20;
 
 impl CommandError {
     /// Erreur sans index, champ ni sujet.
@@ -614,7 +649,72 @@ fn kind_message(kind: &CommandErrorKind, lang: Language) -> String {
                 format!("task {uid} is not scheduled: there is no date to explain")
             }
         }
+        K::CalendarNameTaken { name, existing } => {
+            if fr {
+                format!("le nom « {name} » est déjà celui du calendrier {existing} (casse ignorée)")
+            } else {
+                format!(
+                    "the name \u{201c}{name}\u{201d} is already used by calendar {existing} (case ignored)"
+                )
+            }
+        }
+        K::CalendarBaseNotBase { base } => {
+            if fr {
+                format!(
+                    "le calendrier {base} n'est pas un calendrier de base : il ne peut pas servir de base"
+                )
+            } else {
+                format!("calendar {base} is not a base calendar: it cannot be used as a base")
+            }
+        }
+        K::CalendarServesAsBase { calendar, count } => {
+            if fr {
+                format!(
+                    "le calendrier {calendar} sert de base à {count} calendrier(s) : il ne peut pas devenir dérivé"
+                )
+            } else {
+                format!("calendar {calendar} is the base of {count} calendar(s): it cannot become derived")
+            }
+        }
+        K::CalendarInUse {
+            calendar,
+            users,
+            total,
+        } => calendar_in_use_message(*calendar, users, *total, fr),
     }
+}
+
+/// Message de `calendar.in_use` : utilisateurs listés (R-248).
+fn calendar_in_use_message(calendar: CalendarUid, users: &[Subject], total: usize, fr: bool) -> String {
+    let listed: Vec<String> = users
+        .iter()
+        .map(|u| match (u, fr) {
+            (Subject::Project, true) => "projet".to_owned(),
+            (Subject::Project, false) => "project".to_owned(),
+            (Subject::Task(t), true) => format!("tâche {t}"),
+            (Subject::Task(t), false) => format!("task {t}"),
+            (Subject::Resource(r), true) => format!("ressource {r}"),
+            (Subject::Resource(r), false) => format!("resource {r}"),
+            (Subject::Calendar(c), true) => format!("calendrier {c}"),
+            (Subject::Calendar(c), false) => format!("calendar {c}"),
+            (other, _) => other.to_string(),
+        })
+        .collect();
+    let mut s = if fr {
+        format!(
+            "le calendrier {calendar} est utilisé ({total} utilisateur(s)) : {}",
+            listed.join(", ")
+        )
+    } else {
+        format!(
+            "calendar {calendar} is in use ({total} user(s)): {}",
+            listed.join(", ")
+        )
+    };
+    if total > users.len() {
+        s.push_str(", …");
+    }
+    s
 }
 
 /// Message d'un texte illisible (le message français vient de

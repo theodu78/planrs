@@ -99,9 +99,15 @@ fn contract_compiles() {
         let again: Batch = serde_json::from_value(serde_json::to_value(&batch).unwrap()).unwrap();
         assert_eq!(again, batch, "aller-retour {i}");
         assert_eq!(batch.ops[0].id(), op["op"].as_str().unwrap());
-        let err = s.apply(&batch, ApplyMode::Commit).unwrap_err();
-        assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{i}");
-        assert_eq!(err.op_index, Some(0), "{i}");
+        // Servies au fil du lot L5 ; les autres restent réservées.
+        let served = [0, 1, 2, 3, 4, 10];
+        match s.apply(&batch, ApplyMode::DryRun) {
+            Err(err) if !served.contains(&i) => {
+                assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{i}");
+            }
+            Err(err) => assert_ne!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{i}"),
+            Ok(_) => assert!(served.contains(&i), "{i}"),
+        }
     }
     let Command::CalendarSetWeek(week) = &one(&ops[3]).ops[0] else {
         panic!("calendar.set_week attendu");

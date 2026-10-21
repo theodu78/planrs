@@ -92,6 +92,8 @@ pub enum SideEffect {
         /// Ressources.
         resources: u32,
     },
+    /// Calendrier supprimé (`calendar.delete`, R-248 ; J7).
+    CalendarDeleted(CalendarUid),
     /// Tâche laissée telle quelle par `progress.reschedule` (R-217 ; J6) :
     /// `reason` en code stable (`constraint`).
     RescheduleSkipped {

@@ -27,6 +27,7 @@ pub mod chrome;
 pub mod diagnostics;
 pub mod gantt;
 pub mod main_view;
+pub mod recovery;
 pub mod resource_sheet;
 pub mod table;
 pub mod timescale;

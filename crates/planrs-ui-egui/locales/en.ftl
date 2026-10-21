@@ -601,5 +601,20 @@ menu-recent-empty = No recent files
 menu-recent-missing = { $name } (not found)
 
 # --- J7 L15 ---
+recovery-title = Recover “{ $name }” ({ $count ->
+        [one] { $count } change
+       *[other] { $count } changes
+    })?
+recovery-checkpointed = Changes made before the last recovery point can no longer be undone.
+recovery-restore = Restore
+recovery-discard = Discard
+recovery-later = Later
+recovery-partial = “{ $name }” partly recovered: { $count ->
+        [one] { $count } change replayed
+       *[other] { $count } changes replayed
+    }, the next one was refused: { $detail }
+recovery-failed = Cannot recover “{ $name }”: { $detail }
+recovery-discard-failed = Cannot delete the recovery journal: { $detail }
+recovery-journal-cut = Crash recovery stopped for this document: { $detail }. Editing continues; save often.
 
 # --- J7 L16 ---

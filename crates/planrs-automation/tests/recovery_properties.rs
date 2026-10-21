@@ -435,11 +435,11 @@ fn recovery_checkpoint_truncates() {
     }
     assert_eq!(journal.epoch(), 1);
     assert_eq!(journal.entries(), 0);
-    assert!(files.lock().unwrap().ops.is_empty());
+    assert_eq!(files.lock().unwrap().ops.len(), 0);
     let back = replay_mem(&files);
     assert_eq!(back.project(), live.project());
     assert!(back.is_dirty(), "point de reprise d'un état non enregistré");
-    assert!(back.history().entries.is_empty());
+    assert_eq!(back.history().entries.len(), 0);
 
     // Une modification puis l'enregistrement : nouveau point de reprise,
     // base enregistrée.

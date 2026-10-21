@@ -639,7 +639,7 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
 
 /// Coins à droite de l'en-tête et de la barre horizontale du Gantt, au-dessus
 /// et au-dessous de la barre verticale : même fond que l'en-tête.
-fn paint_corners(ui: &egui::Ui, fc: &mut FrameCtx<'_>, layout: &MainLayout, avail: Rect) {
+pub(crate) fn paint_corners(ui: &egui::Ui, fc: &mut FrameCtx<'_>, layout: &MainLayout, avail: Rect) {
     let corners = [
         Rect::from_min_max(
             pos2(layout.gantt_header.right(), layout.gantt_header.top()),
@@ -689,7 +689,7 @@ fn zoom_from_wheel(fc: &mut FrameCtx<'_>, view: &mut ViewTransient, layout: &Mai
 
 /// Séparateur table / Gantt, glissable : `SetTableWidth` d'après la position
 /// du pointeur (pas de perte d'arrondi d'une image à l'autre).
-fn paint_splitter(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, layout: &MainLayout, avail: Rect) {
+pub(crate) fn paint_splitter(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, layout: &MainLayout, avail: Rect) {
     let rect = layout.splitter;
     if !rect.is_finite() || !rect.is_positive() {
         return;

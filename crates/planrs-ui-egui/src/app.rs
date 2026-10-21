@@ -1164,6 +1164,10 @@ impl App {
                 }
             }
             Action::ShowTaskInformation if self.state.view == ViewKind::ResourceSheet => {}
+            // Utilisation des ressources (J7, lot L11) : lecture seule, aucune
+            // commande de structure ni fenêtre d'une tâche.
+            Action::Structure(_) | Action::ShowTaskInformation
+                if self.state.view == ViewKind::ResourceUsage => {}
             Action::Structure(op) => self.run_structure(op),
             Action::ConfirmDelete(confirmed) if self.view.resources.pending_delete.is_some() => {
                 self.answer_resource_delete(confirmed);
@@ -1174,6 +1178,12 @@ impl App {
                     self.view
                         .resources
                         .navigate(document, &self.texts, mv, view::ROW_H);
+                }
+            }
+            Action::Nav { mv, .. } if self.state.view == ViewKind::ResourceUsage => {
+                if let Some(document) = &self.document {
+                    let ViewTransient { usage, expanded, .. } = &mut self.view;
+                    usage.navigate(document, &self.texts, expanded, mv, view::ROW_H);
                 }
             }
             Action::Nav { mv, extend } => self.navigate(mv, extend),
@@ -1923,8 +1933,8 @@ impl App {
 fn show_view(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view_state: &mut ViewTransient) {
     match fc.state.view {
         ViewKind::ResourceSheet => view::resource_sheet::show(ui, fc, &mut view_state.resources),
-        // Utilisation des ressources : lot L11 ; d'ici là, la vue principale.
-        ViewKind::Gantt | ViewKind::ResourceUsage => view::main_view::show(ui, fc, view_state),
+        ViewKind::ResourceUsage => view::usage::show(ui, fc, view_state),
+        ViewKind::Gantt => view::main_view::show(ui, fc, view_state),
     }
 }
 

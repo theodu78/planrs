@@ -483,6 +483,17 @@ res-delete-text =
     }
 
 # --- J7 L11 ---
+menu-view-resource-usage = Utilisation des ressources
+usage-sheet-label = Utilisation des ressources
+usage-periods-label = Travail par période
+usage-col-expand = +/-
+usage-col-name = Nom de la ressource
+usage-col-work = Travail
+usage-hours-suffix = {"\u00A0"}h
+usage-expand = Développer { $name }
+usage-collapse = Réduire { $name }
+usage-assignment-label = Affectation : { $name } ({ $detail })
+usage-limit = Utilisation trop grande pour être affichée : replier des ressources ({ $detail }).
 
 # --- J7 L12 ---
 

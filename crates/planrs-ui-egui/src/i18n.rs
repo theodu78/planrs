@@ -501,6 +501,17 @@ text_ids! {
     ResDeleteTitle => "res-delete-title",
     ResDeleteText => "res-delete-text",
     // --- J7 L11 ---
+    MenuViewResourceUsage => "menu-view-resource-usage",
+    UsageSheetLabel => "usage-sheet-label",
+    UsagePeriodsLabel => "usage-periods-label",
+    UsageColExpand => "usage-col-expand",
+    UsageColName => "usage-col-name",
+    UsageColWork => "usage-col-work",
+    UsageHoursSuffix => "usage-hours-suffix",
+    UsageExpand => "usage-expand",
+    UsageCollapse => "usage-collapse",
+    UsageAssignmentLabel => "usage-assignment-label",
+    UsageLimit => "usage-limit",
     // --- J7 L12 ---
     // --- J7 L13 ---
     // --- J7 L14 ---

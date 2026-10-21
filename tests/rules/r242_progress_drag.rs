@@ -23,7 +23,11 @@ fn drag(s: &mut Session, days: i64) -> i64 {
         Some(b) => {
             let json = serde_json::to_value(&b).unwrap();
             assert_eq!(json["ops"][0]["op"], "progress.update");
-            assert_eq!(json["ops"][0]["percent_complete"]["value"], percent.get(), "aperçu");
+            assert_eq!(
+                json["ops"][0]["percent_complete"]["value"],
+                percent.get(),
+                "aperçu"
+            );
             s.apply(&b, ApplyMode::Commit).unwrap();
         }
         None => assert_eq!(get(s, 1).progress.percent_complete, percent),

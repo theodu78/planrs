@@ -1211,13 +1211,14 @@ impl App {
                 kind @ (DialogKind::WorkingTime
                 | DialogKind::ProjectInformation
                 | DialogKind::Baseline
-                | DialogKind::Reschedule),
+                | DialogKind::Reschedule
+                | DialogKind::AssignResources),
             ) => self.open_window(kind),
             Action::CloseDialog => self.close_dialog(),
             // Contrat J7 (lot L0) : actions câblées par leur lot.
             Action::SetGanttStyle(style) => self.state.gantt_style = style,
             Action::SetView(kind) => self.set_view(kind),
-            other @ (Action::ShowDialog(_) | Action::OpenRecent(_) | Action::Recover(_)) => {
+            other @ (Action::OpenRecent(_) | Action::Recover(_)) => {
                 log::debug!("action J7 pas encore câblée : {other:?}");
             }
             Action::ToggleColumn(column) => self.toggle_column(column),
@@ -1716,7 +1717,8 @@ impl App {
                 | DialogBody::WorkingTime(_)
                 | DialogBody::ProjectInfo(_)
                 | DialogBody::Baseline(_)
-                | DialogBody::Reschedule(_),
+                | DialogBody::Reschedule(_)
+                | DialogBody::Assign(_),
             )
             | None => Shown::TaskInfo(task_info::Outcome::Cancel),
         };

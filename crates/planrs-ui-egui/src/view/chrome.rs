@@ -194,6 +194,9 @@ fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
         }
     }
     ui.separator();
+    // « Affecter des ressources » (J7, lot L13) : aucun raccourci (S61).
+    let assign = Action::ShowDialog(DialogKind::AssignResources);
+    menu_item(ui, fc, TextId::MenuAssignResources, None, has_doc, assign);
     ui.menu_button(texts.get(TextId::MenuProject), |ui| project_menu(ui, fc));
 }
 

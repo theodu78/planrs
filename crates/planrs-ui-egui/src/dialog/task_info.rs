@@ -208,7 +208,7 @@ const fn decimal_sep(ctx: &TextContext) -> char {
 
 /// Texte des unités d'une affectation selon le type de la ressource :
 /// pourcentage (travail), quantité (matériel), vide (coût).
-fn units_text(kind: Option<&ResourceKind>, units: i64, ctx: &TextContext) -> String {
+pub(crate) fn units_text(kind: Option<&ResourceKind>, units: i64, ctx: &TextContext) -> String {
     match kind {
         Some(ResourceKind::Material { .. }) => {
             let mut out = String::new();
@@ -709,7 +709,7 @@ fn resolve_id(text: &str, s: &Session) -> Option<TaskUid> {
 
 /// Unités en texte : `%` ajouté pour une ressource de travail s'il manque
 /// (« 50 » vaut 50 %, comme la colonne % achevé).
-fn units_json(text: &str, percent: bool) -> UnitsJson {
+pub(crate) fn units_json(text: &str, percent: bool) -> UnitsJson {
     let trimmed = text.trim();
     let text = if percent && !trimmed.ends_with('%') {
         format!("{trimmed}%")

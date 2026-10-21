@@ -582,6 +582,24 @@ text_ids! {
     RsTitle => "rs-title",
     RsAfter => "rs-after",
     // --- J7 L13 ---
+    MenuAssignResources => "menu-assign-resources",
+    AsTitle => "as-title",
+    AsTaskOne => "as-task-one",
+    AsTaskMany => "as-task-many",
+    AsNoTask => "as-no-task",
+    AsFilter => "as-filter",
+    AsResource => "as-resource",
+    AsUnits => "as-units",
+    AsUnitsOf => "as-units-of",
+    AsAssigned => "as-assigned",
+    AsAssignedAll => "as-assigned-all",
+    AsAssignedSome => "as-assigned-some",
+    AsAssign => "as-assign",
+    AsRemove => "as-remove",
+    AsUpdateUnits => "as-update-units",
+    AsClose => "as-close",
+    AsNoResource => "as-no-resource",
+    AsHint => "as-hint",
     // --- J7 L14 ---
     // --- J7 L15 ---
     // --- J7 L16 ---

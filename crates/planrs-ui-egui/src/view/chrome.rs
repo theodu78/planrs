@@ -89,6 +89,11 @@ fn file_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     menu_item(ui, fc, TextId::MenuOpenDemo, None, true, Action::OpenDemo);
     let open = Binding::Ui(UiBinding::OpenFile);
     menu_item(ui, fc, TextId::MenuOpen, Some(open), true, Action::OpenDialog);
+    // Fichiers récents (H-UI-28) : chemins du desktop seulement.
+    if !cfg!(target_arch = "wasm32") {
+        let texts = fc.texts;
+        ui.menu_button(texts.get(TextId::MenuRecent), |ui| recent_menu(ui, fc));
+    }
     ui.separator();
     let save = Binding::Command("project.save");
     menu_item(ui, fc, TextId::MenuSave, Some(save), has_doc, Action::Save);
@@ -101,6 +106,38 @@ fn file_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
         ui.separator();
         let quit = Binding::Ui(UiBinding::Quit);
         menu_item(ui, fc, TextId::MenuQuit, Some(quit), true, Action::Quit);
+    }
+}
+
+/// Sous-menu Fichier → Fichiers récents (H-UI-28) : le plus récent en
+/// tête, nom affiché et chemin en infobulle ; un fichier introuvable est
+/// grisé (« (introuvable) ») mais reste cliquable : la tentative
+/// d'ouverture le retire de la liste. L'existence n'est relue que pendant
+/// que le sous-menu est ouvert.
+fn recent_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    let texts = fc.texts;
+    if fc.state.recent.is_empty() {
+        ui.add_enabled(false, egui::Button::new(texts.get(TextId::MenuRecentEmpty)));
+        return;
+    }
+    for (index, recent) in fc.state.recent.iter().enumerate() {
+        let exists = std::path::Path::new(&recent.path).exists();
+        let label = if exists {
+            egui::RichText::new(recent.name.as_str())
+        } else {
+            let text = texts.get_args(
+                TextId::MenuRecentMissing,
+                &[("name", Arg::Str(recent.name.as_str().into()))],
+            );
+            egui::RichText::new(text).weak()
+        };
+        if ui
+            .add(egui::Button::new(label))
+            .on_hover_text(recent.path.as_str())
+            .clicked()
+        {
+            fc.actions.push(Action::OpenRecent(index));
+        }
     }
 }
 

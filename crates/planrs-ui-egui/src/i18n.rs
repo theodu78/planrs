@@ -601,6 +601,12 @@ text_ids! {
     AsNoResource => "as-no-resource",
     AsHint => "as-hint",
     // --- J7 L14 ---
+    OpenErrorReadFile => "open-error-read-file",
+    OpenErrorMspdiFile => "open-error-mspdi-file",
+    OpenErrorMissing => "open-error-missing",
+    MenuRecent => "menu-recent",
+    MenuRecentEmpty => "menu-recent-empty",
+    MenuRecentMissing => "menu-recent-missing",
     // --- J7 L15 ---
     // --- J7 L16 ---
 }

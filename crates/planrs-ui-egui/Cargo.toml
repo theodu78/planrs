@@ -28,6 +28,9 @@ rfd.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Attente du sélecteur asynchrone dans un fil dédié (`io.rs`).
 pollster.workspace = true
+# Capture relayée (`relay.rs`, C-CTL-08) : PNG puis base64.
+image.workspace = true
+base64.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Langue du navigateur (`navigator.language`).
@@ -44,6 +47,11 @@ web-sys = { workspace = true, features = ["Blob", "BlobPropertyBag", "Url", "Htm
 
 [dev-dependencies]
 egui_kittest.workspace = true
+# Sonde des polices de repli du desktop (`tests/ui/desktop.rs`).
+egui_system_font_provider.workspace = true
+# Réseau généré ouvert sans MSPDI (N8 : `App::open_project`), exemple
+# `snapshot --generate N` et test de fluidité.
+planrs-tests = { path = "../../tests", version = "0.1.0" }
 fluent-syntax.workspace = true
 proptest.workspace = true
 

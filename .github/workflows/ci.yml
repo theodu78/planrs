@@ -140,6 +140,9 @@ jobs:
       PLANRS_UI_SNAPSHOTS: "1"
       # lavapipe par Vulkan : un seul chemin de rendu, pas de repli GL.
       WGPU_BACKEND: vulkan
+      # Sonde des polices de repli du système (J7 lot L14) : une police CJK
+      # est installée, son absence fait échouer `fonts_system_fallback_probe`.
+      PLANRS_FONTS: required
     steps:
       - uses: actions/checkout@v7
 
@@ -150,7 +153,7 @@ jobs:
       - name: Pilote Vulkan logiciel (lavapipe)
         run: |
           sudo apt-get update
-          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools libxkbcommon-x11-0
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools libxkbcommon-x11-0 fonts-noto-cjk
 
       - name: Adaptateur disponible (diagnostic)
         run: vulkaninfo --summary

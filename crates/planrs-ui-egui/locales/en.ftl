@@ -593,6 +593,12 @@ as-no-resource = No resource
 as-hint = Click a resource to choose it (Ctrl or Cmd + click: several); units left empty: default value.
 
 # --- J7 L14 ---
+open-error-read-file = Could not read “{ $name }”: { $detail }
+open-error-mspdi-file = “{ $name }”: unreadable MSPDI file: { $detail }
+open-error-missing = “{ $name }” was not found and was removed from recent files: { $detail }
+menu-recent = Recent files
+menu-recent-empty = No recent files
+menu-recent-missing = { $name } (not found)
 
 # --- J7 L15 ---
 

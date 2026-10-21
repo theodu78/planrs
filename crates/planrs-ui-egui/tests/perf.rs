@@ -40,10 +40,9 @@
 //!   de la vue à ± 5 %).
 //!
 //! Le rendu GPU n'est pas chronométré (lavapipe en CI n'est pas
-//! représentatif). Le projet est un MSPDI généré en mémoire par ce fichier :
-//! `App` ne s'ouvre que depuis des octets (pas d'injection directe d'un
-//! `Project`, voir le compte rendu L8), et `planrs_tests::generate` construit
-//! un `Project`, pas un MSPDI.
+//! représentatif). Le projet est construit directement
+//! (`planrs_tests::generate::ui_network`) et ouvert sans MSPDI
+//! (`App::open_project`, N8, J7 lot L14).
 //!
 //! `cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture`
 
@@ -64,7 +63,6 @@
     reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
 )]
 
-use std::fmt::Write as _;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
@@ -73,6 +71,7 @@ use egui::{
     Event, Key, Modifiers, MouseWheelSource, MouseWheelUnit, Pos2, RawInput, Rect, TouchPhase, pos2, vec2,
 };
 use planrs_core::Moment;
+use planrs_tests::generate::{ui_network, ui_network_with_resources};
 use planrs_ui_egui::column::Column;
 use planrs_ui_egui::edit::{EditState, commit_edit};
 use planrs_ui_egui::nav::RowRef;
@@ -102,118 +101,10 @@ const SUMMARIES: usize = 250;
 const LEAVES_PER_SUMMARY: usize = 19;
 /// Liens du grand réseau.
 const LINKS: usize = 10_000;
-/// Nombre de voies FS parallèles : la feuille `k` suit la feuille `k − 19`
-/// (environ 250 tâches en série, soit un peu plus d'un an de planning).
-const LANES: usize = 19;
 
 /// « Maintenant » fixe (début du projet généré).
 fn now() -> Moment {
     "2026-01-05T08:00".parse().unwrap()
-}
-
-/// Semaine type Standard (lundi-vendredi, 8 h-12 h et 13 h-17 h).
-const CALENDAR: &str = "<Calendars><Calendar><UID>1</UID><Name>Standard</Name>\
-<IsBaseCalendar>1</IsBaseCalendar><BaseCalendarUID>-1</BaseCalendarUID><WeekDays>\
-<WeekDay><DayType>1</DayType><DayWorking>0</DayWorking></WeekDay>\
-<WeekDay><DayType>2</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>\
-<WeekDay><DayType>3</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>\
-<WeekDay><DayType>4</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>\
-<WeekDay><DayType>5</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>\
-<WeekDay><DayType>6</DayType><DayWorking>1</DayWorking><WorkingTimes><WorkingTime><FromTime>08:00:00</FromTime><ToTime>12:00:00</ToTime></WorkingTime><WorkingTime><FromTime>13:00:00</FromTime><ToTime>17:00:00</ToTime></WorkingTime></WorkingTimes></WeekDay>\
-<WeekDay><DayType>7</DayType><DayWorking>0</DayWorking></WeekDay>\
-</WeekDays></Calendar></Calendars>";
-
-/// Lien MSPDI (`Type` : 0 FF, 1 FS, 3 SS), sans décalage.
-fn link_xml(out: &mut String, predecessor_uid: usize, kind: u8) {
-    write!(
-        out,
-        "<PredecessorLink><PredecessorUID>{predecessor_uid}</PredecessorUID><Type>{kind}</Type>\
-         <CrossProject>0</CrossProject><LinkLag>0</LinkLag><LagFormat>7</LagFormat></PredecessorLink>"
-    )
-    .unwrap();
-}
-
-/// Réseau MSPDI déterministe (sans aléa) : `summaries` récapitulatives de
-/// `leaves` feuilles chacune ; au plus `max_links` liens entre feuilles
-/// proches, dans cet ordre de priorité : FS depuis la feuille `k − 19`
-/// (voies parallèles), SS depuis `k − 1`, puis FF depuis `k − 2` pour une
-/// feuille sur neuf. Tous les liens remontent la liste : aucun cycle, aucun
-/// lien entre une récapitulative et sa descendante. Durées de 4 à 16 heures,
-/// un jalon toutes les 97 feuilles.
-fn network_xml(summaries: usize, leaves: usize, max_links: usize) -> Vec<u8> {
-    let leaf_count = summaries * leaves;
-    // Prédécesseurs de chaque feuille, en indices de feuille.
-    let mut preds: Vec<Vec<(usize, u8)>> = vec![Vec::new(); leaf_count];
-    let mut links = 0;
-    for (k, list) in preds.iter_mut().enumerate().skip(LANES) {
-        if links < max_links {
-            list.push((k - LANES, 1));
-            links += 1;
-        }
-    }
-    for (k, list) in preds.iter_mut().enumerate().skip(1) {
-        if links < max_links {
-            list.push((k - 1, 3));
-            links += 1;
-        }
-    }
-    for k in (9..leaf_count).step_by(9) {
-        if links < max_links {
-            preds[k].push((k - 2, 0));
-            links += 1;
-        }
-    }
-    // UID d'une feuille : récapitulative, puis ses feuilles, dans l'ordre.
-    let leaf_uid = |k: usize| (k / leaves) * (leaves + 1) + (k % leaves) + 2;
-
-    let mut xml = String::with_capacity(leaf_count * 700);
-    xml.push_str(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
-         <Project xmlns=\"http://schemas.microsoft.com/project\"><SaveVersion>14</SaveVersion>\
-         <Name>Réseau de mesure</Name><ScheduleFromStart>1</ScheduleFromStart>\
-         <StartDate>2026-01-05T08:00:00</StartDate><CurrentDate>2026-01-05T08:00:00</CurrentDate>\
-         <CalendarUID>1</CalendarUID><MinutesPerDay>480</MinutesPerDay><MinutesPerWeek>2400</MinutesPerWeek>\
-         <DaysPerMonth>20</DaysPerMonth><DurationFormat>7</DurationFormat><CriticalSlackLimit>0</CriticalSlackLimit>",
-    );
-    xml.push_str(CALENDAR);
-    xml.push_str(
-        "<Tasks><Task><UID>0</UID><ID>0</ID><Name>Réseau de mesure</Name>\
-         <OutlineLevel>0</OutlineLevel><Summary>1</Summary></Task>",
-    );
-    let mut id = 0;
-    for s in 0..summaries {
-        id += 1;
-        write!(
-            xml,
-            "<Task><UID>{id}</UID><ID>{id}</ID><Name>Lot {n} — gros œuvre et second œuvre</Name>\
-             <OutlineLevel>1</OutlineLevel><Active>1</Active><Manual>0</Manual><Summary>1</Summary>\
-             <Milestone>0</Milestone><DurationFormat>7</DurationFormat><ConstraintType>0</ConstraintType></Task>",
-            n = s + 1
-        )
-        .unwrap();
-        for j in 0..leaves {
-            id += 1;
-            let k = s * leaves + j;
-            assert_eq!(leaf_uid(k), id);
-            let milestone = k % 97 == 96;
-            let hours = if milestone { 0 } else { 4 + (k * 7) % 13 };
-            write!(
-                xml,
-                "<Task><UID>{id}</UID><ID>{id}</ID><Name>Tâche {k} : préparation, exécution et contrôle</Name>\
-                 <OutlineLevel>2</OutlineLevel><Active>1</Active><Manual>0</Manual><Summary>0</Summary>\
-                 <Milestone>{m}</Milestone><Duration>PT{hours}H0M0S</Duration><DurationFormat>7</DurationFormat>\
-                 <ConstraintType>0</ConstraintType>",
-                m = u8::from(milestone)
-            )
-            .unwrap();
-            for &(p, kind) in &preds[k] {
-                link_xml(&mut xml, leaf_uid(p), kind);
-            }
-            xml.push_str("</Task>");
-        }
-    }
-    xml.push_str("</Tasks></Project>");
-    xml.into_bytes()
 }
 
 /// Application ouverte sur un réseau généré : français, thème clair.
@@ -229,7 +120,7 @@ fn app_with(summaries: usize, leaves: usize, max_links: usize) -> App {
         path: None,
         demo: false,
     };
-    app.open_bytes(&network_xml(summaries, leaves, max_links), origin);
+    app.open_project(ui_network(summaries, leaves, max_links), origin);
     let document = app.document.as_ref().unwrap_or_else(|| {
         panic!("réseau généré refusé : {:?}", app.messages());
     });
@@ -909,44 +800,6 @@ fn bar_drag() {
 /// Ressources du réseau mesuré par `usage_scroll` (ADR-0015 § 0).
 const USAGE_RESOURCES: usize = 1_200;
 
-/// Réseau de [`network_xml`] dont chaque feuille (hors jalons) est affectée
-/// à 100 % à la ressource `k mod resources` (travail = durée).
-fn network_with_resources(summaries: usize, leaves: usize, max_links: usize, resources: usize) -> Vec<u8> {
-    let base = String::from_utf8(network_xml(summaries, leaves, max_links)).unwrap();
-    let body = base.strip_suffix("</Project>").unwrap();
-    let mut xml = String::with_capacity(base.len() + summaries * leaves * 200);
-    xml.push_str(body);
-    xml.push_str("<Resources>");
-    for r in 1..=resources {
-        write!(
-            xml,
-            "<Resource><UID>{r}</UID><ID>{r}</ID><Name>Équipe {r} — compagnons</Name><Type>1</Type>\
-             <MaxUnits>1</MaxUnits></Resource>"
-        )
-        .unwrap();
-    }
-    xml.push_str("</Resources><Assignments>");
-    let leaf_uid = |k: usize| (k / leaves) * (leaves + 1) + (k % leaves) + 2;
-    let mut uid = 0;
-    for k in 0..summaries * leaves {
-        if k % 97 == 96 {
-            continue;
-        }
-        uid += 1;
-        let hours = 4 + (k * 7) % 13;
-        write!(
-            xml,
-            "<Assignment><UID>{uid}</UID><TaskUID>{t}</TaskUID><ResourceUID>{r}</ResourceUID>\
-             <Units>1</Units><Work>PT{hours}H0M0S</Work></Assignment>",
-            t = leaf_uid(k),
-            r = k % resources + 1
-        )
-        .unwrap();
-    }
-    xml.push_str("</Assignments></Project>");
-    xml.into_bytes()
-}
-
 /// Application ouverte sur un réseau affecté, vue Utilisation des
 /// ressources, zoom `zoom`, défilée au début.
 fn usage_app(summaries: usize, resources: usize, zoom: TimeScaleZoom) -> (App, Bench) {
@@ -962,8 +815,8 @@ fn usage_app(summaries: usize, resources: usize, zoom: TimeScaleZoom) -> (App, B
         demo: false,
     };
     let leaves = LEAVES_PER_SUMMARY;
-    let xml = network_with_resources(summaries, leaves, 2 * summaries * leaves, resources);
-    app.open_bytes(&xml, origin);
+    let project = ui_network_with_resources(summaries, leaves, 2 * summaries * leaves, resources);
+    app.open_project(project, origin);
     let document = app
         .document
         .as_ref()

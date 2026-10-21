@@ -283,6 +283,14 @@ Autres hypothèses H-UI non numérotées (commentaires du code) : règle de plur
 - **Relecture.** À chaque image où la clé du document ou la sélection a changé (édition, annulation, agent, clic dans la table) ; filtre, choix encore valides et saisies non appliquées gardés.
 - **Hypothèses (non numérotées).** Choix par clic sur le nom ; les boutons ne visent que les ressources choisies **visibles** par le filtre ; « Affecter » laisse telle quelle une affectation déjà présente ; ni « Remplacer » ni « Graphes » (S70) en J7.
 
+### 1.21 Desktop : capture relayée, fichiers récents, argument (J7, lot L14)
+
+- **Capture (`app.screenshot`, C-CTL-08).** Permise seulement par le desktop (`App::enable_screenshots`, après `control_inbox`) ; ailleurs (kittest, web) `control.screenshot_unavailable` aussitôt. La vidange de la file envoie `ViewportCommand::Screenshot` ; un fil `planrs-screenshot` attend l'image 5 s au plus (sinon `control.screenshot_unavailable` : fenêtre masquée, intégration qui abandonne la demande), la réduit de moitié `scale_down` fois (0 à 2, sinon `param.invalid`), l'encode en PNG (`image`, format PNG seul) puis en base64 et répond lui-même ; le fil d'interface n'encode rien. Texte base64 au-delà de 6 Mio ⇒ nouvelle réduction de moitié, deux fois au plus, puis `control.screenshot_too_large`. Réponse `{ mime_type: "image/png", data, width, height, scale_down (réductions faites), bytes (taille du PNG) }` ; le serveur MCP en fait un contenu image, le reste en contenu structuré (sans `data`).
+- **Fichiers récents (H-UI-28).** Fichier → Fichiers récents (desktop seulement) : 10 au plus, le plus récent en tête, sans doublon (`UiState::remember_recent` à chaque ouverture ou enregistrement vers un chemin) ; nom affiché, chemin en infobulle ; un fichier absent est grisé « nom (introuvable) » mais reste cliquable : le clic le retire de la liste et l'explique dans le bandeau ; un fichier disparu entre le menu et la lecture est retiré aussi (`NotFound`). L'existence n'est relue que pendant que le sous-menu est ouvert. Ouverture confirmée comme les autres si le document est modifié.
+- **Argument.** `planrs-desktop plan.xml` : chemin rendu absolu (les récents restent valables), ouvert avant la première image (`App::open_path`, synchrone) après l'observateur du rendez-vous ; un échec s'affiche dans le bandeau, nom du fichier compris (N10). Option inconnue, chemin non UTF-8 ou deux fichiers : message sur la sortie d'erreur, démarrage sans fichier.
+- **Projet construit (N8).** `App::open_project(project, origin)` ouvre un `Project` sans MSPDI (tests, `snapshot --generate`).
+- **Tests.** `tests/ui/desktop.rs` : `c_ctl_08_screenshot_scaled_or_refused`, `screenshot_unavailable_times_out`, `h_ui_28_recent_files_cap_and_missing`, `n8_open_project_direct`, `snapshot_generate_and_views` (l'exemple inclus par `#[path]`, chaque vue préparée ; rendu et PNG sous `PLANRS_UI_SNAPSHOTS=1`), `fonts_system_fallback_probe` ; `apps/planrs` : `desktop_open_from_argument`, `desktop_keeps_system_font_fallback` ; `planrs-mspdi` : `n10_eof_message_no_empty_parens` ; `planrs-mcp` : `relay_screenshot_is_image_content`.
+
 ## 2. Rendu
 
 - **Virtualisation.** Une seule `ScrollArea::vertical().show_viewport` englobe la table et le Gantt : les deux corps reçoivent la même plage `geom::visible_rows(viewport.top, viewport.bottom, ROW_H, len, OVERSCAN)` dans la même image (pas d'image de retard). Seules ces lignes (fenêtre + 2 de part et d'autre) sont parcourues ; aucun travail proportionnel au nombre de tâches pendant une image (textes pré-formatés, liens par `links_touching`, barres hors de la découpe horizontale non dessinées). Hauteur de ligne fixe 22 points, en-tête commun de 44 points à deux niveaux.
@@ -357,14 +365,14 @@ Décomposition de `edit_latency` (médianes) : recalcul (`Session::apply` en mod
 
 Reportés (ADR-0011), non implémentés :
 - édition dans le Gantt (glisser une barre, tracer un lien), structure (insertion, suppression, indentation : lot L14), glisser-déposer : J4 coupable ou J7 ;
-- fichiers récents ; redimensionnement des colonnes ; défilement horizontal de la table ; filtres ; tri ;
+- ~~fichiers récents~~ (fait en J7 lot L14, § 1.21) ; redimensionnement des colonnes ; défilement horizontal de la table ; filtres ; tri ;
 - panneau de diagnostics détaillé (version minimale seulement : une ligne par diagnostic, en français) ;
 - ~~**jours chômés** non grisés dans le Gantt~~ (fait en J7 lot L7, `docs/ui-needs.md` N3 clos) ;
 - profil `wasm-release` (LTO) ; ressources, utilisation, calendriers, panneau IA, enregistrement.
 
 Constatés à la relecture et non corrigés :
-- **polices non latines** : les noms en chinois, japonais, coréen, arabe, hébreu ou en emoji s'affichent en boîtes vides (polices par défaut d'egui) ; sur le desktop, la feature `system_fonts` d'eframe (active par défaut, native seulement) pourrait fournir un repli par les polices du système, non vérifié ; rien sur le web ni sous kittest. Décision à prendre (police de repli embarquée : licence, taille ; chargement paresseux sur le web) ;
-- **erreurs d'ouverture non traduites** : le détail est le `Display` de `MspdiError` (français) ou de `std::io::Error` (langue du système), figé dans le message (un changement de langue retraduit le titre, pas le détail) ; le nom du fichier fautif n'apparaît pas dans le message (`docs/ui-needs.md` N9, N10) ;
+- **polices non latines** (conclusion J7 lot L14) : sur le **desktop**, eframe 0.37 est pris avec ses features par défaut, dont `system_fonts`, et `NativeOptions::system_font_fallback` reste vrai (`desktop_keeps_system_font_fallback`) : un caractère absent des polices d'egui est cherché par `egui_system_font_provider` dans les polices du système (fontconfig, CoreText, DirectWrite). Vérifié par `fonts_system_fallback_probe` : les noms chinois de A6 (清明节, 劳动节) sont trouvés quand une police CJK est installée (job CI `ui` : `fonts-noto-cjk`, `PLANRS_FONTS=required`) et une ligne de table en CJK s'affiche sous kittest sans glyphe manquant. Sans police CJK sur la machine, boîtes vides : rien n'est embarqué (Noto CJK > 15 Mo). Sur le **web** et sous kittest sans fournisseur : polices d'egui seules (police de repli web : J8)
+- **erreurs d'ouverture non traduites** : le détail est le `Display` de `MspdiError` (français) ou de `std::io::Error` (langue du système), figé dans le message (un changement de langue retraduit le titre, pas le détail) ; le nom du fichier fautif figure dans le message depuis J7 lot L14 (`docs/ui-needs.md` N9 ouvert, N10 clos) ;
 - ~~**contraintes ignorées sans diagnostic**~~ (clos en J3 : le moteur honore les contraintes de date et émet des diagnostics ; la tâche 41 de l'exemple démarre le 26/04, `docs/ui-needs.md` N4) ;
 - « → » des diagnostics du cœur remplacé par « -> » à l'affichage (glyphe absent des polices d'egui) ;
 - barre d'outils sur deux lignes sous environ 900 px de large (`horizontal_wrapped`) ;
@@ -373,7 +381,7 @@ Constatés à la relecture et non corrigés :
 - navigateur sans événement `cancel` sur le sélecteur de fichier (Safari < 16.4) : l'annulation ne répond jamais ; relancer « Ouvrir » abandonne la demande précédente ;
 - web : le sélecteur est créé dans un futur lancé en fin d'image, donc hors du gestionnaire du clic ; il repose sur l'activation transitoire du navigateur (environ 5 s dans Chromium), à vérifier sur Safari ;
 - clé `open-in-progress` (`TextId::OpenInProgress`) encore définie mais plus affichée depuis la relance de « Ouvrir » ;
-- `App` ne s'ouvre que depuis des octets MSPDI (`open_bytes`, `open_demo`) : pas d'injection directe d'un `Project` (`docs/ui-needs.md` N8) ;
+- ~~`App` ne s'ouvre que depuis des octets MSPDI~~ (clos en J7 lot L14 : `App::open_project`, `docs/ui-needs.md` N8) ;
 - la mesure de fluidité ne couvre que le CPU (construction + tessellation), pas le GPU ni le navigateur (facteur 2 à 3 attendu en wasm, non mesuré) ;
 - macOS : binaire non signé (premier lancement par clic droit → Ouvrir ou `xattr -d com.apple.quarantine`, voir le README de l'artefact) ;
 - sélecteur de fichiers réel jamais exercé par un test automatique (les tests injectent `NoFileService`, la CI n'a pas d'écran) : vérification manuelle sur chaque plateforme ; Windows et Linux non vérifiés, sélecteur non rattaché à la fenêtre sur ces deux plateformes ;
@@ -394,9 +402,15 @@ cd apps/planrs-web && trunk serve            # développement, http://127.0.0.1:
 cd apps/planrs-web && trunk build --release  # dist/ statique, à servir en HTTP :
 python3 -m http.server -d apps/planrs-web/dist 8080
 
+# Desktop sur un fichier (erreur d'ouverture dans le bandeau)
+cargo run --release -p planrs -- chemin/vers/plan.xml
+
 # Rendu hors écran d'une vue en PNG (sans fenêtre)
 cargo run -p planrs-ui-egui --example snapshot -- crates/planrs-ui-egui/assets/demo/house.xml main sortie.png
-#   vues : welcome | main | main-week | main-day | main-dark | main-en
+cargo run -p planrs-ui-egui --example snapshot -- --generate 5000 usage --zoom week --size 1920x1080 usage.png
+cargo run -p planrs-ui-egui --example snapshot -- --generate 5000 tracking --row 2500 --zoom week
+#   snapshot <fichier.xml | --generate N> <vue> [--row N] [--zoom day|week|month|quarter] [--size LxH] [sortie.png]
+#   vues : welcome | main | main-week | main-day | main-dark | main-en | tracking | resources | usage
 #   sortie par défaut : planrs-snapshot-<vue>.png ; erreurs : message et code de sortie non nul
 
 # Tests de l'interface (sans GPU)
@@ -414,4 +428,4 @@ cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture
 git tag ui-<suffixe> && git push origin ui-<suffixe>
 ```
 
-L'exemple `snapshot` utilise le même harnais que les captures (1280×720, 1 px par point, OS fixé, « maintenant » fixe au 2027-01-15) et préfère un adaptateur wgpu logiciel ; à défaut, il prend le premier adaptateur disponible et le signale (pixels alors différents de la CI). Langue et thème : français clair, sauf `main-dark` (français sombre) et `main-en` (anglais clair) ; `main-day` est défilée deux jours avant la date d'état ; `welcome` ignore le fichier.
+L'exemple `snapshot` utilise le même harnais que les captures (1280×720, 1 px par point, OS fixé, « maintenant » fixe au 2027-01-15) et préfère un adaptateur wgpu logiciel ; à défaut, il prend le premier adaptateur disponible et le signale (pixels alors différents de la CI). Langue et thème : français clair, sauf `main-dark` (français sombre) et `main-en` (anglais clair) ; `main-day` est défilée deux jours avant la date d'état ; `welcome` ignore le fichier ; `tracking` : Gantt de suivi ; `resources` : feuille des ressources ; `usage` : utilisation des ressources. `--generate N` (1 à 20 000) ouvre sans MSPDI le réseau du test de fluidité (`planrs_tests::generate::ui_network_with_resources` : lots de 20 tâches, N arrondi au multiple de 20 supérieur, deux liens par tâche, une ressource pour 25 tâches, « maintenant » au 2026-01-05) ; `--row N` sélectionne la ligne de tâche N (depuis 0) et y défile la table et le Gantt (début de la barre) ; `--zoom` impose l'échelle après la vue ; `--size LxH` (côtés de 320 à 4 096) remplace 1280×720. Le test `snapshot_generate_and_views` inclut l'exemple et prépare chaque vue.

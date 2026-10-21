@@ -237,6 +237,26 @@ impl UiState {
         serde_json::to_string(self)
     }
 
+    /// Inscrit `path` en tête des fichiers récents (H-UI-28) : une entrée
+    /// déjà présente remonte (nom mis à jour), le plus ancien sort au-delà
+    /// de [`MAX_RECENT_FILES`].
+    pub fn remember_recent(&mut self, path: &str, name: &str) {
+        self.recent.retain(|recent| recent.path != path);
+        self.recent.insert(
+            0,
+            RecentFile {
+                path: path.to_owned(),
+                name: name.to_owned(),
+            },
+        );
+        self.recent.truncate(MAX_RECENT_FILES);
+    }
+
+    /// Retire `path` des fichiers récents (fichier introuvable, H-UI-28).
+    pub fn forget_recent(&mut self, path: &str) {
+        self.recent.retain(|recent| recent.path != path);
+    }
+
     /// Bornes appliquées, colonnes complétées et dédoublonnées dans l'ordre
     /// de [`Column::ALL`] (la première occurrence d'une colonne l'emporte),
     /// largeurs bornées à `[Column::MIN_WIDTH, Column::MAX_WIDTH]`, largeur

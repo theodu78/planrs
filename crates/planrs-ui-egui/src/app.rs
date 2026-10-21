@@ -235,6 +235,8 @@ enum Pending {
     /// Installer un document arrivé du sélecteur alors que le document
     /// courant a été modifié depuis la demande.
     Install(Box<(LoadedDocument, DocOrigin)>),
+    /// Ouvrir un fichier par son chemin (fichier récent, J7 lot L14).
+    OpenPath(String),
 }
 
 /// Enregistrement en cours.
@@ -614,6 +616,7 @@ impl App {
                 let (loaded, origin) = *boxed;
                 self.install(loaded, origin);
             }
+            Pending::OpenPath(path) => self.open_path(&path),
         }
     }
 
@@ -720,6 +723,9 @@ impl App {
         if document.opening != job.key.0 {
             return;
         }
+        if let Some(path) = &path {
+            self.state.remember_recent(path, &name);
+        }
         document.set_origin(DocOrigin {
             name,
             path,
@@ -795,8 +801,62 @@ impl App {
         let now = (self.env.now)();
         match document::load(bytes, now) {
             Ok(loaded) => self.install(loaded, origin),
-            Err(error) => self.report_open_error(&error),
+            Err(error) => self.report_open_error(&error, &origin.name),
         }
+    }
+
+    /// Ouvre un projet déjà construit, sans MSPDI (N8 : réseaux générés des
+    /// tests et de l'exemple `snapshot`) : planning calculé, historique
+    /// vide, aucun diagnostic d'import.
+    pub fn open_project(&mut self, project: planrs_core::Project, origin: DocOrigin) {
+        let now = (self.env.now)();
+        self.install(document::load_project(project, now), origin);
+    }
+
+    /// Ouvre le fichier `path` (synchrone : argument de la ligne de
+    /// commande, fichier récent). Un échec devient un message nommant le
+    /// fichier ; le document précédent reste affiché. Un fichier récent
+    /// introuvable est retiré de la liste (H-UI-28).
+    pub fn open_path(&mut self, path: &str) {
+        let name = document::file_name(path);
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    self.state.forget_recent(path);
+                }
+                self.report_open_error(&OpenError::Read(error.to_string()), &name);
+                return;
+            }
+        };
+        let origin = DocOrigin {
+            name,
+            path: Some(path.to_owned()),
+            demo: false,
+        };
+        self.open_bytes(&bytes, origin);
+    }
+
+    /// Fichier récent `index` (H-UI-28) : absent ⇒ retiré de la liste et
+    /// signalé ; sinon ouvert, après confirmation si le document courant est
+    /// modifié.
+    fn open_recent(&mut self, index: usize, ctx: &egui::Context) {
+        let Some(recent) = self.state.recent.get(index).cloned() else {
+            return;
+        };
+        if !std::path::Path::new(&recent.path).exists() {
+            self.state.forget_recent(&recent.path);
+            let text = self.texts.get_args(
+                TextId::OpenErrorMissing,
+                &[
+                    ("name", Arg::Str(recent.name.into())),
+                    ("detail", Arg::Str(recent.path.into())),
+                ],
+            );
+            self.push_titled(Severity::Error, Some(TextId::OpenErrorTitle), text);
+            return;
+        }
+        self.request(Pending::OpenPath(recent.path), ctx);
     }
 
     /// Met une action en file ; elle sera appliquée par le réducteur en fin
@@ -915,6 +975,9 @@ impl App {
         // (J7 lot L1) ; projet sans tâche : la ligne vide.
         self.selection = self.rows.as_ref().and_then(|rows| rows.row(0)).map(|row| row.uid);
         self.selected = Selection::single(self.selection);
+        if let Some(path) = &document.origin.path {
+            self.state.remember_recent(path, &document.origin.name);
+        }
         self.document = Some(document);
         self.view = self.fresh_view(true);
         self.view.focus_table_pending = true;
@@ -931,13 +994,28 @@ impl App {
     }
 
     /// Transforme une erreur d'ouverture en message traduit (le titre
-    /// `open-error-title` est ajouté par le bandeau).
-    fn report_open_error(&mut self, error: &OpenError) {
-        let (id, detail) = match error {
-            OpenError::Read(detail) => (TextId::OpenErrorRead, detail.clone()),
-            OpenError::Mspdi(error) => (TextId::OpenErrorMspdi, error.to_string()),
+    /// `open-error-title` est ajouté par le bandeau), nommant le fichier
+    /// `name` s'il est connu (N10).
+    pub(crate) fn report_open_error(&mut self, error: &OpenError, name: &str) {
+        let (id, named, detail) = match error {
+            OpenError::Read(detail) => (TextId::OpenErrorRead, TextId::OpenErrorReadFile, detail.clone()),
+            OpenError::Mspdi(error) => (
+                TextId::OpenErrorMspdi,
+                TextId::OpenErrorMspdiFile,
+                error.to_string(),
+            ),
         };
-        let text = self.texts.get_args(id, &[("detail", Arg::Str(detail.into()))]);
+        let text = if name.is_empty() {
+            self.texts.get_args(id, &[("detail", Arg::Str(detail.into()))])
+        } else {
+            self.texts.get_args(
+                named,
+                &[
+                    ("name", Arg::Str(name.into())),
+                    ("detail", Arg::Str(detail.into())),
+                ],
+            )
+        };
         self.push_titled(Severity::Error, Some(TextId::OpenErrorTitle), text);
     }
 
@@ -963,7 +1041,7 @@ impl App {
                             self.confirm = Some(Pending::Install(Box::new((loaded, origin))));
                         }
                     }
-                    Err(error) => self.report_open_error(&error),
+                    Err(error) => self.report_open_error(&error, &origin.name),
                 },
             }
         }
@@ -1218,7 +1296,8 @@ impl App {
             // Contrat J7 (lot L0) : actions câblées par leur lot.
             Action::SetGanttStyle(style) => self.state.gantt_style = style,
             Action::SetView(kind) => self.set_view(kind),
-            other @ (Action::OpenRecent(_) | Action::Recover(_)) => {
+            Action::OpenRecent(index) => self.open_recent(index, ctx),
+            other @ Action::Recover(_) => {
                 log::debug!("action J7 pas encore câblée : {other:?}");
             }
             Action::ToggleColumn(column) => self.toggle_column(column),
@@ -1323,6 +1402,13 @@ impl App {
 
     /// Accepte l'écriture relayée `id` (bandeau, H-UI-27) ; sans canal
     /// (web), rien.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        allow(
+            clippy::unused_self,
+            reason = "web : aucun canal, même signature que le desktop"
+        )
+    )]
     fn approve_relayed(&mut self, id: u64) {
         #[cfg(not(target_arch = "wasm32"))]
         self.approve(id);
@@ -1331,6 +1417,13 @@ impl App {
     }
 
     /// Refuse l'écriture relayée `id` ; sans canal (web), rien.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        allow(
+            clippy::unused_self,
+            reason = "web : aucun canal, même signature que le desktop"
+        )
+    )]
     fn reject_relayed(&mut self, id: u64) {
         #[cfg(not(target_arch = "wasm32"))]
         self.reject(id);
@@ -1823,7 +1916,7 @@ impl App {
         // Appels relayés d'un agent d'abord (ADR-0015 D9) : la session vue
         // par l'image est celle qui a répondu.
         #[cfg(not(target_arch = "wasm32"))]
-        self.drain_relay();
+        self.drain_relay(&ctx);
         self.poll_io();
         self.poll_save(&ctx);
         self.guard_close(&ctx);

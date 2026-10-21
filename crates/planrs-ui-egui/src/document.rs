@@ -73,6 +73,34 @@ pub fn load(bytes: &[u8], now: Moment) -> Result<LoadedDocument, OpenError> {
     })
 }
 
+/// Ouvre la session d'un projet déjà construit (N8, J7 lot L14) : planning
+/// calculé par le moteur, historique vide, aucun diagnostic d'import. Même
+/// plage affichée que [`load`].
+#[must_use]
+pub fn load_project(project: Project, now: Moment) -> LoadedDocument {
+    let origin = SessionOrigin {
+        name: String::new(),
+        path: None,
+    };
+    let session = Session::from_project(project, origin, now, TextLanguage::Fr);
+    let range = default_range(session.project(), session.schedule());
+    LoadedDocument {
+        session,
+        import_diagnostics: Vec::new(),
+        range: range.span,
+        range_truncated: range.truncated,
+    }
+}
+
+/// Nom affiché d'un fichier : dernier composant de `path` (le chemin entier
+/// s'il n'en a pas).
+#[must_use]
+pub fn file_name(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map_or_else(|| path.to_owned(), |name| name.to_string_lossy().into_owned())
+}
+
 /// Calendriers compilés d'un document (N3, J7 lot L7) : compilés à la
 /// première demande, **une fois par génération** de la session, avec le
 /// budget du moteur (`Limits::compiled_segments`, R-172 amendée) ; partagés
@@ -169,7 +197,7 @@ mod tests {
         reason = "tests : un échec doit s'arrêter net et lisiblement"
     )]
 
-    use super::{CalendarCache, OpenError, load, project_calendar};
+    use super::{CalendarCache, OpenError, file_name, load, load_project, project_calendar};
 
     fn now() -> planrs_core::Moment {
         "2026-10-17T08:00".parse().unwrap()
@@ -225,5 +253,30 @@ mod tests {
         assert!(project_calendar(&set, project).is_none());
         tiny.get(project, 0);
         assert_eq!(tiny.compiles(), 1);
+    }
+
+    /// N8 : un projet construit s'ouvre sans MSPDI, même planning que la
+    /// session du moteur, rien de modifié.
+    #[test]
+    fn n8_load_project_direct() {
+        let read = load(crate::DEMO_MSPDI, now()).unwrap();
+        let project = read.session.project().clone();
+        let doc = load_project(project, now());
+        assert_eq!(doc.session.project().tasks.len(), 49);
+        assert_eq!(
+            doc.session.schedule().project_finish,
+            read.session.schedule().project_finish
+        );
+        assert_eq!(doc.import_diagnostics.len(), 0);
+        assert!(!doc.session.is_dirty());
+        assert_eq!(doc.session.generation(), 0);
+        assert_eq!(doc.range, read.range);
+    }
+
+    #[test]
+    fn file_name_of_path() {
+        assert_eq!(file_name("/tmp/plans/maison.xml"), "maison.xml");
+        assert_eq!(file_name("maison.xml"), "maison.xml");
+        assert_eq!(file_name("/"), "/");
     }
 }

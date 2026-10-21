@@ -542,6 +542,38 @@ async fn c_ctl_10_app_tools_not_attached() {
     assert_eq!(tool_of(&frames[2]), "app.ui");
 }
 
+/// J7 L14 (C-CTL-08) : la capture relayée devient un contenu image MCP ;
+/// le contenu structuré garde la taille, sans les données de l'image.
+#[test]
+fn relay_screenshot_is_image_content() {
+    let dir = TempDir::new("screenshot");
+    let script: Script = Arc::new(|f: &Frame| {
+        let result = match f.method {
+            Method::Screenshot => json!({
+                "mime_type": "image/png", "data": "iVBORw0KGgo=", "width": 2, "height": 1,
+                "scale_down": 0, "bytes": 8
+            }),
+            _ => json!(null),
+        };
+        vec![Step::Send(Reply::Ok { id: f.id, result })]
+    });
+    let _app = FakeApp::start(&dir.0, "a", None, script);
+    let s = server(&dir.0);
+    assert!(s.attach_at_startup());
+    let r = s.dispatch("screenshot", None).unwrap();
+    assert_ne!(r.is_error, Some(true));
+    let image = r
+        .content
+        .iter()
+        .find_map(|c| c.as_image())
+        .expect("contenu image");
+    assert_eq!(image.data, "iVBORw0KGgo=");
+    assert_eq!(image.mime_type, "image/png");
+    let structured = r.structured_content.unwrap();
+    assert_eq!(structured["width"], 2);
+    assert!(structured.get("data").is_none());
+}
+
 #[test]
 fn relay_journal_records_relayed_calls() {
     let dir = TempDir::new("journal");

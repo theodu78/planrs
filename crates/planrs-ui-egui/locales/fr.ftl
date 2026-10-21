@@ -592,6 +592,12 @@ as-no-resource = Aucune ressource
 as-hint = Clic sur une ressource pour la choisir (Ctrl ou Cmd + clic : plusieurs) ; unités laissées vides : valeur par défaut.
 
 # --- J7 L14 ---
+open-error-read-file = Lecture de « { $name } » impossible : { $detail }
+open-error-mspdi-file = « { $name } » : fichier MSPDI illisible : { $detail }
+open-error-missing = « { $name } » est introuvable, retiré des fichiers récents : { $detail }
+menu-recent = Fichiers récents
+menu-recent-empty = Aucun fichier récent
+menu-recent-missing = { $name } (introuvable)
 
 # --- J7 L15 ---
 

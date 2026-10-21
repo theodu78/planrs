@@ -300,6 +300,7 @@ impl PlanrsServer {
         let res = self.execute(&mut backend, spec.id, params);
         let result = match res {
             Ok(value) if spec.id == "render.gantt" => render_result(value, backend.session(), lang),
+            Ok(value) if spec.id == "app.screenshot" => screenshot_result(value),
             Ok(value) => CallToolResult::structured(value),
             Err(Failure::Tool(e)) => error_result(&e),
             Err(Failure::App(v)) => CallToolResult::structured_error(v),
@@ -554,6 +555,29 @@ fn poisoned(lang: Language) -> ToolError {
 fn error_result(e: &ToolError) -> CallToolResult {
     let value = serde_json::to_value(e).unwrap_or_else(|_| json!({ "code": e.code, "message": e.message }));
     CallToolResult::structured_error(value)
+}
+
+/// Résultat de `screenshot` (J7 lot L14, C-CTL-08) : PNG de l'application
+/// en contenu image (`data` base64, `mime_type`), puis le reste du résultat
+/// (taille, réductions) en contenu structuré et texte, sans les données de
+/// l'image (journal et contexte de l'agent légers).
+fn screenshot_result(value: Value) -> CallToolResult {
+    let Value::Object(mut report) = value else {
+        return CallToolResult::structured(value);
+    };
+    let (Some(Value::String(data)), Some(Value::String(mime))) =
+        (report.remove("data"), report.get("mime_type").cloned())
+    else {
+        return CallToolResult::structured(Value::Object(report));
+    };
+    let report = Value::Object(report);
+    let content = vec![
+        ContentBlock::image(data, mime),
+        ContentBlock::text(report.to_string()),
+    ];
+    let mut result = CallToolResult::success(content);
+    result.structured_content = Some(report);
+    result
 }
 
 /// Résultat de `render_gantt` : résumé texte puis SVG en contenu texte,

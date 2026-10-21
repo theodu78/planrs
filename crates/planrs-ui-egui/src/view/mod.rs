@@ -26,6 +26,7 @@ pub mod chrome;
 pub mod diagnostics;
 pub mod gantt;
 pub mod main_view;
+pub mod resource_sheet;
 pub mod table;
 pub mod timescale;
 
@@ -124,6 +125,9 @@ pub struct ViewTransient {
     pub drag: Option<BarDrag>,
     /// Fenêtre ouverte (J7, lots L8, L9, L12, L13).
     pub dialog: Option<DialogState>,
+    /// Feuille des ressources : curseur, saisie, lignes, confirmation (J7,
+    /// lot L10).
+    pub resources: resource_sheet::ResourceSheetState,
 }
 
 /// Volet de la vue principale (J7).

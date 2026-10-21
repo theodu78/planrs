@@ -433,6 +433,39 @@ task-info-duplicate-resource = Ressource affectée deux fois : { $name }
 task-info-unknown-resource = Ressource inconnue
 
 # --- J7 L10 ---
+menu-view-resource-sheet = Feuille des ressources
+res-sheet-label = Feuille des ressources
+res-col-indicator = Ind.
+res-col-name = Nom de la ressource
+res-col-kind = Type
+res-col-material-label = Étiquette
+res-col-initials = Initiales
+res-col-group = Groupe
+res-col-max-units = Capacité max.
+res-col-standard-rate = Taux standard
+res-col-overtime-rate = Taux heures sup.
+res-col-cost-per-use = Coût/utilisation
+res-col-calendar = Calendrier
+res-kind-work = Travail
+res-kind-material = Matériel
+res-kind-cost = Coût
+rate-minute = /min
+rate-hour = /h
+rate-day = /j
+rate-week = /sem
+rate-month = /mois
+rate-year = /an
+res-row-label = Ressource { $id } : { $name }
+res-blank-row-label = Ligne vide (nouvelle ressource)
+res-name-first = Saisir d'abord le nom de la ressource
+res-unknown-calendar = Aucun calendrier nommé « { $name } »
+res-calendar-none = (aucun)
+res-delete-title = Supprimer une ressource affectée
+res-delete-text =
+    { $count ->
+        [one] « { $name } » est affectée à une tâche : l'affectation sera retirée avec elle.
+       *[other] « { $name } » a { $count } affectations : elles seront retirées avec elle.
+    }
 
 # --- J7 L11 ---
 

@@ -377,6 +377,58 @@ table-scroll-label = Défilement horizontal de la table
 # --- J7 L8 ---
 
 # --- J7 L9 ---
+task-info-menu = Informations sur la tâche…
+task-info-title = Informations sur la tâche — { $id } { $name }
+task-info-tab-general = Général
+task-info-tab-predecessors = Prédécesseurs
+task-info-tab-resources = Ressources
+task-info-tab-advanced = Avancé
+task-info-tab-notes = Notes
+task-info-name = Nom
+task-info-duration = Durée
+task-info-percent = % achevé
+task-info-start = Début
+task-info-finish = Fin
+task-info-active = Active
+task-info-pred-id = ID
+task-info-pred-type = Type
+task-info-pred-lag = Décalage
+task-info-row-field = { $column }, ligne { $count }
+task-info-add-predecessor = Ajouter un prédécesseur
+task-info-add-resource = Affecter une ressource
+task-info-remove-row = Retirer
+task-info-resource-name = Ressource
+task-info-resource-units = Unités
+task-info-no-resource = Aucune ressource dans le projet.
+task-info-constraint = Type de contrainte
+task-info-constraint-date = Date de contrainte
+task-info-deadline = Échéance
+task-info-task-type = Type de tâche
+task-info-effort-driven = Pilotée par l'effort
+task-info-notes = Notes de la tâche
+task-info-link-fs = Fin à début (FD)
+task-info-link-ss = Début à début (DD)
+task-info-link-ff = Fin à fin (FF)
+task-info-link-sf = Début à fin (DF)
+task-info-constraint-asap = Dès que possible
+task-info-constraint-alap = Le plus tard possible
+task-info-constraint-mso = Doit commencer le
+task-info-constraint-mfo = Doit finir le
+task-info-constraint-snet = Début au plus tôt le
+task-info-constraint-snlt = Début au plus tard le
+task-info-constraint-fnet = Fin au plus tôt le
+task-info-constraint-fnlt = Fin au plus tard le
+task-info-type-fixed-units = Capacité fixe
+task-info-type-fixed-duration = Durée fixe
+task-info-type-fixed-work = Travail fixe
+task-info-ok = OK
+task-info-cancel = Annuler
+task-info-stale = Le projet a changé depuis l'ouverture : les valeurs ont été relues, rien n'a été appliqué.
+task-info-date-required = Date obligatoire pour ce type de contrainte
+task-info-bad-id = ID illisible : { $id }
+task-info-duplicate-predecessor = Prédécesseur en double : { $id }
+task-info-duplicate-resource = Ressource affectée deux fois : { $name }
+task-info-unknown-resource = Ressource inconnue
 
 # --- J7 L10 ---
 

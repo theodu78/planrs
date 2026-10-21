@@ -29,7 +29,7 @@ use super::{FrameCtx, OVERSCAN, Pane, ViewTransient, gantt, table, timescale};
 use crate::action::Action;
 use crate::geom::{self, MainLayout};
 use crate::i18n::TextId;
-use crate::keymap::{self, Binding};
+use crate::keymap::{self, Binding, UiBinding};
 use crate::selection::SelectMode;
 use crate::structure::StructureOp;
 use crate::timescale::TimeAxis;
@@ -380,6 +380,7 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
     let texts = fc.texts;
     let ctx = ui.ctx().clone();
     let mut chosen = None;
+    let mut information = false;
     Popup::new(
         Id::unique("planrs.structure-menu"),
         ctx.clone(),
@@ -403,9 +404,21 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
                 chosen = Some(op);
             }
         }
+        // « Informations sur la tâche » (H-UI-19, J7 lot L9).
+        ui.separator();
+        let mut button = egui::Button::new(texts.get(TextId::TaskInfoMenu));
+        if let Some(shortcut) = keymap::shortcut_for(Binding::Ui(UiBinding::TaskInformation)) {
+            button = button.shortcut_text(keymap::shortcut_text(&ctx, shortcut));
+        }
+        if ui.add_enabled(has_selection, button).clicked() {
+            information = true;
+        }
     });
     if let Some(op) = chosen {
         fc.actions.push(Action::Structure(op));
+    }
+    if information {
+        fc.actions.push(Action::ShowTaskInformation);
     }
 }
 

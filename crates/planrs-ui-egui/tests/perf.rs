@@ -666,7 +666,9 @@ fn counts_after(app: &mut App, bench: &mut Bench, events: &[Vec<Event>]) -> Coun
 
 /// J7 L1 (garde indépendante de la machine) : à 1 000 et 5 000 tâches,
 /// défilées en haut au zoom Semaine, formes, sommets et galleys égaux à
-/// ± 5 %, au départ puis après des déplacements du curseur au clavier.
+/// ± 5 %, au départ puis après des déplacements du curseur au clavier, puis
+/// toutes les colonnes affichées et la table défilée jusqu'à la dernière
+/// (J7 L6).
 #[test]
 fn frame_counts_equal_at_1000_and_5000_tasks() {
     let scenarios: Vec<Vec<Vec<Event>>> = vec![
@@ -689,10 +691,24 @@ fn frame_counts_equal_at_1000_and_5000_tasks() {
         let x = app.view().gantt_scroll_x;
         app.dispatch(Action::ScrollGanttX(-x));
         bench.settle(&mut app);
-        let counts: Vec<Counts> = scenarios
+        let mut counts: Vec<Counts> = scenarios
             .iter()
             .map(|events| counts_after(&mut app, &mut bench, events))
             .collect();
+        // J7 L6 : toutes les colonnes affichées (textes des colonnes de
+        // suivi), table défilée horizontalement par Fin.
+        for column in Column::ALL {
+            if !app.state.column(column).is_some_and(|c| c.visible) {
+                app.dispatch(Action::ToggleColumn(column));
+            }
+        }
+        bench.settle(&mut app);
+        counts.push(counts_after(
+            &mut app,
+            &mut bench,
+            &[key_events(Key::End, Modifiers::NONE)],
+        ));
+        assert!(app.view().table_scroll_x > 0.0, "table non défilée");
         eprintln!("{} tâches : {counts:?}", app.rows().unwrap().len());
         measured.push(counts);
     }

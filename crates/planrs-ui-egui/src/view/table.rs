@@ -17,6 +17,7 @@ use egui::{
 };
 use planrs_core::TaskUid;
 
+use super::main_view::HBarSpec;
 use super::{FrameCtx, Pane};
 use crate::action::Action;
 use crate::column::{CellAlign, Column};
@@ -111,26 +112,43 @@ fn name_indent(indent_per_level: f32, level: u16, w: f32) -> f32 {
     if wanted.is_finite() { wanted.min(cap) } else { 0.0 }
 }
 
+/// Demi-largeur de la poignée de redimensionnement au bord droit d'un
+/// en-tête de colonne, en points.
+const RESIZE_GRIP: f32 = 3.0;
+
 /// En-tête de la table : fond, titres des colonnes visibles (centrés,
-/// tronqués), séparateurs verticaux et trait bas.
-pub fn paint_header(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, rect: Rect) {
+/// tronqués), séparateurs verticaux et trait bas, décalés de `scroll_x`
+/// (défilement horizontal de la table, J7 lot L6).
+///
+/// Chaque titre est une zone cliquable (« Colonne Durée ») dont le clic
+/// droit ouvre le menu des colonnes ([`column_menu`]) ; le bord droit de
+/// chaque titre se glisse pour changer la largeur de la colonne
+/// (`Action::SetColumnWidth`, bornée par `UiState::set_column_width`).
+pub fn paint_header(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, rect: Rect, scroll_x: f32) {
     if !rect.is_finite() || !rect.is_positive() {
         return;
     }
-    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+    let scroll_x = if scroll_x.is_finite() { scroll_x } else { 0.0 };
+    let clip = rect.intersect(ui.clip_rect());
+    let painter = ui.painter().with_clip_rect(clip);
     let palette = fc.palette;
     let pad = fc.metrics.pad_x;
     let font = cell_font(ui);
     let mut shapes = 0_usize;
     painter.rect_filled(rect, 0.0, palette.header_bg);
     shapes = shapes.saturating_add(1);
-    let mut left = rect.left();
+    let mut left = rect.left() - scroll_x;
+    let mut edges = Vec::new();
     for state in fc.state.visible_columns() {
         if left >= rect.right() {
             break;
         }
         let w = f32::from(state.width);
         let right = left + w;
+        if right <= rect.left() {
+            left = right;
+            continue;
+        }
         let max_w = w - 2.0 * pad;
         if max_w >= MIN_TEXT_WIDTH {
             let title = fc.texts.get(state.column.title());
@@ -143,6 +161,11 @@ pub fn paint_header(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, rect: Rect) {
         }
         painter.vline(right - 0.5, rect.y_range(), Stroke::new(1.0, palette.grid_major));
         shapes = shapes.saturating_add(1);
+        let cell = Rect::from_min_max(pos2(left, rect.top()), pos2(right, rect.bottom())).intersect(clip);
+        if cell.is_positive() {
+            header_cell(ui, fc, state.column, cell);
+        }
+        edges.push((state.column, left, right));
         left = right;
     }
     painter.hline(
@@ -152,6 +175,197 @@ pub fn paint_header(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, rect: Rect) {
     );
     shapes = shapes.saturating_add(1);
     fc.stats.shapes = fc.stats.shapes.saturating_add(shapes);
+    // Poignées après les titres : elles passent au-dessus pour le pointeur.
+    for (column, cell_left, right) in edges {
+        resize_grip(ui, fc, column, cell_left, right, rect, clip);
+    }
+}
+
+/// Zone d'un titre de colonne : nœud d'accessibilité et menu des colonnes
+/// au clic droit.
+fn header_cell(ui: &egui::Ui, fc: &mut FrameCtx<'_>, column: Column, cell: Rect) {
+    let texts = fc.texts;
+    let response = ui.interact(
+        cell,
+        ui.make_persistent_id(("planrs.table.header", column)),
+        Sense::click(),
+    );
+    response.widget_info(|| {
+        let label = texts.get_args(
+            TextId::ColumnHeaderLabel,
+            &[("column", Arg::Str(texts.get(column.title()).into()))],
+        );
+        egui::WidgetInfo::labeled(egui::Role::ColumnHeader, true, label)
+    });
+    let mut chosen = None;
+    response.context_menu(|ui| chosen = column_menu(ui, fc, column));
+    if let Some(action) = chosen {
+        fc.actions.push(action);
+    }
+}
+
+/// Menu des colonnes (clic droit sur un titre) : « Masquer la colonne »
+/// (grisé pour l'ID et le Nom, H-UI-12), puis une case par colonne, cochée
+/// si elle est visible (ID et Nom cochés et grisés). Rend l'action choisie.
+fn column_menu(ui: &mut egui::Ui, fc: &FrameCtx<'_>, clicked: Column) -> Option<Action> {
+    let texts = fc.texts;
+    let mut chosen = None;
+    let hide = egui::Button::new(texts.get(TextId::ColumnMenuHide));
+    if ui.add_enabled(clicked.hideable(), hide).clicked() {
+        chosen = Some(Action::ToggleColumn(clicked));
+    }
+    ui.separator();
+    for column in Column::ALL {
+        let mut visible = fc.state.column(column).is_some_and(|state| state.visible);
+        let check = egui::Checkbox::new(&mut visible, texts.get(column.title()));
+        if ui.add_enabled(column.hideable(), check).clicked() {
+            chosen = Some(Action::ToggleColumn(column));
+        }
+    }
+    chosen
+}
+
+/// Poignée du bord droit d'un titre (`right`) : glisser pousse
+/// `SetColumnWidth` d'après la position du pointeur (largeur entière ≥ 0,
+/// bornée ensuite par l'état).
+fn resize_grip(
+    ui: &egui::Ui,
+    fc: &mut FrameCtx<'_>,
+    column: Column,
+    cell_left: f32,
+    right: f32,
+    rect: Rect,
+    clip: Rect,
+) {
+    let grip = Rect::from_min_max(
+        pos2(right - RESIZE_GRIP, rect.top()),
+        pos2(right + RESIZE_GRIP, rect.bottom()),
+    )
+    .intersect(clip);
+    if !grip.is_finite() || !grip.is_positive() {
+        return;
+    }
+    let texts = fc.texts;
+    let response = ui.interact(
+        grip,
+        ui.make_persistent_id(("planrs.table.resize", column)),
+        Sense::drag(),
+    );
+    response.widget_info(|| {
+        let label = texts.get_args(
+            TextId::ColumnResizeLabel,
+            &[("column", Arg::Str(texts.get(column.title()).into()))],
+        );
+        egui::WidgetInfo::labeled(egui::Role::Splitter, true, label)
+    });
+    let response = response.on_hover_and_drag_cursor(egui::CursorIcon::ResizeColumn);
+    if !response.dragged() {
+        return;
+    }
+    let Some(p) = response.interact_pointer_pos() else {
+        return;
+    };
+    let Some(width) = width_from_drag(p.x - cell_left) else {
+        return;
+    };
+    let current = fc.state.column(column).map(|state| state.width);
+    if current != Some(width) {
+        fc.actions.push(Action::SetColumnWidth { column, width });
+    }
+}
+
+/// Largeur entière d'une colonne d'après la distance entre son bord gauche
+/// et le pointeur : arrondie, bornée à `[Column::MIN_WIDTH,
+/// Column::MAX_WIDTH]` ; `None` si la distance n'est pas finie.
+#[must_use]
+pub fn width_from_drag(dx: f32) -> Option<u16> {
+    if !dx.is_finite() {
+        return None;
+    }
+    let w = dx
+        .round()
+        .clamp(f32::from(Column::MIN_WIDTH), f32::from(Column::MAX_WIDTH));
+    // Borné à [24, 2 000] et fini : la conversion par `f32_to_index` est
+    // exacte.
+    u16::try_from(crate::geom::f32_to_index(w)).ok()
+}
+
+/// Défilement horizontal de la table qui montre la colonne visible `col`
+/// (largeurs `widths` dans l'ordre d'affichage), avec la colonne voisine
+/// en marge du côté du déplacement quand elle tient (H-UI-17 horizontal, J7 lot L6) ; une
+/// colonne plus large que la vue s'aligne à gauche. Rend `scroll` borné à
+/// `[0, Σ largeurs − view_w]` si la colonne est déjà visible ou absente ;
+/// valeurs non finies : 0.
+#[must_use]
+pub fn scroll_to_column(widths: &[u16], col: usize, scroll: f32, view_w: f32) -> f32 {
+    let scroll = if scroll.is_finite() { scroll.max(0.0) } else { 0.0 };
+    let view_w = if view_w.is_finite() { view_w.max(0.0) } else { 0.0 };
+    let total: f32 = widths.iter().map(|&w| f32::from(w)).sum();
+    let max = (total - view_w).max(0.0);
+    let Some(&w) = widths.get(col) else {
+        return scroll.min(max);
+    };
+    let left: f32 = widths.iter().take(col).map(|&w| f32::from(w)).sum();
+    let right = left + f32::from(w);
+    if right - left >= view_w {
+        return left.min(max);
+    }
+    let prev = col
+        .checked_sub(1)
+        .and_then(|i| widths.get(i))
+        .map_or(0.0, |&w| f32::from(w));
+    let next = col
+        .checked_add(1)
+        .and_then(|i| widths.get(i))
+        .map_or(0.0, |&w| f32::from(w));
+    // Marge du côté où l'on va, si la colonne et sa voisine tiennent.
+    let target = if left < scroll {
+        if right - (left - prev) <= view_w {
+            left - prev
+        } else {
+            left
+        }
+    } else if right > scroll + view_w {
+        if right + next - left <= view_w {
+            right + next - view_w
+        } else {
+            right - view_w
+        }
+    } else {
+        scroll
+    };
+    target.clamp(0.0, max)
+}
+
+/// Barre de défilement horizontale de la table, dans la bande sous la
+/// table : bande unie (comme avant J7) tant que les colonnes tiennent, barre
+/// glissable sinon. Rend le défilement demandé, en points.
+pub fn paint_hbar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, track: Rect, scroll_x: f32, view_w: f32) -> f32 {
+    let content_w: f32 = fc
+        .state
+        .visible_columns()
+        .map(|state| f32::from(state.width))
+        .sum();
+    if !track.is_finite() || !track.is_positive() {
+        return 0.0;
+    }
+    if content_w.is_nan() || content_w <= view_w {
+        ui.painter().rect_filled(track, 0.0, fc.palette.header_bg);
+        fc.stats.shapes = fc.stats.shapes.saturating_add(1);
+        return 0.0;
+    }
+    super::main_view::hbar(
+        ui,
+        fc,
+        track,
+        &HBarSpec {
+            id: Id::unique("planrs.table-hbar"),
+            label: TextId::TableScrollLabel,
+            scroll: scroll_x,
+            content_w,
+            visible_w: view_w,
+        },
+    )
 }
 
 /// Textes des cellules visibles d'une ligne (nom indenté, troncature,
@@ -162,14 +376,16 @@ fn paint_cells(
     rows: &RowModel,
     i: usize,
     row_rect: Rect,
+    cols_left: f32,
     font: &FontId,
 ) -> usize {
     let Some(row) = rows.row(i) else { return 0 };
     let metrics = fc.metrics;
     let pad = metrics.pad_x;
+    let clip_left = painter.clip_rect().left();
     let right = painter.clip_rect().right();
     let mut shapes = 0_usize;
-    let mut x = row_rect.left();
+    let mut x = cols_left;
     for state in fc.state.visible_columns() {
         if x >= right {
             break;
@@ -177,6 +393,10 @@ fn paint_cells(
         let w = f32::from(state.width);
         let cell_left = x;
         x += w;
+        if x <= clip_left {
+            // Colonne entièrement à gauche de la vue (défilement horizontal).
+            continue;
+        }
         let text = rows.text(i, state.column);
         if text.is_empty() {
             continue;
@@ -209,7 +429,8 @@ fn paint_cells(
 }
 
 /// Corps de la table : lignes `range`, `origin` étant le coin haut-gauche
-/// écran de la ligne 0, découpe `clip`.
+/// écran de la ligne 0, découpe `clip`, colonnes décalées de `scroll_x`
+/// (défilement horizontal, J7 lot L6).
 ///
 /// Fond alterné léger, ligne sélectionnée surlignée, texte en couleur
 /// normale (rouge seulement dans la colonne « Critique »), nom indenté par
@@ -222,6 +443,10 @@ fn paint_cells(
 /// d'accessibilité (« Ligne 3, Durée, 5 jours »). Saisie des cellules : voir
 /// [`edit_cells`]. Écrit `FrameStats::table_rows` (et lui seul : le Gantt
 /// écrit `gantt_rows`).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "contexte d'image découpé en emprunts disjoints"
+)]
 pub fn paint_body(
     ui: &mut egui::Ui,
     fc: &mut FrameCtx<'_>,
@@ -230,8 +455,10 @@ pub fn paint_body(
     origin: Pos2,
     range: Range<usize>,
     clip: Rect,
+    scroll_x: f32,
 ) {
     let clip = clip.intersect(ui.clip_rect());
+    let scroll_x = if scroll_x.is_finite() { scroll_x } else { 0.0 };
     if !clip.is_finite() || !clip.is_positive() || !origin.x.is_finite() || !origin.y.is_finite() {
         return;
     }
@@ -254,6 +481,7 @@ pub fn paint_body(
     open_from_keys(ui, fc, rows, edit, cursor);
     fc.stats.table_rows = range.clone();
     let left = clip.left();
+    let cols_left = left - scroll_x;
     let blank = rows.len();
     for i in range.clone() {
         let top = origin.y + index_to_f32(i) * row_h;
@@ -286,7 +514,7 @@ pub fn paint_body(
         if let Some(row) = row
             && row.kind != RowKind::Null
         {
-            shapes = shapes.saturating_add(paint_cells(&painter, fc, rows, i, row_rect, &font));
+            shapes = shapes.saturating_add(paint_cells(&painter, fc, rows, i, row_rect, cols_left, &font));
         }
 
         let hit = row_rect.intersect(clip);
@@ -310,23 +538,31 @@ pub fn paint_body(
                 };
                 egui::WidgetInfo::selected(egui::Role::Row, true, selected, label)
             });
-            row_clicked(fc, rows, edit, cursor, &response, i, left);
+            row_clicked(fc, rows, edit, cursor, &response, i, cols_left);
         }
     }
 
     // Séparateurs verticaux de colonnes, sur toute la hauteur visible.
-    let mut x = left;
+    let mut x = cols_left;
     for state in fc.state.visible_columns() {
         x += f32::from(state.width);
         if x > clip.right() {
             break;
         }
+        if x <= left {
+            continue;
+        }
         painter.vline(x - 0.5, clip.y_range(), Stroke::new(1.0, palette.grid));
         shapes = shapes.saturating_add(1);
     }
-    shapes = shapes.saturating_add(paint_cursor(ui, &painter, fc, rows, edit, cursor, origin, &range));
+    let at = Place {
+        origin,
+        cols_left,
+        range: &range,
+    };
+    shapes = shapes.saturating_add(paint_cursor(ui, &painter, fc, rows, edit, cursor, &at));
     fc.stats.shapes = fc.stats.shapes.saturating_add(shapes);
-    edit_cells(ui, fc, rows, edit, cursor, origin, &range, clip);
+    edit_cells(ui, fc, rows, edit, cursor, &at, clip);
 }
 
 /// Widget focalisable de la table (sans clic : les lignes, dessinées
@@ -351,13 +587,20 @@ fn cursor_index(rows: &RowModel, cursor: &TableCursor) -> Option<usize> {
     }
 }
 
+/// Position des lignes et des colonnes à l'écran pour une image.
+struct Place<'r> {
+    /// Coin haut-gauche écran de la ligne 0.
+    origin: Pos2,
+    /// Abscisse écran du bord gauche de la première colonne visible
+    /// (défilement horizontal déduit).
+    cols_left: f32,
+    /// Lignes dessinées.
+    range: &'r Range<usize>,
+}
+
 /// Cadre de 2 px de la cellule courante (couleur `Palette::cursor`) et
 /// son nœud d'accessibilité, si elle est dans la plage dessinée, sa colonne
 /// visible et aucune saisie ouverte ; rend le nombre de formes ajoutées.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "contexte d'image découpé en emprunts disjoints"
-)]
 fn paint_cursor(
     ui: &egui::Ui,
     painter: &Painter,
@@ -365,22 +608,21 @@ fn paint_cursor(
     rows: &RowModel,
     edit: &TableEdit,
     cursor: &TableCursor,
-    origin: Pos2,
-    range: &Range<usize>,
+    at: &Place<'_>,
 ) -> usize {
     if edit.editing.is_some() {
         return 0;
     }
     let clip = painter.clip_rect();
-    let Some(index) = cursor_index(rows, cursor).filter(|i| range.contains(i)) else {
+    let Some(index) = cursor_index(rows, cursor).filter(|i| at.range.contains(i)) else {
         return 0;
     };
-    let Some((left, w)) = column_span(fc, clip.left(), cursor.column) else {
+    let Some((left, w)) = column_span(fc, at.cols_left, cursor.column) else {
         return 0;
     };
-    let top = origin.y + index_to_f32(index) * fc.metrics.row_h;
+    let top = at.origin.y + index_to_f32(index) * fc.metrics.row_h;
     let rect = Rect::from_min_size(pos2(left, top), vec2(w, fc.metrics.row_h));
-    if !rect.is_finite() || !rect.is_positive() {
+    if !rect.is_finite() || !rect.is_positive() || !rect.intersects(clip) {
         return 0;
     }
     painter.rect_stroke(
@@ -622,18 +864,13 @@ fn finish_keys(ui: &egui::Ui) -> Option<Finish> {
 /// ([`commit_edit`]) reste ouverte avec son message ; acceptée, son lot est
 /// poussé dans `Action::ExecOn` (refus du registre : bandeau), suivi du
 /// déplacement du curseur (`Action::Nav`, appliqué après le lot).
-#[allow(
-    clippy::too_many_arguments,
-    reason = "contexte d'image découpé en emprunts disjoints"
-)]
 fn edit_cells(
     ui: &mut egui::Ui,
     fc: &mut FrameCtx<'_>,
     rows: &RowModel,
     edit: &mut TableEdit,
     cursor: &mut TableCursor,
-    origin: Pos2,
-    range: &Range<usize>,
+    at: &Place<'_>,
     clip: Rect,
 ) {
     let Some(state) = edit.editing.as_ref() else {
@@ -643,7 +880,7 @@ fn edit_cells(
         Some(uid) => rows.index_of(uid),
         None => Some(rows.len()),
     };
-    let span = column_span(fc, clip.left(), state.column);
+    let span = column_span(fc, at.cols_left, state.column);
     let (Some(index), Some((cell_left, cell_w))) = (index, span) else {
         // Tâche disparue ou colonne masquée : saisie abandonnée.
         close_editor(ui, edit);
@@ -659,8 +896,8 @@ fn edit_cells(
     if finish.is_none() && scrolled {
         finish = Some(Finish::Commit(Move::Stay));
     }
-    if range.contains(&index) {
-        let top = origin.y + index_to_f32(index) * fc.metrics.row_h;
+    if at.range.contains(&index) {
+        let top = at.origin.y + index_to_f32(index) * fc.metrics.row_h;
         let rect = Rect::from_min_size(pos2(cell_left, top), vec2(cell_w, fc.metrics.row_h));
         let lost = show_editor(ui, fc, edit, rect, clip);
         if finish.is_none() && lost {
@@ -797,7 +1034,7 @@ fn commit(
 mod tests {
     use planrs_core::TaskUid;
 
-    use super::{NAME_MIN_TEXT_ROOM, cell_text_color, name_indent};
+    use super::{NAME_MIN_TEXT_ROOM, cell_text_color, name_indent, scroll_to_column, width_from_drag};
     use crate::column::Column;
     use crate::rows::{Row, RowKind};
     use crate::theme::Palette;
@@ -810,6 +1047,10 @@ mod tests {
             kind,
             critical,
             bar: None,
+            percent: planrs_core::Percent::ZERO,
+            baseline: None,
+            finish_variance: None,
+            stop: None,
         }
     }
 
@@ -838,6 +1079,39 @@ mod tests {
             cell_text_color(&row(RowKind::Excluded, true), Column::Critical, &p),
             p.text_weak
         );
+    }
+
+    /// H-UI-17 horizontal (J7, lot L6) : une colonne de marge quand elle
+    /// tient, alignement à gauche d'une colonne plus large que la vue,
+    /// bornes et valeurs non finies.
+    #[test]
+    fn table_scroll_to_column_margin() {
+        let widths = [40, 220, 80, 96, 96, 110];
+        // Vue de 300 : colonnes 0-1 visibles (0..260).
+        assert_eq!(scroll_to_column(&widths, 1, 0.0, 300.0), 0.0);
+        // Colonne 2 (260..340) et sa voisine 3 (..436) : bord droit à 436.
+        assert_eq!(scroll_to_column(&widths, 2, 0.0, 300.0), 136.0);
+        // Retour à la colonne 1 (40..260) avec la colonne 0 en marge.
+        assert_eq!(scroll_to_column(&widths, 1, 136.0, 300.0), 0.0);
+        // Dernière colonne : maximum (642 − 300).
+        assert_eq!(scroll_to_column(&widths, 5, 0.0, 300.0), 342.0);
+        // Marge impossible (vue de 120) : la colonne seule.
+        assert_eq!(scroll_to_column(&widths, 2, 0.0, 120.0), 220.0);
+        // Colonne plus large que la vue : bord gauche.
+        assert_eq!(scroll_to_column(&widths, 1, 0.0, 100.0), 40.0);
+        // Colonne absente, valeurs non finies : bornées.
+        assert_eq!(scroll_to_column(&widths, 9, 1e9, 300.0), 342.0);
+        assert_eq!(scroll_to_column(&widths, 0, f32::NAN, f32::INFINITY), 0.0);
+        assert_eq!(scroll_to_column(&[], 0, 5.0, 300.0), 0.0);
+    }
+
+    #[test]
+    fn table_width_from_drag_bounded() {
+        assert_eq!(width_from_drag(120.4), Some(120));
+        assert_eq!(width_from_drag(-50.0), Some(Column::MIN_WIDTH));
+        assert_eq!(width_from_drag(1e9), Some(Column::MAX_WIDTH));
+        assert_eq!(width_from_drag(f32::NAN), None);
+        assert_eq!(width_from_drag(f32::INFINITY), None);
     }
 
     /// Mineur A/M4 : l'indentation est plafonnée, le nom reste visible au

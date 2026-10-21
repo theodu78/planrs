@@ -278,6 +278,35 @@ impl UiState {
     pub fn visible_columns(&self) -> impl Iterator<Item = ColumnState> + '_ {
         self.columns.iter().copied().filter(|state| state.visible)
     }
+
+    /// Affiche ou masque `column` (J7, lot L6) ; l'ID et le Nom restent
+    /// visibles (H-UI-12). Rend vrai si la visibilité a changé.
+    pub fn toggle_column(&mut self, column: Column) -> bool {
+        if !column.hideable() {
+            return false;
+        }
+        match self.columns.iter_mut().find(|state| state.column == column) {
+            Some(state) => {
+                state.visible = !state.visible;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Largeur de `column`, bornée à `[Column::MIN_WIDTH, Column::MAX_WIDTH]`
+    /// comme par [`UiState::normalized`] (J7, lot L6). Rend vrai si elle a
+    /// changé.
+    pub fn set_column_width(&mut self, column: Column, width: u16) -> bool {
+        let width = width.clamp(Column::MIN_WIDTH, Column::MAX_WIDTH);
+        match self.columns.iter_mut().find(|state| state.column == column) {
+            Some(state) if state.width != width => {
+                state.width = width;
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 /// Lecteur champ par champ d'un objet JSON d'état : chaque champ illisible

@@ -114,8 +114,12 @@ pub struct ViewTransient {
     /// Hauteur du contenu défilé à l'image précédente (borne du
     /// défilement imposé, connue d'egui avec une image de retard).
     pub last_content_h: f32,
-    /// Défilement horizontal de la table, en points (J7, lot L6).
+    /// Défilement horizontal de la table, en points (J7, lot L6), borné à
+    /// chaque image par la vue principale.
     pub table_scroll_x: f32,
+    /// Largeur visible de la table à l'image précédente : borne du
+    /// défilement horizontal et suivi du curseur (H-UI-17, J7 lot L6).
+    pub last_table_width: f32,
     /// Glisser d'une barre en cours (J7, lot L8).
     pub drag: Option<BarDrag>,
     /// Fenêtre ouverte (J7, lots L8, L9, L12, L13).

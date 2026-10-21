@@ -380,6 +380,58 @@ menu-gantt-tracking = Tracking Gantt
 # --- J7 L8 ---
 
 # --- J7 L9 ---
+task-info-menu = Task Information…
+task-info-title = Task Information — { $id } { $name }
+task-info-tab-general = General
+task-info-tab-predecessors = Predecessors
+task-info-tab-resources = Resources
+task-info-tab-advanced = Advanced
+task-info-tab-notes = Notes
+task-info-name = Name
+task-info-duration = Duration
+task-info-percent = % complete
+task-info-start = Start
+task-info-finish = Finish
+task-info-active = Active
+task-info-pred-id = ID
+task-info-pred-type = Type
+task-info-pred-lag = Lag
+task-info-row-field = { $column }, row { $count }
+task-info-add-predecessor = Add predecessor
+task-info-add-resource = Assign resource
+task-info-remove-row = Remove
+task-info-resource-name = Resource
+task-info-resource-units = Units
+task-info-no-resource = No resources in the project.
+task-info-constraint = Constraint type
+task-info-constraint-date = Constraint date
+task-info-deadline = Deadline
+task-info-task-type = Task type
+task-info-effort-driven = Effort driven
+task-info-notes = Task notes
+task-info-link-fs = Finish-to-Start (FS)
+task-info-link-ss = Start-to-Start (SS)
+task-info-link-ff = Finish-to-Finish (FF)
+task-info-link-sf = Start-to-Finish (SF)
+task-info-constraint-asap = As Soon As Possible
+task-info-constraint-alap = As Late As Possible
+task-info-constraint-mso = Must Start On
+task-info-constraint-mfo = Must Finish On
+task-info-constraint-snet = Start No Earlier Than
+task-info-constraint-snlt = Start No Later Than
+task-info-constraint-fnet = Finish No Earlier Than
+task-info-constraint-fnlt = Finish No Later Than
+task-info-type-fixed-units = Fixed Units
+task-info-type-fixed-duration = Fixed Duration
+task-info-type-fixed-work = Fixed Work
+task-info-ok = OK
+task-info-cancel = Cancel
+task-info-stale = The project changed since this window opened: values were reloaded, nothing was applied.
+task-info-date-required = A date is required for this constraint type
+task-info-bad-id = Unreadable ID: { $id }
+task-info-duplicate-predecessor = Duplicate predecessor: { $id }
+task-info-duplicate-resource = Resource assigned twice: { $name }
+task-info-unknown-resource = Unknown resource
 
 # --- J7 L10 ---
 

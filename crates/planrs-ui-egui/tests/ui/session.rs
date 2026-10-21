@@ -239,6 +239,8 @@ fn check_keymap_entry(i: usize) {
             ));
         }
         Binding::Ui(UiBinding::Quit) => crate::files::check_quit_shortcut(i),
+        // « Informations sur la tâche » (J7 lot L9) : `task_info.rs`.
+        Binding::Ui(UiBinding::TaskInformation) => crate::task_info::check_keymap_entry(i),
         // Navigation, échelle de temps, zoom, `task.move` (J7 lot L1) :
         // vérifiées par `nav.rs`.
         binding if crate::nav::is_nav_entry(binding) => crate::nav::check_keymap_entry(i),
@@ -319,6 +321,7 @@ keymap_entry_tests! {
     ui_keymap_each_shortcut_dispatches_48 => 48,
     ui_keymap_each_shortcut_dispatches_49 => 49,
     ui_keymap_each_shortcut_dispatches_50 => 50,
+    ui_keymap_each_shortcut_dispatches_51 => 51,
 }
 
 /// Lot refusé : UID absent.

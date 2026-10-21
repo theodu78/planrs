@@ -31,8 +31,10 @@ use planrs_automation::{
 use planrs_core::{Day, Moment, PRODUCT_NAME, Project, Schedule, Severity, TaskUid, TimeOfDay, Weekday};
 use planrs_mspdi::ImportDiagnostic;
 
-use crate::action::{Action, ConfirmChoice, UiOp};
+use crate::action::{Action, ConfirmChoice, DialogKind, UiOp};
 use crate::column::Column;
+use crate::dialog::task_info::{self, FieldError, TaskInfoState};
+use crate::dialog::{DialogBody, DialogState};
 use crate::document::{self, LoadedDocument, OpenError};
 use crate::edit::TableEdit;
 use crate::geom;
@@ -177,6 +179,9 @@ pub enum EditOrigin {
     /// Un agent (canal de contrôle, J7) : le refus est rendu à l'appelant,
     /// qui le relaie ; rien ne s'affiche.
     Agent,
+    /// « OK » d'une fenêtre (J7, lot L9) : le refus s'affiche dans la
+    /// fenêtre, pas dans le bandeau.
+    Dialog,
 }
 
 /// Observateur du document ouvert (application desktop : rendez-vous du
@@ -1073,6 +1078,7 @@ impl App {
     }
 
     /// Réducteur : applique une action.
+    #[allow(clippy::too_many_lines, reason = "réducteur : un bras court par action")]
     fn apply(&mut self, action: Action, ctx: &egui::Context) {
         match action {
             Action::OpenDemo => self.request(Pending::OpenDemo, ctx),
@@ -1159,12 +1165,17 @@ impl App {
             Action::TimescaleToStart => self.scroll_gantt_to_project(false),
             Action::TimescaleToEnd => self.scroll_gantt_to_project(true),
             Action::ZoomBy(steps) => self.zoom_step(steps, self.gantt_center()),
+            Action::ShowDialog(DialogKind::TaskInformation(uid)) => self.open_task_info(uid),
+            Action::ShowTaskInformation => {
+                if let Some(uid) = self.selection {
+                    self.open_task_info(uid);
+                }
+            }
+            Action::CloseDialog => self.close_dialog(),
             // Contrat J7 (lot L0) : actions câblées par leur lot.
             Action::SetGanttStyle(style) => self.state.gantt_style = style,
             other @ (Action::SetView(_)
             | Action::ShowDialog(_)
-            | Action::ShowTaskInformation
-            | Action::CloseDialog
             | Action::OpenRecent(_)
             | Action::Recover(_)) => log::debug!("action J7 pas encore câblée : {other:?}"),
             Action::ToggleColumn(column) => self.toggle_column(column),
@@ -1418,6 +1429,124 @@ impl App {
         }
     }
 
+    /// Ouvre « Informations sur la tâche » de `uid` (H-UI-19) : une fenêtre
+    /// à la fois (la précédente est remplacée), brouillon relu sur la
+    /// session ; une saisie de cellule ouverte est abandonnée. Sans document
+    /// ou tâche absente : rien.
+    fn open_task_info(&mut self, uid: TaskUid) {
+        let lang = self.text_language();
+        let Some(document) = &self.document else {
+            return;
+        };
+        let Some(state) = TaskInfoState::open(&document.session, uid, document.cache_key(), lang) else {
+            return;
+        };
+        self.view.edit.editing = None;
+        self.view.dialog = Some(DialogState {
+            kind: DialogKind::TaskInformation(uid),
+            body: DialogBody::TaskInfo(Box::new(state)),
+        });
+    }
+
+    /// Ferme la fenêtre ouverte ; la table reprend le focus clavier.
+    fn close_dialog(&mut self) {
+        if self.view.dialog.take().is_some() && self.document.is_some() {
+            self.view.focus_table_pending = true;
+        }
+    }
+
+    /// Dessine la fenêtre ouverte, applique sa réponse, puis retire de
+    /// l'image les touches qu'elle n'a pas prises.
+    fn show_dialog(&mut self, ctx: &egui::Context) {
+        let outcome = match self.view.dialog.as_mut().map(|dialog| &mut dialog.body) {
+            Some(DialogBody::TaskInfo(state)) => task_info::show(ctx, &self.texts, state),
+            Some(DialogBody::Empty) | None => task_info::Outcome::Cancel,
+        };
+        match outcome {
+            task_info::Outcome::Open => {}
+            task_info::Outcome::Cancel => self.close_dialog(),
+            task_info::Outcome::Ok => self.commit_task_info(),
+        }
+        ctx.input_mut(|input| {
+            input.events.retain(|event| {
+                !matches!(
+                    event,
+                    egui::Event::Key { .. }
+                        | egui::Event::Text(_)
+                        | egui::Event::Paste(_)
+                        | egui::Event::Copy
+                        | egui::Event::Cut
+                        | egui::Event::Ime(_)
+                )
+            });
+        });
+    }
+
+    /// « OK » d'« Informations sur la tâche » : document changé depuis
+    /// l'ouverture ⇒ brouillon relu et avertissement, rien appliqué ;
+    /// champs illisibles ⇒ refus affichés dans leur onglet ; sinon un seul
+    /// lot, dont le refus par le registre s'affiche dans la fenêtre ; rien
+    /// de changé ⇒ fenêtre fermée sans lot.
+    fn commit_task_info(&mut self) {
+        let lang = self.text_language();
+        let (
+            Some(document),
+            Some(DialogState {
+                body: DialogBody::TaskInfo(state),
+                ..
+            }),
+        ) = (&self.document, &mut self.view.dialog)
+        else {
+            self.close_dialog();
+            return;
+        };
+        let key = document.cache_key();
+        if key != state.draft.key {
+            match TaskInfoState::open(&document.session, state.draft.uid, key, lang) {
+                Some(mut fresh) => {
+                    fresh.stale = true;
+                    fresh.tab = state.tab;
+                    **state = fresh;
+                }
+                None => self.close_dialog(),
+            }
+            return;
+        }
+        let batch = match state.draft.to_batch(&document.session, lang) {
+            Ok(Some(batch)) => batch,
+            Ok(None) => {
+                self.close_dialog();
+                return;
+            }
+            Err(errors) => {
+                show_errors(state, errors);
+                return;
+            }
+        };
+        match self.execute(&batch, EditOrigin::Dialog) {
+            Ok(_) => self.close_dialog(),
+            Err(error) => {
+                let (tab, field) = task_info::locate(&batch, &error);
+                let message = task_info::command_message(&self.texts, &error, lang);
+                if let Some(DialogState {
+                    body: DialogBody::TaskInfo(state),
+                    ..
+                }) = &mut self.view.dialog
+                {
+                    show_errors(
+                        state,
+                        vec![FieldError {
+                            tab,
+                            field,
+                            row: None,
+                            message,
+                        }],
+                    );
+                }
+            }
+        }
+    }
+
     /// Contextes actifs des raccourcis : document ouvert ; table focalisée
     /// (focus d'egui et volet), sans saisie, menu, fenêtre ni confirmation
     /// de suppression ouverts (ADR-0015 D2).
@@ -1456,8 +1585,14 @@ impl App {
         }
         let mut actions = std::mem::take(&mut self.actions);
         // Raccourcis avant le dessin : la touche consommée n'atteint aucun
-        // widget.
-        crate::keymap::dispatch(&ctx, self.key_state(&ctx), &mut actions);
+        // widget. Fenêtre ouverte (J7, lot L9) : aucun raccourci, la fenêtre
+        // est dessinée d'abord et les touches qu'elle n'a pas prises sont
+        // retirées de l'image (rien n'atteint la table ni le Gantt).
+        if self.view.dialog.is_some() {
+            self.show_dialog(&ctx);
+        } else {
+            crate::keymap::dispatch(&ctx, self.key_state(&ctx), &mut actions);
+        }
         let mut stats = FrameStats::default();
         #[cfg(not(target_arch = "wasm32"))]
         let approval = self.approval_banner();
@@ -1547,6 +1682,17 @@ impl App {
             self.sent_title = title;
         }
     }
+}
+
+/// Pose les refus d'une tentative ; l'onglet affiché passe au premier
+/// onglet en refus s'il n'en a lui-même aucun.
+fn show_errors(state: &mut TaskInfoState, errors: Vec<FieldError>) {
+    if !errors.iter().any(|e| e.tab == state.tab)
+        && let Some(first) = errors.iter().map(|e| e.tab).min()
+    {
+        state.tab = first;
+    }
+    state.errors = errors;
 }
 
 /// Titre de la fenêtre pour `document` (voir [`App::window_title`]). Le web

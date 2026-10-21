@@ -208,6 +208,10 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
         Shortcut::new(Modifiers::COMMAND, Key::F2),
         Binding::Command("link.add"),
     ),
+    // J7 L9 : « Informations sur la tâche » de la tâche active (S61,
+    // H-UI-19), après Ctrl+Maj+F2 et Ctrl+F2 ; F2 seul reste la saisie de
+    // la cellule (lu par la table, après les raccourcis).
+    doc_ui(SHIFT, Key::F2, UiBinding::TaskInformation),
     // --- J7 L1 : navigation (H-UI-13 à H-UI-16), échelle de temps
     // (H-UI-18), déplacement des lignes (H-UI-29). Maj et Alt en trop étant
     // ignorés par egui, chaque touche liste ses combinaisons de la plus

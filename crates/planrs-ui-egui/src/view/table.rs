@@ -19,7 +19,7 @@ use planrs_core::TaskUid;
 
 use super::main_view::HBarSpec;
 use super::{FrameCtx, Pane};
-use crate::action::Action;
+use crate::action::{Action, DialogKind};
 use crate::column::{CellAlign, Column};
 use crate::edit::{EditState, TableEdit, commit_edit, editable, initial_text, text_language};
 use crate::geom::index_to_f32;
@@ -715,9 +715,17 @@ fn row_clicked(
     {
         cursor.column = column;
     }
-    // Double-clic (ou triple : deux clics suivant de près un premier).
+    // Double-clic (ou triple : deux clics suivant de près un premier) :
+    // sur l'ID, « Informations sur la tâche » (H-UI-19, J7 lot L9) ;
+    // ailleurs, la saisie de la cellule.
     if (response.double_clicked() || response.triple_clicked()) && edit.editing.is_none() {
-        open_editor(fc, rows, edit, cursor.column, uid, i);
+        match uid {
+            Some(uid) if cursor.column == Column::Id => {
+                fc.actions
+                    .push(Action::ShowDialog(DialogKind::TaskInformation(uid)));
+            }
+            _ => open_editor(fc, rows, edit, cursor.column, uid, i),
+        }
     }
 }
 

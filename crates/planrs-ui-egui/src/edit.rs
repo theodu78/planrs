@@ -14,11 +14,11 @@
 use std::collections::BTreeMap;
 
 use planrs_automation::command::{
-    DurationJson, LagJson, LinkKey, LinkSpec, LinkTypeJson, TaskAdd, TaskUpdate,
+    DurationJson, LagJson, LinkKey, LinkSpec, LinkTypeJson, PercentJson, ProgressUpdate, TaskAdd, TaskUpdate,
 };
 use planrs_automation::text::{
     self, DateRole, PredecessorRef, TextContext, TextError, format_date, format_duration,
-    format_predecessors, parse_date, parse_duration, parse_predecessors,
+    format_predecessors, parse_date, parse_duration, parse_percent, parse_predecessors,
 };
 use planrs_automation::{Batch, Command, CommandError, Patch, Placement, Session, TaskRef};
 use planrs_core::{Duration, Lag, LinkType, Moment, Project, Task, TaskUid};
@@ -138,13 +138,48 @@ impl TableEdit {
     }
 }
 
-/// Colonnes éditables : Nom, Durée, Début, Fin, Prédécesseurs.
+/// Colonnes éditables : Nom, Durée, Début, Fin, Prédécesseurs, % achevé
+/// (J7, lot L6).
 #[must_use]
 pub const fn editable(column: Column) -> bool {
     matches!(
         column,
-        Column::Name | Column::Duration | Column::Start | Column::Finish | Column::Predecessors
+        Column::Name
+            | Column::Duration
+            | Column::Start
+            | Column::Finish
+            | Column::Predecessors
+            | Column::PercentComplete
     )
+}
+
+/// `progress.update { percent_complete: { text } }` d'un % saisi (J7, lot
+/// L6) : lu par `parse_percent` pour signaler l'erreur sous la cellule,
+/// envoyé en texte avec `%` (que le registre exige ; « 50 » se lit
+/// « 50% »). Une récapitulative ou une tâche exclue est refusée par le
+/// registre (bandeau).
+fn percent_update(uid: TaskUid, buffer: &str, ctx: &TextContext) -> Result<Command, EditError> {
+    parse_percent(buffer, ctx)?;
+    let trimmed = buffer.trim();
+    let text = if trimmed.ends_with('%') {
+        trimmed.to_owned()
+    } else {
+        format!("{trimmed}%")
+    };
+    Ok(Command::ProgressUpdate(ProgressUpdate {
+        task: TaskRef::Uid(uid),
+        percent_complete: Some(PercentJson {
+            value: None,
+            text: Some(text),
+        }),
+        actual_start: None,
+        actual_finish: None,
+        actual_duration: None,
+        remaining_duration: None,
+        percent_work_complete: None,
+        actual_work: None,
+        physical_percent_complete: None,
+    }))
 }
 
 /// Langue des textes du moteur correspondant à la langue de l'interface.
@@ -282,6 +317,9 @@ fn replace_links(task: &Task, wanted: &[Resolved], project: &Project, ctx: &Text
 ///   `task.update start|finish` (R-158 appliquée par le registre) ;
 /// - Prédécesseurs → `parse_predecessors` (R-142), ID → UID (R-150), puis
 ///   `link.remove` des anciens absents, `link.update`, `link.add` ;
+/// - % achevé → `parse_percent`, puis `progress.update { percent_complete:
+///   { text } }` (J7, lot L6 ; refusé sur la ligne vide : une tâche se crée
+///   par les autres colonnes) ;
 /// - ligne vide et autre colonne que Nom : `task.add` (nom vide) portant la
 ///   valeur, ou suivi des `link.add` vers l'étiquette `$new`.
 ///
@@ -323,10 +361,13 @@ pub fn commit_edit(state: &EditState, session: &Session, lang: text::Language) -
                     batch.ops = ops;
                     return Ok(batch);
                 }
+                Column::PercentComplete => {
+                    batch.ops = vec![percent_update(uid, buffer, &ctx)?];
+                    return Ok(batch);
+                }
                 Column::Id
                 | Column::TotalSlack
                 | Column::Critical
-                | Column::PercentComplete
                 | Column::ResourceNames
                 | Column::BaselineStart
                 | Column::BaselineFinish

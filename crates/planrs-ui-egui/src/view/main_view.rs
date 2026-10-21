@@ -84,6 +84,16 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
     let scroll_x = clamp_scroll(view.gantt_scroll_x, max_scroll);
     view.gantt_scroll_x = scroll_x;
     let axis = TimeAxis::new(doc.range, fc.state.zoom, layout.gantt_clip.left() - scroll_x);
+    // Défilement horizontal de la table (J7, lot L6) : borné à chaque image
+    // (une colonne masquée ou rétrécie réduit le maximum).
+    let table_w = layout.table_clip.width();
+    view.last_table_width = table_w;
+    let columns_w: f32 = fc.state.visible_columns().map(|c| f32::from(c.width)).sum();
+    let table_max = max_scroll_x(columns_w, table_w);
+    let table_x = clamp_scroll(view.table_scroll_x, table_max);
+    view.table_scroll_x = table_x;
+    let table_zone = layout.table_clip.union(layout.table_header);
+    let table_hovered = ui.rect_contains_pointer(table_zone);
 
     let gantt_zone = layout.gantt_clip.union(layout.gantt_header);
     let hovered = ui.rect_contains_pointer(gantt_zone);
@@ -93,7 +103,7 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
         zoom_delta: i.zoom_delta(),
     });
 
-    table::paint_header(ui, fc, layout.table_header);
+    table::paint_header(ui, fc, layout.table_header, table_x);
     timescale::paint_header(ui, fc, &axis, layout.gantt_header);
     paint_corners(ui, fc, &layout, avail);
 
@@ -118,9 +128,29 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
         }
         zoom_from_wheel(fc, view, &layout, input);
     }
+    // Maj + molette au-dessus de la table : défilement horizontal de la
+    // table (H-UI-17, lot L6).
+    let mut wheel_table = 0.0;
+    if table_hovered && !input.hovered {
+        let wheel_x = ui.input(|i| i.smooth_scroll_delta.x);
+        if wheel_x.is_finite() && wheel_x.abs() > f32::EPSILON {
+            wheel_table -= wheel_x;
+            ui.input_mut(|i| i.smooth_scroll_delta.x = 0.0);
+        }
+    }
 
     paint_splitter(ui, fc, &layout, avail);
-    delta_x += paint_hbar(ui, fc, &layout, scroll_x, content_w, max_scroll);
+    delta_x += paint_hbar(ui, fc, &layout, scroll_x, content_w);
+    let under_table = Rect::from_min_max(
+        pos2(layout.table_clip.left(), layout.gantt_hbar.top()),
+        pos2(layout.table_clip.right(), layout.gantt_hbar.bottom()),
+    );
+    wheel_table += table::paint_hbar(ui, fc, under_table, table_x, table_w);
+    let table_target = clamp_scroll(table_x + wheel_table, table_max);
+    let table_step = table_target - table_x;
+    if table_step.abs() > f32::EPSILON {
+        fc.actions.push(Action::ScrollTableX(table_step));
+    }
 
     let target = clamp_scroll(scroll_x + delta_x, max_scroll);
     let dx = target - scroll_x;
@@ -221,6 +251,7 @@ fn paint_rows(
     body_ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
     let table_clip = layout.table_clip;
     let gantt_clip = layout.gantt_clip;
+    let table_scroll_x = view.table_scroll_x;
     let edit = &mut view.edit;
     let cursor = &mut view.cursor;
     let out = area.show_viewport(&mut body_ui, |ui, viewport| {
@@ -235,7 +266,16 @@ fn paint_rows(
             Sense::click_and_drag(),
         );
         let first_action = fc.actions.len();
-        table::paint_body(ui, fc, edit, cursor, origin, range.clone(), table_clip);
+        table::paint_body(
+            ui,
+            fc,
+            edit,
+            cursor,
+            origin,
+            range.clone(),
+            table_clip,
+            table_scroll_x,
+        );
         gantt::paint_body(ui, fc, axis, origin, range, gantt_clip);
 
         let mut dx = 0.0;
@@ -450,36 +490,65 @@ fn paint_splitter(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, layout: &MainLayout,
     }
 }
 
-/// Barre horizontale minimale du Gantt (piste et curseur proportionnel),
-/// glissable ; un clic sur la piste avance d'une page. Rend le défilement
-/// demandé, en pixels de contenu.
+/// Barre horizontale du Gantt : rend le défilement demandé, en pixels de
+/// contenu.
 fn paint_hbar(
     ui: &mut egui::Ui,
     fc: &mut FrameCtx<'_>,
     layout: &MainLayout,
     scroll_x: f32,
     content_w: f32,
-    max_scroll: f32,
 ) -> f32 {
+    hbar(
+        ui,
+        fc,
+        layout.gantt_hbar,
+        &HBarSpec {
+            id: Id::unique("planrs.gantt-hbar"),
+            label: TextId::GanttScrollLabel,
+            scroll: scroll_x,
+            content_w,
+            visible_w: layout.gantt_clip.width(),
+        },
+    )
+}
+
+/// Paramètres d'une barre de défilement horizontale ([`hbar`]).
+#[derive(Clone, Copy)]
+pub(crate) struct HBarSpec {
+    /// Identifiant de la zone interactive.
+    pub id: Id,
+    /// Nom accessible.
+    pub label: TextId,
+    /// Défilement courant, en points de contenu.
+    pub scroll: f32,
+    /// Largeur du contenu.
+    pub content_w: f32,
+    /// Largeur visible.
+    pub visible_w: f32,
+}
+
+/// Barre horizontale minimale (piste et curseur proportionnel), glissable ;
+/// un clic sur la piste avance d'une page. Rend le défilement demandé, en
+/// points de contenu (Gantt, et table au lot L6 de J7).
+pub(crate) fn hbar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, track: Rect, spec: &HBarSpec) -> f32 {
     let palette = fc.palette;
-    let painter = ui.painter();
-    // Bande sous la table : même fond que la piste.
-    let under_table = Rect::from_min_max(
-        pos2(layout.table_clip.left(), layout.gantt_hbar.top()),
-        pos2(layout.table_clip.right(), layout.gantt_hbar.bottom()),
-    );
-    if under_table.is_finite() && under_table.is_positive() {
-        painter.rect_filled(under_table, 0.0, palette.header_bg);
-    }
-    let track = layout.gantt_hbar;
     if !track.is_finite() || !track.is_positive() {
         return 0.0;
     }
+    let painter = ui.painter();
     painter.rect_filled(track, 0.0, palette.header_bg);
     painter.hline(track.x_range(), track.top() + 0.5, Stroke::new(1.0, palette.grid));
-    fc.stats.shapes = fc.stats.shapes.saturating_add(3);
+    fc.stats.shapes = fc.stats.shapes.saturating_add(2);
 
-    let visible_w = layout.gantt_clip.width();
+    let HBarSpec {
+        id,
+        label,
+        scroll: scroll_x,
+        content_w,
+        visible_w,
+    } = *spec;
+    let max_scroll = max_scroll_x(content_w, visible_w);
     let ratio = if content_w > 0.0 && content_w.is_finite() {
         (visible_w / content_w).clamp(0.0, 1.0)
     } else {
@@ -500,10 +569,8 @@ fn paint_hbar(
     );
 
     let texts = fc.texts;
-    let response = ui.interact(track, Id::unique("planrs.gantt-hbar"), Sense::click_and_drag());
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::Role::ScrollBar, true, texts.get(TextId::GanttScrollLabel))
-    });
+    let response = ui.interact(track, id, Sense::click_and_drag());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ScrollBar, true, texts.get(label)));
     let active = response.hovered() || response.dragged();
     if thumb.is_finite() && thumb.is_positive() && max_scroll > 0.0 {
         let color = if active {

@@ -1149,11 +1149,18 @@ impl App {
             | Action::ShowDialog(_)
             | Action::ShowTaskInformation
             | Action::CloseDialog
-            | Action::ToggleColumn(_)
-            | Action::SetColumnWidth { .. }
-            | Action::ScrollTableX(_)
             | Action::OpenRecent(_)
             | Action::Recover(_)) => log::debug!("action J7 pas encore câblée : {other:?}"),
+            Action::ToggleColumn(column) => self.toggle_column(column),
+            Action::SetColumnWidth { column, width } => {
+                self.state.set_column_width(column, width);
+            }
+            Action::ScrollTableX(delta) => {
+                if delta.is_finite() {
+                    self.view.table_scroll_x += delta;
+                }
+                self.clamp_table_scroll();
+            }
             Action::Approve(id) => self.approve_relayed(id),
             Action::Reject(id) => self.reject_relayed(id),
             Action::Ui(op) => self.apply_ui(op, ctx),
@@ -1338,6 +1345,49 @@ impl App {
             self.view.pending_scroll_y = Some(y);
             self.view.last_scroll_y = y;
         }
+        self.follow_cursor_x();
+    }
+
+    /// Affiche ou masque une colonne (J7, lot L6) ; masquer la colonne du
+    /// curseur le ramène sur le Nom (toujours visible).
+    fn toggle_column(&mut self, column: Column) {
+        if !self.state.toggle_column(column) {
+            return;
+        }
+        let visible = self.state.column(column).is_some_and(|state| state.visible);
+        if !visible && self.view.cursor.column == column {
+            self.view.cursor.column = Column::Name;
+        }
+        self.clamp_table_scroll();
+    }
+
+    /// Borne le défilement horizontal de la table à `[0, Σ largeurs −
+    /// largeur visible]` (largeur de l'image précédente).
+    fn clamp_table_scroll(&mut self) {
+        let total: f32 = self.state.visible_columns().map(|c| f32::from(c.width)).sum();
+        let max = total - self.view.last_table_width;
+        let max = if max.is_finite() { max.max(0.0) } else { 0.0 };
+        let x = self.view.table_scroll_x;
+        self.view.table_scroll_x = if x.is_finite() { x.clamp(0.0, max) } else { 0.0 };
+    }
+
+    /// Le défilement horizontal suit la colonne du curseur, une colonne de
+    /// marge de chaque côté quand elle tient (H-UI-17, J7 lot L6).
+    fn follow_cursor_x(&mut self) {
+        if self.view.last_table_width.is_nan() || self.view.last_table_width <= 0.0 {
+            // Aucune image encore : largeur visible inconnue.
+            return;
+        }
+        let widths: Vec<u16> = self.state.visible_columns().map(|c| c.width).collect();
+        let Some(col) = self
+            .state
+            .visible_columns()
+            .position(|c| c.column == self.view.cursor.column)
+        else {
+            return;
+        };
+        self.view.table_scroll_x =
+            view::table::scroll_to_column(&widths, col, self.view.table_scroll_x, self.view.last_table_width);
     }
 
     /// Pas de zoom (Ctrl/Cmd + molette) ancré sous le pointeur, `anchor_x`

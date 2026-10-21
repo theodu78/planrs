@@ -1,19 +1,21 @@
-//! Formateurs d'affichage purs (durée, prédécesseurs, date, marge), sans egui
-//! ni fluent.
+//! Formateurs d'affichage purs (durée, prédécesseurs, date, marge, %), sans
+//! egui ni fluent.
 //!
 //! Les libellés sont résolus une fois par langue depuis les `.ftl`
 //! (`Texts::format_labels`) : les formateurs ne voient que des chaînes, ce qui
-//! les rend testables sans fluent. Les nombres sont écrits en arithmétique
-//! entière à partir du point fixe du cœur (jamais de flottant). Le format
-//! MS Project d'une durée ou d'un prédécesseur n'existe pas encore dans le
-//! cœur : API à migrer en J4 (`docs/ui-needs.md`), hypothèses H-UI.
+//! les rend testables sans fluent. Durées, décalages, prédécesseurs, % et
+//! noms des ressources sont écrits par `planrs_automation::text` (besoins N1,
+//! N2, N11 clos au lot L6 de J7, `docs/ui-needs.md`) à partir de ces
+//! libellés ([`DisplayLabels`]) ; restent ici les dates et la marge, et la
+//! traduction des mots. Hypothèses H-UI.
 
 use std::fmt::Write as _;
 
 use chrono::Datelike as _;
+use planrs_automation::text::{self, DisplayLabels};
 use planrs_core::{
-    ConversionFactors, Decimal, Duration, DurationUnit, Lag, LagValue, Link, LinkType, Minutes, Moment,
-    Project, TimeBasis, Weekday,
+    ConversionFactors, Duration, DurationUnit, Lag, Link, LinkType, Minutes, Moment, Percent, Project,
+    TimeBasis, Weekday,
 };
 
 /// Libellé d'une unité au singulier et au pluriel (« jour » / « jours »).
@@ -122,102 +124,63 @@ pub struct FormatLabels {
     pub quarter_prefix: String,
     /// Préfixe d'une semaine numérotée (clé `tier-week` : FR `S` ; EN `W`).
     pub week_prefix: String,
+    /// Suffixe d'un pourcentage (clé `fmt-percent-suffix` : FR « \u{a0}% » ;
+    /// EN « % » ; J7 lot L6).
+    pub percent_suffix: String,
 }
 
 /// Suffixe d'une durée estimée (« 1 jour? »), identique en français et en
 /// anglais dans MS Project (hypothèse H-UI : symbole, pas une chaîne
-/// traduite).
-pub const ESTIMATED_SUFFIX: char = '?';
-
+/// traduite). Défini par `planrs_automation::text` (N1).
+pub use planrs_automation::text::ESTIMATED_SUFFIX;
 /// Règle de pluriel des unités, lue dans la clé `.ftl` `fmt-plural-rule`
-/// (`Texts::format_labels`).
-///
-/// Hypothèse H-UI : en français, singulier si |valeur| < 2 (« 0 jour »,
-/// « 1,5 jour », « -1 jour ») ; en anglais, singulier si |valeur| = 1
-/// exactement (« 1 day », « 0 days », « 1.5 days »).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum PluralRule {
-    /// Singulier si |v| < 2 (clé `below-two`, français).
-    BelowTwo,
-    /// Singulier si |v| = 1 (clé `exactly-one`, anglais ; repli).
-    #[default]
-    ExactlyOne,
-}
+/// (`Texts::format_labels`) ; définie par `planrs_automation::text` (N1).
+pub use planrs_automation::text::PluralRule;
+/// Écriture d'un décimal du cœur en arithmétique entière (N1).
+pub use planrs_automation::text::write_decimal;
 
-impl PluralRule {
-    /// Règle désignée par une valeur de `fmt-plural-rule` (`below-two`,
-    /// `exactly-one`) ; `None` pour une valeur inconnue.
-    #[must_use]
-    pub fn from_key(key: &str) -> Option<Self> {
-        match key.trim() {
-            "below-two" => Some(Self::BelowTwo),
-            "exactly-one" => Some(Self::ExactlyOne),
-            _ => None,
+/// Les libellés d'une langue alimentent les formateurs d'affichage de
+/// `planrs_automation::text` (N1, N2, N11 : J7 lot L6) : l'interface ne
+/// garde que la traduction des mots.
+impl DisplayLabels for FormatLabels {
+    fn decimal_sep(&self) -> char {
+        self.decimal_sep
+    }
+
+    fn list_sep(&self) -> &str {
+        &self.list_sep
+    }
+
+    fn plural(&self) -> PluralRule {
+        self.plural
+    }
+
+    fn unit_word(&self, unit: DurationUnit, basis: TimeBasis, singular: bool) -> &str {
+        let label = self.units.get(unit, basis);
+        if singular { &label.one } else { &label.other }
+    }
+
+    fn link_code(&self, kind: LinkType) -> &str {
+        match kind {
+            LinkType::FinishToStart => &self.link_fs,
+            LinkType::StartToStart => &self.link_ss,
+            LinkType::FinishToFinish => &self.link_ff,
+            LinkType::StartToFinish => &self.link_sf,
         }
     }
 
-    /// Vrai si la valeur prend la forme singulière.
-    #[must_use]
-    pub fn is_one(self, d: Decimal) -> bool {
-        let d = d.normalized();
-        let abs = d.mantissa().unsigned_abs();
-        match self {
-            Self::ExactlyOne => d.scale() == 0 && abs == 1,
-            Self::BelowTwo => 10_u64
-                .checked_pow(u32::from(d.scale()))
-                .and_then(|den| den.checked_mul(2))
-                .is_some_and(|two| abs < two),
-        }
+    fn unknown(&self) -> &str {
+        &self.unknown
     }
-}
 
-/// Écrit un décimal du cœur avec le séparateur `sep`, en arithmétique
-/// entière (« -2,5 », « 31 ») ; zéros finaux retirés.
-pub fn write_decimal(out: &mut String, d: Decimal, sep: char) {
-    let d = d.normalized();
-    let abs = d.mantissa().unsigned_abs();
-    if d.mantissa() < 0 {
-        out.push('-');
-    }
-    let Some(den) = 10_u64.checked_pow(u32::from(d.scale())) else {
-        // Échelle bornée à 6 par le cœur : branche inatteignable en pratique.
-        let _ = write!(out, "{abs}");
-        return;
-    };
-    let int_part = abs.checked_div(den).unwrap_or(abs);
-    let frac_part = abs.checked_rem(den).unwrap_or(0);
-    let _ = write!(out, "{int_part}");
-    if d.scale() > 0 {
-        let width = usize::from(d.scale());
-        out.push(sep);
-        let _ = write!(out, "{frac_part:0width$}");
-    }
-}
-
-/// Écrit une valeur suivie de son unité (« 2,5 jours ») ; `l.unknown` si la
-/// conversion échoue.
-fn write_value_unit(
-    out: &mut String,
-    value: Decimal,
-    unit: DurationUnit,
-    basis: TimeBasis,
-    l: &FormatLabels,
-) {
-    write_decimal(out, value, l.decimal_sep);
-    let label = l.units.get(unit, basis);
-    let word = if l.plural.is_one(value) {
-        &label.one
-    } else {
-        &label.other
-    };
-    if !word.is_empty() {
-        out.push(' ');
-        out.push_str(word);
+    fn percent_suffix(&self) -> &str {
+        &self.percent_suffix
     }
 }
 
 /// Écrit des minutes dans une unité et une base (« 31 jours »), avec le
 /// suffixe d'estimation si demandé ; `l.unknown` si la conversion échoue.
+/// Délégué à `planrs_automation::text` (N1).
 pub fn write_duration(
     out: &mut String,
     minutes: Minutes,
@@ -227,28 +190,19 @@ pub fn write_duration(
     f: &ConversionFactors,
     l: &FormatLabels,
 ) {
-    match f.to_unit_value(minutes, unit, basis) {
-        Ok(value) => {
-            write_value_unit(out, value, unit, basis, l);
-            if estimated {
-                out.push(ESTIMATED_SUFFIX);
-            }
-        }
-        Err(_) => out.push_str(&l.unknown),
-    }
+    text::write_display_duration(out, minutes, unit, basis, estimated, f, l);
 }
 
 /// Durée d'une tâche dans son unité (« 5 jours », « 2,5 jours », « 1 jour? »,
-/// « 5 jours écoulés »).
+/// « 5 jours écoulés ») ; délégué à `planrs_automation::text` (N1).
 #[must_use]
 pub fn format_duration(d: &Duration, f: &ConversionFactors, l: &FormatLabels) -> String {
-    let mut out = String::new();
-    write_duration(&mut out, d.minutes(), d.unit(), d.basis(), d.is_estimated(), f, l);
-    out
+    text::display_duration(d, f, l)
 }
 
 /// Minutes exprimées dans une unité et une base données (« 31 jours ») :
-/// durée d'une récapitulative (`TaskSchedule::duration`), marge.
+/// durée d'une récapitulative (`TaskSchedule::duration`), marge ; délégué à
+/// `planrs_automation::text` (N1).
 #[must_use]
 pub fn format_minutes_as(
     m: Minutes,
@@ -257,65 +211,19 @@ pub fn format_minutes_as(
     f: &ConversionFactors,
     l: &FormatLabels,
 ) -> String {
-    let mut out = String::new();
-    write_duration(&mut out, m, unit, basis, false, f, l);
-    out
+    text::display_minutes_as(m, unit, basis, f, l)
 }
 
 /// Écrit un décalage signé (« +2 jours », « -1 jour », « +50% ») ; rien pour
-/// un décalage nul.
+/// un décalage nul. Délégué à `planrs_automation::text` (N2).
 pub fn write_lag(out: &mut String, lag: &Lag, f: &ConversionFactors, l: &FormatLabels) {
-    match lag.value {
-        LagValue::Time { minutes, unit } => {
-            if minutes == Minutes::ZERO {
-                return;
-            }
-            if !minutes.is_negative() {
-                out.push('+');
-            }
-            write_duration(out, minutes, unit, lag.basis, false, f, l);
-        }
-        LagValue::Percent { percent } => {
-            let raw = percent.get();
-            if raw == 0 {
-                return;
-            }
-            if raw > 0 {
-                out.push('+');
-            }
-            // 1/10 000 → pour cent avec deux décimales.
-            match Decimal::new(raw, 2) {
-                Ok(value) => {
-                    write_decimal(out, value, l.decimal_sep);
-                    out.push('%');
-                }
-                Err(_) => out.push_str(&l.unknown),
-            }
-        }
-    }
-}
-
-/// Code d'un type de lien dans la langue des libellés.
-const fn link_code(kind: LinkType, l: &FormatLabels) -> &String {
-    match kind {
-        LinkType::FinishToStart => &l.link_fs,
-        LinkType::StartToStart => &l.link_ss,
-        LinkType::FinishToFinish => &l.link_ff,
-        LinkType::StartToFinish => &l.link_sf,
-    }
-}
-
-/// Vrai si le décalage est nul (temps ou pourcentage).
-const fn lag_is_zero(lag: &Lag) -> bool {
-    match lag.value {
-        LagValue::Time { minutes, .. } => minutes.get() == 0,
-        LagValue::Percent { percent } => percent.get() == 0,
-    }
+    text::write_display_lag(out, lag, f, l);
 }
 
 /// Liste des prédécesseurs (« 3;5DD+2 jours ») : ID (et non UID) seul pour un
 /// lien fin à début sans décalage, `l.unknown` à la place de l'ID d'un UID
-/// inconnu ; ordre des liens conservé, séparateur `l.list_sep`.
+/// inconnu ; ordre des liens conservé, séparateur `l.list_sep`. Délégué à
+/// `planrs_automation::text` (N2).
 #[must_use]
 pub fn format_predecessors(
     links: &[Link],
@@ -323,24 +231,14 @@ pub fn format_predecessors(
     f: &ConversionFactors,
     l: &FormatLabels,
 ) -> String {
-    let mut out = String::new();
-    for (k, link) in links.iter().enumerate() {
-        if k > 0 {
-            out.push_str(&l.list_sep);
-        }
-        match project.task_id(link.predecessor) {
-            Some(id) => {
-                let _ = write!(out, "{}", id.get());
-            }
-            None => out.push_str(&l.unknown),
-        }
-        if link.kind == LinkType::FinishToStart && lag_is_zero(&link.lag) {
-            continue;
-        }
-        out.push_str(link_code(link.kind, l));
-        write_lag(&mut out, &link.lag, f, l);
-    }
-    out
+    text::display_predecessors(links, project, f, l)
+}
+
+/// % achevé, entier tronqué (« 33 % ») ; délégué à
+/// `planrs_automation::text` (J7 lot L6).
+#[must_use]
+pub fn format_percent(p: Percent, l: &FormatLabels) -> String {
+    text::display_percent(p, l)
 }
 
 /// Nom court d'un jour de la semaine (`weekdays_short`, dimanche d'abord).
@@ -860,6 +758,90 @@ mod tests {
         assert_eq!(
             format_duration(&days(2_400, TimeBasis::Working, false), &f, en_ftl),
             "5 days"
+        );
+    }
+
+    /// N1, N2 (J7, lot L6) : les formateurs de l'interface délèguent à
+    /// `planrs_automation::text` et rendent les textes J4 à l'identique
+    /// (corpus des tests ci-dessus, dans les deux langues).
+    #[test]
+    fn format_delegates_to_automation_same_text() {
+        use planrs_automation::text;
+        let f = factors();
+        let p = small_project();
+        let durations = [
+            (days(2_400, TimeBasis::Working, false), "5 jours", "5 days"),
+            (days(720, TimeBasis::Working, false), "1,5 jour", "1.5 days"),
+            (days(0, TimeBasis::Working, false), "0 jour", "0 days"),
+            (days(160, TimeBasis::Working, false), "0,33 jour", "0.33 days"),
+            (days(480, TimeBasis::Working, true), "1 jour?", "1 day?"),
+            (
+                days(7_200, TimeBasis::Elapsed, false),
+                "5 jours écoulés",
+                "5 edays",
+            ),
+        ];
+        for (d, want_fr, want_en) in &durations {
+            assert_eq!(format_duration(d, &f, &fr()), *want_fr);
+            assert_eq!(text::display_duration(d, &f, &fr()), *want_fr);
+            assert_eq!(format_duration(d, &f, &en()), *want_en);
+            assert_eq!(text::display_duration(d, &f, &en()), *want_en);
+        }
+        let percent = |v| LagValue::Percent {
+            percent: SignedPercent::new(v).unwrap(),
+        };
+        let links = [
+            Link::finish_to_start(TaskUid::new(30)),
+            link(30, LinkType::StartToStart, TimeBasis::Working, lag_days(960)),
+            link(20, LinkType::FinishToStart, TimeBasis::Working, lag_days(-480)),
+            link(10, LinkType::FinishToStart, TimeBasis::Working, percent(5_000)),
+            link(30, LinkType::FinishToStart, TimeBasis::Elapsed, lag_days(2_880)),
+            link(77, LinkType::StartToFinish, TimeBasis::Working, lag_days(0)),
+        ];
+        let want_fr = "3;3DD+2 jours;2FD-1 jour;1FD+50%;3FD+2 jours écoulés;?DF";
+        let want_en = "3,3SS+2 days,2FS-1 day,1FS+50%,3FS+2 edays,?SF";
+        assert_eq!(format_predecessors(&links, &p, &f, &fr()), want_fr);
+        assert_eq!(text::display_predecessors(&links, &p, &f, &fr()), want_fr);
+        assert_eq!(format_predecessors(&links, &p, &f, &en()), want_en);
+        assert_eq!(text::display_predecessors(&links, &p, &f, &en()), want_en);
+        assert_eq!(format_slack(Minutes::new(-960), &f, &fr()), "-2 jours");
+        assert_eq!(
+            text::display_minutes_as(
+                Minutes::new(-960),
+                DurationUnit::Day,
+                TimeBasis::Working,
+                &f,
+                &fr()
+            ),
+            "-2 jours"
+        );
+        // Libellés lus dans les `.ftl` : mêmes textes.
+        let fr_texts = crate::i18n::Texts::new(crate::i18n::Language::Fr);
+        let en_texts = crate::i18n::Texts::new(crate::i18n::Language::En);
+        for (d, want_fr, want_en) in &durations {
+            assert_eq!(format_duration(d, &f, fr_texts.format_labels()), *want_fr);
+            let en_text = format_duration(d, &f, en_texts.format_labels());
+            if d.basis() == TimeBasis::Working {
+                assert_eq!(en_text, *want_en);
+            }
+        }
+        assert_eq!(
+            format_predecessors(&links, &p, &f, fr_texts.format_labels()),
+            want_fr
+        );
+        assert_eq!(
+            super::format_percent(
+                planrs_core::Percent::new(5_000).unwrap(),
+                fr_texts.format_labels()
+            ),
+            "50\u{a0}%"
+        );
+        assert_eq!(
+            super::format_percent(
+                planrs_core::Percent::new(5_000).unwrap(),
+                en_texts.format_labels()
+            ),
+            "50%"
         );
     }
 

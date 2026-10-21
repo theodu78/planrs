@@ -366,6 +366,11 @@ menu-undo-agent-ops =
 # --- J7 L5 ---
 
 # --- J7 L6 ---
+fmt-percent-suffix = {"\u00A0%"}
+column-header-label = Colonne { $column }
+column-resize-label = Largeur de la colonne { $column }
+column-menu-hide = Masquer la colonne
+table-scroll-label = Défilement horizontal de la table
 
 # --- J7 L7 ---
 

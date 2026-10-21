@@ -8,12 +8,18 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-use planrs_core::{LinkType, Moment, Project, Task, TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis};
+use planrs_automation::text::format_resource_names;
+use planrs_core::baseline::{TaskVariance, variance};
+use planrs_core::{
+    Assignment, BaselineNumber, CalendarSet, LinkType, Minutes, Moment, Percent, Project, Task, TaskOutcome,
+    TaskRole, TaskSchedule, TaskUid, TimeBasis,
+};
 
 use crate::app::OpenDocument;
 use crate::column::Column;
 use crate::format::{
-    FormatLabels, format_date, format_duration, format_minutes_as, format_predecessors, format_slack,
+    FormatLabels, format_date, format_duration, format_minutes_as, format_percent, format_predecessors,
+    format_slack,
 };
 
 /// Nature d'une ligne, pour le dessin.
@@ -46,6 +52,18 @@ pub struct Row {
     pub critical: bool,
     /// Début et fin de la barre, issus du planning (aucun calcul ici).
     pub bar: Option<(Moment, Moment)>,
+    /// % achevé (J7, lot L6) : calculé par le moteur pour une tâche
+    /// planifiée (R-200, R-210), saisi sinon ; 1/10 000.
+    pub percent: Percent,
+    /// Début et fin de la ligne de base 0, si les deux sont enregistrés
+    /// (J7, lot L6 ; dessin au lot L7).
+    pub baseline: Option<(Moment, Moment)>,
+    /// Variation de fin à la ligne de base 0, en minutes ouvrées signées
+    /// (R-224, `baseline::variance`) ; `None` sans fin de base (J7, lot L6).
+    pub finish_variance: Option<Minutes>,
+    /// Fin de la partie réelle (`Stop`, R-204) d'une tâche commencée (J7,
+    /// lot L6 ; bande d'avancement au lot L7).
+    pub stop: Option<Moment>,
 }
 
 /// Lien à dessiner, en indices de ligne.
@@ -94,11 +112,12 @@ impl RowModel {
         let mut rows = Vec::with_capacity(count);
         let mut texts = Vec::with_capacity(count.saturating_mul(Column::COUNT));
         let mut index = BTreeMap::new();
+        let extras = Extras::collect(doc);
         for (position, task) in project.tasks.iter().enumerate() {
             let uid = task.uid();
             let outcome = doc.schedule().tasks.get(&uid);
-            let row = make_row(project, task, position, outcome);
-            push_texts(&mut texts, project, task, &row, outcome, labels);
+            let row = make_row(project, task, position, outcome, &extras);
+            push_texts(&mut texts, project, task, &row, outcome, labels, &extras);
             index.insert(uid, position);
             rows.push(row);
         }
@@ -198,7 +217,13 @@ const fn scheduled(outcome: Option<&TaskOutcome>) -> Option<&TaskSchedule> {
 }
 
 /// Ligne d'une tâche (sans ses textes).
-fn make_row(project: &Project, task: &Task, position: usize, outcome: Option<&TaskOutcome>) -> Row {
+fn make_row(
+    project: &Project,
+    task: &Task,
+    position: usize,
+    outcome: Option<&TaskOutcome>,
+    extras: &Extras<'_>,
+) -> Row {
     let uid = task.uid();
     let id = project.task_id(uid).map_or_else(
         || {
@@ -231,6 +256,8 @@ fn make_row(project: &Project, task: &Task, position: usize, outcome: Option<&Ta
             None => (RowKind::Excluded, false, None),
         }
     };
+    let progress = scheduled(outcome).and_then(|s| s.progress);
+    let base = task.baselines.get(&BaselineNumber::PRIMARY);
     Row {
         uid,
         id,
@@ -238,6 +265,62 @@ fn make_row(project: &Project, task: &Task, position: usize, outcome: Option<&Ta
         kind,
         critical,
         bar,
+        percent: progress.map_or(task.progress.percent_complete, |p| p.percent_complete),
+        baseline: base.and_then(|b| b.start.zip(b.finish)),
+        finish_variance: extras
+            .variance(uid)
+            .filter(|v| v.baseline.is_some_and(|b| b.finish.is_some()))
+            .map(|v| v.variance.finish),
+        stop: progress.map(|p| p.stop),
+    }
+}
+
+/// Données des colonnes J7 calculées une fois par construction : écarts à
+/// la ligne de base 0 (`baseline::variance`, calendriers compilés une fois,
+/// seulement si une tâche a une ligne 0) et affectations par tâche (ordre
+/// du projet).
+struct Extras<'a> {
+    /// Écarts des tâches planifiées, dans l'ordre des UID.
+    variances: Vec<TaskVariance>,
+    /// Affectations de chaque tâche, dans l'ordre du projet.
+    assignments: BTreeMap<TaskUid, Vec<&'a Assignment>>,
+}
+
+impl<'a> Extras<'a> {
+    /// Collecte les données d'un document.
+    fn collect(doc: &'a OpenDocument) -> Self {
+        let project = doc.project();
+        let any_baseline = project
+            .tasks
+            .iter()
+            .any(|t| t.baselines.contains_key(&BaselineNumber::PRIMARY));
+        let variances = if any_baseline {
+            let (set, _) = CalendarSet::compile(project);
+            variance(project, doc.schedule(), &set, BaselineNumber::PRIMARY).tasks
+        } else {
+            Vec::new()
+        };
+        let mut assignments: BTreeMap<TaskUid, Vec<&'a Assignment>> = BTreeMap::new();
+        for a in &project.assignments {
+            assignments.entry(a.task).or_default().push(a);
+        }
+        Self {
+            variances,
+            assignments,
+        }
+    }
+
+    /// Écarts d'une tâche planifiée (recherche dichotomique par UID).
+    fn variance(&self, uid: TaskUid) -> Option<&TaskVariance> {
+        self.variances
+            .binary_search_by_key(&uid, |v| v.uid)
+            .ok()
+            .and_then(|i| self.variances.get(i))
+    }
+
+    /// Affectations d'une tâche.
+    fn assignments(&self, uid: TaskUid) -> &[&'a Assignment] {
+        self.assignments.get(&uid).map_or(&[], Vec::as_slice)
     }
 }
 
@@ -250,6 +333,7 @@ fn push_texts(
     row: &Row,
     outcome: Option<&TaskOutcome>,
     l: &FormatLabels,
+    extras: &Extras<'_>,
 ) {
     let f = &project.options.factors;
     let schedule = scheduled(outcome);
@@ -285,16 +369,35 @@ fn push_texts(
                 Column::Critical => schedule
                     .map(|s| if s.critical { l.yes.clone() } else { l.no.clone() })
                     .unwrap_or_default(),
-                // Colonnes J7 (contrat L0) : textes du lot L6.
-                Column::PercentComplete
-                | Column::ResourceNames
-                | Column::BaselineStart
-                | Column::BaselineFinish
-                | Column::FinishVariance => String::new(),
+                // Colonnes J7 (lot L6).
+                Column::PercentComplete => format_percent(row.percent, l),
+                Column::ResourceNames => {
+                    format_resource_names(extras.assignments(row.uid).iter().copied(), project, l)
+                }
+                Column::BaselineStart => base_date(task, |b| b.start, l),
+                Column::BaselineFinish => base_date(task, |b| b.finish, l),
+                // Jours ouvrés signés, comme la marge (H-UI-09).
+                Column::FinishVariance => row
+                    .finish_variance
+                    .map(|m| format_slack(m, f, l))
+                    .unwrap_or_default(),
             }
         };
         texts.push(text);
     }
+}
+
+/// Date de la ligne de base 0 d'une tâche (vide si absente).
+fn base_date(
+    task: &Task,
+    pick: impl Fn(&planrs_core::TaskBaseline) -> Option<Moment>,
+    l: &FormatLabels,
+) -> String {
+    task.baselines
+        .get(&BaselineNumber::PRIMARY)
+        .and_then(pick)
+        .map(|m| format_date(m, l))
+        .unwrap_or_default()
 }
 
 /// Liens entre lignes connues, triés par `min(from, to)` (tri stable :
@@ -358,11 +461,43 @@ mod tests {
         OpenDocument::new(loaded, origin, 1)
     }
 
-    /// Ligne d'ID `id` (indice `id − 1`), colonnes J6 ; les colonnes J7
-    /// (contrat L0) sont vides jusqu'au lot L6.
+    /// Ligne d'ID `id` (indice `id − 1`), colonnes J6.
     fn row_texts(model: &RowModel, id: usize) -> Vec<&str> {
-        assert!(Column::ALL[8..].iter().all(|&c| model.text(id - 1, c).is_empty()));
         Column::ALL[..8].iter().map(|&c| model.text(id - 1, c)).collect()
+    }
+
+    /// Colonnes J7 (lot L6) sur l'exemple, sans ligne de base : % achevé
+    /// du moteur, ressources des affectations, colonnes de référence vides.
+    #[test]
+    fn rows_j7_columns_demo() {
+        let doc = demo();
+        let model = RowModel::build(&doc, Texts::new(Language::Fr).format_labels());
+        let project = doc.project();
+        for (i, task) in project.tasks.iter().enumerate() {
+            let row = model.row(i).unwrap();
+            assert!(task.baselines.is_empty());
+            assert_eq!(row.baseline, None);
+            assert_eq!(row.finish_variance, None);
+            for c in [
+                Column::BaselineStart,
+                Column::BaselineFinish,
+                Column::FinishVariance,
+            ] {
+                assert_eq!(model.text(i, c), "", "{c:?}");
+            }
+            let percent = model.text(i, Column::PercentComplete);
+            if task.is_null {
+                assert_eq!(percent, "");
+            } else {
+                assert!(percent.ends_with('%'), "{percent}");
+            }
+            let expected = planrs_automation::text::format_resource_names(
+                project.assignments.iter().filter(|a| a.task == task.uid()),
+                project,
+                Texts::new(Language::Fr).format_labels(),
+            );
+            assert_eq!(model.text(i, Column::ResourceNames), expected);
+        }
     }
 
     #[test]

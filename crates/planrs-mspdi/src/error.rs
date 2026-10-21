@@ -62,7 +62,8 @@ pub enum MspdiError {
         message: String,
     },
     /// Fin de l'entrée avec des éléments encore ouverts (fichier tronqué).
-    #[error("fin inattendue du document à la {at} (éléments ouverts : {})", open.join("/"))]
+    /// Sans élément ouvert, pas de parenthèse vide (N10).
+    #[error("fin inattendue du document à la {at}{}", open_elements(open))]
     UnexpectedEof {
         /// Fin de l'entrée.
         at: Location,
@@ -131,6 +132,16 @@ impl MspdiError {
             Self::TextTooLong { .. } => "mspdi.error.text_too_long",
             Self::NotMspdi { .. } => "mspdi.error.not_mspdi",
         }
+    }
+}
+
+/// Suffixe « (éléments ouverts : a/b) » du message de fin inattendue ; vide
+/// si aucun élément n'est ouvert (N10, `docs/ui-needs.md`).
+fn open_elements(open: &[String]) -> String {
+    if open.is_empty() {
+        String::new()
+    } else {
+        format!(" (éléments ouverts : {})", open.join("/"))
     }
 }
 
@@ -307,7 +318,10 @@ mod tests {
             open: vec!["Project".to_owned(), "Tasks".to_owned()],
         };
         assert_eq!(e.code(), "mspdi.error.unexpected_eof");
-        assert!(e.to_string().contains("Project/Tasks"), "{e}");
+        assert_eq!(
+            e.to_string(),
+            "fin inattendue du document à la ligne 2, colonne 3 (octet 10) (éléments ouverts : Project/Tasks)"
+        );
         assert_eq!(MspdiError::Empty.code(), "mspdi.error.empty");
         let e = MspdiError::TooManyRetained {
             at: Location {
@@ -319,5 +333,24 @@ mod tests {
         };
         assert_eq!(e.code(), "mspdi.error.too_many_retained");
         assert!(e.to_string().contains("limite 3"), "{e}");
+    }
+
+    /// N10 : sans élément ouvert, le message n'a pas de parenthèse vide.
+    #[test]
+    fn n10_eof_message_no_empty_parens() {
+        let e = MspdiError::UnexpectedEof {
+            at: Location {
+                byte: 0,
+                line: 1,
+                column: 1,
+            },
+            open: Vec::new(),
+        };
+        let text = e.to_string();
+        assert_eq!(
+            text,
+            "fin inattendue du document à la ligne 1, colonne 1 (octet 0)"
+        );
+        assert!(!text.contains("()") && !text.contains(": )"), "{text}");
     }
 }

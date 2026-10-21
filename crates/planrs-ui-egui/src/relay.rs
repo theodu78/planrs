@@ -21,6 +21,15 @@
 //! même JSON que `Workspace::call` (C-CTL-09). `project.open`,
 //! `project.new`, `project.import_csv` : `control.not_relayable`
 //! (C-CTL-05). Le web n'a pas de canal : ce module n'y est pas compilé.
+//!
+//! Capture (`app.screenshot`, C-CTL-08, lot L14) : permise seulement si
+//! l'application l'active ([`App::enable_screenshots`], desktop) ; sinon,
+//! et sous kittest, `control.screenshot_unavailable` aussitôt.
+//! `ViewportCommand::Screenshot` est envoyée pendant la vidange de la file ;
+//! un fil `planrs-screenshot` attend l'image ([`ScreenshotConfig::timeout`],
+//! 5 s), la réduit de moitié `scale_down` fois, l'encode en PNG (crate
+//! `image`) puis en base64 ([`encode_screenshot`]) et répond lui-même : le
+//! fil d'interface n'encode jamais.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -28,8 +37,12 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, SyncSender};
+use std::time::Duration;
 
-use planrs_automation::command::params::{ThemeJson, UiActionParams, UiLanguageJson, ViewJson, ZoomJson};
+use base64::Engine as _;
+use planrs_automation::command::params::{
+    ScreenshotParams, ThemeJson, UiActionParams, UiLanguageJson, ViewJson, ZoomJson,
+};
 use planrs_automation::control::{CallState, RelayCall, RelayKind, Reply};
 use planrs_automation::error::codes;
 use planrs_automation::registry::{Kind, lookup};
@@ -84,6 +97,38 @@ impl PendingApproval {
     }
 }
 
+/// Plafond d'une capture rendue (C-CTL-08) : 6 Mio de texte base64, soit
+/// une ligne de réponse sous `MAX_LINE_BYTES` (8 Mio) du canal.
+pub const SCREENSHOT_MAX_BYTES: usize = 6 * 1024 * 1024;
+
+/// Attente de l'image après la demande de capture (C-CTL-08).
+pub const SCREENSHOT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Réductions de moitié demandées au plus (`ScreenshotParams::scale_down`).
+pub const MAX_SCALE_DOWN: u8 = 2;
+
+/// Réductions de moitié ajoutées au plus quand la capture dépasse le
+/// plafond (C-CTL-08).
+pub const MAX_AUTO_SCALE_DOWN: u8 = 2;
+
+/// Réglages de la capture d'écran relayée.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScreenshotConfig {
+    /// Attente de l'image au plus.
+    pub timeout: Duration,
+    /// Plafond du texte base64 rendu, en octets.
+    pub max_bytes: usize,
+}
+
+impl Default for ScreenshotConfig {
+    fn default() -> Self {
+        Self {
+            timeout: SCREENSHOT_TIMEOUT,
+            max_bytes: SCREENSHOT_MAX_BYTES,
+        }
+    }
+}
+
 /// Relais de l'application : file des appels et écritures en attente.
 #[derive(Debug)]
 pub struct Relay {
@@ -96,6 +141,8 @@ pub struct Relay {
     /// Dossier des rendez-vous (garde ADR-0002 d'un enregistrement relayé) ;
     /// `None` : celui de la plateforme.
     control_dir: Option<PathBuf>,
+    /// Capture permise (desktop) ; `None` : `control.screenshot_unavailable`.
+    screenshots: Option<ScreenshotConfig>,
 }
 
 impl Relay {
@@ -239,7 +286,16 @@ impl App {
             pending: VecDeque::new(),
             focused: None,
             control_dir: None,
+            screenshots: None,
         });
+    }
+
+    /// Permet la capture de la fenêtre (`app.screenshot`) : desktop
+    /// seulement, après [`App::control_inbox`] (sans relais, rien).
+    pub fn enable_screenshots(&mut self, config: ScreenshotConfig) {
+        if let Some(relay) = &mut self.relay {
+            relay.screenshots = Some(config);
+        }
     }
 
     /// Dossier des rendez-vous lu par la garde d'un enregistrement relayé
@@ -267,13 +323,13 @@ impl App {
     /// Vide la file des appels relayés (début d'image) : sert les
     /// lectures, met les écritures en attente, retire les appels expirés
     /// et ceux d'un document remplacé.
-    pub(crate) fn drain_relay(&mut self) {
+    pub(crate) fn drain_relay(&mut self, ctx: &egui::Context) {
         let Some(relay) = &self.relay else {
             return;
         };
         let calls: Vec<RelayCall> = relay.inbox.try_iter().collect();
         for call in calls {
-            self.serve_call(call);
+            self.serve_call(call, ctx);
         }
         let opening = self.document.as_ref().map(|document| document.opening);
         let Some(relay) = &mut self.relay else {
@@ -298,7 +354,7 @@ impl App {
     }
 
     /// Sert un appel relayé.
-    fn serve_call(&mut self, call: RelayCall) {
+    fn serve_call(&mut self, call: RelayCall, ctx: &egui::Context) {
         let RelayCall {
             id,
             kind,
@@ -316,8 +372,8 @@ impl App {
         }
         match kind {
             RelayKind::UiState => self.reply_now(&state, &reply, id, Ok(self.ui_state_json())),
-            RelayKind::Screenshot { .. } => self.reply_screenshot(&state, &reply, id),
-            RelayKind::Execute { tool, params } => self.serve_execute(id, tool, params, state, reply),
+            RelayKind::Screenshot { scale_down } => self.screenshot(ctx, scale_down, &state, &reply, id),
+            RelayKind::Execute { tool, params } => self.serve_execute(id, tool, params, state, reply, ctx),
             RelayKind::Cancel(_) => {}
         }
     }
@@ -343,13 +399,70 @@ impl App {
         );
     }
 
-    /// Capture de la fenêtre : lot L14 (jusque-là indisponible).
-    fn reply_screenshot(&self, state: &CallState, reply: &SyncSender<Reply>, id: u64) {
-        let e = error(
-            codes::CONTROL_SCREENSHOT_UNAVAILABLE,
-            "capture de la fenêtre non disponible dans cette version",
-        );
-        self.reply_now(state, reply, id, Err(e));
+    /// Capture de la fenêtre (C-CTL-08) : demandée au contexte egui, puis
+    /// attendue, réduite et encodée par un fil dédié qui répond lui-même.
+    fn screenshot(
+        &self,
+        ctx: &egui::Context,
+        scale_down: u8,
+        state: &Arc<CallState>,
+        reply: &SyncSender<Reply>,
+        id: u64,
+    ) {
+        if scale_down > MAX_SCALE_DOWN {
+            let e = ToolError::simple(
+                codes::PARAM_INVALID,
+                format!("app.screenshot : scale_down vaut {MAX_SCALE_DOWN} au plus"),
+            )
+            .with_field("scale_down");
+            return self.reply_now(state, reply, id, Err(e));
+        }
+        let Some(config) = self.relay.as_ref().and_then(|relay| relay.screenshots) else {
+            let e = error(
+                codes::CONTROL_SCREENSHOT_UNAVAILABLE,
+                "capture de la fenêtre indisponible dans cet environnement",
+            );
+            return self.reply_now(state, reply, id, Err(e));
+        };
+        let (image_tx, image_rx) = std::sync::mpsc::channel::<Arc<egui::ColorImage>>();
+        let thread_state = Arc::clone(state);
+        let thread_reply = reply.clone();
+        let spawned = std::thread::Builder::new()
+            .name("planrs-screenshot".to_owned())
+            .spawn(move || {
+                // Délai écoulé ou demande abandonnée (callback détruit sans
+                // image) : indisponible.
+                let result = match image_rx.recv_timeout(config.timeout) {
+                    Ok(image) => encode_screenshot(&image, scale_down, config.max_bytes),
+                    Err(_) => Err(error(
+                        codes::CONTROL_SCREENSHOT_UNAVAILABLE,
+                        "aucune image de la fenêtre dans le délai (fenêtre masquée ?)",
+                    )),
+                };
+                if thread_state.claim() {
+                    send(
+                        &thread_reply,
+                        match result {
+                            Ok(result) => Reply::Ok { id, result },
+                            Err(e) => tool_reply(id, &e),
+                        },
+                    );
+                }
+            });
+        if let Err(spawn_error) = spawned {
+            let e = ToolError::simple(
+                codes::CONTROL_SCREENSHOT_UNAVAILABLE,
+                format!("capture impossible : {spawn_error}"),
+            );
+            return self.reply_now(state, reply, id, Err(e));
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(
+            move |image| {
+                if image_tx.send(image).is_err() {
+                    log::debug!("capture arrivée après le délai : ignorée");
+                }
+            },
+        )));
     }
 
     /// Sert `execute { tool, params }`.
@@ -360,10 +473,16 @@ impl App {
         params: Value,
         state: Arc<CallState>,
         reply: SyncSender<Reply>,
+        ctx: &egui::Context,
     ) {
         match tool.as_str() {
             "app.ui_state" => return self.reply_now(&state, &reply, id, Ok(self.ui_state_json())),
-            "app.screenshot" => return self.reply_screenshot(&state, &reply, id),
+            "app.screenshot" => {
+                return match screenshot_params(params) {
+                    Ok(scale_down) => self.screenshot(ctx, scale_down, &state, &reply, id),
+                    Err(e) => self.reply_now(&state, &reply, id, Err(e)),
+                };
+            }
             "app.ui" => {
                 let result = self.queue_ui(params);
                 return self.reply_now(&state, &reply, id, result);
@@ -618,6 +737,141 @@ impl App {
         let take_focus = relay.focused != Some(id);
         relay.focused = Some(id);
         Some((id, take_focus))
+    }
+}
+
+/// `scale_down` des paramètres d'`app.screenshot` (absent : 0).
+fn screenshot_params(params: Value) -> Result<u8, ToolError> {
+    let params = if params.is_null() { json!({}) } else { params };
+    let p: ScreenshotParams = serde_json::from_value(params).map_err(|e| {
+        ToolError::simple(
+            codes::PARAM_INVALID,
+            format!("paramètres de app.screenshot invalides : {e}"),
+        )
+    })?;
+    Ok(p.scale_down.unwrap_or(0))
+}
+
+/// Pixels RGBA non prémultipliés d'une image egui, avec sa largeur et sa
+/// hauteur ; `None` si la taille ne correspond pas aux pixels.
+fn rgba_of(image: &egui::ColorImage) -> Option<(Vec<u8>, usize, usize)> {
+    let [width, height] = image.size;
+    if width.checked_mul(height)? != image.pixels.len() || width == 0 || height == 0 {
+        return None;
+    }
+    let bytes = image
+        .pixels
+        .iter()
+        .flat_map(egui::Color32::to_srgba_unmultiplied)
+        .collect();
+    Some((bytes, width, height))
+}
+
+/// Réduction de moitié (moyenne entière de blocs de 2 × 2, bord impair
+/// moyenné sur ce qui existe) ; au moins un pixel de côté.
+fn halve(rgba: &[u8], width: usize, height: usize) -> (Vec<u8>, usize, usize) {
+    let (w, h) = ((width / 2).max(1), (height / 2).max(1));
+    let mut out = Vec::with_capacity(w.saturating_mul(h).saturating_mul(4));
+    for y in 0..h {
+        for x in 0..w {
+            let mut sum = [0u32; 4];
+            let mut count = 0u32;
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let (sx, sy) = (
+                    x.saturating_mul(2).saturating_add(dx),
+                    y.saturating_mul(2).saturating_add(dy),
+                );
+                if sx >= width || sy >= height {
+                    continue;
+                }
+                let at = sy.saturating_mul(width).saturating_add(sx).saturating_mul(4);
+                let Some(px) = rgba.get(at..at.saturating_add(4)) else {
+                    continue;
+                };
+                for (total, &v) in sum.iter_mut().zip(px) {
+                    *total = total.saturating_add(u32::from(v));
+                }
+                count = count.saturating_add(1);
+            }
+            let count = std::num::NonZeroU32::new(count).unwrap_or(std::num::NonZeroU32::MIN);
+            out.extend(sum.map(|total| u8::try_from(total / count).unwrap_or(u8::MAX)));
+        }
+    }
+    (out, w, h)
+}
+
+/// PNG de pixels RGBA.
+fn png_of(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>, String> {
+    use image::ImageEncoder as _;
+    let (Ok(w), Ok(h)) = (u32::try_from(width), u32::try_from(height)) else {
+        return Err("image trop grande".to_owned());
+    };
+    let mut png = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut png)
+        .write_image(rgba, w, h, image::ExtendedColorType::Rgba8)
+        .map_err(|e| e.to_string())?;
+    Ok(png)
+}
+
+/// Longueur du texte base64 (avec remplissage) de `n` octets.
+const fn base64_len(n: usize) -> usize {
+    n.div_ceil(3).saturating_mul(4)
+}
+
+/// Capture rendue au MCP (C-CTL-08) : `image` réduite de moitié
+/// `scale_down` fois, encodée en PNG puis en base64 ; tant que le texte
+/// dépasse `max_bytes`, réduite encore de moitié ([`MAX_AUTO_SCALE_DOWN`]
+/// fois au plus). Résultat : `{ mime_type, data, width, height, scale_down,
+/// bytes }` (`scale_down` : réductions faites au total, `bytes` : taille du
+/// PNG).
+///
+/// # Errors
+///
+/// `control.screenshot_too_large` si le texte dépasse encore `max_bytes`
+/// après les réductions ; `control.screenshot_unavailable` si l'image est
+/// vide ou incohérente, ou si l'encodage échoue.
+pub fn encode_screenshot(
+    image: &egui::ColorImage,
+    scale_down: u8,
+    max_bytes: usize,
+) -> Result<Value, ToolError> {
+    let unavailable = |detail: &str| {
+        ToolError::simple(
+            codes::CONTROL_SCREENSHOT_UNAVAILABLE,
+            format!("capture inutilisable : {detail}"),
+        )
+    };
+    let (mut rgba, mut width, mut height) = rgba_of(image).ok_or_else(|| unavailable("image vide"))?;
+    let mut halvings = 0u8;
+    for _ in 0..scale_down {
+        (rgba, width, height) = halve(&rgba, width, height);
+        halvings = halvings.saturating_add(1);
+    }
+    let mut extra = 0u8;
+    loop {
+        let png = png_of(&rgba, width, height).map_err(|e| unavailable(&e))?;
+        if base64_len(png.len()) <= max_bytes {
+            return Ok(json!({
+                "mime_type": "image/png",
+                "data": base64::engine::general_purpose::STANDARD.encode(&png),
+                "width": width,
+                "height": height,
+                "scale_down": halvings,
+                "bytes": png.len(),
+            }));
+        }
+        if extra >= MAX_AUTO_SCALE_DOWN {
+            return Err(ToolError::simple(
+                codes::CONTROL_SCREENSHOT_TOO_LARGE,
+                format!(
+                    "capture trop grande : {} octets en base64 après {halvings} réductions (plafond {max_bytes})",
+                    base64_len(png.len())
+                ),
+            ));
+        }
+        (rgba, width, height) = halve(&rgba, width, height);
+        halvings = halvings.saturating_add(1);
+        extra = extra.saturating_add(1);
     }
 }
 

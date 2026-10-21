@@ -66,7 +66,7 @@ Application (`planrs-ui-egui/src/relay.rs`, file vidée en **début d'image**, a
 - appel déjà expiré dans la file : ignoré ; `Cancel(id)` : écriture `id` retirée ;
 - `app.ui_state` (ou méthode `ui_state`) ⇒ `{ ui_state, selection (UID triés), active, view, visible_rows: [première, dernière], dirty, generation, opening }` ;
 - `app.ui` ⇒ actions d'interface (`select`, `scroll_to`, `zoom`, `view`, `theme`, `language`), appliquées en fin d'image, sans historique ; au moins un champ ; UID absent de la vue ⇒ `task.not_found` ; réponse `{ applied }` ;
-- `app.screenshot` ⇒ `control.screenshot_unavailable` jusqu'au lot L14 ;
+- `app.screenshot` (ou méthode `screenshot`) ⇒ capture de la fenêtre (desktop, J7 lot L14, C-CTL-08) : `{ mime_type, data (PNG en base64), width, height, scale_down, bytes }`, réduite de moitié `scale_down` fois (0 à 2) puis encore, deux fois au plus, tant que le base64 dépasse 6 Mio (sinon `control.screenshot_too_large`) ; aucune image en 5 s, ou capture non activée (kittest, web) ⇒ `control.screenshot_unavailable` (`docs/features/ui.md` § 1.20) ;
 - id inconnu ⇒ `param.invalid` ; `project.open`, `project.new`, `project.import_csv` ⇒ `control.not_relayable` (C-CTL-05) ; aucun document ⇒ `session.none` ;
 - lectures (genres `Read`, `Analysis`, `history.list`, et toute écriture en `dry_run: true`) ⇒ `workspace::call_with` sur la session du document, réponse immédiate : même JSON que `Workspace::call` local (C-CTL-09) ;
 - écritures (genre `Write`, `batch.apply`, `project.save`, `project.export_mspdi`, `history.undo`, `history.redo`) ⇒ validation (voir § 3.1).
@@ -113,7 +113,7 @@ Les codes sont dans `control::codes` (propres au fil, distincts de `error::codes
 
 ## 6. Limites et suites
 
-- Capture (`app.screenshot`) : lot L14. Panneau IA complet (diff détaillé, aperçu `what_if`) : J8 ; le bandeau J7 est minimal.
+- Capture (`app.screenshot`) : faite en lot L14 (§ 1.20 de `ui.md`) ; non vérifiée sur une fenêtre réelle par un test automatique (la CI n'a pas d'écran). Panneau IA complet (diff détaillé, aperçu `what_if`) : J8 ; le bandeau J7 est minimal.
 - La garde d'un enregistrement relayé sonde les rendez-vous (`find_live_for_in`, 2 s au plus par application) sur le fil de l'interface, avant l'affichage du bandeau.
 - Windows : écouteur sur named pipe et sonde réelle en J7 ; d'ici là, règle des 24 h ci-dessus.
 - Le rendez-vous ne dit qu'un projet par fichier ; une application à plusieurs documents publie un rendez-vous par document (même écouteur, `handle.rendezvous(...)` appelé plusieurs fois).

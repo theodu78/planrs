@@ -62,6 +62,14 @@ bytes = "1.12.1"
 getrandom = "0.3.4"
 egui = "0.37.0"
 eframe = "0.37.0"
+# Capture relayée (`app.screenshot`, J7 lot L14) : PNG par `image` (format
+# PNG seul) puis base64, côté application native. Déjà au lock (tirés par
+# egui_kittest et rmcp) ; aucune crate nouvelle.
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+base64 = "0.23.1"
+# Sonde des polices de repli (J7 lot L14, test seulement) : le fournisseur que
+# la feature `system_fonts` d'eframe installe sur le desktop. Déjà au lock.
+egui_system_font_provider = "0.37.0"
 # macOS seulement (apps/planrs) : `EventLoopBuilderExtMacOS::with_default_menu`
 # retire le menu applicatif par défaut de winit, dont « Quitter » (Cmd+Q)
 # appelle `terminate:` sans `CloseRequested`. Même version que celle tirée

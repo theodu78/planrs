@@ -3468,17 +3468,21 @@ dependencies = [
 name = "planrs-ui-egui"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chrono",
  "eframe",
  "egui",
  "egui_kittest",
+ "egui_system_font_provider",
  "fluent-bundle",
  "fluent-syntax",
+ "image",
  "js-sys",
  "log",
  "planrs-automation",
  "planrs-core",
  "planrs-mspdi",
+ "planrs-tests",
  "pollster 1.0.1",
  "proptest",
  "rfd",

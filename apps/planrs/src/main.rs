@@ -15,6 +15,18 @@
 //! vidée par l'interface en début d'image ; l'écouteur la réveille par
 //! `request_repaint`.
 //!
+//! Ligne de commande (J7, lot L14) : `planrs-desktop [plan.xml]` ouvre le
+//! fichier au démarrage ([`startup_path`], chemin rendu absolu pour les
+//! fichiers récents) ; un échec s'affiche dans le bandeau de l'interface,
+//! nom du fichier compris. La capture relayée (`app.screenshot`) est
+//! permise ici seulement ([`App::enable_screenshots`]).
+//!
+//! Polices : eframe est pris avec ses features par défaut, dont
+//! `system_fonts` ; `NativeOptions::system_font_fallback` reste vrai
+//! ([`native_options`]) : un caractère absent des polices d'egui (CJK,
+//! arabe…) est cherché dans les polices du système (fontconfig, CoreText,
+//! DirectWrite), sans police embarquée (ADR-0015, décision J8).
+//!
 //! macOS : le menu applicatif par défaut de winit est retiré
 //! ([`event_loop_hook`]). Son entrée « Quitter » (Cmd+Q) appelle
 //! `terminate:`, qui ferme la fenêtre sans `CloseRequested` : le garde des
@@ -33,6 +45,7 @@ use planrs_automation::control::{
     canonical_project, new_token, publish_in, spawn_listener_in, state_dir,
 };
 use planrs_core::{Moment, PRODUCT_NAME};
+use planrs_ui_egui::relay::ScreenshotConfig;
 use planrs_ui_egui::{DocumentObserver, Env, Language, OpenDocument, PlanrsApp, RfdFileService};
 
 /// « Maintenant » en heure locale, tronqué à la minute. Hors du domaine des
@@ -166,15 +179,55 @@ fn event_loop_hook() -> Option<eframe::EventLoopBuilderHook> {
     }
 }
 
-fn main() -> ExitCode {
-    let options = eframe::NativeOptions {
+/// Usage affiché pour un argument refusé.
+const USAGE: &str = "usage : planrs-desktop [fichier.xml]";
+
+/// Fichier à ouvrir au démarrage : premier argument, rendu absolu (les
+/// fichiers récents restent valables quel que soit le dossier de
+/// lancement). Aucun argument : `None`.
+///
+/// # Errors
+///
+/// Option inconnue, chemin non UTF-8 ou plus d'un argument : message à
+/// afficher (l'application démarre quand même, sans fichier).
+fn startup_path(mut args: impl Iterator<Item = std::ffi::OsString>) -> Result<Option<String>, String> {
+    let Some(first) = args.next() else {
+        return Ok(None);
+    };
+    if args.next().is_some() {
+        return Err(format!("un seul fichier attendu\n{USAGE}"));
+    }
+    let path = PathBuf::from(&first);
+    if first.to_str().is_some_and(|text| text.starts_with('-')) {
+        return Err(format!("option inconnue : {}\n{USAGE}", path.display()));
+    }
+    let absolute = std::path::absolute(&path).unwrap_or(path);
+    absolute
+        .into_os_string()
+        .into_string()
+        .map(Some)
+        .map_err(|raw| format!("chemin non UTF-8 refusé : {}", PathBuf::from(raw).display()))
+}
+
+/// Options de la fenêtre : titre, tailles, boucle d'événements ; repli des
+/// polices du système gardé (`system_font_fallback`, défaut d'eframe).
+fn native_options() -> eframe::NativeOptions {
+    eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title(PRODUCT_NAME)
             .with_inner_size([1440.0, 900.0])
             .with_min_inner_size([800.0, 500.0]),
         event_loop_builder: event_loop_hook(),
         ..Default::default()
-    };
+    }
+}
+
+fn main() -> ExitCode {
+    let startup = startup_path(std::env::args_os().skip(1)).unwrap_or_else(|error| {
+        eprintln!("{PRODUCT_NAME} : {error}");
+        None
+    });
+    let options = native_options();
     let result = eframe::run_native(
         PRODUCT_NAME,
         options,
@@ -188,7 +241,12 @@ fn main() -> ExitCode {
             let ctx = cc.egui_ctx.clone();
             let (control, inbox) = ControlRendezvous::new(Arc::new(move || ctx.request_repaint()));
             app.app_mut().control_inbox(inbox);
+            app.app_mut().enable_screenshots(ScreenshotConfig::default());
             app.app_mut().set_observer(Box::new(control));
+            // Après l'observateur : le rendez-vous suit le fichier ouvert.
+            if let Some(path) = &startup {
+                app.app_mut().open_path(path);
+            }
             Ok(Box::new(app))
         }),
     );
@@ -213,7 +271,7 @@ mod tests {
     use planrs_ui_egui::document;
     use planrs_ui_egui::{DocOrigin, DocumentObserver, OpenDocument};
 
-    use super::ControlRendezvous;
+    use super::{ControlRendezvous, startup_path};
 
     /// macOS : le menu par défaut de winit (« Quitter » = `terminate:`, sans
     /// `CloseRequested`) est retiré ; ailleurs, aucun réglage.
@@ -257,5 +315,61 @@ mod tests {
         assert!(find_live_for_in(&dir, &second).is_none());
         drop(observer);
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Arguments : aucun, un chemin (rendu absolu), une option ou deux
+    /// fichiers refusés ; le fichier donné s'ouvre (et entre aux fichiers
+    /// récents), un fichier illisible s'affiche dans le bandeau avec son nom.
+    #[test]
+    fn desktop_open_from_argument() {
+        use std::ffi::OsString;
+
+        use planrs_ui_egui::{App, Env, UiState};
+
+        assert_eq!(startup_path(std::iter::empty()), Ok(None));
+        let relative = startup_path([OsString::from("plan.xml")].into_iter())
+            .unwrap()
+            .unwrap();
+        assert!(Path::new(&relative).is_absolute(), "{relative}");
+        assert!(relative.ends_with("plan.xml"));
+        assert!(startup_path([OsString::from("--aide")].into_iter()).is_err());
+        assert!(startup_path([OsString::from("a.xml"), OsString::from("b.xml")].into_iter()).is_err());
+
+        let root = std::env::temp_dir().join(format!("planrs-l14-arg-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let good = root.join("maison.xml");
+        std::fs::write(&good, planrs_ui_egui::DEMO_MSPDI).unwrap();
+        let bad = root.join("tronqué.xml");
+        std::fs::write(&bad, b"").unwrap();
+        let now = "2027-01-15T08:00".parse().unwrap();
+        let mut app = App::new(UiState::default(), Env::fixed(now));
+        let path = startup_path([good.clone().into_os_string()].into_iter())
+            .unwrap()
+            .unwrap();
+        app.open_path(&path);
+        let doc = app.document.as_ref().unwrap();
+        assert_eq!(doc.origin.name, "maison.xml");
+        assert_eq!(doc.origin.path.as_deref(), Some(path.as_str()));
+        assert_eq!(
+            app.state.recent.first().map(|r| r.path.as_str()),
+            Some(path.as_str())
+        );
+        assert!(app.messages().is_empty(), "{:?}", app.messages());
+        app.open_path(bad.to_str().unwrap());
+        assert_eq!(
+            app.document.as_ref().unwrap().opening,
+            1,
+            "le document reste affiché"
+        );
+        let message = &app.messages().last().unwrap().text;
+        assert!(message.contains("tronqué.xml"), "{message}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Polices : le repli sur les polices du système reste actif (feature
+    /// `system_fonts` d'eframe, option par défaut).
+    #[test]
+    fn desktop_keeps_system_font_fallback() {
+        assert!(super::native_options().system_font_fallback);
     }
 }

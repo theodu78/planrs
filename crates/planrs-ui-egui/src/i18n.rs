@@ -583,6 +583,12 @@ text_ids! {
     RsAfter => "rs-after",
     // --- J7 L13 ---
     // --- J7 L14 ---
+    OpenErrorReadFile => "open-error-read-file",
+    OpenErrorMspdiFile => "open-error-mspdi-file",
+    OpenErrorMissing => "open-error-missing",
+    MenuRecent => "menu-recent",
+    MenuRecentEmpty => "menu-recent-empty",
+    MenuRecentMissing => "menu-recent-missing",
     // --- J7 L15 ---
     // --- J7 L16 ---
 }

@@ -485,6 +485,77 @@ res-delete-text =
 # --- J7 L11 ---
 
 # --- J7 L12 ---
+menu-project = Projet
+menu-project-info = Informations sur le projet…
+menu-working-time = Modifier le temps de travail…
+menu-baseline = Ligne de base…
+menu-reschedule = Replanifier le travail restant…
+scope-project = Projet entier
+scope-selection = { $count ->
+        [one] Tâche sélectionnée (1)
+       *[other] Tâches sélectionnées ({ $count })
+    }
+wt-title = Modifier le temps de travail
+wt-calendar = Pour le calendrier
+wt-project-calendar = { $name } (calendrier du projet)
+wt-resource-calendar = { $name } (ressource)
+wt-new = Nouveau calendrier…
+wt-delete = Supprimer le calendrier
+wt-name = Nom du calendrier
+wt-base-of = Calendrier de base : { $name }
+wt-new-name = Nom du nouveau calendrier
+wt-new-base = Nouveau calendrier de base
+wt-new-copy = Copie de « { $name } »
+wt-create = Créer
+wt-new-cancel = Ne pas créer
+wt-prev-month = Mois précédent
+wt-next-month = Mois suivant
+wt-month-title = { $name } { $value }
+wt-month-unavailable = Calendrier indisponible : { $detail }
+wt-state-working = Ouvré : { $value }
+wt-state-non-working = Chômé
+wt-legend-working = Ouvré
+wt-legend-non-working = Chômé
+wt-legend-exception = Exception
+wt-tab-exceptions = Exceptions
+wt-tab-week = Semaine de travail
+wt-exc-name = Nom
+wt-exc-from = Début
+wt-exc-to = Fin
+wt-exc-working = Ouvré
+wt-exc-ranges = Plages
+wt-exc-recurring = Récurrente (lecture seule)
+wt-exc-add = Ajouter une exception
+wt-week-inherit = Hérité de la base
+wt-week-non-working = Jour chômé
+wt-week-working = Horaires définis
+wt-week-setting = Réglage du { $name }
+wt-week-ranges = Plages du { $name }
+wt-week-inherited = Base : { $value }
+wt-bad-ranges = Plages attendues sous la forme 08:00-12:00, 13:00-17:00
+pi-title = Informations sur le projet
+pi-direction = Planifier à partir de
+pi-from-start = la date de début du projet
+pi-from-finish = la date de fin du projet
+pi-start = Date de début
+pi-finish = Date de fin
+pi-status = Date d'état
+pi-status-hint = Vide : NA (la date du jour sert de date d'état)
+pi-calendar = Calendrier
+bl-title = Ligne de base
+bl-set = Définir la ligne de base
+bl-clear = Effacer la ligne de base
+bl-number = Numéro
+bl-baseline-0 = Ligne de base
+bl-baseline-n = Ligne de base { $count }
+bl-rollup = Cumul des lignes de base
+bl-rollup-none = Aucun cumul
+bl-rollup-all = Vers toutes les tâches récapitulatives
+bl-rollup-from = Des sous-tâches vers les récapitulatives sélectionnées
+bl-confirm = { $detail } Remplacer la ligne de base enregistrée ?
+bl-replace = Remplacer
+rs-title = Replanifier le travail restant
+rs-after = Replanifier après le
 
 # --- J7 L13 ---
 

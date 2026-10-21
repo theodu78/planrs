@@ -486,6 +486,77 @@ res-delete-text =
 # --- J7 L11 ---
 
 # --- J7 L12 ---
+menu-project = Project
+menu-project-info = Project Information…
+menu-working-time = Change Working Time…
+menu-baseline = Baseline…
+menu-reschedule = Reschedule Uncompleted Work…
+scope-project = Entire project
+scope-selection = { $count ->
+        [one] Selected task (1)
+       *[other] Selected tasks ({ $count })
+    }
+wt-title = Change Working Time
+wt-calendar = For calendar
+wt-project-calendar = { $name } (Project Calendar)
+wt-resource-calendar = { $name } (resource)
+wt-new = Create New Calendar…
+wt-delete = Delete calendar
+wt-name = Calendar name
+wt-base-of = Base calendar: { $name }
+wt-new-name = New calendar name
+wt-new-base = Create new base calendar
+wt-new-copy = Make a copy of “{ $name }”
+wt-create = Create
+wt-new-cancel = Do not create
+wt-prev-month = Previous month
+wt-next-month = Next month
+wt-month-title = { $name } { $value }
+wt-month-unavailable = Calendar unavailable: { $detail }
+wt-state-working = Working: { $value }
+wt-state-non-working = Nonworking
+wt-legend-working = Working
+wt-legend-non-working = Nonworking
+wt-legend-exception = Exception
+wt-tab-exceptions = Exceptions
+wt-tab-week = Work Week
+wt-exc-name = Name
+wt-exc-from = Start
+wt-exc-to = Finish
+wt-exc-working = Working
+wt-exc-ranges = Times
+wt-exc-recurring = Recurring (read only)
+wt-exc-add = Add exception
+wt-week-inherit = Inherited from base
+wt-week-non-working = Nonworking day
+wt-week-working = Specific working times
+wt-week-setting = Setting for { $name }
+wt-week-ranges = Times for { $name }
+wt-week-inherited = Base: { $value }
+wt-bad-ranges = Times expected as 08:00-12:00, 13:00-17:00
+pi-title = Project Information
+pi-direction = Schedule from
+pi-from-start = Project Start Date
+pi-from-finish = Project Finish Date
+pi-start = Start date
+pi-finish = Finish date
+pi-status = Status date
+pi-status-hint = Empty: NA (today serves as status date)
+pi-calendar = Calendar
+bl-title = Baseline
+bl-set = Set baseline
+bl-clear = Clear baseline
+bl-number = Number
+bl-baseline-0 = Baseline
+bl-baseline-n = Baseline { $count }
+bl-rollup = Roll up baselines
+bl-rollup-none = No rollup
+bl-rollup-all = To all summary tasks
+bl-rollup-from = From subtasks into selected summary tasks
+bl-confirm = { $detail } Replace the saved baseline?
+bl-replace = Replace
+rs-title = Reschedule Uncompleted Work
+rs-after = Reschedule after
 
 # --- J7 L13 ---
 

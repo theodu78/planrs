@@ -1197,6 +1197,12 @@ impl App {
                     self.open_task_info(uid);
                 }
             }
+            Action::ShowDialog(
+                kind @ (DialogKind::WorkingTime
+                | DialogKind::ProjectInformation
+                | DialogKind::Baseline
+                | DialogKind::Reschedule),
+            ) => self.open_window(kind),
             Action::CloseDialog => self.close_dialog(),
             // Contrat J7 (lot L0) : actions câblées par leur lot.
             Action::SetGanttStyle(style) => self.state.gantt_style = style,
@@ -1670,7 +1676,7 @@ impl App {
     }
 
     /// Ferme la fenêtre ouverte ; la table reprend le focus clavier.
-    fn close_dialog(&mut self) {
+    pub(crate) fn close_dialog(&mut self) {
         if self.view.dialog.take().is_some() && self.document.is_some() {
             self.view.focus_table_pending = true;
         }
@@ -1686,10 +1692,23 @@ impl App {
             /// Boîte d'un lien.
             Link(LinkOutcome),
         }
+        if self.view.dialog.as_ref().is_some_and(|d| d.body.is_window()) {
+            // Fenêtres du lot L12 (`dialog/mod.rs`).
+            self.show_window(ctx);
+            strip_keys(ctx);
+            return;
+        }
         let shown = match self.view.dialog.as_mut().map(|dialog| &mut dialog.body) {
             Some(DialogBody::TaskInfo(state)) => Shown::TaskInfo(task_info::show(ctx, &self.texts, state)),
             Some(DialogBody::Link(state)) => Shown::Link(link::show(ctx, &self.texts, state)),
-            Some(DialogBody::Empty) | None => Shown::TaskInfo(task_info::Outcome::Cancel),
+            Some(
+                DialogBody::Empty
+                | DialogBody::WorkingTime(_)
+                | DialogBody::ProjectInfo(_)
+                | DialogBody::Baseline(_)
+                | DialogBody::Reschedule(_),
+            )
+            | None => Shown::TaskInfo(task_info::Outcome::Cancel),
         };
         match shown {
             Shown::TaskInfo(task_info::Outcome::Open) | Shown::Link(LinkOutcome::Open) => {}
@@ -1700,19 +1719,7 @@ impl App {
             Shown::Link(LinkOutcome::Ok) => self.commit_link(false),
             Shown::Link(LinkOutcome::Delete) => self.commit_link(true),
         }
-        ctx.input_mut(|input| {
-            input.events.retain(|event| {
-                !matches!(
-                    event,
-                    egui::Event::Key { .. }
-                        | egui::Event::Text(_)
-                        | egui::Event::Paste(_)
-                        | egui::Event::Copy
-                        | egui::Event::Cut
-                        | egui::Event::Ime(_)
-                )
-            });
-        });
+        strip_keys(ctx);
     }
 
     /// « OK » d'« Informations sur la tâche » : document changé depuis
@@ -1980,6 +1987,24 @@ pub fn next_monday_morning(now: Moment) -> Moment {
         .zip(TimeOfDay::new(480).ok())
         .and_then(|(monday, morning)| Moment::at(monday, morning).ok())
         .unwrap_or(now)
+}
+
+/// Retire de l'image les touches qu'une fenêtre ouverte n'a pas prises
+/// (rien n'atteint la table ni le Gantt).
+fn strip_keys(ctx: &egui::Context) {
+    ctx.input_mut(|input| {
+        input.events.retain(|event| {
+            !matches!(
+                event,
+                egui::Event::Key { .. }
+                    | egui::Event::Text(_)
+                    | egui::Event::Paste(_)
+                    | egui::Event::Copy
+                    | egui::Event::Cut
+                    | egui::Event::Ime(_)
+            )
+        });
+    });
 }
 
 /// Nombre de jours d'une plage (0 si vide ou inversée).

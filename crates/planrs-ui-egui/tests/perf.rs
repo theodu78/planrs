@@ -28,6 +28,10 @@
 //! - J7 L3 (ignoré, release) : `approval_banner` (bandeau de validation
 //!   d'une écriture d'un agent affiché, défilement à chaque image), mêmes
 //!   seuils.
+//! - J7 L8 (ignoré, release) : `bar_drag` (120 images de glisser d'une
+//!   barre, un point par image, aperçu `gesture::preview` recalculé quand
+//!   l'écart en jours change, aucun recalcul du planning), puis lâcher (un
+//!   seul lot) ; mêmes seuils.
 //!
 //! Le rendu GPU n'est pas chronométré (lavapipe en CI n'est pas
 //! représentatif). Le projet est un MSPDI généré en mémoire par ce fichier :
@@ -774,4 +778,122 @@ fn approval_banner() {
         "bandeau toujours affiché"
     );
     assert_budget("approval_banner", samples, bench.last);
+}
+
+/// Images de clic (appui puis relâchement) au point `p`.
+fn click_frames(bench: &mut Bench, app: &mut App, p: Pos2) {
+    bench.frame(app, vec![Event::PointerMoved(p)]);
+    for pressed in [true, false] {
+        bench.frame(
+            app,
+            vec![Event::PointerButton {
+                pos: p,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+    }
+}
+
+/// Ligne sous l'ordonnée `y` du Gantt d'après la sélection posée par un
+/// clic (abscisse `x`, sans barre ni lien supposés : seul l'indice compte).
+fn row_clicked(bench: &mut Bench, app: &mut App, x: f32, y: f32) -> Option<usize> {
+    click_frames(bench, app, pos2(x, y));
+    let uid = app.selection?;
+    app.rows().unwrap().index_of(uid)
+}
+
+/// J7 L8 : glisser d'une barre sur 120 images (ADR-0015 D12), réseau de
+/// 5 000 tâches au zoom Semaine. Le haut de la ligne visée est retrouvé par
+/// des clics (la sélection donne la ligne sous le pointeur), puis la barre
+/// est saisie en son milieu (abscisse par `TimeAxis::x`).
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn bar_drag() {
+    let (mut app, mut bench) = nav_bench();
+    // Une colonne du Gantt loin des barres du début : x = bord gauche + 5.
+    let probe_x = app.view().last_gantt_left + 5.0;
+    let k = row_clicked(&mut bench, &mut app, probe_x, 500.0).expect("aucune ligne à y = 500");
+    // Haut de la ligne k, au point près : plus petit y qui la donne encore.
+    let (mut lo, mut hi) = (500.0 - ROW_H, 500.0_f32);
+    while hi - lo > 0.5 {
+        let mid = f32::midpoint(lo, hi);
+        if row_clicked(&mut bench, &mut app, probe_x, mid) == Some(k) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    let top_k = hi;
+    // Feuille non commencée près de k, barre amenée à 200 points du bord.
+    let j = (k..k + 10)
+        .find(|&j| {
+            let row = app.rows().unwrap().row(j).unwrap();
+            row.kind == RowKind::Leaf && row.bar.is_some() && row.percent.get() == 0
+        })
+        .expect("aucune feuille près de la ligne visée");
+    let uid = app.rows().unwrap().row(j).unwrap().uid;
+    scroll_gantt_to_row(&mut app, j);
+    bench.settle(&mut app);
+    let y = top_k + (j - k) as f32 * ROW_H + ROW_H / 2.0;
+    let doc = app.document.as_ref().unwrap();
+    let (start, finish) = app.rows().unwrap().row(j).unwrap().bar.unwrap();
+    let axis = TimeAxis::new(
+        doc.range,
+        app.state.zoom,
+        app.view().last_gantt_left - app.view().gantt_scroll_x,
+    );
+    let x = f32::midpoint(axis.x(start), axis.x(finish));
+    let generation = doc.generation();
+    bench.frame(&mut app, vec![Event::PointerMoved(pos2(x, y))]);
+    bench.frame(
+        &mut app,
+        vec![Event::PointerButton {
+            pos: pos2(x, y),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        }],
+    );
+    // Au-delà du seuil de glisser d'egui (6 points).
+    for i in 1..=WARMUP {
+        bench.frame(&mut app, vec![Event::PointerMoved(pos2(x + 2.0 * i as f32, y))]);
+    }
+    let drag = app.view().drag.unwrap_or_else(|| {
+        panic!(
+            "glisser non commencé : ligne {j}, y {y}, x {x}, sélection {:?}",
+            app.selection
+        )
+    });
+    assert_eq!(drag.uid, uid);
+    let samples: Vec<Duration> = (0..120)
+        .map(|i| {
+            let p = pos2(x + (2 * WARMUP + i) as f32, y);
+            bench.frame(&mut app, vec![Event::PointerMoved(p)])
+        })
+        .collect();
+    let doc = app.document.as_ref().unwrap();
+    assert_eq!(doc.generation(), generation, "recalcul pendant le glisser");
+    let days = app.view().drag.unwrap().days;
+    assert!(days > 0, "écart nul après 125 points");
+    let end = pos2(x + (2 * WARMUP + 120) as f32, y);
+    bench.frame(
+        &mut app,
+        vec![Event::PointerButton {
+            pos: end,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        }],
+    );
+    bench.settle(&mut app);
+    assert!(app.view().drag.is_none());
+    assert_eq!(
+        app.document.as_ref().unwrap().generation(),
+        generation + 1,
+        "{:?}",
+        app.messages()
+    );
+    assert_budget("bar_drag", samples, bench.last);
 }

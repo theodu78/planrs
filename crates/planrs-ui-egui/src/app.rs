@@ -24,6 +24,7 @@
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use planrs_automation::error::codes;
+use planrs_automation::gesture::{GestureError, NotDraggable};
 use planrs_automation::{
     AnchorSpec, ApplyMode, ApplyOutcome, Batch, CommandError, CommandErrorKind, HistoryError, NewProject,
     Session,
@@ -33,6 +34,7 @@ use planrs_mspdi::ImportDiagnostic;
 
 use crate::action::{Action, ConfirmChoice, DialogKind, UiOp};
 use crate::column::Column;
+use crate::dialog::link::{self, LinkOutcome, LinkState};
 use crate::dialog::task_info::{self, FieldError, TaskInfoState};
 use crate::dialog::{DialogBody, DialogState};
 use crate::document::{self, LoadedDocument, OpenError};
@@ -1166,6 +1168,11 @@ impl App {
             Action::TimescaleToEnd => self.scroll_gantt_to_project(true),
             Action::ZoomBy(steps) => self.zoom_step(steps, self.gantt_center()),
             Action::ShowDialog(DialogKind::TaskInformation(uid)) => self.open_task_info(uid),
+            Action::ShowDialog(DialogKind::Link {
+                predecessor,
+                successor,
+            }) => self.open_link(predecessor, successor),
+            Action::GestureRefused(error) => self.report_gesture(error),
             Action::ShowTaskInformation => {
                 if let Some(uid) = self.selection {
                     self.open_task_info(uid);
@@ -1448,6 +1455,117 @@ impl App {
         });
     }
 
+    /// Ouvre la boîte « Dépendance » du lien `predecessor` → `successor`
+    /// (H-UI-21) : une fenêtre à la fois ; lien absent : rien.
+    fn open_link(&mut self, predecessor: TaskUid, successor: TaskUid) {
+        let lang = self.text_language();
+        let Some(document) = &self.document else {
+            return;
+        };
+        let key = document.cache_key();
+        let Some(state) = LinkState::open(&document.session, &self.texts, predecessor, successor, key, lang)
+        else {
+            return;
+        };
+        self.view.edit.editing = None;
+        self.view.drag = None;
+        self.view.dialog = Some(DialogState {
+            kind: DialogKind::Link {
+                predecessor,
+                successor,
+            },
+            body: DialogBody::Link(Box::new(state)),
+        });
+    }
+
+    /// « OK » (ou « Supprimer » si `delete`) de la boîte d'un lien :
+    /// document changé depuis l'ouverture ⇒ brouillon relu et
+    /// avertissement, rien appliqué ; décalage illisible ou refus du
+    /// registre ⇒ message dans la boîte ; rien de changé ⇒ boîte fermée
+    /// sans lot ; sinon un seul lot.
+    fn commit_link(&mut self, delete: bool) {
+        let lang = self.text_language();
+        let (
+            Some(document),
+            Some(DialogState {
+                body: DialogBody::Link(state),
+                ..
+            }),
+        ) = (&self.document, &mut self.view.dialog)
+        else {
+            self.close_dialog();
+            return;
+        };
+        let key = document.cache_key();
+        if key != state.key {
+            match LinkState::open(
+                &document.session,
+                &self.texts,
+                state.predecessor,
+                state.successor,
+                key,
+                lang,
+            ) {
+                Some(mut fresh) => {
+                    fresh.stale = true;
+                    **state = fresh;
+                }
+                None => self.close_dialog(),
+            }
+            return;
+        }
+        let batch = if delete {
+            Ok(Some(state.delete_batch()))
+        } else {
+            state.to_batch(&document.session, &self.texts, lang)
+        };
+        let batch = match batch {
+            Ok(Some(batch)) => batch,
+            Ok(None) => {
+                self.close_dialog();
+                return;
+            }
+            Err(message) => {
+                state.error = Some(message);
+                return;
+            }
+        };
+        match self.execute(&batch, EditOrigin::Dialog) {
+            Ok(_) => self.close_dialog(),
+            Err(error) => {
+                let message = task_info::command_message(&self.texts, &error, lang);
+                if let Some(DialogState {
+                    body: DialogBody::Link(state),
+                    ..
+                }) = &mut self.view.dialog
+                {
+                    state.error = Some(message);
+                }
+            }
+        }
+    }
+
+    /// Affiche le refus d'un geste du Gantt (bandeau), raison traduite.
+    fn report_gesture(&mut self, error: GestureError) {
+        let reason = match error {
+            GestureError::NotDraggable(_, NotDraggable::Summary) => TextId::GanttReasonSummary,
+            GestureError::NotDraggable(_, NotDraggable::Started) => TextId::GanttReasonStarted,
+            GestureError::NotDraggable(_, NotDraggable::Milestone) => TextId::GanttReasonMilestone,
+            GestureError::NotDraggable(_, NotDraggable::Excluded) | GestureError::UnknownTask(_) => {
+                TextId::GanttReasonExcluded
+            }
+            GestureError::NotDraggable(_, NotDraggable::Blank) => TextId::GanttReasonBlank,
+            GestureError::SameTask => TextId::GanttReasonSameTask,
+            GestureError::Overflow => TextId::GanttReasonOverflow,
+        };
+        let detail = self.texts.get(reason);
+        let text = self.texts.get_args(
+            error_text_id(error.code()),
+            &[("detail", Arg::Str(detail.into()))],
+        );
+        self.push_titled(Severity::Error, Some(TextId::CommandErrorTitle), text);
+    }
+
     /// Ferme la fenêtre ouverte ; la table reprend le focus clavier.
     fn close_dialog(&mut self) {
         if self.view.dialog.take().is_some() && self.document.is_some() {
@@ -1458,14 +1576,26 @@ impl App {
     /// Dessine la fenêtre ouverte, applique sa réponse, puis retire de
     /// l'image les touches qu'elle n'a pas prises.
     fn show_dialog(&mut self, ctx: &egui::Context) {
-        let outcome = match self.view.dialog.as_mut().map(|dialog| &mut dialog.body) {
-            Some(DialogBody::TaskInfo(state)) => task_info::show(ctx, &self.texts, state),
-            Some(DialogBody::Empty) | None => task_info::Outcome::Cancel,
+        /// Réponse de la fenêtre dessinée.
+        enum Shown {
+            /// « Informations sur la tâche ».
+            TaskInfo(task_info::Outcome),
+            /// Boîte d'un lien.
+            Link(LinkOutcome),
+        }
+        let shown = match self.view.dialog.as_mut().map(|dialog| &mut dialog.body) {
+            Some(DialogBody::TaskInfo(state)) => Shown::TaskInfo(task_info::show(ctx, &self.texts, state)),
+            Some(DialogBody::Link(state)) => Shown::Link(link::show(ctx, &self.texts, state)),
+            Some(DialogBody::Empty) | None => Shown::TaskInfo(task_info::Outcome::Cancel),
         };
-        match outcome {
-            task_info::Outcome::Open => {}
-            task_info::Outcome::Cancel => self.close_dialog(),
-            task_info::Outcome::Ok => self.commit_task_info(),
+        match shown {
+            Shown::TaskInfo(task_info::Outcome::Open) | Shown::Link(LinkOutcome::Open) => {}
+            Shown::TaskInfo(task_info::Outcome::Cancel) | Shown::Link(LinkOutcome::Cancel) => {
+                self.close_dialog();
+            }
+            Shown::TaskInfo(task_info::Outcome::Ok) => self.commit_task_info(),
+            Shown::Link(LinkOutcome::Ok) => self.commit_link(false),
+            Shown::Link(LinkOutcome::Delete) => self.commit_link(true),
         }
         ctx.input_mut(|input| {
             input.events.retain(|event| {

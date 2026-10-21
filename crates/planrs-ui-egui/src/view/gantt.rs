@@ -14,14 +14,15 @@ use std::ops::Range;
 use egui::{Id, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, pos2};
 use planrs_automation::command::TaskRef;
 use planrs_automation::command::params::ExplainParams;
+use planrs_automation::gesture::GestureKind;
 use planrs_automation::json::SideJson;
 use planrs_core::{LinkType, TaskUid, Weekday};
 
-use super::FrameCtx;
+use super::{BarDrag, FrameCtx};
 use crate::app::OpenDocument;
 use crate::document::project_calendar;
 use crate::edit::text_language;
-use crate::geom::{index_to_f32, row_at};
+use crate::geom::{BarZone, GanttHit, bar_zone, index_to_f32, near_polyline, row_at};
 use crate::i18n::{Arg, Language, Texts, error_text_id};
 use crate::query::{Query, QueryValue};
 use crate::rows::{Row, RowKind, RowModel};
@@ -876,6 +877,121 @@ pub fn paint_body(
     fc.stats.links_painted = links;
     fc.stats.shapes = fc.stats.shapes.saturating_add(shapes.len());
     painter.extend(shapes);
+}
+
+/// Tolérance du pointeur autour du tracé d'un lien, en points.
+const LINK_HIT_TOL: f32 = 3.0;
+
+/// Cible du pointeur `p` (écran) dans le corps du Gantt (H-UI-20,
+/// H-UI-21) : zone de la barre de sa ligne (bande verticale de la barre et
+/// 2 points autour ; losange d'un jalon), sinon tracé d'un lien qui
+/// traverse sa ligne, sinon rien. `origin` : coin haut-gauche écran de la
+/// ligne 0. Indices et UID seulement : aucune date.
+#[must_use]
+pub fn hit_test(
+    rows: &RowModel,
+    axis: &TimeAxis,
+    origin: Pos2,
+    row_h: f32,
+    tracking: bool,
+    p: Pos2,
+) -> GanttHit {
+    let Some(i) = row_at(p.y - origin.y, row_h, rows.len()) else {
+        return GanttHit::Empty;
+    };
+    let body = Body {
+        axis,
+        origin,
+        clip: Rect::EVERYTHING,
+        m: LinkMetrics {
+            row_h,
+            ..LinkMetrics::default()
+        },
+        tracking,
+    };
+    if let (Some(row), Some(bar)) = (rows.row(i), body.bar(rows, i)) {
+        let band = bar.hover_rect();
+        let (left, right) = if bar.kind == RowKind::Milestone {
+            (band.left(), band.right())
+        } else {
+            (bar.x0, bar.x1)
+        };
+        if band.y_range().contains(p.y) {
+            match bar_zone(p.x, left, right, row.kind) {
+                Some(BarZone::Progress) => return GanttHit::BarStart(row.uid),
+                Some(BarZone::Resize) => return GanttHit::BarEnd(row.uid),
+                Some(BarZone::Inside) => return GanttHit::Bar(row.uid),
+                None => {}
+            }
+        }
+    }
+    for link in rows.links_touching(i..i.saturating_add(1)) {
+        let (Ok(from), Ok(to)) = (usize::try_from(link.from), usize::try_from(link.to)) else {
+            continue;
+        };
+        let (Some(pred), Some(succ)) = (rows.row(from), rows.row(to)) else {
+            continue;
+        };
+        let (Some(pb), Some(sb)) = (body.bar(rows, from), body.bar(rows, to)) else {
+            continue;
+        };
+        let path = link_path(link.kind, pb.ends(), sb.ends(), &body.m);
+        if near_polyline(p, path.points(), LINK_HIT_TOL) || path.arrow_tip.distance(p) <= LINK_HIT_TOL {
+            return GanttHit::Link(pred.uid, succ.uid);
+        }
+    }
+    GanttHit::Empty
+}
+
+/// Fantôme du glisser en cours (J7, lot L8) : contour de la barre aux
+/// dates de l'aperçu (`gesture::preview`, abscisses par `TimeAxis::x`,
+/// sens date → pixel), bande d'avancement de l'aperçu, ou trait du lien
+/// tracé vers la ligne survolée. Aucune date n'est calculée ici.
+pub fn paint_drag(
+    ui: &egui::Ui,
+    fc: &FrameCtx<'_>,
+    axis: &TimeAxis,
+    origin: Pos2,
+    clip: Rect,
+    drag: &BarDrag,
+    hover: Option<Pos2>,
+) {
+    let Some(rows) = fc.rows else {
+        return;
+    };
+    let Some(i) = rows.index_of(drag.uid) else {
+        return;
+    };
+    let row_h = fc.metrics.row_h;
+    let top = row_top(origin, i, row_h);
+    let yc = top + row_h / 2.0;
+    let half = LinkMetrics::default().bar_half_h + 1.0;
+    let painter = ui.painter_at(clip);
+    let stroke = Stroke::new(1.5, fc.palette.text_strong);
+    let linking = drag.kind == GestureKind::Move && drag.over_row.is_some_and(|r| r != i);
+    if linking {
+        if let Some(p) = hover.filter(|p| p.is_finite()) {
+            let from = pos2(clip.left() + drag.origin_x, yc);
+            painter.line_segment([from, p], stroke);
+        }
+        return;
+    }
+    let Some(preview) = drag.preview else {
+        return;
+    };
+    let x0 = axis.x(preview.start);
+    let x1 = axis.x(preview.finish).max(x0 + 1.0);
+    if !(x0.is_finite() && x1.is_finite() && yc.is_finite()) {
+        return;
+    }
+    let rect = Rect::from_min_max(pos2(x0, yc - half), pos2(x1, yc + half));
+    painter.rect_stroke(rect, 2.0, stroke, StrokeKind::Outside);
+    if let Some(percent) = preview.percent {
+        // Bande proportionnelle au % de l'aperçu (dessin seulement).
+        let share = index_to_f32(usize::try_from(percent.get().clamp(0, 10_000)).unwrap_or(0)) / 10_000.0;
+        let band = Rect::from_min_max(pos2(x0, yc - 1.5), pos2(x0 + (x1 - x0) * share, yc + 1.5));
+        painter.rect_filled(band, 0.0, fc.palette.text_strong);
+    }
 }
 
 #[cfg(test)]

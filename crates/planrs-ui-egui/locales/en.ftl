@@ -378,6 +378,21 @@ menu-gantt-standard = Gantt Chart
 menu-gantt-tracking = Tracking Gantt
 
 # --- J7 L8 ---
+gantt-reason-summary = summary task (only linking is allowed)
+gantt-reason-started = task already started
+gantt-reason-milestone = milestone
+gantt-reason-excluded = task excluded from scheduling
+gantt-reason-blank = blank row
+gantt-reason-overflow = offset outside the allowed dates
+gantt-reason-same-task = task linked to itself
+link-dialog-title = Task Dependency
+link-dialog-from = From
+link-dialog-to = To
+link-dialog-type = Type
+link-dialog-lag = Lag
+link-dialog-delete = Delete
+link-dialog-stale = The project changed: the dependency was reloaded.
+link-dialog-task = { $id } { $name }
 
 # --- J7 L9 ---
 task-info-menu = Task Information…

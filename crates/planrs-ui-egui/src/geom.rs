@@ -7,8 +7,10 @@
 
 use std::ops::Range;
 
-use egui::{Rect, pos2, vec2};
+use egui::{Pos2, Rect, pos2, vec2};
+use planrs_core::TaskUid;
 
+use crate::rows::RowKind;
 use crate::state::TABLE_WIDTH_MIN;
 use crate::view::Metrics;
 
@@ -44,6 +46,21 @@ pub fn i64_to_f32(v: i64) -> f32 {
     v as f32
 }
 
+/// `f32` → entier borné à `[-bound, bound]` (`bound` ≥ 0) : 0 pour NaN,
+/// saturé aux bornes ; partie fractionnaire tronquée (l'appelant arrondit).
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "valeur bornée à ±bound avant la conversion ; `as` sature et donne 0 pour NaN"
+)]
+#[must_use]
+pub fn f32_to_bounded_i64(v: f32, bound: i64) -> i64 {
+    let bound = bound.max(0);
+    if v.is_nan() {
+        return 0;
+    }
+    (v as i64).clamp(bound.saturating_neg(), bound)
+}
+
 /// Largeur minimale laissée au Gantt par le séparateur, en points logiques.
 pub const GANTT_MIN_WIDTH: f32 = 200.0;
 
@@ -77,6 +94,89 @@ pub fn row_at(y: f32, row_h: f32, len: usize) -> Option<usize> {
     }
     let i = f32_to_index((y / row_h).floor());
     (i < len).then_some(i)
+}
+
+/// Cible d'un pointeur dans le Gantt (J7, lot L8, H-UI-20, H-UI-21) :
+/// UID et zones seulement, jamais une date.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GanttHit {
+    /// Intérieur d'une barre (déplacer, ou lier si lâché sur une autre
+    /// ligne ; récapitulative : lier seulement).
+    Bar(TaskUid),
+    /// Bord gauche d'une barre : glisser l'avancement.
+    BarStart(TaskUid),
+    /// Bord droit d'une barre : redimensionner.
+    BarEnd(TaskUid),
+    /// Tracé d'un lien (prédécesseur, successeur).
+    Link(TaskUid, TaskUid),
+    /// Rien : le glisser fait défiler.
+    Empty,
+}
+
+/// Zone d'une barre sous le pointeur (H-UI-20).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BarZone {
+    /// Bord gauche : avancement.
+    Progress,
+    /// Bord droit : durée.
+    Resize,
+    /// Intérieur : déplacer ou lier.
+    Inside,
+}
+
+/// Largeur des bords actifs d'une barre, en points.
+pub const BAR_EDGE: f32 = 4.0;
+
+/// Largeur en dessous de laquelle une barre n'a que son intérieur.
+pub const BAR_ZONES_MIN: f32 = 12.0;
+
+/// Zone de l'abscisse `x` sur une barre qui s'étend de `left` à `right`
+/// (H-UI-20) : feuille d'au moins [`BAR_ZONES_MIN`] points, `[left, left +
+/// 4[` avancement et `]right − 4, right]` durée, le reste intérieur ;
+/// feuille plus étroite, jalon et récapitulative : intérieur seul ; ligne
+/// vide ou exclue, hors de la barre ou valeurs non finies : `None`.
+#[must_use]
+pub fn bar_zone(x: f32, left: f32, right: f32, kind: RowKind) -> Option<BarZone> {
+    if !(x.is_finite() && left.is_finite() && right.is_finite()) || x < left || x > right {
+        return None;
+    }
+    match kind {
+        RowKind::Null | RowKind::Excluded => None,
+        RowKind::Leaf if right - left >= BAR_ZONES_MIN && x - left < BAR_EDGE => Some(BarZone::Progress),
+        RowKind::Leaf if right - left >= BAR_ZONES_MIN && right - x < BAR_EDGE => Some(BarZone::Resize),
+        RowKind::Leaf | RowKind::Milestone | RowKind::Summary => Some(BarZone::Inside),
+    }
+}
+
+/// Vrai si `p` est à au plus `tol` points d'un segment de la polyligne
+/// `points` (tracé d'un lien) ; faux pour une polyligne de moins de deux
+/// points ou des valeurs non finies.
+#[must_use]
+pub fn near_polyline(p: Pos2, points: &[Pos2], tol: f32) -> bool {
+    if !p.is_finite() || !tol.is_finite() {
+        return false;
+    }
+    points.windows(2).any(|w| match w {
+        [a, b] => segment_distance(p, *a, *b) <= tol,
+        _ => false,
+    })
+}
+
+/// Distance de `point` au segment `[from, to]` (infinie si non finie).
+fn segment_distance(point: Pos2, from: Pos2, to: Pos2) -> f32 {
+    let (dx, dy) = (to.x - from.x, to.y - from.y);
+    let len2 = dx * dx + dy * dy;
+    let along = if len2 > 0.0 {
+        (((point.x - from.x) * dx + (point.y - from.y) * dy) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let distance = pos2(from.x + dx * along, from.y + dy * along).distance(point);
+    if distance.is_finite() {
+        distance
+    } else {
+        f32::INFINITY
+    }
 }
 
 /// Rectangles de la vue principale (coordonnées écran).
@@ -172,7 +272,11 @@ pub fn main_layout(avail: Rect, table_width: f32, m: &Metrics) -> MainLayout {
 mod tests {
     use egui::{Rect, pos2, vec2};
 
-    use super::{GANTT_MIN_WIDTH, f32_to_index, index_to_f32, main_layout, row_at, visible_rows};
+    use super::{
+        BarZone, GANTT_MIN_WIDTH, bar_zone, f32_to_bounded_i64, f32_to_index, index_to_f32, main_layout,
+        near_polyline, row_at, visible_rows,
+    };
+    use crate::rows::RowKind;
     use crate::state::TABLE_WIDTH_MIN;
     use crate::view::Metrics;
 
@@ -236,6 +340,56 @@ mod tests {
         // Valeurs extrêmes mais finies : bornées à `len`.
         let r = visible_rows(-1e30, 1e30, 22.0, 10, usize::MAX);
         assert_eq!(r, 0..10);
+    }
+
+    #[test]
+    fn bounded_i64_conversion() {
+        assert_eq!(f32_to_bounded_i64(f32::NAN, 10), 0);
+        assert_eq!(f32_to_bounded_i64(f32::INFINITY, 10), 10);
+        assert_eq!(f32_to_bounded_i64(f32::NEG_INFINITY, 10), -10);
+        assert_eq!(f32_to_bounded_i64(3.7, 10), 3);
+        assert_eq!(f32_to_bounded_i64(-3.0, 10), -3);
+        assert_eq!(f32_to_bounded_i64(5.0, -1), 0);
+    }
+
+    #[test]
+    fn h_ui_20_bar_zones() {
+        // Barre de 60 px : x ∈ [0, 4[ avancement, ]56, 60] durée.
+        let zone = |x| bar_zone(x, 0.0, 60.0, RowKind::Leaf);
+        assert_eq!(zone(0.0), Some(BarZone::Progress));
+        assert_eq!(zone(3.9), Some(BarZone::Progress));
+        assert_eq!(zone(4.0), Some(BarZone::Inside));
+        assert_eq!(zone(56.0), Some(BarZone::Inside));
+        assert_eq!(zone(56.1), Some(BarZone::Resize));
+        assert_eq!(zone(60.0), Some(BarZone::Resize));
+        assert_eq!(zone(60.1), None);
+        assert_eq!(zone(-0.1), None);
+        assert_eq!(zone(f32::NAN), None);
+        // Barre < 12 px : intérieur seul ; jalon, récapitulative : intérieur.
+        assert_eq!(bar_zone(1.0, 0.0, 11.9, RowKind::Leaf), Some(BarZone::Inside));
+        assert_eq!(bar_zone(0.0, 0.0, 60.0, RowKind::Summary), Some(BarZone::Inside));
+        assert_eq!(
+            bar_zone(59.0, 0.0, 60.0, RowKind::Milestone),
+            Some(BarZone::Inside)
+        );
+        assert_eq!(bar_zone(10.0, 0.0, 60.0, RowKind::Excluded), None);
+        assert_eq!(bar_zone(10.0, 0.0, 60.0, RowKind::Null), None);
+    }
+
+    #[test]
+    fn near_polyline_segments() {
+        let pts = [pos2(0.0, 0.0), pos2(10.0, 0.0), pos2(10.0, 20.0)];
+        assert!(near_polyline(pos2(5.0, 2.0), &pts, 3.0));
+        assert!(near_polyline(pos2(12.0, 15.0), &pts, 3.0));
+        assert!(!near_polyline(pos2(5.0, 5.0), &pts, 3.0));
+        assert!(!near_polyline(pos2(f32::NAN, 0.0), &pts, 3.0));
+        assert!(!near_polyline(pos2(0.0, 0.0), &pts[..1], 3.0));
+        // Segment dégénéré : distance au point.
+        assert!(near_polyline(
+            pos2(1.0, 1.0),
+            &[pos2(0.0, 0.0), pos2(0.0, 0.0)],
+            2.0
+        ));
     }
 
     #[test]

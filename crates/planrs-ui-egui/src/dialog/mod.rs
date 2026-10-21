@@ -10,6 +10,7 @@
 //! prises par la fenêtre sont retirées de l'image (rien n'atteint la
 //! table, lot L9).
 
+pub mod link;
 pub mod task_info;
 
 use crate::action::DialogKind;
@@ -30,4 +31,6 @@ pub enum DialogBody {
     Empty,
     /// « Informations sur la tâche » (lot L9).
     TaskInfo(Box<task_info::TaskInfoState>),
+    /// Boîte « Dépendance » (lot L8, H-UI-21).
+    Link(Box<link::LinkState>),
 }

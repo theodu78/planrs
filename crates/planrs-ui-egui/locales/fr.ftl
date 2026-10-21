@@ -377,6 +377,21 @@ menu-gantt-standard = Diagramme de Gantt
 menu-gantt-tracking = Gantt de suivi
 
 # --- J7 L8 ---
+gantt-reason-summary = récapitulative (seul le lien est permis)
+gantt-reason-started = tâche commencée
+gantt-reason-milestone = jalon
+gantt-reason-excluded = tâche exclue du calcul
+gantt-reason-blank = ligne vide
+gantt-reason-overflow = écart hors des dates permises
+gantt-reason-same-task = lien d'une tâche vers elle-même
+link-dialog-title = Dépendance
+link-dialog-from = De
+link-dialog-to = À
+link-dialog-type = Type
+link-dialog-lag = Décalage
+link-dialog-delete = Supprimer
+link-dialog-stale = Le projet a changé : la dépendance a été relue.
+link-dialog-task = { $id } { $name }
 
 # --- J7 L9 ---
 task-info-menu = Informations sur la tâche…

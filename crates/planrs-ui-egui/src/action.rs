@@ -5,6 +5,7 @@
 //! Une action sérialisée préfigure aussi le canal de contrôle (ADR-0002).
 
 use planrs_automation::Batch;
+use planrs_automation::gesture::GestureError;
 use planrs_core::TaskUid;
 
 use crate::column::Column;
@@ -156,6 +157,9 @@ pub enum Action {
     Recover(RecoverChoice),
     /// Action d'interface demandée par un agent (`app.ui`, lot L3).
     Ui(UiOp),
+    /// Geste du Gantt refusé au lâcher (J7, lot L8 : barre commencée,
+    /// jalon, écart hors limites) : message au bandeau.
+    GestureRefused(GestureError),
 }
 
 /// Fenêtre à ouvrir (J7, ADR-0015 D6 ; `Action::OpenDialog` reste le

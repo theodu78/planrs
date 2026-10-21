@@ -15,6 +15,16 @@
 //! que `Select`, réécrit ici d'après les modificateurs de l'image) ; un clic
 //! droit sur une ligne la sélectionne (si elle ne l'est pas déjà) et ouvre
 //! le menu des commandes de structure (`Action::Structure`).
+//!
+//! Gestes du Gantt (J7, lot L8, H-UI-20, H-UI-21, R-240 à R-243) : un
+//! glisser qui part d'une barre ([`gantt::hit_test`]) devient un
+//! [`BarDrag`] ; l'interface n'en garde qu'un écart en jours entiers
+//! (`TimeAxis::days_for_dx`), l'aperçu vient de
+//! `planrs_automation::gesture::preview` (recalculé quand l'écart change,
+//! jamais de recalcul du planning) et le lâcher pousse un seul lot
+//! (`ExecOn`). Glisser dans le vide : défilement, inchangé. Double-clic sur
+//! une barre : « Informations sur la tâche » ; sur un lien : boîte
+//! « Dépendance ». Échap annule le glisser.
 
 use egui::containers::menu::menu_style;
 use egui::scroll_area::ScrollBarVisibility;
@@ -23,14 +33,18 @@ use egui::{
     SetOpenCommand, Stroke, pos2, vec2,
 };
 
+use planrs_automation::gesture::{self, GestureKind};
 use planrs_core::TaskUid;
 
-use super::{FrameCtx, OVERSCAN, Pane, ViewTransient, gantt, table, timescale};
-use crate::action::Action;
-use crate::geom::{self, MainLayout};
+use super::{BarDrag, FrameCtx, OVERSCAN, Pane, ViewTransient, gantt, table, timescale};
+use crate::action::{Action, DialogKind};
+use crate::app::OpenDocument;
+use crate::geom::{self, GanttHit, MainLayout};
 use crate::i18n::TextId;
 use crate::keymap::{self, Binding, UiBinding};
+use crate::rows::{RowKind, RowModel};
 use crate::selection::SelectMode;
+use crate::state::GanttStyle;
 use crate::structure::StructureOp;
 use crate::timescale::TimeAxis;
 
@@ -257,6 +271,7 @@ fn paint_rows(
     let table_scroll_x = view.table_scroll_x;
     let edit = &mut view.edit;
     let cursor = &mut view.cursor;
+    let drag = &mut view.drag;
     let out = area.show_viewport(&mut body_ui, |ui, viewport| {
         let origin = ui.max_rect().min;
         ui.set_min_size(vec2(ui.available_width().max(0.0), content_h));
@@ -308,7 +323,13 @@ fn paint_rows(
         let from_gantt = ui
             .input(|i| i.pointer.press_origin())
             .is_some_and(|p| gantt_clip.contains(p));
-        if background.dragged_by(PointerButton::Primary) && from_gantt {
+        let gesture = bar_gesture(ui, fc, drag, &background, origin, axis, gantt_clip, from_gantt);
+        if let Some(d) = drag.as_ref() {
+            let pointer = ui.input(|i| i.pointer.interact_pos());
+            gantt::paint_drag(ui, fc, axis, origin, gantt_clip, d, pointer);
+        }
+        gantt_double_click(fc, &background, origin, axis, gantt_clip);
+        if !gesture && background.dragged_by(PointerButton::Primary) && from_gantt {
             let drag = background.drag_delta().x;
             if drag.is_finite() {
                 dx -= drag;
@@ -324,6 +345,200 @@ fn paint_rows(
     });
     // Les plages dessinées sont relevées par chaque volet lui-même.
     out.inner
+}
+
+/// Écart en jours du glisser `d` pour l'abscisse écran `x` : depuis le
+/// point de départ (déplacer, redimensionner), depuis le début de la barre
+/// (avancement, R-242). `left` : bord gauche du Gantt.
+fn gesture_days(d: &BarDrag, rows: &RowModel, axis: &TimeAxis, left: f32, x: f32) -> i64 {
+    match d.kind {
+        GestureKind::Move | GestureKind::Resize => axis.days_for_dx(x - left - d.origin_x),
+        GestureKind::Progress => {
+            let start_x = rows
+                .index_of(d.uid)
+                .and_then(|i| rows.row(i))
+                .and_then(|row| row.bar)
+                .map_or(left + d.origin_x, |(start, _)| axis.x(start));
+            axis.days_for_dx(x - start_x)
+        }
+    }
+}
+
+/// Aperçu du glisser `d` (calendrier seul, sans recalcul) ; refus : aucun.
+fn gesture_preview(doc: &OpenDocument, d: &BarDrag) -> Option<gesture::Preview> {
+    gesture::preview(&doc.session, &doc.calendars(), d.uid, d.kind, d.days).ok()
+}
+
+/// Glisser d'une barre : début sur une zone de barre (H-UI-20), suivi de
+/// l'écart et de la ligne survolée, lâcher ou Échap. Rend vrai tant qu'un
+/// geste tient le glisser du fond (pas de défilement).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "contexte de l'image passé tel quel, comme les autres volets"
+)]
+fn bar_gesture(
+    ui: &egui::Ui,
+    fc: &mut FrameCtx<'_>,
+    drag: &mut Option<BarDrag>,
+    background: &egui::Response,
+    origin: Pos2,
+    axis: &TimeAxis,
+    gantt_clip: Rect,
+    from_gantt: bool,
+) -> bool {
+    let (Some(doc), Some(rows)) = (fc.doc, fc.rows) else {
+        *drag = None;
+        return false;
+    };
+    let row_h = fc.metrics.row_h;
+    let tracking = fc.state.gantt_style == GanttStyle::Tracking;
+    let left = gantt_clip.left();
+    let pointer = ui.input(|i| i.pointer.interact_pos());
+    if drag.is_none()
+        && from_gantt
+        && background.drag_started_by(PointerButton::Primary)
+        && let Some(p) = ui.input(|i| i.pointer.press_origin())
+    {
+        let start = match gantt::hit_test(rows, axis, origin, row_h, tracking, p) {
+            GanttHit::Bar(uid) => Some((uid, GestureKind::Move)),
+            GanttHit::BarStart(uid) => Some((uid, GestureKind::Progress)),
+            GanttHit::BarEnd(uid) => Some((uid, GestureKind::Resize)),
+            GanttHit::Link(..) | GanttHit::Empty => None,
+        };
+        if let Some((uid, kind)) = start {
+            let mut d = BarDrag {
+                uid,
+                kind,
+                origin_x: p.x - left,
+                days: 0,
+                over_row: geom::row_at(p.y - origin.y, row_h, rows.len()),
+                preview: None,
+            };
+            d.days = gesture_days(&d, rows, axis, left, p.x);
+            d.preview = gesture_preview(doc, &d);
+            *drag = Some(d);
+            fc.actions.push(Action::Select(Some(uid)));
+            fc.actions.push(Action::FocusPane(Pane::Gantt));
+        }
+    }
+    let Some(current) = drag.as_mut() else {
+        if !from_gantt
+            && let Some(p) = ui.ctx().pointer_hover_pos()
+            && gantt_clip.contains(p)
+        {
+            hover_cursor(ui, gantt::hit_test(rows, axis, origin, row_h, tracking, p));
+        }
+        return false;
+    };
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        *drag = None;
+        return true;
+    }
+    if let Some(p) = pointer.filter(|p| p.is_finite()) {
+        let days = gesture_days(current, rows, axis, left, p.x);
+        if days != current.days {
+            current.days = days;
+            current.preview = gesture_preview(doc, current);
+        }
+        current.over_row = geom::row_at(p.y - origin.y, row_h, rows.len());
+    }
+    let released = background.drag_stopped() || !ui.input(|i| i.pointer.primary_down());
+    if released {
+        let done = *current;
+        *drag = None;
+        let moved = pointer.is_some_and(|p| axis.days_for_dx(p.x - left - done.origin_x) != 0);
+        drop_gesture(fc, doc, rows, &done, moved);
+    } else {
+        let icon = match current.kind {
+            GestureKind::Move => CursorIcon::Grabbing,
+            GestureKind::Resize | GestureKind::Progress => CursorIcon::ResizeHorizontal,
+        };
+        ui.ctx().set_cursor_icon(icon);
+    }
+    true
+}
+
+/// Curseur au survol d'une barre : bords redimensionnables, intérieur
+/// saisissable.
+fn hover_cursor(ui: &egui::Ui, hit: GanttHit) {
+    match hit {
+        GanttHit::BarStart(_) | GanttHit::BarEnd(_) => ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal),
+        GanttHit::Bar(_) => ui.ctx().set_cursor_icon(CursorIcon::Grab),
+        GanttHit::Link(..) => ui.ctx().set_cursor_icon(CursorIcon::PointingHand),
+        GanttHit::Empty => {}
+    }
+}
+
+/// Lâcher du glisser `d` : un seul lot (`ExecOn`), ou le refus du geste au
+/// bandeau ; lien vers une autre ligne (R-243 : ligne vide, tâche exclue ou
+/// la même tâche ⇒ rien), déplacement (R-240 ; récapitulative : rien),
+/// redimensionnement (R-241), avancement (R-242, seulement si le pointeur
+/// a bougé d'au moins un demi-jour).
+fn drop_gesture(fc: &mut FrameCtx<'_>, doc: &OpenDocument, rows: &RowModel, d: &BarDrag, moved: bool) {
+    let s = &doc.session;
+    let origin_row = rows.index_of(d.uid);
+    let result = match d.kind {
+        GestureKind::Move => {
+            if let Some(target) = d.over_row.filter(|&r| Some(r) != origin_row) {
+                let batch = rows
+                    .row(target)
+                    .and_then(|row| gesture::link_drag(s, d.uid, row.uid).ok());
+                Ok(batch)
+            } else if origin_row
+                .and_then(|i| rows.row(i))
+                .is_some_and(|row| row.kind == RowKind::Summary)
+            {
+                Ok(None)
+            } else {
+                gesture::bar_move(s, d.uid, d.days)
+            }
+        }
+        GestureKind::Resize => gesture::bar_resize(s, &doc.calendars(), d.uid, d.days),
+        GestureKind::Progress if moved => gesture::progress_drag(s, &doc.calendars(), d.uid, d.days),
+        GestureKind::Progress => Ok(None),
+    };
+    match result {
+        Ok(Some(batch)) => fc.actions.push(Action::ExecOn {
+            opening: doc.opening,
+            batch,
+        }),
+        Ok(None) => {}
+        Err(error) => fc.actions.push(Action::GestureRefused(error)),
+    }
+}
+
+/// Double-clic dans le Gantt : « Informations sur la tâche » sur une barre
+/// (H-UI-19), boîte « Dépendance » sur un lien (H-UI-21).
+fn gantt_double_click(
+    fc: &mut FrameCtx<'_>,
+    background: &egui::Response,
+    origin: Pos2,
+    axis: &TimeAxis,
+    gantt_clip: Rect,
+) {
+    // Un triple-clic compte aussi (un clic précédent, ailleurs, à moins du
+    // délai d'egui, transforme le double-clic en triple, comme dans la table).
+    if !(background.double_clicked() || background.triple_clicked()) {
+        return;
+    }
+    let (Some(rows), Some(p)) = (fc.rows, background.interact_pointer_pos()) else {
+        return;
+    };
+    if !gantt_clip.contains(p) {
+        return;
+    }
+    let tracking = fc.state.gantt_style == GanttStyle::Tracking;
+    let kind = match gantt::hit_test(rows, axis, origin, fc.metrics.row_h, tracking, p) {
+        GanttHit::Bar(uid) | GanttHit::BarStart(uid) | GanttHit::BarEnd(uid) => {
+            DialogKind::TaskInformation(uid)
+        }
+        GanttHit::Link(predecessor, successor) => DialogKind::Link {
+            predecessor,
+            successor,
+        },
+        GanttHit::Empty => return,
+    };
+    fc.actions.push(Action::ShowDialog(kind));
 }
 
 /// Position d'un clic droit relâché dans cette image au-dessus de `zone`, sur

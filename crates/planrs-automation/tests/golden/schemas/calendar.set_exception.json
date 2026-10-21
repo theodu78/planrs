@@ -21,6 +21,13 @@
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
       "type": "string"
     },
+    "name": {
+      "description": "Nom de l'exception (J7, R-165 amendée, ≤ 512 caractères, O44 ;\nabsent : nom gardé à un remplacement, vide à une création).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "ranges": {
       "default": [],
       "description": "Plages ouvrées `[\"08:00\",\"12:00\"]` ; vide : jours chômés.",

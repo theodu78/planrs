@@ -2,13 +2,13 @@
 //! des outils MCP, des commandes de la CLI, du canal et des raccourcis de
 //! l'interface.
 //!
-//! Entrées disponibles : J4, les huit entrées J5 (lot L8 de J5) et les six
-//! entrées J6 (contrat du lot L0, activées par les lots L7 et L8 de J6).
-//! Une entrée réservée à un jalon futur (`Availability::Milestone`) n'est
-//! pas listée et est refusée `command.not_yet_available` : les cinq
-//! écritures J7 (`calendar.add`, `calendar.update`, `calendar.set_week`,
-//! `calendar.delete`, `baseline.clear`, contrat J7 L0, activées par le lot
-//! L5). Les trois entrées `app.*` (genre [`Kind::Ui`]) ne sont servies que
+//! Entrées disponibles : J4, les huit entrées J5 (lot L8 de J5), les six
+//! entrées J6 (contrat du lot L0, activées par les lots L7 et L8 de J6) et
+//! les cinq écritures J7 (`calendar.add`, `calendar.update`,
+//! `calendar.set_week`, `calendar.delete`, `baseline.clear`, contrat J7 L0,
+//! activées par le lot L5). Une entrée réservée à un jalon futur
+//! (`Availability::Milestone`) n'est pas listée et est refusée
+//! `command.not_yet_available` (aucune en J7). Les trois entrées `app.*` (genre [`Kind::Ui`]) ne sont servies que
 //! par une application rattachée (`Availability::Attached`, ADR-0015 D11) :
 //! non listées par une surface « headless », refusées
 //! `control.not_attached`. Le schéma de chaque
@@ -144,6 +144,10 @@ const fn now(
 
 /// Entrée réservée au jalon `milestone` (non listée, refusée
 /// `command.not_yet_available`).
+#[allow(
+    dead_code,
+    reason = "aucune entrée réservée depuis le lot L5 de J7 ; gardée pour les jalons suivants"
+)]
 const fn reserved(
     milestone: u8,
     id: &'static str,
@@ -259,8 +263,7 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Modifie une affectation (unités, travail, quantité, retard).",
         "Update an assignment (units, work, quantity, delay).",
     ),
-    reserved(
-        7,
+    now(
         "baseline.clear",
         "clear_baseline",
         Kind::Write,
@@ -284,8 +287,7 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Applique un lot de commandes en une seule transaction (étiquettes \"$x\" entre commandes).",
         "Apply a batch of commands as one transaction (\"$x\" labels across commands).",
     ),
-    reserved(
-        7,
+    now(
         "calendar.add",
         "add_calendar",
         Kind::Write,
@@ -293,8 +295,7 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Crée un calendrier : de base, dérivé d'une base, ou copie d'un calendrier existant.",
         "Create a calendar: base, derived from a base, or copy of an existing calendar.",
     ),
-    reserved(
-        7,
+    now(
         "calendar.delete",
         "delete_calendar",
         Kind::Write,
@@ -318,8 +319,7 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Crée ou remplace une exception de calendrier (jours chômés ou horaires).",
         "Create or replace a calendar exception (nonworking days or working times).",
     ),
-    reserved(
-        7,
+    now(
         "calendar.set_week",
         "set_work_week",
         Kind::Write,
@@ -327,8 +327,7 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Règle la semaine type d'un calendrier : jours hérités, chômés ou ouvrés sur des plages.",
         "Set a calendar's work week: days inherited, nonworking or working on time ranges.",
     ),
-    reserved(
-        7,
+    now(
         "calendar.update",
         "update_calendar",
         Kind::Write,

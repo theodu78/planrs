@@ -214,26 +214,20 @@ pub enum Command {
     /// Enregistre une ligne de base (R-227).
     #[serde(rename = "baseline.set")]
     BaselineSet(BaselineSet),
-    /// Crée un calendrier (R-248 ; contrat J7, réservée jusqu'au lot L5 :
-    /// hors du schéma des lots, refusée `command.not_yet_available`).
+    /// Crée un calendrier (R-248 ; J7).
     #[serde(rename = "calendar.add")]
-    #[schemars(skip)]
     CalendarAdd(CalendarAdd),
-    /// Renomme un calendrier ou change sa base (R-248 ; réservée, L5).
+    /// Renomme un calendrier ou change sa base (R-248 ; J7).
     #[serde(rename = "calendar.update")]
-    #[schemars(skip)]
     CalendarUpdate(CalendarUpdate),
-    /// Règle la semaine type d'un calendrier (R-247 ; réservée, L5).
+    /// Règle la semaine type d'un calendrier (R-247 ; J7).
     #[serde(rename = "calendar.set_week")]
-    #[schemars(skip)]
     CalendarSetWeek(CalendarSetWeek),
-    /// Supprime un calendrier (R-248 ; réservée, L5).
+    /// Supprime un calendrier (R-248 ; J7).
     #[serde(rename = "calendar.delete")]
-    #[schemars(skip)]
     CalendarDelete(CalendarDelete),
-    /// Efface une ligne de base (R-250 ; réservée, L5).
+    /// Efface une ligne de base (R-250 ; J7).
     #[serde(rename = "baseline.clear")]
-    #[schemars(skip)]
     BaselineClear(BaselineClear),
 }
 
@@ -616,11 +610,9 @@ pub struct ProjectInfoPatch {
     /// R-197 ; J5, refusé jusqu'au lot L7).
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
     pub new_tasks_effort_driven: Patch<bool>,
-    /// Calendrier du projet (J7, R-249 ; UID d'un calendrier existant,
-    /// `null` refusé). Contrat L0 : hors du schéma, refusé
-    /// `command.not_yet_available` jusqu'au lot L5.
+    /// Calendrier du projet (J7, R-249 ; UID d'un calendrier existant, de
+    /// base ou dérivé, `null` refusé).
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
-    #[schemars(skip)]
     pub calendar: Patch<u32>,
 }
 
@@ -761,11 +753,9 @@ pub struct CalendarException {
     #[serde(default)]
     #[schemars(with = "Vec<[TimeOfDaySchema; 2]>")]
     pub ranges: Vec<[TimeOfDay; 2]>,
-    /// Nom de l'exception (J7, R-165 amendée, ≤ 512 caractères, O44).
-    /// Contrat L0 : hors du schéma, refusé `command.not_yet_available`
-    /// jusqu'au lot L5.
+    /// Nom de l'exception (J7, R-165 amendée, ≤ 512 caractères, O44 ;
+    /// absent : nom gardé à un remplacement, vide à une création).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
     pub name: Option<String>,
 }
 
@@ -963,19 +953,17 @@ pub struct ResourceUpdate {
     /// Ressource inactive.
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
     pub inactive: Patch<bool>,
-    /// Taux standard (J7, R-195 amendée : stocké, jamais calculé). Contrat
-    /// L0 : hors du schéma, refusé `command.not_yet_available` jusqu'au
-    /// lot L5 (comme les deux champs suivants).
+    /// Taux standard (J7, R-195 amendée : stocké tel quel, jamais
+    /// calculé ; `null` : 0).
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
-    #[schemars(skip)]
     pub standard_rate: Patch<RateJson>,
-    /// Taux des heures supplémentaires (J7, R-195 amendée).
+    /// Taux des heures supplémentaires (J7, R-195 amendée ; ressource de
+    /// travail).
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
-    #[schemars(skip)]
     pub overtime_rate: Patch<RateJson>,
-    /// Coût par utilisation (J7, R-195 amendée ; `per` sans objet).
+    /// Coût par utilisation (J7, R-195 amendée ; montant seul, `per`
+    /// refusé).
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
-    #[schemars(skip)]
     pub cost_per_use: Patch<RateJson>,
 }
 

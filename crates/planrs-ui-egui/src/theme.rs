@@ -41,9 +41,8 @@ pub struct Palette {
     pub status_date: Color32,
     /// Séparateur table / Gantt.
     pub splitter: Color32,
-    /// Fond des jours chômés (week-ends, jours fériés) dans le Gantt.
-    /// Réservé au lot L7 (jours chômés, ADR-0011 décision 5) : pas encore
-    /// dessiné, gardé pour que la palette soit validée d'avance.
+    /// Fond des jours chômés du calendrier du projet (week-ends, jours
+    /// fériés) dans le Gantt, aux zooms Jour et Semaine (J7, lot L7, N3).
     pub non_working: Color32,
     /// Barre à crochets d'une récapitulative critique.
     pub summary_critical: Color32,
@@ -54,6 +53,13 @@ pub struct Palette {
     /// Cadre de la cellule courante de la table (J7, lot L1) : contraste
     /// ≥ 3:1 sur le fond, le fond alterné et la sélection.
     pub cursor: Color32,
+    /// Barre de la ligne de base 0 du Gantt de suivi (J7, lot L7,
+    /// H-UI-22) : contraste ≥ 3:1 sur le fond et sur les jours chômés.
+    pub baseline: Color32,
+    /// Bande d'avancement du Gantt de suivi, dessinée dans la barre (J7,
+    /// lot L7, H-UI-22) : contraste ≥ 3:1 sur la barre et sur la barre
+    /// critique.
+    pub progress: Color32,
 }
 
 impl Palette {
@@ -80,6 +86,8 @@ impl Palette {
         message_error_bg: Color32::from_rgb(0xFD, 0xEC, 0xEA),
         message_warning_bg: Color32::from_rgb(0xFF, 0xF4, 0xD6),
         cursor: Color32::from_rgb(0x1F, 0x5F, 0xBF),
+        baseline: Color32::from_rgb(0x80, 0x86, 0x8F),
+        progress: Color32::from_rgb(0x10, 0x14, 0x1A),
     };
 
     /// Palette sombre.
@@ -105,6 +113,8 @@ impl Palette {
         message_error_bg: Color32::from_rgb(0x3A, 0x14, 0x14),
         message_warning_bg: Color32::from_rgb(0x3A, 0x30, 0x12),
         cursor: Color32::from_rgb(0x8A, 0xB4, 0xF8),
+        baseline: Color32::from_rgb(0x8E, 0x94, 0x9C),
+        progress: Color32::from_rgb(0x0F, 0x23, 0x40),
     };
 
     /// Palette du thème résolu.
@@ -245,6 +255,40 @@ mod tests {
         }
     }
 
+    /// J7 L7 (H-UI-22, N3) : ligne de base lisible sur le fond et sur les
+    /// jours chômés ; bande d'avancement lisible dans la barre (courante et
+    /// critique) ; barres, jalons et liens lisibles sur un jour chômé ;
+    /// jours chômés distincts du fond ; ligne de base distincte de la barre.
+    #[test]
+    fn palette_tracking_and_non_working_contrast() {
+        for (name, p) in palettes() {
+            assert_ne!(p.non_working, p.background, "{name}");
+            for (label, bg) in [("fond", p.background), ("jour chômé", p.non_working)] {
+                let ratio = contrast(p.baseline, bg);
+                assert!(ratio >= 3.0, "{name} : ligne de base sur {label} = {ratio:.2}");
+            }
+            for (label, bar) in [("barre", p.bar), ("barre critique", p.critical)] {
+                let ratio = contrast(p.progress, bar);
+                assert!(ratio >= 3.0, "{name} : avancement dans la {label} = {ratio:.2}");
+            }
+            for (label, color) in [
+                ("barre", p.bar),
+                ("critique", p.critical),
+                ("jalon", p.milestone),
+                ("récapitulative", p.summary),
+                ("lien", p.link),
+                ("date d'état", p.status_date),
+            ] {
+                let ratio = contrast(color, p.non_working);
+                assert!(ratio >= 3.0, "{name} : {label} sur jour chômé = {ratio:.2}");
+            }
+            assert_ne!(p.baseline, p.bar, "{name}");
+            // Ligne de base grise : aucune composante dominante nette.
+            let spread = p.baseline.r().abs_diff(p.baseline.b());
+            assert!(spread < 0x20, "{name} : ligne de base teintée");
+        }
+    }
+
     #[test]
     fn palette_critical_distinct_from_bar() {
         for (name, p) in palettes() {
@@ -289,6 +333,8 @@ mod tests {
                 p.message_error_bg,
                 p.message_warning_bg,
                 p.cursor,
+                p.baseline,
+                p.progress,
             ] {
                 assert_eq!(color.a(), 255, "{name} : {color:?}");
             }

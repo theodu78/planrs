@@ -399,6 +399,8 @@ text_ids! {
     ColumnMenuHide => "column-menu-hide",
     TableScrollLabel => "table-scroll-label",
     // --- J7 L7 ---
+    MenuGanttStandard => "menu-gantt-standard",
+    MenuGanttTracking => "menu-gantt-tracking",
     // --- J7 L8 ---
     // --- J7 L9 ---
     // --- J7 L10 ---

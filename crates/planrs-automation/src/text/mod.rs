@@ -2,7 +2,10 @@
 //! « parseur du texte : J4 (planrs-automation) », avancé en J3 par
 //! l'ADR-0010) : durées (« 5j », « 1,5 j », « 5ej », « 2j? »), décalages
 //! (« +2j », « -50% »), prédécesseurs (« 3FD+2j;5DD », « 3FS+2d,5SS »),
-//! dates (« 19/10/2026 08:00 »), en français et en anglais.
+//! dates (« 19/10/2026 08:00 »), en français et en anglais ; texte
+//! d'affichage des colonnes de la table (`display`, J7 lot L6 : « 5 jours »,
+//! « 3FD+2 jours », « 50 % », « Maçon[50 %];Électricien »), les mots étant
+//! fournis par l'appelant.
 //!
 //! Aucune entrée/sortie : du texte en entrée, une valeur du modèle en sortie
 //! (et l'inverse). Aucun flottant : les nombres sont lus en
@@ -14,12 +17,18 @@
 //! R-142 (prédécesseurs), R-143 (dates).
 
 mod date;
+mod display;
 mod duration;
 mod predecessors;
 
 pub(crate) mod lex;
 
 pub use date::{DateRole, format_date, parse_date};
+pub use display::{
+    DisplayLabels, ESTIMATED_SUFFIX, PluralRule, display_duration, display_minutes_as, display_percent,
+    display_predecessors, format_resource_names, parse_percent, write_decimal, write_display_duration,
+    write_display_lag,
+};
 pub use duration::{format_duration, format_lag, parse_duration, parse_lag};
 pub(crate) use predecessors::predecessor_elements;
 pub use predecessors::{

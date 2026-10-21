@@ -1678,3 +1678,10 @@ Règles J7 (ADR-0015 D7, D8, lots L4 et L5) : utilisation par affectation et tot
 - **Source** : support.microsoft.com, « Set the general working days and times for a project » (S63 : calendrier du projet choisi dans les informations du projet).
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r249_project_calendar.rs` (`r249_project_calendar_recalculates`).
+
+## R-250 — Effacer une ligne de base
+- **Formulation** (lot L5) : `baseline.clear { number?, tasks? }` (numéro 0 à 10, défaut 0, sinon `param.invalid` ; tâche inconnue ⇒ `task.not_found`). Sans `tasks` : la ligne `number` de toutes les tâches (UID 0 compris), de leurs affectations et des ressources ; avec `tasks` : de ces tâches et de leurs affectations, ressources inchangées (hypothèse) ; récapitulatives non recalculées (une récapitulative hors de la sélection garde sa ligne). Les `Extras` relus de portée `Baseline#n/` des entités visées sont jetés (`SideEffect::ExtrasDropped`, comme R-223). Effet `SideEffect::BaselineCleared { number, tasks, assignments, resources }` (lignes retirées par genre). Rien à effacer (aucune ligne ni `Extras` de portée) : information `baseline.nothing_to_clear`, projet inchangé (le lot reste une entrée d'historique sans effet, comme tout lot J4 sans changement). Une entrée d'annulation. Ensuite, écarts « sans ligne de base » : début et fin 0 (R-224), travail = W, durée = D (R-225).
+  - Exemple (S, lun 19/10/2026) : A 2 j → B 3 j, R affectée à A, `set_baseline 0`, B retardée d'un jour ⇒ écart de fin de B +480 ; `clear_baseline 0` ⇒ `BaselineCleared { 0, 2, 1, 1 }`, plus de ligne, écart de fin 0, écart de travail de A = 960 ; MSPDI : aucun `<Baseline>` 0, `FinishVariance` 0, `WorkVariance` = W × 1 000.
+- **Source** : support.microsoft.com, « Set and save a baseline » (S72, relu en L0 : sans phrase sur la portée ni les ressources) ; portée d'une sélection, ressources gardées, récapitulatives non recalculées : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r250_baseline_clear.rs` (`r250_clear_project`, `r250_clear_selection`, `r250_nothing_to_clear`, `r250_undo_restores`).

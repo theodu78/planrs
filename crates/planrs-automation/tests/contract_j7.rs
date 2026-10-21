@@ -100,7 +100,7 @@ fn contract_compiles() {
         assert_eq!(again, batch, "aller-retour {i}");
         assert_eq!(batch.ops[0].id(), op["op"].as_str().unwrap());
         // Servies au fil du lot L5 ; les autres restent réservées.
-        let served = [0, 1, 2, 3, 4, 7, 10];
+        let served = [0, 1, 2, 3, 4, 5, 6, 7, 10];
         match s.apply(&batch, ApplyMode::DryRun) {
             Err(err) if !served.contains(&i) => {
                 assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{i}");

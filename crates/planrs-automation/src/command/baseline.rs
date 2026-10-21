@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 
 use planrs_core::baseline::{self, BaselineError, BaselineSpec, Scope};
-use planrs_core::{BaselineNumber, Diagnostic, Subject};
+use planrs_core::{AssignmentUid, BaselineNumber, Diagnostic, Extras, HasUid, ResourceUid, Subject, TaskUid};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -39,8 +39,7 @@ pub struct BaselineSet {
 }
 
 /// `baseline.clear` (J7, R-250) : efface la ligne de base `number` (0 à
-/// 10, défaut 0) du projet entier ou de `tasks`. Contrat J7 L0 ; exécution :
-/// lot L5.
+/// 10, défaut 0) du projet entier ou de `tasks`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BaselineClear {
@@ -53,10 +52,145 @@ pub struct BaselineClear {
     pub tasks: Option<Vec<TaskRef>>,
 }
 
-/// `baseline.clear` : squelette J7 L0.
+/// Jette les `Extras` relus de portée `Baseline#n/` (origine `mspdi`) ;
+/// rend leurs clés triées, sans doublon (R-250, comme R-223).
+fn drop_scoped(extras: &mut Extras, n: BaselineNumber) -> Vec<String> {
+    let prefix = format!("Baseline#{}/", n.get());
+    let mut keys = Vec::new();
+    extras.0.retain(|e| {
+        let scoped = e.origin == planrs_mspdi::extras::ORIGIN && e.key.starts_with(&prefix);
+        if scoped {
+            keys.push(e.key.clone());
+        }
+        !scoped
+    });
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+/// Retire la ligne `n` d'une entité et ses `Extras` de portée ; rend
+/// (ligne retirée, clés jetées).
+fn clear_one<B>(
+    baselines: &mut std::collections::BTreeMap<BaselineNumber, B>,
+    extras: &mut Extras,
+    n: BaselineNumber,
+) -> (bool, Vec<String>) {
+    let removed = baselines.remove(&n).is_some();
+    (removed, drop_scoped(extras, n))
+}
+
+/// Effacement en cours : compteurs, effets et sujets touchés.
+#[derive(Default)]
+struct Cleared {
+    tasks: usize,
+    assignments: usize,
+    resources: usize,
+    dropped: Vec<(Subject, Vec<String>)>,
+    touched: Vec<Subject>,
+}
+
+impl Cleared {
+    /// Compte le résultat de [`clear_one`] pour `subject`.
+    fn record(&mut self, subject: Subject, (removed, keys): (bool, Vec<String>)) {
+        if removed {
+            match subject {
+                Subject::Task(_) => self.tasks = self.tasks.saturating_add(1),
+                Subject::Assignment(_) => self.assignments = self.assignments.saturating_add(1),
+                Subject::Resource(_) => self.resources = self.resources.saturating_add(1),
+                _ => {}
+            }
+        }
+        if removed || !keys.is_empty() {
+            self.touched.push(subject);
+        }
+        if !keys.is_empty() {
+            self.dropped.push((subject, keys));
+        }
+    }
+}
+
+/// `baseline.clear` (R-250) : sans `tasks`, toutes les tâches (UID 0
+/// compris), leurs affectations et les ressources ; avec `tasks`, ces
+/// tâches et leurs affectations (ressources inchangées, hypothèse) ;
+/// récapitulatives non recalculées ; `Extras` `Baseline#n/` jetés ; effet
+/// `BaselineCleared`. Rien à effacer : information
+/// `baseline.nothing_to_clear`, aucun changement.
 pub(super) fn clear(op: &BaselineClear, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
-    let _ = (op, ctx);
-    Err(CommandError::not_yet(7))
+    let number = BaselineNumber::new(op.number.unwrap_or(0)).map_err(|_| {
+        CommandError::new(
+            codes::PARAM_INVALID,
+            CommandErrorKind::InvalidParam("numéro de ligne de base attendu de 0 à 10".to_owned()),
+        )
+        .with_field("number")
+    })?;
+    let selection = match &op.tasks {
+        None => None,
+        Some(refs) => {
+            let mut uids = BTreeSet::new();
+            for r in refs {
+                uids.insert(ctx.task(r, "tasks")?);
+            }
+            Some(uids)
+        }
+    };
+    let p = &mut *ctx.project;
+    let mut out = Cleared::default();
+    if selection.is_none()
+        && let Some(root) = p.summary_task.as_mut()
+    {
+        let r = clear_one(&mut root.baselines, &mut root.extras, number);
+        out.record(Subject::Task(TaskUid::PROJECT_SUMMARY), r);
+    }
+    let in_scope = |t: TaskUid| selection.as_ref().is_none_or(|s| s.contains(&t));
+    let mut tasks: Vec<TaskUid> = p.tasks.iter().map(HasUid::uid).filter(|t| in_scope(*t)).collect();
+    tasks.sort();
+    for uid in tasks {
+        if let Some(t) = p.tasks.get_mut(uid) {
+            let r = clear_one(&mut t.baselines, &mut t.extras, number);
+            out.record(Subject::Task(uid), r);
+        }
+    }
+    let mut assignments: Vec<AssignmentUid> = p
+        .assignments
+        .iter()
+        .filter(|a| in_scope(a.task))
+        .map(HasUid::uid)
+        .collect();
+    assignments.sort();
+    for uid in assignments {
+        if let Some(a) = p.assignments.get_mut(uid) {
+            let r = clear_one(&mut a.baselines, &mut a.extras, number);
+            out.record(Subject::Assignment(uid), r);
+        }
+    }
+    if selection.is_none() {
+        let mut resources: Vec<ResourceUid> = p.resources.iter().map(HasUid::uid).collect();
+        resources.sort();
+        for uid in resources {
+            if let Some(r) = p.resources.get_mut(uid) {
+                let res = clear_one(&mut r.baselines, &mut r.extras, number);
+                out.record(Subject::Resource(uid), res);
+            }
+        }
+    }
+    if out.touched.is_empty() {
+        ctx.notes.push(Diagnostic::BaselineNothingToClear { number });
+        return Ok(());
+    }
+    ctx.effects.push(SideEffect::BaselineCleared {
+        number: number.get(),
+        tasks: count(out.tasks),
+        assignments: count(out.assignments),
+        resources: count(out.resources),
+    });
+    for (subject, keys) in out.dropped {
+        ctx.effects.push(SideEffect::ExtrasDropped { subject, keys });
+    }
+    for subject in out.touched {
+        ctx.touched.insert(subject, ctx.op_index);
+    }
+    Ok(())
 }
 
 /// Refus de la capture → erreur de commande (R-227).

@@ -125,6 +125,14 @@ fn drop_assignment_extras(ctx: &mut Ctx<'_>, cal: CalendarUid) {
     }
 }
 
+impl Ctx<'_> {
+    /// R-161 : jette la répartition des affectations planifiées par `cal`
+    /// ou un calendrier qui en dérive (calendrier du projet changé, R-249).
+    pub(crate) fn drop_calendar_assignment_extras(&mut self, cal: CalendarUid) {
+        drop_assignment_extras(self, cal);
+    }
+}
+
 /// `calendar.set_exception` (R-165).
 pub(super) fn set_exception(op: &CalendarException, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
     // Nom d'exception (R-165 amendée, O44) : au plus 512 caractères.

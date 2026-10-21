@@ -237,6 +237,7 @@ mod r245_assignment_usage;
 mod r246_quarter;
 mod r247_set_week;
 mod r248_calendar_commands;
+mod r249_project_calendar;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

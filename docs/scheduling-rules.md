@@ -1672,3 +1672,9 @@ Règles J7 (ADR-0015 D7, D8, lots L4 et L5) : utilisation par affectation et tot
 - **Source** : support.microsoft.com, « Create a new base calendar » (S65 : nouveau calendrier de base) ; copie, refus, contrôle du nom et conversion base ↔ dérivé : hypothèse (S65 ne dit rien de la copie, relu en L0).
 - **Statut** : `hypothèse`.
 - **Tests** : `tests/rules/r248_calendar_commands.rs` (`r248_add_derived_copy_base`, `r248_name_taken`, `r248_base_not_base`, `r248_delete_in_use`).
+
+## R-249 — Calendrier du projet par commande
+- **Formulation** (lot L5) : `project.set_info { calendar }` : UID d'un calendrier existant, de base ou dérivé (A4 a un calendrier du projet dérivé) ; inconnu ⇒ `calendar.not_found` (`calendar`) ; `null` ⇒ `param.invalid`. Recalcul complet du lot, R-113 comprise (échelle de marge d'une tâche sans calendrier propre = base du calendrier du projet dérivé) ; répartition des affectations planifiées par l'ancien ou le nouveau calendrier jetée (R-161). Exemple : S → « 24 heures » ⇒ T 1 j (480) lun 19/10 08:00 – 16:00 ; T2 1 j FS ⇒ lun 16:00 – mar 00:00 ; calendrier « Chantier » dérivé de S ⇒ T2 mar 20/10 08:00 – 17:00.
+- **Source** : support.microsoft.com, « Set the general working days and times for a project » (S63 : calendrier du projet choisi dans les informations du projet).
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r249_project_calendar.rs` (`r249_project_calendar_recalculates`).

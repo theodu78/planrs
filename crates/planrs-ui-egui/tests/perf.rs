@@ -814,31 +814,31 @@ fn bar_drag() {
     let (mut app, mut bench) = nav_bench();
     // Une colonne du Gantt loin des barres du début : x = bord gauche + 5.
     let probe_x = app.view().last_gantt_left + 5.0;
-    let k = row_clicked(&mut bench, &mut app, probe_x, 500.0).expect("aucune ligne à y = 500");
-    // Haut de la ligne k, au point près : plus petit y qui la donne encore.
+    let probe_row = row_clicked(&mut bench, &mut app, probe_x, 500.0).expect("aucune ligne à y = 500");
+    // Haut de la ligne probe_row, au point près : plus petit y qui la donne encore.
     let (mut lo, mut hi) = (500.0 - ROW_H, 500.0_f32);
     while hi - lo > 0.5 {
         let mid = f32::midpoint(lo, hi);
-        if row_clicked(&mut bench, &mut app, probe_x, mid) == Some(k) {
+        if row_clicked(&mut bench, &mut app, probe_x, mid) == Some(probe_row) {
             hi = mid;
         } else {
             lo = mid;
         }
     }
     let top_k = hi;
-    // Feuille non commencée près de k, barre amenée à 200 points du bord.
-    let j = (k..k + 10)
-        .find(|&j| {
-            let row = app.rows().unwrap().row(j).unwrap();
+    // Feuille non commencée près de probe_row, barre amenée à 200 points du bord.
+    let row_index = (probe_row..probe_row + 10)
+        .find(|&row_index| {
+            let row = app.rows().unwrap().row(row_index).unwrap();
             row.kind == RowKind::Leaf && row.bar.is_some() && row.percent.get() == 0
         })
         .expect("aucune feuille près de la ligne visée");
-    let uid = app.rows().unwrap().row(j).unwrap().uid;
-    scroll_gantt_to_row(&mut app, j);
+    let uid = app.rows().unwrap().row(row_index).unwrap().uid;
+    scroll_gantt_to_row(&mut app, row_index);
     bench.settle(&mut app);
-    let y = top_k + (j - k) as f32 * ROW_H + ROW_H / 2.0;
+    let y = top_k + (row_index - probe_row) as f32 * ROW_H + ROW_H / 2.0;
     let doc = app.document.as_ref().unwrap();
-    let (start, finish) = app.rows().unwrap().row(j).unwrap().bar.unwrap();
+    let (start, finish) = app.rows().unwrap().row(row_index).unwrap().bar.unwrap();
     let axis = TimeAxis::new(
         doc.range,
         app.state.zoom,
@@ -862,7 +862,7 @@ fn bar_drag() {
     }
     let drag = app.view().drag.unwrap_or_else(|| {
         panic!(
-            "glisser non commencé : ligne {j}, y {y}, x {x}, sélection {:?}",
+            "glisser non commencé : ligne {row_index}, y {y}, x {x}, sélection {:?}",
             app.selection
         )
     });

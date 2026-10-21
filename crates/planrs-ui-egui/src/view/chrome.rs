@@ -8,7 +8,7 @@
 use planrs_core::Severity;
 
 use crate::action::Action;
-use crate::action::ConfirmChoice;
+use crate::action::{ConfirmChoice, DialogKind};
 use crate::app::{MAX_MESSAGES, UserMessage};
 use crate::format::format_date;
 use crate::i18n::{Arg, Language, TextId};
@@ -104,6 +104,22 @@ fn file_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     }
 }
 
+/// Sous-menu Édition → Projet (J7, lot L12) : informations sur le projet,
+/// temps de travail, ligne de base, replanifier le travail restant ; grisé
+/// sans document. Sous-menu plutôt qu'un menu de la barre : la barre de
+/// menus figure dans toutes les captures de référence (écart consigné).
+fn project_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    let has_doc = fc.doc.is_some();
+    for (label, kind) in [
+        (TextId::MenuProjectInfo, DialogKind::ProjectInformation),
+        (TextId::MenuWorkingTime, DialogKind::WorkingTime),
+        (TextId::MenuBaseline, DialogKind::Baseline),
+        (TextId::MenuReschedule, DialogKind::Reschedule),
+    ] {
+        menu_item(ui, fc, label, None, has_doc, Action::ShowDialog(kind));
+    }
+}
+
 /// Entrée de menu : libellé traduit, raccourci éventuel de la liaison,
 /// action poussée au clic.
 fn menu_item(
@@ -128,7 +144,7 @@ fn menu_item(
 /// contextuel (grisées sans document, et sans sélection sauf « Insérer une
 /// tâche ») ; raccourcis de [`crate::keymap::KEYMAP`] affichés. Rend la
 /// structure découvrable sans clic droit ni touche Inser (relecture finale
-/// J4, F5).
+/// J4, F5) ; enfin le sous-menu Projet (J7, lot L12).
 fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let texts = fc.texts;
     let history = fc.doc.map(|doc| doc.session.history());
@@ -177,6 +193,8 @@ fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
             fc.actions.push(Action::Structure(op));
         }
     }
+    ui.separator();
+    ui.menu_button(texts.get(TextId::MenuProject), |ui| project_menu(ui, fc));
 }
 
 /// Barre d'outils : exemple, ouvrir, zoom, ajuster, thème, langue. Toujours

@@ -570,6 +570,27 @@ rs-title = Reschedule Uncompleted Work
 rs-after = Reschedule after
 
 # --- J7 L13 ---
+menu-assign-resources = Assign Resources…
+as-title = Assign Resources
+as-task-one = Task: { $name }
+as-task-many = { $count ->
+        [one] { $count } selected task
+       *[other] { $count } selected tasks
+    }
+as-no-task = No task selected
+as-filter = Filter by name
+as-resource = Resource Name
+as-units = Units
+as-units-of = Units of { $name }
+as-assigned = Assigned
+as-assigned-all = yes
+as-assigned-some = { $count } of { $value }
+as-assign = Assign
+as-remove = Remove
+as-update-units = Change Units
+as-close = Close
+as-no-resource = No resource
+as-hint = Click a resource to choose it (Ctrl or Cmd + click: several); units left empty: default value.
 
 # --- J7 L14 ---
 

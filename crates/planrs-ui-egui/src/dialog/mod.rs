@@ -14,7 +14,13 @@
 //! [`App::show_window`]) : document changé entre l'ouverture et « OK » ⇒
 //! brouillon relu, avertissement, rien appliqué ; refus du registre
 //! (`EditOrigin::Dialog`) affiché dans la fenêtre, jamais dans le bandeau.
+//!
+//! « Affecter des ressources » (lot L13) est hébergée de même mais **non
+//! modale** (`egui::Window`) : la table et le Gantt restent cliquables, la
+//! fenêtre est relue sur la sélection et le document à chaque image où ils
+//! ont changé, et chacun de ses boutons applique aussitôt son lot.
 
+pub mod assign;
 pub mod baseline;
 pub mod link;
 pub mod project_info;
@@ -56,6 +62,8 @@ pub enum DialogBody {
     Baseline(Box<baseline::BaselineState>),
     /// « Replanifier le travail restant » (lot L12).
     Reschedule(Box<reschedule::RescheduleState>),
+    /// « Affecter des ressources » (lot L13, non modale).
+    Assign(Box<assign::AssignState>),
 }
 
 impl DialogBody {
@@ -64,18 +72,23 @@ impl DialogBody {
     pub const fn is_window(&self) -> bool {
         matches!(
             self,
-            Self::WorkingTime(_) | Self::ProjectInfo(_) | Self::Baseline(_) | Self::Reschedule(_)
+            Self::WorkingTime(_)
+                | Self::ProjectInfo(_)
+                | Self::Baseline(_)
+                | Self::Reschedule(_)
+                | Self::Assign(_)
         )
     }
 
-    /// Clé du document vue par le brouillon (fenêtres du lot L12).
+    /// Clé du document vue par le brouillon (fenêtres du lot L12 ;
+    /// « Affecter des ressources » se relit seule, sans avertissement).
     const fn key(&self) -> Option<(u64, u64)> {
         match self {
             Self::WorkingTime(s) => Some(s.key),
             Self::ProjectInfo(s) => Some(s.key),
             Self::Baseline(s) => Some(s.key),
             Self::Reschedule(s) => Some(s.key),
-            Self::Empty | Self::TaskInfo(_) | Self::Link(_) => None,
+            Self::Empty | Self::TaskInfo(_) | Self::Link(_) | Self::Assign(_) => None,
         }
     }
 }
@@ -130,6 +143,8 @@ enum Shown {
     Cancel,
     /// Lot immédiat du temps de travail : « Créer » (vrai) ou « Supprimer ».
     Immediate(bool),
+    /// Bouton à lot d'« Affecter des ressources ».
+    Assign(assign::AssignOp),
 }
 
 impl App {
@@ -156,7 +171,13 @@ impl App {
             DialogKind::Reschedule => DialogBody::Reschedule(Box::new(reschedule::RescheduleState::open(
                 s, key, lang, selected,
             ))),
-            DialogKind::TaskInformation(_) | DialogKind::Link { .. } | DialogKind::AssignResources => return,
+            DialogKind::AssignResources => DialogBody::Assign(Box::new(assign::AssignState::open(
+                s,
+                key,
+                lang,
+                self.selected.uids(),
+            ))),
+            DialogKind::TaskInformation(_) | DialogKind::Link { .. } => return,
         };
         self.view.edit.editing = None;
         self.view.drag = None;
@@ -167,6 +188,7 @@ impl App {
     pub(crate) fn show_window(&mut self, ctx: &egui::Context) {
         let lang = self.text_language();
         self.refresh_month_view();
+        self.refresh_assign();
         let shown = match (
             self.document.as_ref(),
             self.view.dialog.as_mut().map(|d| &mut d.body),
@@ -187,6 +209,11 @@ impl App {
             (Some(_), Some(DialogBody::Reschedule(state))) => {
                 simple(reschedule::show(ctx, &self.texts, state))
             }
+            (Some(_), Some(DialogBody::Assign(state))) => match assign::show(ctx, &self.texts, state) {
+                assign::AssignOutcome::Open => Shown::Open,
+                assign::AssignOutcome::Close => Shown::Cancel,
+                assign::AssignOutcome::Apply(op) => Shown::Assign(op),
+            },
             _ => Shown::Cancel,
         };
         match shown {
@@ -194,6 +221,7 @@ impl App {
             Shown::Cancel => self.close_dialog(),
             Shown::Ok => self.commit_window(),
             Shown::Immediate(create) => self.working_time_immediate(create),
+            Shown::Assign(op) => self.assign_apply(op),
         }
         // Mois changé pendant l'image : relu à la suivante.
         if let Some(DialogState {
@@ -207,6 +235,62 @@ impl App {
         {
             ctx.request_repaint();
         }
+    }
+
+    /// Relit « Affecter des ressources » si la sélection ou le document ont
+    /// changé depuis l'image précédente (fenêtre non modale).
+    fn refresh_assign(&mut self) {
+        let lang = self.text_language();
+        let (
+            Some(document),
+            Some(DialogState {
+                body: DialogBody::Assign(state),
+                ..
+            }),
+        ) = (&self.document, &mut self.view.dialog)
+        else {
+            return;
+        };
+        let key = document.cache_key();
+        let selection = self.selected.uids();
+        if !state.shows(key, selection) {
+            state.reread(&document.session, key, lang, selection);
+        }
+    }
+
+    /// Bouton à lot d'« Affecter des ressources » : un seul lot (une
+    /// entrée d'annulation), rien s'il n'y a rien à faire ; refus du
+    /// registre affiché dans la fenêtre, qui reste ouverte.
+    fn assign_apply(&mut self, op: assign::AssignOp) {
+        let lang = self.text_language();
+        let Some(DialogState {
+            body: DialogBody::Assign(state),
+            ..
+        }) = &self.view.dialog
+        else {
+            return;
+        };
+        let Some(batch) = state.to_batch(op, lang) else {
+            return;
+        };
+        let result = self.execute(&batch, EditOrigin::Dialog);
+        let message = result
+            .as_ref()
+            .err()
+            .map(|error| task_info::command_message(&self.texts, error, lang));
+        let Some(DialogState {
+            body: DialogBody::Assign(state),
+            ..
+        }) = &mut self.view.dialog
+        else {
+            return;
+        };
+        match message {
+            Some(message) => state.error = Some(message),
+            None => state.applied(),
+        }
+        // Relue tout de suite : l'image suivante montre le résultat.
+        self.refresh_assign();
     }
 
     /// Relit sur le moteur le mois affiché par « Modifier le temps de
@@ -281,7 +365,7 @@ impl App {
                 fresh.stale = true;
                 **state = fresh;
             }
-            DialogBody::Empty | DialogBody::TaskInfo(_) | DialogBody::Link(_) => {}
+            DialogBody::Empty | DialogBody::TaskInfo(_) | DialogBody::Link(_) | DialogBody::Assign(_) => {}
         }
         true
     }
@@ -329,7 +413,9 @@ impl App {
                     return;
                 }
             },
-            DialogBody::Empty | DialogBody::TaskInfo(_) | DialogBody::Link(_) => return,
+            DialogBody::Empty | DialogBody::TaskInfo(_) | DialogBody::Link(_) | DialogBody::Assign(_) => {
+                return;
+            }
         };
         let Some(batch) = batch else {
             self.close_dialog();
@@ -365,7 +451,10 @@ impl App {
                         }
                     }
                     DialogBody::Reschedule(state) => state.error = Some(message),
-                    DialogBody::Empty | DialogBody::TaskInfo(_) | DialogBody::Link(_) => {}
+                    DialogBody::Empty
+                    | DialogBody::TaskInfo(_)
+                    | DialogBody::Link(_)
+                    | DialogBody::Assign(_) => {}
                 }
             }
         }

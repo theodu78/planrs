@@ -569,6 +569,27 @@ rs-title = Replanifier le travail restant
 rs-after = Replanifier après le
 
 # --- J7 L13 ---
+menu-assign-resources = Affecter des ressources…
+as-title = Affecter des ressources
+as-task-one = Tâche : { $name }
+as-task-many = { $count ->
+        [one] { $count } tâche sélectionnée
+       *[other] { $count } tâches sélectionnées
+    }
+as-no-task = Aucune tâche sélectionnée
+as-filter = Filtrer par nom
+as-resource = Nom de la ressource
+as-units = Unités
+as-units-of = Unités de { $name }
+as-assigned = Affectée
+as-assigned-all = oui
+as-assigned-some = { $count } sur { $value }
+as-assign = Affecter
+as-remove = Retirer
+as-update-units = Modifier les unités
+as-close = Fermer
+as-no-resource = Aucune ressource
+as-hint = Clic sur une ressource pour la choisir (Ctrl ou Cmd + clic : plusieurs) ; unités laissées vides : valeur par défaut.
 
 # --- J7 L14 ---
 

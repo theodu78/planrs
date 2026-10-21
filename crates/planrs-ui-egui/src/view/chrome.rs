@@ -13,7 +13,7 @@ use crate::app::{MAX_MESSAGES, UserMessage};
 use crate::format::format_date;
 use crate::i18n::{Arg, Language, TextId};
 use crate::keymap::{Binding, UiBinding, shortcut_for, shortcut_text};
-use crate::state::{LanguagePref, ThemePref};
+use crate::state::{GanttStyle, LanguagePref, ThemePref};
 use crate::theme::Palette;
 use crate::timescale::TimeScaleZoom;
 
@@ -33,6 +33,12 @@ const THEME_CHOICES: [(ThemePref, TextId); 3] = [
     (ThemePref::Dark, TextId::ThemeDark),
 ];
 
+/// Styles du Gantt proposés, avec leur libellé (J7, lot L7).
+const GANTT_STYLE_CHOICES: [(GanttStyle, TextId); 2] = [
+    (GanttStyle::Standard, TextId::MenuGanttStandard),
+    (GanttStyle::Tracking, TextId::MenuGanttTracking),
+];
+
 /// Barre de menus (Fichier, Édition, Affichage).
 pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let texts = fc.texts;
@@ -42,6 +48,8 @@ pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
             ui.menu_button(texts.get(TextId::MenuFile), |ui| file_menu(ui, fc));
             ui.menu_button(texts.get(TextId::MenuEdit), |ui| edit_menu(ui, fc));
             ui.menu_button(texts.get(TextId::MenuView), |ui| {
+                ui.add_enabled_ui(has_doc, |ui| gantt_style_choices(ui, fc));
+                ui.separator();
                 ui.menu_button(texts.get(TextId::MenuZoom), |ui| {
                     ui.add_enabled_ui(has_doc, |ui| {
                         zoom_choices(ui, fc);
@@ -232,6 +240,17 @@ fn zoom_choices(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     for zoom in TimeScaleZoom::ALL {
         if choice(ui, has_doc && fc.state.zoom == zoom, &fc.texts.get(zoom.label())) {
             fc.actions.push(Action::SetZoom(zoom));
+        }
+    }
+}
+
+/// Style exclusif du Gantt : Diagramme de Gantt / Gantt de suivi (J7, lot
+/// L7, H-UI-22) ; aucun n'est surligné sans document.
+fn gantt_style_choices(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    let has_doc = fc.doc.is_some();
+    for (style, label) in GANTT_STYLE_CHOICES {
+        if choice(ui, has_doc && fc.state.gantt_style == style, &fc.texts.get(label)) {
+            fc.actions.push(Action::SetGanttStyle(style));
         }
     }
 }

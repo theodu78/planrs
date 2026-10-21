@@ -373,6 +373,8 @@ column-menu-hide = Masquer la colonne
 table-scroll-label = Défilement horizontal de la table
 
 # --- J7 L7 ---
+menu-gantt-standard = Diagramme de Gantt
+menu-gantt-tracking = Gantt de suivi
 
 # --- J7 L8 ---
 

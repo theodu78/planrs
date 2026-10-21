@@ -96,6 +96,8 @@ pub struct OpenDocument {
     /// Numéro d'ouverture (1, 2…) : avec [`OpenDocument::generation`], clé
     /// d'invalidation des caches.
     pub opening: u64,
+    /// Calendriers compilés, une fois par génération (N3, J7 lot L7).
+    pub(crate) calendar_cache: crate::document::CalendarCache,
 }
 
 impl OpenDocument {
@@ -111,7 +113,21 @@ impl OpenDocument {
             range: loaded.range,
             origin,
             opening,
+            calendar_cache: crate::document::CalendarCache::new(),
         }
+    }
+
+    /// Calendriers compilés du document (N3, J7 lot L7), compilés à la
+    /// première demande de chaque génération.
+    #[must_use]
+    pub fn calendars(&self) -> std::sync::Arc<planrs_core::CalendarSet> {
+        self.calendar_cache.get(self.project(), self.generation())
+    }
+
+    /// Compilations des calendriers faites pour ce document (tests de N3).
+    #[must_use]
+    pub fn calendar_compiles(&self) -> u64 {
+        self.calendar_cache.compiles()
     }
 
     /// Modèle courant.
@@ -1144,8 +1160,8 @@ impl App {
             Action::TimescaleToEnd => self.scroll_gantt_to_project(true),
             Action::ZoomBy(steps) => self.zoom_step(steps, self.gantt_center()),
             // Contrat J7 (lot L0) : actions câblées par leur lot.
+            Action::SetGanttStyle(style) => self.state.gantt_style = style,
             other @ (Action::SetView(_)
-            | Action::SetGanttStyle(_)
             | Action::ShowDialog(_)
             | Action::ShowTaskInformation
             | Action::CloseDialog

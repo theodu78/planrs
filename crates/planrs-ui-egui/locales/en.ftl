@@ -374,6 +374,8 @@ column-menu-hide = Hide column
 table-scroll-label = Task table horizontal scroll
 
 # --- J7 L7 ---
+menu-gantt-standard = Gantt Chart
+menu-gantt-tracking = Tracking Gantt
 
 # --- J7 L8 ---
 

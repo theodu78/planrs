@@ -48,7 +48,7 @@ use crate::keymap::KeyState;
 use crate::nav::{self, GridPos, GridShape, NavMove, RowRef};
 use crate::rows::RowModel;
 use crate::selection::{SelectMode, Selection};
-use crate::state::{StateLoadError, TABLE_WIDTH_MAX, TABLE_WIDTH_MIN, ThemePref, UiState};
+use crate::state::{StateLoadError, TABLE_WIDTH_MAX, TABLE_WIDTH_MIN, ThemePref, UiState, ViewKind};
 use crate::structure::PendingDelete;
 use crate::theme::Palette;
 use crate::timescale::{
@@ -1155,8 +1155,27 @@ impl App {
                     self.selection = self.selected.focus();
                 }
             }
+            // Feuille des ressources (J7, lot L10) : Suppr supprime la
+            // ressource courante ; les autres commandes de structure et la
+            // fenêtre d'une tâche visent la table des tâches, absente.
+            Action::Structure(op) if self.state.view == ViewKind::ResourceSheet => {
+                if op == crate::structure::StructureOp::Delete {
+                    self.delete_resource();
+                }
+            }
+            Action::ShowTaskInformation if self.state.view == ViewKind::ResourceSheet => {}
             Action::Structure(op) => self.run_structure(op),
+            Action::ConfirmDelete(confirmed) if self.view.resources.pending_delete.is_some() => {
+                self.answer_resource_delete(confirmed);
+            }
             Action::ConfirmDelete(confirmed) => self.answer_delete(confirmed),
+            Action::Nav { mv, .. } if self.state.view == ViewKind::ResourceSheet => {
+                if let Some(document) = &self.document {
+                    self.view
+                        .resources
+                        .navigate(document, &self.texts, mv, view::ROW_H);
+                }
+            }
             Action::Nav { mv, extend } => self.navigate(mv, extend),
             Action::FocusPane(pane) => self.focus_pane(pane, ctx),
             Action::TimescaleStep(n) => {
@@ -1181,10 +1200,10 @@ impl App {
             Action::CloseDialog => self.close_dialog(),
             // Contrat J7 (lot L0) : actions câblées par leur lot.
             Action::SetGanttStyle(style) => self.state.gantt_style = style,
-            other @ (Action::SetView(_)
-            | Action::ShowDialog(_)
-            | Action::OpenRecent(_)
-            | Action::Recover(_)) => log::debug!("action J7 pas encore câblée : {other:?}"),
+            Action::SetView(kind) => self.set_view(kind),
+            other @ (Action::ShowDialog(_) | Action::OpenRecent(_) | Action::Recover(_)) => {
+                log::debug!("action J7 pas encore câblée : {other:?}");
+            }
             Action::ToggleColumn(column) => self.toggle_column(column),
             Action::SetColumnWidth { column, width } => {
                 self.state.set_column_width(column, width);
@@ -1198,6 +1217,90 @@ impl App {
             Action::Approve(id) => self.approve_relayed(id),
             Action::Reject(id) => self.reject_relayed(id),
             Action::Ui(op) => self.apply_ui(op, ctx),
+        }
+    }
+
+    /// Fenêtres de confirmation d'une suppression : tâche récapitulative
+    /// (lot L14 de J4) ou ressource affectée (J7, lot L10).
+    fn show_confirmations(&self, ctx: &egui::Context, palette: &Palette, actions: &mut Vec<Action>) {
+        if let Some(pending) = &self.pending_delete {
+            crate::structure::confirm_modal(ctx, &self.texts, pending, actions);
+        }
+        if let Some(pending) = &self.view.resources.pending_delete {
+            view::resource_sheet::confirm_delete_modal(ctx, &self.texts, palette, pending, actions);
+        }
+    }
+
+    /// Change la vue principale (J7, lots L10, L11) : une saisie ouverte
+    /// dans l'autre grille est abandonnée ; la grille affichée prend le
+    /// focus clavier.
+    fn set_view(&mut self, kind: ViewKind) {
+        if self.state.view == kind {
+            return;
+        }
+        self.state.view = kind;
+        self.view.edit.editing = None;
+        self.view.resources.edit.editing = None;
+        self.view.focus_table_pending = true;
+    }
+
+    /// Suppr dans la feuille des ressources (J7, lot L10) : `resource.delete`
+    /// de la ressource courante ; affectée (`resource.has_assignments`), une
+    /// fenêtre demande confirmation avant la suppression en cascade. Tout
+    /// autre refus s'affiche dans le bandeau.
+    fn delete_resource(&mut self) {
+        if self.view.resources.pending_delete.is_some() {
+            return;
+        }
+        let Some(document) = &self.document else {
+            return;
+        };
+        self.view.resources.ensure_rows(document, &self.texts);
+        let Some(uid) = self.view.resources.cursor.row.item() else {
+            return;
+        };
+        let rows = &self.view.resources.rows;
+        let name = rows
+            .index_of(uid)
+            .map(|i| {
+                rows.text(i, crate::resource_rows::ResourceColumn::Name)
+                    .to_owned()
+            })
+            .unwrap_or_default();
+        let cache_key = document.cache_key();
+        match self.execute(
+            &crate::resource_rows::delete_batch(uid, false),
+            EditOrigin::Dialog,
+        ) {
+            Ok(_) => {}
+            Err(error) => match error.kind {
+                CommandErrorKind::ResourceHasAssignments { count } => {
+                    self.view.resources.pending_delete = Some(view::resource_sheet::PendingResourceDelete {
+                        uid,
+                        name,
+                        count,
+                        cache_key,
+                    });
+                }
+                _ => self.report_command_error(&error),
+            },
+        }
+    }
+
+    /// Réponse à la confirmation de suppression d'une ressource affectée :
+    /// `true` supprime avec ses affectations (si la demande n'est pas
+    /// devenue caduque), `false` abandonne.
+    fn answer_resource_delete(&mut self, confirmed: bool) {
+        let Some(pending) = self.view.resources.pending_delete.take() else {
+            return;
+        };
+        let current = self.document.as_ref().map(OpenDocument::cache_key);
+        if confirmed && current == Some(pending.cache_key) {
+            // Un refus est affiché par `execute`.
+            drop(self.execute(
+                &crate::resource_rows::delete_batch(pending.uid, true),
+                EditOrigin::User,
+            ));
         }
     }
 
@@ -1244,7 +1347,7 @@ impl App {
                 }
             }
             UiOp::Zoom(zoom) => self.apply(Action::SetZoom(zoom), ctx),
-            UiOp::View(kind) => self.state.view = kind,
+            UiOp::View(kind) => self.set_view(kind),
             UiOp::Theme(theme) => self.apply(Action::SetTheme(theme), ctx),
             UiOp::Language(language) => self.apply(Action::SetLanguage(language), ctx),
         }
@@ -1688,7 +1791,9 @@ impl App {
             && self.view.edit.editing.is_none()
             && !self.popup_open
             && self.view.dialog.is_none()
-            && self.pending_delete.is_none();
+            && self.pending_delete.is_none()
+            && self.view.resources.edit.editing.is_none()
+            && self.view.resources.pending_delete.is_none();
         KeyState { document, table }
     }
 
@@ -1709,6 +1814,8 @@ impl App {
         let metrics = Metrics::default();
         self.sync_selection();
         self.drop_stale_delete();
+        let current = self.document.as_ref().map(OpenDocument::cache_key);
+        self.view.resources.drop_stale_delete(current);
         if self.view.focus_table_pending && self.document.is_some() {
             self.view.focus_table_pending = false;
             self.focus_pane(Pane::Table, &ctx);
@@ -1768,18 +1875,16 @@ impl App {
             let view_state = &mut self.view;
             if fc.doc.is_some() {
                 let frame = egui::Frame::central_panel(ui.style()).inner_margin(0.0);
-                egui::CentralPanel::default().frame(frame).show(ui, |ui| {
-                    view::main_view::show(ui, &mut fc, view_state);
-                });
+                egui::CentralPanel::default()
+                    .frame(frame)
+                    .show(ui, |ui| show_view(ui, &mut fc, view_state));
             } else {
                 egui::CentralPanel::default().show(ui, |ui| {
                     view::chrome::welcome(ui, &mut fc);
                 });
             }
-            if let Some(pending) = &self.pending_delete {
-                crate::structure::confirm_modal(&ctx, &self.texts, pending, fc.actions);
-            }
         }
+        self.show_confirmations(&ctx, &palette, &mut actions);
         self.last_frame = stats;
         self.popup_open = ctx.any_popup_open();
         // Les actions sont appliquées après le dessin : une image de plus
@@ -1811,6 +1916,15 @@ impl App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.sent_title = title;
         }
+    }
+}
+
+/// Vue centrale du document selon `UiState::view` (J7, lot L10).
+fn show_view(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view_state: &mut ViewTransient) {
+    match fc.state.view {
+        ViewKind::ResourceSheet => view::resource_sheet::show(ui, fc, &mut view_state.resources),
+        // Utilisation des ressources : lot L11 ; d'ici là, la vue principale.
+        ViewKind::Gantt | ViewKind::ResourceUsage => view::main_view::show(ui, fc, view_state),
     }
 }
 

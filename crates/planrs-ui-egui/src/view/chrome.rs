@@ -13,7 +13,7 @@ use crate::app::{MAX_MESSAGES, UserMessage};
 use crate::format::format_date;
 use crate::i18n::{Arg, Language, TextId};
 use crate::keymap::{Binding, UiBinding, shortcut_for, shortcut_text};
-use crate::state::{GanttStyle, LanguagePref, ThemePref};
+use crate::state::{GanttStyle, LanguagePref, ThemePref, ViewKind};
 use crate::theme::Palette;
 use crate::timescale::TimeScaleZoom;
 
@@ -244,14 +244,25 @@ fn zoom_choices(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     }
 }
 
-/// Style exclusif du Gantt : Diagramme de Gantt / Gantt de suivi (J7, lot
-/// L7, H-UI-22) ; aucun n'est surligné sans document.
+/// Vue exclusive : Diagramme de Gantt / Gantt de suivi (J7, lot L7,
+/// H-UI-22 ; style du Gantt, qui ramène à la vue Gantt) / Feuille des
+/// ressources (lot L10) ; aucune n'est surlignée sans document.
 fn gantt_style_choices(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let has_doc = fc.doc.is_some();
+    let gantt = fc.state.view == ViewKind::Gantt;
     for (style, label) in GANTT_STYLE_CHOICES {
-        if choice(ui, has_doc && fc.state.gantt_style == style, &fc.texts.get(label)) {
+        if choice(
+            ui,
+            has_doc && gantt && fc.state.gantt_style == style,
+            &fc.texts.get(label),
+        ) {
+            fc.actions.push(Action::SetView(ViewKind::Gantt));
             fc.actions.push(Action::SetGanttStyle(style));
         }
+    }
+    let sheet = fc.state.view == ViewKind::ResourceSheet;
+    if choice(ui, has_doc && sheet, &fc.texts.get(TextId::MenuViewResourceSheet)) {
+        fc.actions.push(Action::SetView(ViewKind::ResourceSheet));
     }
 }
 

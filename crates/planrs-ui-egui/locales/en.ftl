@@ -449,6 +449,39 @@ task-info-duplicate-resource = Resource assigned twice: { $name }
 task-info-unknown-resource = Unknown resource
 
 # --- J7 L10 ---
+menu-view-resource-sheet = Resource Sheet
+res-sheet-label = Resource sheet
+res-col-indicator = Ind.
+res-col-name = Resource Name
+res-col-kind = Type
+res-col-material-label = Material Label
+res-col-initials = Initials
+res-col-group = Group
+res-col-max-units = Max. Units
+res-col-standard-rate = Std. Rate
+res-col-overtime-rate = Ovt. Rate
+res-col-cost-per-use = Cost/Use
+res-col-calendar = Calendar
+res-kind-work = Work
+res-kind-material = Material
+res-kind-cost = Cost
+rate-minute = /min
+rate-hour = /hr
+rate-day = /day
+rate-week = /wk
+rate-month = /mon
+rate-year = /yr
+res-row-label = Resource { $id }: { $name }
+res-blank-row-label = Blank row (new resource)
+res-name-first = Enter the resource name first
+res-unknown-calendar = No calendar named "{ $name }"
+res-calendar-none = (none)
+res-delete-title = Delete an assigned resource
+res-delete-text =
+    { $count ->
+        [one] "{ $name }" is assigned to one task: the assignment will be removed with it.
+       *[other] "{ $name }" has { $count } assignments: they will be removed with it.
+    }
 
 # --- J7 L11 ---
 

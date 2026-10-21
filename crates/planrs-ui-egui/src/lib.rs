@@ -25,6 +25,7 @@ pub mod keymap;
 pub mod nav;
 pub mod query;
 pub mod relay;
+pub mod resource_rows;
 pub mod rows;
 pub mod selection;
 pub mod shell;

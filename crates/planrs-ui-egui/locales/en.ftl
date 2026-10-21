@@ -367,6 +367,11 @@ menu-undo-agent-ops =
 # --- J7 L5 ---
 
 # --- J7 L6 ---
+fmt-percent-suffix = %
+column-header-label = Column { $column }
+column-resize-label = Width of the { $column } column
+column-menu-hide = Hide column
+table-scroll-label = Task table horizontal scroll
 
 # --- J7 L7 ---
 

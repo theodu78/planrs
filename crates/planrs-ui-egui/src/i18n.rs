@@ -393,6 +393,11 @@ text_ids! {
     // --- J7 L4 ---
     // --- J7 L5 ---
     // --- J7 L6 ---
+    FmtPercentSuffix => "fmt-percent-suffix",
+    ColumnHeaderLabel => "column-header-label",
+    ColumnResizeLabel => "column-resize-label",
+    ColumnMenuHide => "column-menu-hide",
+    TableScrollLabel => "table-scroll-label",
     // --- J7 L7 ---
     // --- J7 L8 ---
     // --- J7 L9 ---
@@ -675,6 +680,7 @@ impl Texts {
             weekday_initials: WEEKDAY_INITIALS.map(|id| self.get(id)),
             quarter_prefix: self.get(TextId::TierQuarter),
             week_prefix: self.get(TextId::TierWeek),
+            percent_suffix: self.get(TextId::FmtPercentSuffix),
         }
     }
 }

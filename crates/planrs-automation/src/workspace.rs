@@ -23,6 +23,7 @@ use crate::command::params::{
 };
 use crate::command::{AnchorSpec, Batch, Command, parse_params};
 use crate::error::{CommandError, CommandErrorKind, HistoryError, codes};
+use crate::history::EditSource;
 use crate::outcome::ApplyOutcome;
 use crate::registry::{Availability, Kind, lookup};
 use crate::session::{ApplyMode, ApplyOptions, NewProject, Session};
@@ -40,7 +41,8 @@ const AUTO_WIDTH_PX: u32 = 1_200;
 
 /// Environnement d'un appel sur une session tenue ailleurs (J7, ADR-0015
 /// D9 : l'application exécute les appels relayés sur la session de son
-/// document) : « maintenant » injecté, langue, racine des chemins.
+/// document) : « maintenant » injecté, langue, racine des chemins, origine
+/// des lots commités.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CallEnv {
     /// « Maintenant » (règle 5).
@@ -49,20 +51,312 @@ pub struct CallEnv {
     pub lang: Language,
     /// Racine des chemins (MCP HTTP), sinon aucune.
     pub root: Option<PathBuf>,
+    /// Origine inscrite dans l'historique pour une écriture commitée
+    /// (`Agent` pour un appel relayé accepté, J7 lot L3).
+    pub source: EditSource,
 }
 
-/// Routeur de [`Workspace::call`] appliqué à `session` (J7, ADR-0015 D9) :
-/// un seul registre pour le local et le relais.
-///
-/// Squelette J7 L0 : refusé `command.not_yet_available` (lot L3, qui en
-/// fait le corps de [`Workspace::call`]).
+impl CallEnv {
+    /// Environnement d'un appel de l'utilisateur, sans racine.
+    #[must_use]
+    pub const fn new(now: Moment, lang: Language) -> Self {
+        Self {
+            now,
+            lang,
+            root: None,
+            source: EditSource::User,
+        }
+    }
+}
+
+/// Ouvertures qui remplacent la session : servies par [`Workspace::call`]
+/// seulement, jamais sur une session tenue ailleurs (`control.not_relayable`,
+/// C-CTL-05).
+pub const NOT_RELAYABLE: [&str; 3] = ["project.import_csv", "project.new", "project.open"];
+
+/// Contrôles de [`call_with`] qui ne demandent aucune session : id connu
+/// (`param.invalid`), hors ouvertures (`control.not_relayable`), disponible
+/// (`command.not_yet_available`, `control.not_attached`). L'application
+/// s'en sert pour refuser un appel relayé sans document ouvert.
 ///
 /// # Errors
 ///
-/// [`ToolError`] ; squelette : `command.not_yet_available`.
+/// Le refus, tel que [`call_with`] le rendrait.
+pub fn relayable(id: &str, lang: Language) -> Result<&'static crate::registry::CommandSpec, ToolError> {
+    let Some(spec) = lookup(id) else {
+        return Err(unknown_command(id, lang));
+    };
+    if NOT_RELAYABLE.contains(&id) {
+        return Err(ToolError::simple(
+            codes::CONTROL_NOT_RELAYABLE,
+            format!(
+                "{} : {id}",
+                tr(
+                    lang,
+                    "ouverture non relayable (ouvrir le fichier dans l'application)",
+                    "opening cannot be relayed (open the file in the application)"
+                )
+            ),
+        ));
+    }
+    check_available(spec.available, id, lang)?;
+    Ok(spec)
+}
+
+/// Routeur de [`Workspace::call`] appliqué à `session` (J7, ADR-0015 D9) :
+/// un seul registre pour le local et le relais. Les ouvertures
+/// ([`NOT_RELAYABLE`]) sont refusées `control.not_relayable`, les entrées
+/// `app.*` `control.not_attached` (l'application les sert elle-même). Une
+/// écriture commitée porte l'origine `env.source`.
+///
+/// # Errors
+///
+/// [`ToolError`] pour tout refus : `param.invalid` (id inconnu, paramètres
+/// mal formés), `command.not_yet_available`, `control.not_relayable`,
+/// `control.not_attached`, `file.*`, ou l'erreur de la commande. La
+/// session est intacte après un refus.
 pub fn call_with(session: &mut Session, env: &CallEnv, id: &str, params: Value) -> Result<Value, ToolError> {
-    let _ = (session, id, params);
-    Err(ToolError::from_command(&CommandError::not_yet(7), env.lang))
+    route(Some(session), env, id, params)
+}
+
+/// Routeur commun : paramètres lus avant la session (un appel mal formé
+/// est `param.invalid` même sans projet ouvert), puis `session.none` sans
+/// session.
+fn route(session: Option<&mut Session>, env: &CallEnv, id: &str, params: Value) -> Result<Value, ToolError> {
+    let lang = env.lang;
+    let cmd = |e: CommandError| ToolError::from_command(&e, lang);
+    let spec = relayable(id, lang)?;
+    match id {
+        "project.save" => {
+            let p = parse_params::<SaveProjectParams>(params).map_err(cmd)?;
+            save(need(session, lang)?, env, p.path.as_deref(), true)
+        }
+        "project.export_mspdi" => {
+            let p = parse_params::<ExportMspdiParams>(params).map_err(cmd)?;
+            save(need(session, lang)?, env, Some(&p.path), false)
+        }
+        "history.list" => {
+            parse_params::<NoParams>(params).map_err(cmd)?;
+            to_value(&need(session, lang)?.history())
+        }
+        "history.undo" | "history.redo" => {
+            parse_params::<NoParams>(params).map_err(cmd)?;
+            let session = need(session, lang)?;
+            let outcome = if id == "history.undo" {
+                session.undo()
+            } else {
+                session.redo()
+            };
+            let outcome = outcome.map_err(|e| history_error(&e, lang))?;
+            to_value(&ViewCtx::new(session).outcome(&outcome))
+        }
+        "batch.apply" => {
+            let mut obj = object(params, lang)?;
+            let dry_run = take_flag(&mut obj, "dry_run", lang)?;
+            let detail = take_flag(&mut obj, "detail", lang)?;
+            check_batch_version(&obj).map_err(cmd)?;
+            let p = parse_params::<ApplyBatchParams>(Value::Object(obj)).map_err(cmd)?;
+            apply(need(session, lang)?, env, &p.into_batch(), dry_run, detail)
+        }
+        _ if spec.kind == Kind::Write => {
+            let mut obj = object(params, lang)?;
+            let dry_run = take_flag(&mut obj, "dry_run", lang)?;
+            let detail = take_flag(&mut obj, "detail", lang)?;
+            if obj.contains_key("op") {
+                return Err(ToolError::simple(
+                    codes::PARAM_INVALID,
+                    tr(lang, "champ inconnu « op »", "unknown field \"op\"").to_owned(),
+                )
+                .with_field("op"));
+            }
+            obj.insert("op".to_owned(), Value::String(id.to_owned()));
+            let op = parse_params::<Command>(Value::Object(obj)).map_err(cmd)?;
+            let batch = Batch {
+                format_version: Batch::FORMAT_VERSION,
+                lang: None,
+                ops: vec![op],
+                label: None,
+            };
+            apply(need(session, lang)?, env, &batch, dry_run, detail)
+        }
+        _ => read(session.map(|s| &*s), lang, id, params),
+    }
+}
+
+/// Lectures et analyses de [`call_with`].
+fn read(session: Option<&Session>, lang: Language, id: &str, params: Value) -> Result<Value, ToolError> {
+    let cmd = |e: CommandError| ToolError::from_command(&e, lang);
+    match id {
+        "project.summary" => {
+            parse_params::<NoParams>(params).map_err(cmd)?;
+            to_value(&view::summary(need(session, lang)?))
+        }
+        "task.list" => {
+            let p = parse_params::<TaskListParams>(params).map_err(cmd)?;
+            to_value(&view::list(need(session, lang)?, &p).map_err(cmd)?)
+        }
+        "task.get" => {
+            let p = parse_params::<TaskGetParams>(params).map_err(cmd)?;
+            let uid = TaskUid::new(p.uid);
+            let v = ViewCtx::new(need(session, lang)?)
+                .task_detail(uid)
+                .ok_or_else(|| {
+                    cmd(
+                        CommandError::new(codes::TASK_NOT_FOUND, CommandErrorKind::UnknownTask(uid))
+                            .with_field("uid"),
+                    )
+                })?;
+            to_value(&v)
+        }
+        "resource.list" => {
+            let p = parse_params::<ResourceListParams>(params).map_err(cmd)?;
+            to_value(&view::list_resources(need(session, lang)?, &p).map_err(cmd)?)
+        }
+        "analysis.resource_usage" => {
+            let p = parse_params::<UsageParams>(params).map_err(cmd)?;
+            to_value(&view::resource_usage(need(session, lang)?, &p).map_err(cmd)?)
+        }
+        "analysis.explain_date" => {
+            let p = parse_params::<ExplainParams>(params).map_err(cmd)?;
+            to_value(&crate::explain::explain_date(need(session, lang)?, &p).map_err(cmd)?)
+        }
+        "analysis.what_if" => {
+            let p = parse_params::<WhatIfParams>(params).map_err(cmd)?;
+            to_value(&crate::analysis::what_if(need(session, lang)?, &p, lang).map_err(cmd)?)
+        }
+        "analysis.baseline_variance" => {
+            let p = parse_params::<VarianceParams>(params).map_err(cmd)?;
+            to_value(&crate::analysis::baseline_variance(need(session, lang)?, &p).map_err(cmd)?)
+        }
+        "analysis.critical_path" => {
+            parse_params::<NoParams>(params).map_err(cmd)?;
+            to_value(&ViewCtx::new(need(session, lang)?).critical_path())
+        }
+        "render.gantt" => {
+            let p = parse_params::<RenderGanttParams>(params).map_err(cmd)?;
+            render(need(session, lang)?, lang, &p)
+        }
+        _ => Err(unknown_command(id, lang)),
+    }
+}
+
+/// Session de l'appel, sinon `session.none`.
+fn need<S>(session: Option<S>, lang: Language) -> Result<S, ToolError> {
+    session.ok_or_else(|| no_session(lang))
+}
+
+/// Refus d'un id inconnu du registre.
+fn unknown_command(id: &str, lang: Language) -> ToolError {
+    ToolError::simple(
+        codes::PARAM_INVALID,
+        format!("{} : {id}", tr(lang, "commande inconnue", "unknown command")),
+    )
+}
+
+/// Applique un lot à `session` (origine `env.source` s'il est commité).
+fn apply(
+    session: &mut Session,
+    env: &CallEnv,
+    batch: &Batch,
+    dry_run: bool,
+    detail: bool,
+) -> Result<Value, ToolError> {
+    let mode = if dry_run {
+        ApplyMode::DryRun
+    } else {
+        ApplyMode::Commit
+    };
+    let outcome: ApplyOutcome = session
+        .apply_with(
+            batch,
+            mode,
+            ApplyOptions {
+                detail,
+                source: env.source,
+            },
+        )
+        .map_err(|e| ToolError::from_command(&e, env.lang))?;
+    to_value(&ViewCtx::new(session).outcome(&outcome))
+}
+
+/// Rendu SVG du Gantt (`render.gantt`).
+fn render(s: &Session, lang: Language, p: &RenderGanttParams) -> Result<Value, ToolError> {
+    let max_rows = p.max_rows.unwrap_or(MAX_RENDER_ROWS);
+    if max_rows == 0 {
+        return Err(ToolError::simple(
+            codes::PARAM_INVALID,
+            tr(
+                lang,
+                "« max_rows » doit valoir au moins 1",
+                "\"max_rows\" must be at least 1",
+            )
+            .to_owned(),
+        )
+        .with_field("max_rows"));
+    }
+    if max_rows > MAX_RENDER_ROWS {
+        let e = CommandError::new(
+            codes::LIMIT_EXCEEDED,
+            CommandErrorKind::Limit {
+                what: "max_rows",
+                max: u64::from(MAX_RENDER_ROWS),
+            },
+        )
+        .with_field("max_rows");
+        return Err(ToolError::from_command(&e, lang));
+    }
+    let sched = s.schedule();
+    let range = match (p.from, p.to) {
+        (None, None) => planrs_render::RangeSpec::Auto,
+        (from, to) => {
+            let from = from.unwrap_or_else(|| sched.project_start.day());
+            let to = to.unwrap_or_else(|| sched.project_finish.day());
+            if from > to {
+                return Err(ToolError::simple(
+                    codes::PARAM_INVALID,
+                    tr(lang, "« from » est après « to »", "\"from\" is after \"to\"").to_owned(),
+                )
+                .with_field("from"));
+            }
+            planrs_render::RangeSpec::Span { from, to }
+        }
+    };
+    let zoom = match p.zoom.unwrap_or_default() {
+        ZoomJson::Auto => planrs_render::Zoom::Auto {
+            width_px: AUTO_WIDTH_PX,
+        },
+        ZoomJson::Day => planrs_render::Zoom::Day,
+        ZoomJson::Week => planrs_render::Zoom::Week,
+        ZoomJson::Month => planrs_render::Zoom::Month,
+        ZoomJson::Quarter => planrs_render::Zoom::Quarter,
+    };
+    let req = planrs_render::GanttRequest {
+        range,
+        zoom,
+        filter: planrs_render::RowFilter {
+            critical_only: p.critical_only,
+            uids: None,
+            max_outline: None,
+        },
+        language: match lang {
+            Language::Fr => planrs_render::Lang::Fr,
+            Language::En => planrs_render::Lang::En,
+        },
+        theme: planrs_render::Theme::Light,
+        limits: planrs_render::RenderLimits {
+            max_rows,
+            ..planrs_render::RenderLimits::default()
+        },
+    };
+    let (svg, report) = planrs_render::svg(s.project(), sched, &req);
+    to_value(&RenderView {
+        svg,
+        shown: report.shown,
+        hidden: report.hidden,
+        truncated_days: report.truncated_days,
+        truncated_bytes: report.truncated_bytes,
+        bytes: report.bytes,
+    })
 }
 
 /// Espace de travail : au plus une session ouverte.
@@ -287,161 +581,23 @@ impl Workspace {
         let lang = self.lang;
         let cmd = |e: CommandError| ToolError::from_command(&e, lang);
         let Some(spec) = lookup(id) else {
-            return Err(ToolError::simple(
-                codes::PARAM_INVALID,
-                format!("{} : {id}", tr(lang, "commande inconnue", "unknown command")),
-            ));
+            return Err(unknown_command(id, lang));
         };
         check_available(spec.available, id, lang)?;
         match id {
             "project.open" => self.open(&parse_params::<OpenProjectParams>(params).map_err(cmd)?),
             "project.new" => self.new_project(parse_params::<NewProjectParams>(params).map_err(cmd)?),
             "project.import_csv" => self.import_csv(&parse_params::<ImportCsvParams>(params).map_err(cmd)?),
-            "project.save" => {
-                let p = parse_params::<SaveProjectParams>(params).map_err(cmd)?;
-                self.save(p.path.as_deref(), true)
-            }
-            "project.export_mspdi" => {
-                let p = parse_params::<ExportMspdiParams>(params).map_err(cmd)?;
-                self.save(Some(&p.path), false)
-            }
-            "project.summary" => {
-                parse_params::<NoParams>(params).map_err(cmd)?;
-                to_value(&view::summary(self.current()?))
-            }
-            "task.list" => {
-                let p = parse_params::<TaskListParams>(params).map_err(cmd)?;
-                to_value(&view::list(self.current()?, &p).map_err(cmd)?)
-            }
-            "task.get" => {
-                let p = parse_params::<TaskGetParams>(params).map_err(cmd)?;
-                let s = self.current()?;
-                let uid = TaskUid::new(p.uid);
-                let v = ViewCtx::new(s).task_detail(uid).ok_or_else(|| {
-                    cmd(
-                        CommandError::new(codes::TASK_NOT_FOUND, CommandErrorKind::UnknownTask(uid))
-                            .with_field("uid"),
-                    )
-                })?;
-                to_value(&v)
-            }
-            "resource.list" | "analysis.resource_usage" => self.resource_read(id, params),
-            "analysis.explain_date" => {
-                let p = parse_params::<ExplainParams>(params).map_err(cmd)?;
-                to_value(&crate::explain::explain_date(self.current()?, &p).map_err(cmd)?)
-            }
-            "analysis.what_if" | "analysis.baseline_variance" => self.analysis(id, params),
-            "analysis.critical_path" => {
-                parse_params::<NoParams>(params).map_err(cmd)?;
-                to_value(&ViewCtx::new(self.current()?).critical_path())
-            }
-            "render.gantt" => self.render(&parse_params::<RenderGanttParams>(params).map_err(cmd)?),
-            "history.list" => {
-                parse_params::<NoParams>(params).map_err(cmd)?;
-                to_value(&self.current()?.history())
-            }
-            "history.undo" | "history.redo" => {
-                parse_params::<NoParams>(params).map_err(cmd)?;
-                let s = self.current_mut()?;
-                let outcome = if id == "history.undo" { s.undo() } else { s.redo() };
-                let outcome = outcome.map_err(|e| history_error(&e, lang))?;
-                to_value(&ViewCtx::new(s).outcome(&outcome))
-            }
-            "batch.apply" => {
-                let mut obj = object(params, lang)?;
-                let dry_run = take_flag(&mut obj, "dry_run", lang)?;
-                let detail = take_flag(&mut obj, "detail", lang)?;
-                check_batch_version(&obj).map_err(cmd)?;
-                let p = parse_params::<ApplyBatchParams>(Value::Object(obj)).map_err(cmd)?;
-                self.apply(&p.into_batch(), dry_run, detail)
-            }
-            _ if spec.kind == Kind::Write => {
-                let mut obj = object(params, lang)?;
-                let dry_run = take_flag(&mut obj, "dry_run", lang)?;
-                let detail = take_flag(&mut obj, "detail", lang)?;
-                if obj.contains_key("op") {
-                    return Err(ToolError::simple(
-                        codes::PARAM_INVALID,
-                        tr(lang, "champ inconnu « op »", "unknown field \"op\"").to_owned(),
-                    )
-                    .with_field("op"));
-                }
-                obj.insert("op".to_owned(), Value::String(id.to_owned()));
-                let op = parse_params::<Command>(Value::Object(obj)).map_err(cmd)?;
-                let batch = Batch {
-                    format_version: Batch::FORMAT_VERSION,
-                    lang: None,
-                    ops: vec![op],
-                    label: None,
+            _ => {
+                let env = CallEnv {
+                    now: self.now,
+                    lang,
+                    root: self.root.clone(),
+                    source: EditSource::User,
                 };
-                self.apply(&batch, dry_run, detail)
+                route(self.session.as_mut(), &env, id, params)
             }
-            _ => Err(ToolError::simple(
-                codes::PARAM_INVALID,
-                format!("{} : {id}", tr(lang, "commande inconnue", "unknown command")),
-            )),
         }
-    }
-
-    /// Lectures des ressources (J5) : `resource.list`,
-    /// `analysis.resource_usage`.
-    fn resource_read(&self, id: &str, params: Value) -> Result<Value, ToolError> {
-        let lang = self.lang;
-        let cmd = |e: CommandError| ToolError::from_command(&e, lang);
-        if id == "resource.list" {
-            let p = parse_params::<ResourceListParams>(params).map_err(cmd)?;
-            to_value(&view::list_resources(self.current()?, &p).map_err(cmd)?)
-        } else {
-            let p = parse_params::<UsageParams>(params).map_err(cmd)?;
-            to_value(&view::resource_usage(self.current()?, &p).map_err(cmd)?)
-        }
-    }
-
-    /// Analyses J6 (lot L8) : `analysis.what_if` (R-234),
-    /// `analysis.baseline_variance` (R-228).
-    fn analysis(&self, id: &str, params: Value) -> Result<Value, ToolError> {
-        let lang = self.lang;
-        let cmd = |e: CommandError| ToolError::from_command(&e, lang);
-        if id == "analysis.what_if" {
-            let p = parse_params::<WhatIfParams>(params).map_err(cmd)?;
-            to_value(&crate::analysis::what_if(self.current()?, &p, lang).map_err(cmd)?)
-        } else {
-            let p = parse_params::<VarianceParams>(params).map_err(cmd)?;
-            to_value(&crate::analysis::baseline_variance(self.current()?, &p).map_err(cmd)?)
-        }
-    }
-
-    /// Session ouverte, sinon `session.none`.
-    fn current(&self) -> Result<&Session, ToolError> {
-        let lang = self.lang;
-        self.session.as_ref().ok_or_else(|| no_session(lang))
-    }
-
-    fn current_mut(&mut self) -> Result<&mut Session, ToolError> {
-        let lang = self.lang;
-        self.session.as_mut().ok_or_else(|| no_session(lang))
-    }
-
-    /// Applique un lot à la session ouverte.
-    fn apply(&mut self, batch: &Batch, dry_run: bool, detail: bool) -> Result<Value, ToolError> {
-        let lang = self.lang;
-        let s = self.current_mut()?;
-        let mode = if dry_run {
-            ApplyMode::DryRun
-        } else {
-            ApplyMode::Commit
-        };
-        let outcome: ApplyOutcome = s
-            .apply_with(
-                batch,
-                mode,
-                ApplyOptions {
-                    detail,
-                    ..ApplyOptions::default()
-                },
-            )
-            .map_err(|e| ToolError::from_command(&e, lang))?;
-        to_value(&ViewCtx::new(s).outcome(&outcome))
     }
 
     /// Ouvre une session, renvoie son résumé et les diagnostics de lecture.
@@ -485,87 +641,6 @@ impl Workspace {
         };
         let session = Session::new_project(init, self.now).map_err(|e| ToolError::from_command(&e, lang))?;
         self.opened(session, Vec::new(), 0)
-    }
-
-    fn render(&self, p: &RenderGanttParams) -> Result<Value, ToolError> {
-        let lang = self.lang;
-        let s = self.current()?;
-        let max_rows = p.max_rows.unwrap_or(MAX_RENDER_ROWS);
-        if max_rows == 0 {
-            return Err(ToolError::simple(
-                codes::PARAM_INVALID,
-                tr(
-                    lang,
-                    "« max_rows » doit valoir au moins 1",
-                    "\"max_rows\" must be at least 1",
-                )
-                .to_owned(),
-            )
-            .with_field("max_rows"));
-        }
-        if max_rows > MAX_RENDER_ROWS {
-            let e = CommandError::new(
-                codes::LIMIT_EXCEEDED,
-                CommandErrorKind::Limit {
-                    what: "max_rows",
-                    max: u64::from(MAX_RENDER_ROWS),
-                },
-            )
-            .with_field("max_rows");
-            return Err(ToolError::from_command(&e, lang));
-        }
-        let sched = s.schedule();
-        let range = match (p.from, p.to) {
-            (None, None) => planrs_render::RangeSpec::Auto,
-            (from, to) => {
-                let from = from.unwrap_or_else(|| sched.project_start.day());
-                let to = to.unwrap_or_else(|| sched.project_finish.day());
-                if from > to {
-                    return Err(ToolError::simple(
-                        codes::PARAM_INVALID,
-                        tr(lang, "« from » est après « to »", "\"from\" is after \"to\"").to_owned(),
-                    )
-                    .with_field("from"));
-                }
-                planrs_render::RangeSpec::Span { from, to }
-            }
-        };
-        let zoom = match p.zoom.unwrap_or_default() {
-            ZoomJson::Auto => planrs_render::Zoom::Auto {
-                width_px: AUTO_WIDTH_PX,
-            },
-            ZoomJson::Day => planrs_render::Zoom::Day,
-            ZoomJson::Week => planrs_render::Zoom::Week,
-            ZoomJson::Month => planrs_render::Zoom::Month,
-            ZoomJson::Quarter => planrs_render::Zoom::Quarter,
-        };
-        let req = planrs_render::GanttRequest {
-            range,
-            zoom,
-            filter: planrs_render::RowFilter {
-                critical_only: p.critical_only,
-                uids: None,
-                max_outline: None,
-            },
-            language: match lang {
-                Language::Fr => planrs_render::Lang::Fr,
-                Language::En => planrs_render::Lang::En,
-            },
-            theme: planrs_render::Theme::Light,
-            limits: planrs_render::RenderLimits {
-                max_rows,
-                ..planrs_render::RenderLimits::default()
-            },
-        };
-        let (svg, report) = planrs_render::svg(s.project(), sched, &req);
-        to_value(&RenderView {
-            svg,
-            shown: report.shown,
-            hidden: report.hidden,
-            truncated_days: report.truncated_days,
-            truncated_bytes: report.truncated_bytes,
-            bytes: report.bytes,
-        })
     }
 }
 
@@ -635,19 +710,7 @@ impl Workspace {
 
     /// Chemin effectif : confiné à la racine s'il y en a une.
     fn resolve(&self, path: &str, field: &str) -> Result<PathBuf, ToolError> {
-        let lang = self.lang;
-        if path.is_empty() {
-            return Err(ToolError::simple(
-                codes::PARAM_INVALID,
-                tr(lang, "chemin vide", "empty path").to_owned(),
-            )
-            .with_field(field));
-        }
-        let p = PathBuf::from(path);
-        match &self.root {
-            None => Ok(p),
-            Some(root) => crate::files::confine(root, &p).map_err(|e| file_error(&e, lang).with_field(field)),
-        }
+        resolve_in(self.root.as_deref(), self.lang, path, field)
     }
 
     fn open(&mut self, p: &OpenProjectParams) -> Result<Value, ToolError> {
@@ -721,51 +784,73 @@ impl Workspace {
             .collect();
         self.opened(session, views, total)
     }
+}
 
-    /// Enregistre (`mark = true` : marque la session enregistrée et suit le
-    /// nouveau chemin) ou exporte une copie.
-    fn save(&mut self, path: Option<&str>, mark: bool) -> Result<Value, ToolError> {
-        let lang = self.lang;
-        let target = if let Some(p) = path {
-            self.resolve(p, "path")?
-        } else {
-            let Some(p) = self.current()?.origin().path.clone() else {
-                return Err(ToolError::simple(
-                    codes::PARAM_INVALID,
-                    tr(
-                        lang,
-                        "projet sans fichier : indiquer « path »",
-                        "the project has no file yet: give \"path\"",
-                    )
-                    .to_owned(),
-                )
-                .with_field("path"));
-            };
-            self.resolve(&p, "path")?
-        };
-        let s = self.current_mut()?;
-        let written = s.save_bytes(&planrs_mspdi::write::WriteOptions::default());
-        crate::files::write_atomic(&target, &written.xml)
-            .map_err(|e| file_error(&e, lang).with_field("path"))?;
-        if mark {
-            s.set_origin(crate::session::DocOrigin {
-                name: display_name(&target),
-                path: Some(target.display().to_string()),
-            });
-            s.mark_saved();
-        }
-        to_value(&SavedView {
-            path: target.display().to_string(),
-            bytes: written.xml.len(),
-            diagnostics: written
-                .diagnostics
-                .iter()
-                .take(MAX_VIEW_DIAGNOSTICS)
-                .map(|d| d.code.code().to_owned())
-                .collect(),
-            dirty: s.is_dirty(),
-        })
+/// Chemin effectif d'un paramètre : confiné à `root` s'il y en a une.
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_in(
+    root: Option<&std::path::Path>,
+    lang: Language,
+    path: &str,
+    field: &str,
+) -> Result<PathBuf, ToolError> {
+    if path.is_empty() {
+        return Err(ToolError::simple(
+            codes::PARAM_INVALID,
+            tr(lang, "chemin vide", "empty path").to_owned(),
+        )
+        .with_field(field));
     }
+    let p = PathBuf::from(path);
+    match root {
+        None => Ok(p),
+        Some(root) => crate::files::confine(root, &p).map_err(|e| file_error(&e, lang).with_field(field)),
+    }
+}
+
+/// Enregistre `session` (`mark = true` : la marque enregistrée et suit le
+/// nouveau chemin) ou en exporte une copie.
+#[cfg(not(target_arch = "wasm32"))]
+fn save(session: &mut Session, env: &CallEnv, path: Option<&str>, mark: bool) -> Result<Value, ToolError> {
+    let lang = env.lang;
+    let root = env.root.as_deref();
+    let target = if let Some(p) = path {
+        resolve_in(root, lang, p, "path")?
+    } else {
+        let Some(p) = session.origin().path.clone() else {
+            return Err(ToolError::simple(
+                codes::PARAM_INVALID,
+                tr(
+                    lang,
+                    "projet sans fichier : indiquer « path »",
+                    "the project has no file yet: give \"path\"",
+                )
+                .to_owned(),
+            )
+            .with_field("path"));
+        };
+        resolve_in(root, lang, &p, "path")?
+    };
+    let written = session.save_bytes(&planrs_mspdi::write::WriteOptions::default());
+    crate::files::write_atomic(&target, &written.xml).map_err(|e| file_error(&e, lang).with_field("path"))?;
+    if mark {
+        session.set_origin(crate::session::DocOrigin {
+            name: display_name(&target),
+            path: Some(target.display().to_string()),
+        });
+        session.mark_saved();
+    }
+    to_value(&SavedView {
+        path: target.display().to_string(),
+        bytes: written.xml.len(),
+        diagnostics: written
+            .diagnostics
+            .iter()
+            .take(MAX_VIEW_DIAGNOSTICS)
+            .map(|d| d.code.code().to_owned())
+            .collect(),
+        dirty: session.is_dirty(),
+    })
 }
 
 /// Erreur d'outil d'une erreur de fichier.
@@ -795,8 +880,18 @@ impl Workspace {
     fn import_csv(&mut self, _: &ImportCsvParams) -> Result<Value, ToolError> {
         Err(self.no_files(codes::FILE_READ))
     }
+}
 
-    fn save(&mut self, _: Option<&str>, _: bool) -> Result<Value, ToolError> {
-        Err(self.no_files(codes::FILE_WRITE))
-    }
+/// Enregistrement : pas de système de fichiers en wasm.
+#[cfg(target_arch = "wasm32")]
+fn save(_: &mut Session, env: &CallEnv, _: Option<&str>, _: bool) -> Result<Value, ToolError> {
+    Err(ToolError::simple(
+        codes::FILE_WRITE,
+        tr(
+            env.lang,
+            "pas de système de fichiers dans cette version",
+            "no file system in this build",
+        )
+        .to_owned(),
+    ))
 }

@@ -116,8 +116,8 @@ pub struct ApplyOptions {
     /// Diff détaillé : jusqu'à `diff_detail_max` tâches au lieu de
     /// [`DEFAULT_DIFF_TASKS`] (R-163).
     pub detail: bool,
-    /// Origine du lot, inscrite dans l'historique (J7, ADR-0015 D10 ;
-    /// ignorée jusqu'au lot L3 : toute entrée vaut `User`).
+    /// Origine du lot, inscrite dans l'historique (J7, ADR-0015 D10) :
+    /// `Agent` pour une écriture relayée acceptée dans l'application.
     pub source: EditSource,
 }
 
@@ -500,6 +500,7 @@ impl Session {
         }
         self.history.push(
             record.label.clone(),
+            options.source,
             record.clone(),
             entity_delta,
             bytes,

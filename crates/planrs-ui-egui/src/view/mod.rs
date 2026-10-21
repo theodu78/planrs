@@ -21,12 +21,15 @@ use crate::selection::Selection;
 use crate::state::UiState;
 use crate::theme::Palette;
 
+pub mod approval;
 pub mod chrome;
 pub mod diagnostics;
 pub mod gantt;
 pub mod main_view;
 pub mod table;
 pub mod timescale;
+
+pub use approval::{ApprovalBanner, ApprovalSummary};
 
 /// Hauteur fixe d'une ligne (table et Gantt), en points logiques.
 pub const ROW_H: f32 = 22.0;

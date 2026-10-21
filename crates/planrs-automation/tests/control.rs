@@ -1,6 +1,10 @@
-//! Canal de contrôle (lot L10, ADR-0002, ADR-0012 D9) : trames, bornes de
-//! ligne, rendez-vous 0600, nettoyage des rendez-vous périmés, jeton,
-//! correspondance par chemin canonique, méthodes réservées à J7.
+//! Canal de contrôle (lot L10 de J4, ADR-0002, ADR-0012 D9) : trames,
+//! bornes de ligne, rendez-vous 0600, nettoyage des rendez-vous périmés,
+//! jeton, correspondance par chemin canonique, écouteur J4 ; écouteur du
+//! relais J7 (lot L3, ADR-0015 D9) : jeton (C-CTL-01), file pleine
+//! (`control.busy`), expiration et `Cancel` (C-CTL-04), lectures seules
+//! par `query`. Le déroulé complet avec l'application est testé dans
+//! `planrs-ui-egui/tests/ui/relay.rs`.
 
 #![cfg(not(target_arch = "wasm32"))]
 #![allow(
@@ -68,17 +72,14 @@ fn control_frame_roundtrip() {
     }
     assert_eq!(
         Method::ALL.map(Method::wire_name),
-        [
-            "hello",
-            "query",
-            "execute",
-            "undo",
-            "redo",
-            "history",
-            "ui_state",
-            "screenshot"
-        ]
+        ["hello", "query", "execute", "ui_state", "screenshot"]
     );
+    // J7 : `undo`, `redo` et `history` retirées (`execute` de
+    // `history.undo`…).
+    for retired in ["undo", "redo", "history"] {
+        let line = format!(r#"{{"v":1,"id":3,"method":"{retired}"}}"#);
+        assert!(serde_json::from_str::<Frame>(&line).is_err(), "{retired}");
+    }
 
     // Forme exacte sur le fil ; `params` absent vaut `null`.
     let frame: Frame = serde_json::from_str(r#"{"v":1,"id":3,"method":"hello"}"#).unwrap();
@@ -106,6 +107,16 @@ fn control_frame_roundtrip() {
         assert_eq!(serde_json::from_str::<Reply>(wire).unwrap(), *reply);
         assert_eq!(reply.id(), id);
     }
+
+    // Erreur d'outil : tous ses champs passent sur le fil (C-CTL-09).
+    let tool = planrs_automation::ToolError::simple("task.not_found", "x".to_owned()).with_field("uid");
+    let reply = Reply::tool_error(9, &tool);
+    let wire: Value = serde_json::from_str(&serde_json::to_string(&reply).unwrap()).unwrap();
+    let mut local = serde_json::to_value(&tool).unwrap();
+    assert_eq!(wire["err"]["error"], local);
+    local["code"] = json!("other");
+    assert_ne!(wire["err"]["error"], local);
+    assert_eq!(serde_json::from_value::<Reply>(wire).unwrap(), reply);
 }
 
 #[test]
@@ -177,6 +188,81 @@ fn control_unsupported_methods_in_j4() {
     unix::unsupported_methods_in_j4();
 }
 
+/// C-CTL-01 (relais J7) : jeton faux ou absent, ou requête avant `hello` ⇒
+/// refus et connexion fermée ; rien n'atteint la file de l'application.
+#[cfg(unix)]
+#[test]
+fn c_ctl_01_bad_token_closes() {
+    unix::relay_bad_token_closes();
+}
+
+/// File de l'application pleine ⇒ `control.busy`, connexion maintenue ;
+/// l'appel en file reçoit sa réponse quand l'application la vide.
+#[cfg(unix)]
+#[test]
+fn relay_queue_full_busy() {
+    unix::relay_queue_full_busy();
+}
+
+/// C-CTL-04 (côté écouteur) : sans réponse finale dans le délai, l'appel
+/// expire (`claim` faux ensuite), `Cancel(id)` suit dans la file et l'agent
+/// reçoit `control.approval_timeout` après `pending_approval`.
+#[cfg(unix)]
+#[test]
+fn c_ctl_04_listener_expires_and_cancels() {
+    unix::relay_expires_and_cancels();
+}
+
+/// `query` relaie les seules lectures du registre (`project.summary` par
+/// défaut) ; `execute`, `ui_state`, `screenshot` donnent leur appel ;
+/// paramètres mal formés refusés sans fermer.
+#[cfg(unix)]
+#[test]
+fn relay_methods_become_calls() {
+    unix::relay_methods_become_calls();
+}
+
+/// `call_with` (ADR-0015 D9) : même JSON que `Workspace::call` ; une
+/// écriture commitée porte l'origine de l'environnement (`Agent` : entrée
+/// d'historique marquée « agent », JSON `source`), un `dry_run` ne laisse
+/// rien.
+#[test]
+fn relay_call_with_marks_agent_source() {
+    use planrs_automation::text::Language;
+    use planrs_automation::{CallEnv, EditSource, Session, Workspace, call_with};
+
+    let now: planrs_core::Moment = "2026-10-19T08:00".parse().unwrap();
+    let mut ws = Workspace::new(now, Language::Fr);
+    ws.call("project.new", json!({ "name": "P", "start": "2026-10-19T08:00" }))
+        .unwrap();
+    let mut session: Session = ws.session().unwrap().clone();
+    let env = CallEnv {
+        source: EditSource::Agent,
+        ..CallEnv::new(now, Language::Fr)
+    };
+    let add = json!({ "name": "T", "duration": {"text": "2j"} });
+    let dry = call_with(
+        &mut session,
+        &env,
+        "task.add",
+        json!({ "name": "T", "duration": {"text": "2j"}, "dry_run": true }),
+    )
+    .unwrap();
+    assert_eq!(dry["committed"], false);
+    assert_eq!(session.generation(), 0);
+    let relayed = call_with(&mut session, &env, "task.add", add.clone()).unwrap();
+    let local = ws.call("task.add", add).unwrap();
+    assert_eq!(relayed, local);
+    let history = call_with(&mut session, &env, "history.list", json!({})).unwrap();
+    assert_eq!(history["entries"][0]["source"], "agent");
+    let local_history = ws.call("history.list", json!({})).unwrap();
+    assert!(local_history["entries"][0].get("source").is_none());
+    assert_eq!(
+        serde_json::to_value(session.project()).unwrap(),
+        serde_json::to_value(ws.session().unwrap().project()).unwrap()
+    );
+}
+
 /// Hors Unix (Windows, J4) : pas d'écouteur ; un rendez-vous est vivant
 /// s'il a été écrit il y a moins de 24 h (hypothèse documentée).
 #[cfg(not(unix))]
@@ -226,10 +312,14 @@ mod unix {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    use std::sync::mpsc::{Receiver, sync_channel};
+
     use planrs_automation::control::{
-        ControlError, ListenerHandle, Rendezvous, WireError, canonical_project, find_live_for_in, new_token,
-        probe, publish_in, spawn_hello_listener_in,
+        ControlError, ListenerHandle, ListenerOptions, RelayCall, RelayKind, Rendezvous, WireError,
+        canonical_project, find_live_for_in, new_token, probe, publish_in, spawn_hello_listener_in,
+        spawn_listener_with,
     };
+    use planrs_automation::error::codes as tool_codes;
 
     use super::*;
 
@@ -538,14 +628,7 @@ mod unix {
             other => panic!("hello attendu : {other:?}"),
         }
         // Méthodes réservées : refus, la connexion reste ouverte.
-        let reserved = [
-            Method::Execute,
-            Method::Undo,
-            Method::Redo,
-            Method::History,
-            Method::UiState,
-            Method::Screenshot,
-        ];
+        let reserved = [Method::Execute, Method::UiState, Method::Screenshot];
         for (method, id) in reserved.into_iter().zip(10..) {
             assert!(!method.available_in_j4());
             let reply = client.call(id, method, json!({}));
@@ -582,5 +665,269 @@ mod unix {
             client.call(25, Method::Query, Value::Null),
             Reply::Ok { id: 25, .. }
         ));
+    }
+
+    /// Écouteur du relais sur une file de `capacity` appels, délai
+    /// `timeout` ; le rappel compte les réveils.
+    fn relay_listener(
+        dir: &Path,
+        capacity: usize,
+        timeout: Duration,
+    ) -> (ListenerHandle, String, Receiver<RelayCall>, Arc<AtomicU64>) {
+        let token = new_token().unwrap();
+        let (tx, rx) = sync_channel(capacity);
+        let woken = Arc::new(AtomicU64::new(0));
+        let counter = Arc::clone(&woken);
+        let wake: planrs_automation::control::Waker = Arc::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        let options = ListenerOptions {
+            approval_timeout: timeout,
+            reply_grace: Duration::from_millis(200),
+        };
+        let handle = spawn_listener_with(dir, token.clone(), tx, wake, options).unwrap();
+        (handle, token, rx, woken)
+    }
+
+    fn execute(tool: &str) -> Value {
+        json!({ "tool": tool, "params": {} })
+    }
+
+    pub(super) fn relay_bad_token_closes() {
+        let tmp = TempDir::new("rtok");
+        let (handle, token, rx, _) = relay_listener(tmp.path(), 4, Duration::from_secs(5));
+        for bad in [json!({ "token": "0".repeat(64) }), json!({}), Value::Null] {
+            let mut client = Client::connect(handle.endpoint());
+            let reply = client.call(1, Method::Hello, bad);
+            assert_eq!(err_code(&reply), codes::BAD_TOKEN);
+            assert!(client.is_closed());
+        }
+        let mut client = Client::connect(handle.endpoint());
+        let reply = client.call(2, Method::Execute, execute("project.summary"));
+        assert_eq!(err_code(&reply), codes::UNAUTHENTICATED);
+        assert!(client.is_closed());
+        assert!(rx.try_recv().is_err(), "rien ne doit atteindre la file");
+        // Le bon jeton : méthodes du relais annoncées.
+        let mut client = Client::connect(handle.endpoint());
+        match client.hello(&token) {
+            Reply::Ok { result, .. } => assert_eq!(
+                result["methods"],
+                json!(["hello", "query", "execute", "ui_state", "screenshot"])
+            ),
+            other => panic!("hello attendu : {other:?}"),
+        }
+    }
+
+    pub(super) fn relay_queue_full_busy() {
+        let tmp = TempDir::new("rbusy");
+        let (handle, token, rx, woken) = relay_listener(tmp.path(), 1, Duration::from_secs(10));
+        let endpoint = handle.endpoint().to_owned();
+        let first_token = token.clone();
+        let first = std::thread::spawn(move || {
+            let mut client = Client::connect(&endpoint);
+            client.hello(&first_token);
+            client.call(5, Method::Execute, execute("project.summary"))
+        });
+        // Le premier appel occupe la seule place de la file.
+        while woken.load(Ordering::SeqCst) < 1 {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut client = Client::connect(handle.endpoint());
+        client.hello(&token);
+        let reply = client.call(7, Method::Execute, execute("task.list"));
+        assert_eq!(err_code(&reply), codes::BUSY);
+        assert_eq!(reply.id(), 7);
+        // Connexion maintenue : toujours pleine, même réponse.
+        let reply = client.call(8, Method::UiState, Value::Null);
+        assert_eq!(err_code(&reply), codes::BUSY);
+        // L'application vide la file et répond au premier appel.
+        let call = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(call.id, 5);
+        assert!(call.state.claim());
+        call.reply
+            .send(Reply::Ok {
+                id: 5,
+                result: json!("a"),
+            })
+            .unwrap();
+        assert_eq!(
+            first.join().unwrap(),
+            Reply::Ok {
+                id: 5,
+                result: json!("a")
+            }
+        );
+        // La place libérée sert l'appel suivant de la même connexion.
+        let frame = Frame {
+            v: 1,
+            id: 9,
+            method: Method::UiState,
+            params: Value::Null,
+        };
+        client.send_raw(&to_line(&frame).unwrap());
+        let call = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!((call.id, &call.kind), (9, &RelayKind::UiState));
+        call.reply
+            .send(Reply::Ok {
+                id: 9,
+                result: json!("b"),
+            })
+            .unwrap();
+        assert_eq!(
+            client.reply(),
+            Reply::Ok {
+                id: 9,
+                result: json!("b")
+            }
+        );
+    }
+
+    pub(super) fn relay_expires_and_cancels() {
+        let tmp = TempDir::new("rexp");
+        let (handle, token, rx, _) = relay_listener(tmp.path(), 4, Duration::from_millis(300));
+        let mut client = Client::connect(handle.endpoint());
+        client.hello(&token);
+        let frame = Frame {
+            v: 1,
+            id: 9,
+            method: Method::Execute,
+            params: execute("task.add"),
+        };
+        client.send_raw(&to_line(&frame).unwrap());
+        let call = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(call.id, 9);
+        call.reply.send(Reply::PendingApproval { id: 9 }).unwrap();
+        assert_eq!(client.reply(), Reply::PendingApproval { id: 9 });
+        let reply = client.reply();
+        assert_eq!(err_code(&reply), tool_codes::CONTROL_APPROVAL_TIMEOUT);
+        assert_eq!(reply.id(), 9);
+        // Course Accepter/délai tranchée : l'application ne peut plus le
+        // prendre ; le bandeau est retiré par `Cancel`.
+        assert!(!call.state.claim());
+        let cancel = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(cancel.kind, RelayKind::Cancel(9));
+        // Une réponse tardive n'arrive jamais à l'agent ; la connexion
+        // sert la requête suivante.
+        let _ = call.reply.send(Reply::Ok {
+            id: 9,
+            result: Value::Null,
+        });
+        let frame = Frame {
+            v: 1,
+            id: 10,
+            method: Method::UiState,
+            params: Value::Null,
+        };
+        client.send_raw(&to_line(&frame).unwrap());
+        let call = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(call.kind, RelayKind::UiState);
+        call.reply
+            .send(Reply::Ok {
+                id: 10,
+                result: json!({}),
+            })
+            .unwrap();
+        assert_eq!(
+            client.reply(),
+            Reply::Ok {
+                id: 10,
+                result: json!({})
+            }
+        );
+    }
+
+    pub(super) fn relay_methods_become_calls() {
+        let tmp = TempDir::new("rmeth");
+        let (handle, token, rx, _) = relay_listener(tmp.path(), 8, Duration::from_secs(5));
+        let mut client = Client::connect(handle.endpoint());
+        client.hello(&token);
+        let cases = [
+            (
+                Method::Query,
+                Value::Null,
+                RelayKind::Execute {
+                    tool: "project.summary".to_owned(),
+                    params: json!({}),
+                },
+            ),
+            (
+                Method::Query,
+                json!({ "command": "task.get", "params": { "uid": 3 } }),
+                RelayKind::Execute {
+                    tool: "task.get".to_owned(),
+                    params: json!({ "uid": 3 }),
+                },
+            ),
+            (
+                Method::Execute,
+                json!({ "tool": "history.undo" }),
+                RelayKind::Execute {
+                    tool: "history.undo".to_owned(),
+                    params: json!({}),
+                },
+            ),
+            (Method::UiState, json!({}), RelayKind::UiState),
+            (
+                Method::Screenshot,
+                json!({ "scale_down": 1 }),
+                RelayKind::Screenshot { scale_down: 1 },
+            ),
+        ];
+        for ((method, params, kind), id) in cases.into_iter().zip(30..) {
+            let frame = Frame {
+                v: 1,
+                id,
+                method,
+                params,
+            };
+            client.send_raw(&to_line(&frame).unwrap());
+            let call = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!((call.id, &call.kind), (id, &kind));
+            assert!(call.state.claim());
+            call.reply
+                .send(Reply::Ok {
+                    id,
+                    result: json!(id),
+                })
+                .unwrap();
+            assert_eq!(
+                client.reply(),
+                Reply::Ok {
+                    id,
+                    result: json!(id)
+                }
+            );
+        }
+        let refused = [
+            (
+                Method::Query,
+                json!({ "command": "task.add" }),
+                codes::UNSUPPORTED,
+            ),
+            (Method::Query, json!({ "command": "nope" }), codes::UNSUPPORTED),
+            (Method::Query, json!({ "command": 3 }), codes::INVALID_FRAME),
+            (Method::Execute, json!({}), codes::INVALID_FRAME),
+            (
+                Method::Execute,
+                json!({ "tool": "x", "y": 1 }),
+                codes::INVALID_FRAME,
+            ),
+            (Method::Execute, json!([1]), codes::INVALID_FRAME),
+            (Method::UiState, json!({ "x": 1 }), codes::INVALID_FRAME),
+            (
+                Method::Screenshot,
+                json!({ "scale_down": "a" }),
+                codes::INVALID_FRAME,
+            ),
+        ];
+        for ((method, params, code), id) in refused.into_iter().zip(50..) {
+            let reply = client.call(id, method, params);
+            assert_eq!(err_code(&reply), code, "{id}");
+        }
+        assert!(rx.try_recv().is_err());
+        // L'application partie (file fermée) : réponse propre.
+        drop(rx);
+        let reply = client.call(60, Method::UiState, Value::Null);
+        assert_eq!(err_code(&reply), tool_codes::CONTROL_APP_GONE);
     }
 }

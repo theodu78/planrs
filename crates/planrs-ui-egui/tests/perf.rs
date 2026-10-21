@@ -25,6 +25,9 @@
 //!   suivante), mesure publiée avec sa décomposition (recalcul,
 //!   `RowModel::build`, reste), porte au lot L16 (médiane < 100 ms, p95 <
 //!   150 ms).
+//! - J7 L3 (ignoré, release) : `approval_banner` (bandeau de validation
+//!   d'une écriture d'un agent affiché, défilement à chaque image), mêmes
+//!   seuils.
 //!
 //! Le rendu GPU n'est pas chronométré (lavapipe en CI n'est pas
 //! représentatif). Le projet est un MSPDI généré en mémoire par ce fichier :
@@ -709,4 +712,50 @@ fn frame_counts_equal_at_1000_and_5000_tasks() {
             "galleys {small:?} / {large:?}"
         );
     }
+}
+
+/// J7 L3 : bandeau de validation d'une écriture d'un agent affiché
+/// (H-UI-27), 5 000 tâches, défilement de la table à chaque image ; même
+/// budget que la vue principale (médiane < 16 ms).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn approval_banner() {
+    use std::sync::Arc;
+    use std::sync::mpsc::sync_channel;
+
+    use planrs_automation::control::{CallState, RelayCall, RelayKind, Reply};
+
+    let (mut app, mut bench) = nav_bench();
+    let (tx, rx) = sync_channel(4);
+    app.control_inbox(rx);
+    let (reply, replies) = sync_channel(4);
+    tx.send(RelayCall {
+        id: 1,
+        kind: RelayKind::Execute {
+            tool: "task.update".to_owned(),
+            params: serde_json::json!({ "uid": 3, "name": "Proposé par l'agent" }),
+        },
+        state: Arc::new(CallState::new()),
+        reply,
+    })
+    .unwrap();
+    bench.settle(&mut app);
+    assert_eq!(replies.try_recv().unwrap(), Reply::PendingApproval { id: 1 });
+    assert_eq!(app.relay().unwrap().pending().len(), 1);
+    for _ in 0..WARMUP {
+        bench.frame(&mut app, wheel_events(-WHEEL_STEP));
+    }
+    let samples: Vec<Duration> = (0..120)
+        .map(|i| {
+            let dy = if i % 2 == 0 { -WHEEL_STEP } else { WHEEL_STEP };
+            bench.frame(&mut app, wheel_events(dy))
+        })
+        .collect();
+    assert_eq!(
+        app.relay().unwrap().pending().len(),
+        1,
+        "bandeau toujours affiché"
+    );
+    assert_budget("approval_banner", samples, bench.last);
 }

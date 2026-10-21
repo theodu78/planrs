@@ -379,6 +379,17 @@ text_ids! {
     NavCursorEmptyValue => "nav-cursor-empty-value",
     // --- J7 L2 ---
     // --- J7 L3 ---
+    ApprovalTitle => "approval-title",
+    ApprovalChanged => "approval-changed",
+    ApprovalFinish => "approval-finish",
+    ApprovalFinishSame => "approval-finish-same",
+    ApprovalCritical => "approval-critical",
+    ApprovalWarnings => "approval-warnings",
+    ApprovalQueued => "approval-queued",
+    ApprovalAccept => "approval-accept",
+    ApprovalReject => "approval-reject",
+    MenuUndoAgent => "menu-undo-agent",
+    MenuUndoAgentOps => "menu-undo-agent-ops",
     // --- J7 L4 ---
     // --- J7 L5 ---
     // --- J7 L6 ---

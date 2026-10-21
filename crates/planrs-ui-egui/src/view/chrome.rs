@@ -130,8 +130,25 @@ fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
         (TextId::MenuUndo, "history.undo", can_undo, Action::Undo),
         (TextId::MenuRedo, "history.redo", can_redo, Action::Redo),
     ];
+    // Dernier lot annulable venu d'un agent (relais J7) : « Annuler :
+    // agent — libellé » (ou le nombre d'opérations).
+    let agent_undo = history
+        .as_ref()
+        .and_then(|h| h.entries.last())
+        .filter(|entry| entry.source == planrs_automation::EditSource::Agent)
+        .map(|entry| {
+            let detail = entry.label.clone().unwrap_or_else(|| {
+                let count = i64::try_from(entry.ops).unwrap_or(i64::MAX);
+                texts.get_args(TextId::MenuUndoAgentOps, &[("count", Arg::Count(count))])
+            });
+            texts.get_args(TextId::MenuUndoAgent, &[("detail", Arg::Str(detail.into()))])
+        });
     for (label, id, enabled, action) in items {
-        let mut button = egui::Button::new(texts.get(label));
+        let text = match (&agent_undo, label) {
+            (Some(text), TextId::MenuUndo) => text.clone(),
+            _ => texts.get(label),
+        };
+        let mut button = egui::Button::new(text);
         if let Some(shortcut) = shortcut_for(Binding::Command(id)) {
             button = button.shortcut_text(shortcut_text(ui.ctx(), shortcut));
         }

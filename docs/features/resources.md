@@ -16,11 +16,12 @@
 
 - Commandes (R-195 à R-197) : `resource.add` (calendrier propre dérivé par défaut, O34), `resource.update`, `resource.delete` (`cascade` obligatoire s'il y a des affectations), `assignment.add` (retire l'affectation fictive), `assignment.update`, `assignment.remove`, `task.update` étendu (`type`, `effort_driven`, `work`), `project.set_info` (type et pilotage par défaut).
 - MCP et CLI : `add_resource`, `update_resource`, `delete_resource`, `list_resources`, `assign_resource`, `update_assignment`, `unassign_resource`, `resource_usage` ; `list_tasks resource=…` ; `DiffView.overallocated { new, resolved }`, y compris en `dry_run` ; CLI `planrs resources` et `planrs usage`.
+- Calendriers et taux (J7, lot L5, R-247 à R-249, R-165 et R-195 amendées) : `calendar.add` (de base à la semaine du Standard, dérivé, ou copie), `calendar.update` (nom, base), `calendar.set_week` (semaine type ; une semaine sans minute ouvrée est acceptée avec l'avertissement `calendar.no_working_time`), `calendar.delete` (refusé si utilisé : `calendar.in_use`), `project.set_info { calendar }`, nom d'exception (`calendar.set_exception { name }`), taux de `resource.update` (`standard_rate`, `overtime_rate`, `cost_per_use`, `{ amount (centièmes), per? }`) stockés dans leur unité d'origine (O46). MCP : `add_calendar`, `update_calendar`, `set_work_week`, `delete_calendar`. Ce sont les écritures des fenêtres « Feuille des ressources » (L10) et « Modifier le temps de travail » (L12).
 - MSPDI : lecture des retards de nivellement et des valeurs enregistrées (R-198) ; écriture de `Start`/`Finish` d'affectation, `Work` des tâches et des ressources, `OverAllocated`, depuis le moteur ; `TimephasedData` de type 1 gardée seulement si le placement est inchangé (R-199).
 
 ## 3. Hors J5 et limites
 
-- Coûts : taux, coût par utilisation et coût fixe stockés et réécrits tels quels, jamais calculés (ADR-0013 D7).
+- Coûts : taux, coût par utilisation et coût fixe stockés et réécrits tels quels, jamais calculés (ADR-0013 D7) ; depuis J7 (lot L5), taux et coût par utilisation modifiables par `resource.update`, toujours sans calcul.
 - Nivellement : non calculé ; les retards enregistrés sont lus et appliqués.
 - Capacité constante (`AvailabilityPeriods` ignorées) ; profils non uniformes placés comme uniformes.
 - Affectation fictive −65 535 lue et gardée, jamais écrite pour les tâches de planrs (écart à O24).

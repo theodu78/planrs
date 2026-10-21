@@ -1401,6 +1401,13 @@ impl App {
 
     /// Accepte l'écriture relayée `id` (bandeau, H-UI-27) ; sans canal
     /// (web), rien.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        allow(
+            clippy::unused_self,
+            reason = "web : aucun canal, même signature que le desktop"
+        )
+    )]
     fn approve_relayed(&mut self, id: u64) {
         #[cfg(not(target_arch = "wasm32"))]
         self.approve(id);
@@ -1409,6 +1416,13 @@ impl App {
     }
 
     /// Refuse l'écriture relayée `id` ; sans canal (web), rien.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        allow(
+            clippy::unused_self,
+            reason = "web : aucun canal, même signature que le desktop"
+        )
+    )]
     fn reject_relayed(&mut self, id: u64) {
         #[cfg(not(target_arch = "wasm32"))]
         self.reject(id);

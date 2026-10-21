@@ -196,6 +196,29 @@ fn apply_click_modifiers(actions: &mut [Action], start: usize, modifiers: egui::
     }
 }
 
+/// Défilement vertical demandé, borné au défilement maximal : un décalage
+/// au-delà ferait revenir la zone par un rebond animé sur une dizaine
+/// d'images. egui borne d'abord par le maximum de l'image précédente : si le
+/// contenu vient de grandir (ligne ajoutée), le reste du défilement attend
+/// l'image suivante (la demande reste dans `pending_scroll_y`).
+fn take_pending_scroll_y(view: &mut ViewTransient, body_h: f32, content_h: f32) -> Option<f32> {
+    let y = view.pending_scroll_y.take().filter(|y| y.is_finite())?;
+    let max_of = |content: f32| {
+        let max = (content - body_h).max(0.0);
+        if max.is_finite() { max } else { 0.0 }
+    };
+    let max_now = max_of(content_h);
+    let max_y = if view.last_content_h > 0.0 {
+        max_now.min(max_of(view.last_content_h))
+    } else {
+        max_now
+    };
+    if y > max_y && max_now > max_y {
+        view.pending_scroll_y = Some(y);
+    }
+    Some(y.clamp(0.0, max_y))
+}
+
 /// `ScrollArea` verticale unique : corps de la table et du Gantt sur la même
 /// plage de lignes, fond cliquable (sélection, glisser horizontal du Gantt).
 fn paint_rows(
@@ -220,28 +243,8 @@ fn paint_rows(
         .auto_shrink([false, false])
         .content_margin(egui::Margin::ZERO)
         .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible);
-    if let Some(y) = view.pending_scroll_y.take()
-        && y.is_finite()
-    {
-        // Borné au défilement maximal : un décalage au-delà ferait revenir
-        // la zone par un rebond animé sur une dizaine d'images. egui borne
-        // d'abord par le maximum de l'image précédente : si le contenu
-        // vient de grandir (ligne ajoutée), le reste du défilement attend
-        // l'image suivante.
-        let max_of = |content: f32| {
-            let max = (content - layout.body.height()).max(0.0);
-            if max.is_finite() { max } else { 0.0 }
-        };
-        let max_now = max_of(content_h);
-        let max_y = if view.last_content_h > 0.0 {
-            max_now.min(max_of(view.last_content_h))
-        } else {
-            max_now
-        };
-        if y > max_y && max_now > max_y {
-            view.pending_scroll_y = Some(y);
-        }
-        area = area.vertical_scroll_offset(y.clamp(0.0, max_y));
+    if let Some(y) = take_pending_scroll_y(view, layout.body.height(), content_h) {
+        area = area.vertical_scroll_offset(y);
     }
     view.last_content_h = content_h;
     let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(layout.body));

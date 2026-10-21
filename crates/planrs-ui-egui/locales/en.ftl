@@ -484,6 +484,17 @@ res-delete-text =
     }
 
 # --- J7 L11 ---
+menu-view-resource-usage = Resource Usage
+usage-sheet-label = Resource usage
+usage-periods-label = Work per period
+usage-col-expand = +/-
+usage-col-name = Resource Name
+usage-col-work = Work
+usage-hours-suffix = h
+usage-expand = Expand { $name }
+usage-collapse = Collapse { $name }
+usage-assignment-label = Assignment: { $name } ({ $detail })
+usage-limit = Usage too large to display: collapse some resources ({ $detail }).
 
 # --- J7 L12 ---
 

@@ -246,7 +246,8 @@ fn zoom_choices(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
 
 /// Vue exclusive : Diagramme de Gantt / Gantt de suivi (J7, lot L7,
 /// H-UI-22 ; style du Gantt, qui ramène à la vue Gantt) / Feuille des
-/// ressources (lot L10) ; aucune n'est surlignée sans document.
+/// ressources (lot L10) / Utilisation des ressources (lot L11) ; aucune
+/// n'est surlignée sans document.
 fn gantt_style_choices(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let has_doc = fc.doc.is_some();
     let gantt = fc.state.view == ViewKind::Gantt;
@@ -263,6 +264,10 @@ fn gantt_style_choices(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let sheet = fc.state.view == ViewKind::ResourceSheet;
     if choice(ui, has_doc && sheet, &fc.texts.get(TextId::MenuViewResourceSheet)) {
         fc.actions.push(Action::SetView(ViewKind::ResourceSheet));
+    }
+    let usage = fc.state.view == ViewKind::ResourceUsage;
+    if choice(ui, has_doc && usage, &fc.texts.get(TextId::MenuViewResourceUsage)) {
+        fc.actions.push(Action::SetView(ViewKind::ResourceUsage));
     }
 }
 

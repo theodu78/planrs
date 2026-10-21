@@ -4,10 +4,11 @@
 //! Chaque vue se teste seule avec un `FrameCtx` fabriqué à la main. Les vues
 //! n'importent pas `app` : c'est `App` qui assemble l'image.
 
+use std::collections::BTreeSet;
 use std::ops::Range;
 
 use planrs_automation::gesture::{GestureKind, Preview};
-use planrs_core::{Severity, TaskUid};
+use planrs_core::{ResourceUid, Severity, TaskUid};
 
 use crate::action::Action;
 use crate::app::OpenDocument;
@@ -29,6 +30,7 @@ pub mod main_view;
 pub mod resource_sheet;
 pub mod table;
 pub mod timescale;
+pub mod usage;
 
 pub use approval::{ApprovalBanner, ApprovalSummary};
 
@@ -128,6 +130,12 @@ pub struct ViewTransient {
     /// Feuille des ressources : curseur, saisie, lignes, confirmation (J7,
     /// lot L10).
     pub resources: resource_sheet::ResourceSheetState,
+    /// Ressources dépliées en affectations dans l'utilisation des
+    /// ressources (J7, lot L11 ; repliées par défaut).
+    pub expanded: BTreeSet<ResourceUid>,
+    /// Utilisation des ressources : curseur, lignes, blocs de périodes du
+    /// moteur (J7, lot L11).
+    pub usage: usage::UsageState,
 }
 
 /// Volet de la vue principale (J7).

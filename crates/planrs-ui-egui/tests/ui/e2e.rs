@@ -151,7 +151,7 @@ fn drag(harness: &mut Harness<'static, App>, from: Pos2, to: Pos2) {
     harness.step();
     for k in 1..=4_u8 {
         let t = f32::from(k) / 4.0;
-        harness.hover_at(from + (to - from) * t);
+        harness.hover_at(from.lerp(to, t));
         harness.step();
     }
     harness.drop_at(to);
@@ -506,4 +506,393 @@ fn e2e_daily_use() {
         reread.session.project().tasks.get(moved).unwrap().constraint,
         edited.tasks.get(moved).unwrap().constraint
     );
+}
+
+/// Vérification 6 du lot L16 : relais avec un vrai `planrs mcp`
+/// (`relay_app_real_mcp`). L'application kittest lance l'écouteur du canal
+/// et publie son rendez-vous dans un dossier temporaire
+/// (`PLANRS_CONTROL_DIR`) ; le binaire `planrs mcp` s'y rattache au
+/// démarrage et un client JSON-RPC stdio (écrit à la main, un fil) rejoue
+/// `tests/mcp/scenarios/relay_j7.jsonl` pendant que l'interface tourne
+/// image par image : écriture acceptée, refusée, édition de l'utilisateur
+/// pendant une attente (C-CTL-07), `ui_state`, `ui_action`, `screenshot`
+/// (`control.screenshot_unavailable` sous kittest), `open_project` du
+/// fichier tenu (rattachement gardé), `undo` relayé, application fermée
+/// (`control.app_gone`, C-CTL-06) ; P47 : même JSON final qu'en local.
+///
+/// Binaire : `PLANRS_MCP_BIN`, sinon `planrs` à côté du dossier `deps` de
+/// cette cible (`cargo build -p planrs-cli` avant le test). Absent : le
+/// test le dit et ne vérifie rien, sauf `PLANRS_RELAY=required` (CI).
+/// `PLANRS_BLESS=1` réécrit le scénario depuis le journal produit.
+/// Harnais de rejeu des scénarios MCP (chargement, `$TMP`, comparaison du
+/// journal), partagé avec `planrs-mcp` et `planrs-cli` ; chemin relatif à
+/// `tests/ui/`.
+#[cfg(unix)]
+#[path = "../../../planrs-mcp/tests/common/replay.rs"]
+mod replay;
+
+#[cfg(unix)]
+#[allow(
+    clippy::disallowed_methods,
+    clippy::arithmetic_side_effects,
+    reason = "test natif : processus fils, fils et attentes, comme `planrs mcp` en vrai ; compteurs d'identifiants et de générations bornés par le scénario"
+)]
+mod relay_app {
+    use std::io::{BufRead, BufReader, Write};
+    use std::path::PathBuf;
+    use std::process::{Child, Command, Stdio};
+    use std::sync::Arc;
+    use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+    use std::thread;
+    use std::time::Duration;
+
+    use egui_kittest::Harness;
+    use planrs_automation::control::{
+        ListenerHandle, ListenerOptions, RendezvousGuard, canonical_project, new_token, publish_in,
+        spawn_listener_with,
+    };
+    use planrs_automation::text::Language as ToolLanguage;
+    use planrs_automation::{Batch, EditSource, Workspace};
+    use planrs_core::Moment;
+    use planrs_ui_egui::{Action, App, DocOrigin, EditOrigin, Env, LanguagePref, ThemePref, UiState};
+    use serde_json::{Value, json};
+
+    use crate::harness_for;
+
+    use super::replay::{self, Scenario, TempDir, logged, normalized, repo_root, substitute};
+
+    /// Nom du scénario.
+    const SCENARIO: &str = "relay_j7";
+
+    /// Attente de la validation côté serveur (`--approval-timeout`).
+    const APPROVAL_SECS: u64 = 30;
+
+    /// Images d'interface au plus par appel (5 ms chacune : ~60 s).
+    const MAX_FRAMES: usize = 12_000;
+
+    /// Ce que l'utilisateur fait pendant un appel relayé.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Directive {
+        /// Rien : lecture, outil d'interface, refus immédiat.
+        None,
+        /// Accepter le bandeau.
+        Approve,
+        /// Refuser le bandeau.
+        Reject,
+        /// Modifier le projet pendant l'attente, Accepter (nouvel aperçu,
+        /// rien d'appliqué), Accepter encore (C-CTL-07).
+        EditThenApprove,
+        /// Fermer l'application (écouteur et rendez-vous retirés) avant
+        /// l'appel.
+        CloseApp,
+    }
+
+    /// Directive de l'appel `seq` (1-based) du scénario.
+    fn directive(seq: usize) -> Directive {
+        match seq {
+            2 | 6 | 9 => Directive::Approve,
+            3 => Directive::Reject,
+            4 => Directive::EditThenApprove,
+            10 => Directive::CloseApp,
+            _ => Directive::None,
+        }
+    }
+
+    /// Édition de l'utilisateur pendant l'attente de l'appel 4 (C-CTL-07),
+    /// rejouée en local pour P47.
+    fn user_edit() -> Value {
+        json!({ "uid": 3, "name": "Plans revus pendant l'attente" })
+    }
+
+    /// Binaire `planrs` : `PLANRS_MCP_BIN`, sinon à côté de `deps/`.
+    fn mcp_binary() -> Option<PathBuf> {
+        if let Some(path) = std::env::var_os("PLANRS_MCP_BIN") {
+            return Some(PathBuf::from(path));
+        }
+        let exe = std::env::current_exe().ok()?;
+        let dir = exe.parent()?.parent()?;
+        Some(dir.join("planrs"))
+    }
+
+    /// Client JSON-RPC stdio minimal (`initialize`, `tools/call`) dans un
+    /// fil : les appels arrivent par `calls`, chaque résultat repart par
+    /// `results` sous la forme du journal (`{"ok": …}` / `{"error": …}`).
+    fn client_thread(
+        child: &mut Child,
+        calls: Receiver<Option<(String, Value)>>,
+        results: SyncSender<Value>,
+    ) {
+        let mut stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut next_id = 1_u64;
+            let mut send = |method: &str, params: Value, id: Option<u64>| {
+                let mut message = json!({ "jsonrpc": "2.0", "method": method, "params": params });
+                if let Some(id) = id {
+                    message["id"] = json!(id);
+                }
+                let line = format!("{message}\n");
+                stdin.write_all(line.as_bytes()).unwrap();
+                stdin.flush().unwrap();
+            };
+            let mut receive = |id: u64| -> Value {
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    let n = reader.read_line(&mut line).unwrap();
+                    assert!(n > 0, "planrs mcp a fermé sa sortie");
+                    let message: Value = match serde_json::from_str(line.trim_end()) {
+                        Ok(message) => message,
+                        Err(_) => continue,
+                    };
+                    if message["id"] == json!(id) {
+                        assert!(message.get("error").is_none(), "JSON-RPC : {message}");
+                        return message["result"].clone();
+                    }
+                }
+            };
+            send(
+                "initialize",
+                json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": { "name": "planrs-relay-test", "version": "0" }
+                }),
+                Some(next_id),
+            );
+            receive(next_id);
+            next_id += 1;
+            send("notifications/initialized", json!({}), None);
+            while let Ok(Some((tool, params))) = calls.recv() {
+                send(
+                    "tools/call",
+                    json!({ "name": tool, "arguments": params }),
+                    Some(next_id),
+                );
+                let result = receive(next_id);
+                next_id += 1;
+                let is_error = result["isError"].as_bool();
+                let structured = result.get("structuredContent").cloned();
+                results.send(logged(is_error, structured)).unwrap();
+            }
+            // Entrée fermée : le serveur rend la main.
+            drop(stdin);
+        });
+    }
+
+    /// Application de test branchée sur un écouteur réel, fichier
+    /// `maison.xml` (l'exemple) tenu dans `tmp`, rendez-vous publié dans
+    /// `tmp/control`.
+    fn wired(
+        tmp: &TempDir,
+        now: Moment,
+    ) -> (Harness<'static, App>, ListenerHandle, RendezvousGuard, PathBuf) {
+        let plan = tmp.path().join("maison.xml");
+        std::fs::write(&plan, planrs_ui_egui::DEMO_MSPDI).unwrap();
+        let state = UiState {
+            language: LanguagePref::Fr,
+            theme: ThemePref::Light,
+            ..UiState::default()
+        };
+        let mut harness = harness_for(App::new(state, Env::fixed(now)));
+        let (tx, rx) = sync_channel(64);
+        harness.state_mut().control_inbox(rx);
+        harness.run();
+        let origin = DocOrigin {
+            name: "maison.xml".to_owned(),
+            path: Some(plan.to_str().unwrap().to_owned()),
+            demo: false,
+        };
+        harness.state_mut().open_bytes(planrs_ui_egui::DEMO_MSPDI, origin);
+        harness.run();
+        assert!(
+            harness.state().document.is_some(),
+            "{:?}",
+            harness.state().messages()
+        );
+        let options = ListenerOptions {
+            approval_timeout: Duration::from_secs(APPROVAL_SECS),
+            reply_grace: Duration::from_secs(2),
+        };
+        let sockets = tmp.path().join("sock");
+        let handle =
+            spawn_listener_with(&sockets, new_token().unwrap(), tx, Arc::new(|| {}), options).unwrap();
+        let control = tmp.path().join("control");
+        let guard = publish_in(&control, &handle.rendezvous(canonical_project(&plan))).unwrap();
+        (harness, handle, guard, control)
+    }
+
+    fn generation(app: &App) -> u64 {
+        app.document.as_ref().unwrap().generation()
+    }
+
+    fn pending(app: &App) -> Option<(u64, u64)> {
+        app.relay()
+            .and_then(|relay| relay.pending().front().map(|p| (p.id, p.generation)))
+    }
+
+    /// Fait tourner l'interface jusqu'au résultat de l'appel en cours, en
+    /// appliquant `directive` au bandeau.
+    fn pump(harness: &mut Harness<'static, App>, results: &Receiver<Value>, directive: Directive) -> Value {
+        let mut approvals = 0_u8;
+        for _ in 0..MAX_FRAMES {
+            if let Ok(result) = results.try_recv() {
+                return result;
+            }
+            if let Some((id, pending_generation)) = pending(harness.state()) {
+                match directive {
+                    Directive::Approve if approvals == 0 => {
+                        harness.state_mut().dispatch(Action::Approve(id));
+                        approvals = 1;
+                    }
+                    Directive::Reject if approvals == 0 => {
+                        harness.state_mut().dispatch(Action::Reject(id));
+                        approvals = 1;
+                    }
+                    Directive::EditThenApprove if approvals == 0 => {
+                        let batch: Batch = serde_json::from_value(json!({
+                            "format_version": 1,
+                            "ops": [{ "op": "task.update", "uid": 3, "name": "Plans revus pendant l'attente" }]
+                        }))
+                        .unwrap();
+                        let before = generation(harness.state());
+                        harness.state_mut().execute(&batch, EditOrigin::User).unwrap();
+                        harness.run();
+                        assert_eq!(generation(harness.state()), before + 1);
+                        harness.state_mut().dispatch(Action::Approve(id));
+                        harness.run();
+                        // Aperçu périmé : rien d'appliqué, nouvel aperçu en attente.
+                        assert_eq!(generation(harness.state()), before + 1, "aperçu périmé appliqué");
+                        approvals = 1;
+                    }
+                    Directive::EditThenApprove
+                        if approvals == 1 && pending_generation == generation(harness.state()) =>
+                    {
+                        harness.state_mut().dispatch(Action::Approve(id));
+                        approvals = 2;
+                    }
+                    _ => {}
+                }
+            }
+            harness.step();
+            thread::sleep(Duration::from_millis(5));
+        }
+        panic!("aucun résultat de l'appel relayé en {MAX_FRAMES} images ({directive:?})");
+    }
+
+    #[test]
+    fn relay_app_real_mcp() {
+        let Some(binary) = mcp_binary().filter(|p| p.is_file()) else {
+            let required = std::env::var("PLANRS_RELAY").is_ok_and(|v| v == "required");
+            assert!(
+                !required,
+                "PLANRS_RELAY=required : binaire planrs introuvable (PLANRS_MCP_BIN)"
+            );
+            eprintln!(
+                "relay_app_real_mcp : binaire planrs absent, test non exécuté (cargo build -p planrs-cli)"
+            );
+            return;
+        };
+        let root = repo_root(env!("CARGO_MANIFEST_DIR"));
+        let scenario = Scenario::load(&root, SCENARIO);
+        let now: Moment = replay::NOW.parse().unwrap();
+        let tmp = TempDir::new("relay");
+        let (mut harness, handle, guard, control) = wired(&tmp, now);
+        let initial_session = harness.state().document.as_ref().unwrap().session.clone();
+        let mut app_side: (Option<ListenerHandle>, Option<RendezvousGuard>) = (Some(handle), Some(guard));
+
+        let journal = tmp.path().join("run.jsonl");
+        let mut child = Command::new(&binary)
+            .args(["--now", replay::NOW, "--lang", "fr", "mcp", "--journal"])
+            .arg(&journal)
+            .args(["--approval-timeout", &APPROVAL_SECS.to_string()])
+            .env("PLANRS_CONTROL_DIR", &control)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap_or_else(|e| panic!("{} : {e}", binary.display()));
+        let (calls_tx, calls_rx) = sync_channel::<Option<(String, Value)>>(1);
+        let (results_tx, results_rx) = sync_channel::<Value>(1);
+        client_thread(&mut child, calls_rx, results_tx);
+
+        let mut got = Vec::with_capacity(scenario.calls.len());
+        let mut local = Workspace::new(now, ToolLanguage::Fr);
+        local.set_session(initial_session);
+        for (i, call) in scenario.calls.iter().enumerate() {
+            let seq = i + 1;
+            let directive = directive(seq);
+            if directive == Directive::CloseApp {
+                // Application fermée : écouteur arrêté, rendez-vous retiré.
+                app_side = (None, None);
+                harness.run();
+            }
+            let params = substitute(&call.params, tmp.path());
+            calls_tx.send(Some((call.tool.clone(), params.clone()))).unwrap();
+            let result = pump(&mut harness, &results_rx, directive);
+            // P47 : les écritures acceptées (et l'édition de l'utilisateur)
+            // rejouées en local, dans le même ordre.
+            match (call.tool.as_str(), directive) {
+                ("add_task", Directive::EditThenApprove) => {
+                    local.call("task.update", user_edit()).unwrap();
+                    local.call("task.add", params).unwrap();
+                }
+                ("add_task", Directive::Approve) => {
+                    local.call("task.add", params).unwrap();
+                }
+                ("undo", Directive::Approve) => {
+                    local.call("history.undo", params).unwrap();
+                }
+                _ => {}
+            }
+            got.push(normalized(&result, tmp.path()));
+        }
+        calls_tx.send(None).unwrap();
+        drop(calls_tx);
+        // 3 000 pas de 10 ms (~30 s) au plus, sans horloge (règle 5).
+        let mut status = None;
+        for _ in 0..3_000 {
+            if let Some(s) = child.try_wait().unwrap() {
+                status = Some(s);
+                break;
+            }
+            harness.step();
+            thread::sleep(Duration::from_millis(10));
+        }
+        let status = status.expect("planrs mcp ne s'arrête pas");
+        assert!(status.success(), "{status}");
+        drop(app_side);
+
+        // Journal produit : scénario octet pour octet (ou régénéré).
+        let produced = std::fs::read_to_string(&journal).unwrap();
+        if replay::blessing() {
+            replay::bless(&root, &scenario, &produced, tmp.path(), None);
+            return;
+        }
+        replay::assert_results(&scenario, &got);
+        replay::assert_journal(&scenario, &produced, tmp.path());
+
+        // Faits clés : la seule écriture refusée n'a rien changé, les
+        // entrées d'historique de l'agent portent sa source, et le projet
+        // final égale le rejeu local (P47).
+        let app = harness.state();
+        let session = &app.document.as_ref().unwrap().session;
+        let local_session = local.session().unwrap();
+        assert_eq!(
+            serde_json::to_value(session.project()).unwrap(),
+            serde_json::to_value(local_session.project()).unwrap(),
+            "P47 : projet final"
+        );
+        assert_eq!(
+            session.history().entries.len(),
+            local_session.history().entries.len()
+        );
+        assert_eq!(session.history().redo.len(), local_session.history().redo.len());
+        let sources: Vec<EditSource> = session.history().entries.iter().map(|e| e.source).collect();
+        // Appel 2 (agent), édition de l'utilisateur, appel 4 (agent) annulé par l'appel 9.
+        assert_eq!(sources, [EditSource::Agent, EditSource::User], "{sources:?}");
+        assert_eq!(session.history().redo.len(), 1);
+        assert!(app.relay().unwrap().pending().is_empty());
+    }
 }

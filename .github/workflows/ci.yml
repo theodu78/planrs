@@ -143,6 +143,10 @@ jobs:
       # Sonde des polices de repli du système (J7 lot L14) : une police CJK
       # est installée, son absence fait échouer `fonts_system_fallback_probe`.
       PLANRS_FONTS: required
+      # Relais avec le vrai binaire `planrs mcp` (J7 lot L16,
+      # `relay_app_real_mcp`) : le binaire est construit juste avant, son
+      # absence fait échouer le test au lieu de le passer.
+      PLANRS_RELAY: required
     steps:
       - uses: actions/checkout@v7
 
@@ -158,7 +162,11 @@ jobs:
       - name: Adaptateur disponible (diagnostic)
         run: vulkaninfo --summary
 
-      - name: Tests de l'interface (captures comparées)
+      # `planrs` à côté de `deps/` : trouvé par `relay_app_real_mcp`.
+      - name: Binaire planrs (relais réel)
+        run: cargo build -p planrs-cli
+
+      - name: Tests de l'interface (captures comparées, relais réel)
         run: cargo test -p planrs-ui-egui --test ui
 
       - name: Captures en échec

@@ -158,7 +158,7 @@ impl Position {
         match self {
             Self::Start => 0,
             Self::Middle => len / 2,
-            Self::End => len - 1,
+            Self::End => len.saturating_sub(1),
         }
     }
 }

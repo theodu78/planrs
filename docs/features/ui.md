@@ -336,6 +336,8 @@ Autres hypothèses H-UI non numérotées (commentaires du code) : règle de plur
 | kittest suivi (J7 L7, 9 + 3 captures) | `tests/ui/tracking.rs` (cible `ui`) | Formes relevées dans `Harness::output` par leur couleur de palette, positions par `TimeAxis` et les dates du moteur : `h_ui_22_baseline_bar_lower_third`, `h_ui_22_progress_band_to_stop`, `h_ui_22_no_baseline_plain_bar`, `h_ui_22_view_menu_switches_style`, `n3_non_working_days_shaded_week_zoom` (week-end fusionné, Jour oui, Mois et Trimestre non), `n3_holiday_shaded` (Armistice de l'exemple), `n3_compile_once_per_generation`, `h_ui_26_tooltip_from_engine_template` (texte = `summary_fr` du moteur, cache relu après une édition) ; captures `tracking_fr_light`, `tracking_fr_dark` (`tests/mcp/expected/tracking_j6.xml`, suivi, Semaine), `main_fr_light_non_working` (exemple, Jour, semaine de l'Armistice). Unitaires : `view::gantt::tests` (`h_ui_22_tracking_layout_lower_third`, `h_ui_22_progress_span_bounded`, `h_ui_26_tip_cache_one_entry`, fumée dans les deux styles), `document::tests::n3_calendar_cache_once_per_generation`, `theme::tests::palette_tracking_and_non_working_contrast`. |
 | kittest affectation (J7 L13, 8) | `tests/ui/assign.rs` (cible `ui`) | `assign_multiple_tasks_single_batch` (trois tâches, deux ressources, un lot, affectation existante gardée, annulation exacte), `assign_default_units_from_registry` (lot sans unités ; 100 %, 50 % et capacité 0 relus sur le modèle), `assign_remove`, `assign_update_units`, `assign_refusal_shown_in_window`, `assign_filter` (sans casse, choix masqué non visé), `assign_selection_change_refreshes` (clic dans la table, écriture d'agent, saisie gardée), `assign_menu_close_and_no_shortcut`. |
 | Fluidité | `tests/perf.rs` | Voir ci-dessous. |
+| Bout en bout (J7 L16, 2) | `tests/ui/e2e.rs` (cible `ui`) | `e2e_daily_use` : exemple ouvert ; ↓ ×3, Origine, Tab ×2, F2, Ctrl+A, « 3j », Entrée ; Maj+Entrée ; Maj+F2, renommer, OK ; glisser une barre de +2 jours (SNET, R-240) ; tracer un lien (FS) ; Gantt de suivi ; feuille des ressources : « Grutier » sur la ligne vide, capacité « 50 » ; utilisation des ressources ; temps de travail : exception nommée « Pont » ; ligne de base 0 définie puis effacée ; neuf annulations ⇒ projet égal à l'ouverture et document propre ; neuf rétablissements ; Ctrl+S sur le `FileService` simulé, octets relus par `document::load` (mêmes tâches, même ressource, même contrainte). `relay_app_real_mcp` (Unix) : application kittest avec écouteur réel et rendez-vous dans `PLANRS_CONTROL_DIR`, vrai binaire `planrs mcp` rattaché en stdio, scénario `tests/mcp/scenarios/relay_j7.jsonl` rejoué par un client JSON-RPC minimal pendant que l'interface tourne image par image (Accepter, Refuser, édition pendant une attente, `ui_state`, `ui_action`, `screenshot`, `open_project` du fichier tenu, `undo`, application fermée ⇒ `control.app_gone` puis `session.none`) ; journal égal au scénario, P47 ; binaire par `PLANRS_MCP_BIN` ou à côté de `deps/` (job `ui` : `PLANRS_RELAY=required`). Détail et écarts : ADR-0015, écarts du lot L16. |
+| Captures du critère de fin (J7 L16, 12) | `tests/ui/snapshots.rs`, `tests/snapshots/net5000_*.png` | Réseau généré de 5 000 tâches et 10 000 liens (`planrs_tests::generate::ui_network`, celui de `perf.rs` et de `snapshot --generate 5000`) : début, milieu, fin × Semaine, Trimestre × clair, sombre ; ligne visée sélectionnée et montrée, Gantt au début de sa barre (`--row` de l'exemple) ; 1280×720, « maintenant » au 2026-01-05. Avec `tracking_*`, `resources_*`, `usage_*`, `working_time_*` de leurs lots : 40 captures comparées sous lavapipe. |
 | kittest utilisation (J7 L11, 7 + 2 captures ; 1 test de la crate) | `tests/ui/usage.rs` (cible `ui`), `view::usage::tests` | `usage_values_from_engine` (chaque cellule = `analysis.resource_usage` sur la même période, travail total = `ResourceLoad::work`), `usage_expand_assignments` (six affectations de Maçon, Σ des affectations = la ressource période par période), `usage_quarter_zoom_monthly_columns` (Mois ⇒ mois civils, Trimestre ⇒ trimestres civils), `usage_cache_hit_no_query`, `usage_navigation_keys`, `h_ui_23_over_cells_red`, `h_ui_25_columns_follow_tier` (colonnes aux abscisses de l'en-tête, 4 zooms) ; captures `usage_fr_light`, `usage_fr_dark` ; `usage_limit_message` (refus gardé en cache, message affiché). Unitaires `timephased::tests` (bornes des blocs, cache). Fluidité : `usage_counts_equal_at_1000_and_5000_tasks` (garde), `usage_scroll` (ignoré, release). |
 
 **CI GitHub.** Run du commit 1d3eb09 (39075623215) entièrement vert : job `checks` (fmt, clippy, tests, deny, xtask, wasm), tests macOS et Windows, MSRV, job `ui` (captures comparées, `ubuntu-24.04`, lavapipe, références régénérées), job `perf` avec l'étape « Fluidité de l'interface (release) », corpus. Au run précédent (1bd203d), `ui` et `perf` étaient verts, `checks` rouge sur clippy (lints de la toolchain stable, corrigés dans 1d3eb09).
@@ -366,13 +368,28 @@ Ouverture du réseau (lecture MSPDI, calcul, `RowModel`) : environ 100 ms. Envir
 
 Décomposition de `edit_latency` (médianes) : recalcul (`Session::apply` en mode commit) 18,4 ms, `RowModel::build` 11,0 ms, reste (images, tessellation) 2,1 ms. Le budget tient sans reconstruction incrémentale des lignes ; `RowModel::build` reste le second poste (à surveiller avec les colonnes du lot L6).
 
+**Vérification finale (J7 lot L16, 2026-10-24).** `edit_latency` est une porte (médiane < 100 ms, p95 < 150 ms) ; chaque scénario mesuré écrit `target/tmp/ui-perf/<scénario>.json` (artefact `ui-perf-report` du job `perf`, scénarios en série). Mesures release sur serveurdvp (1920×1080, 5 000 tâches, 10 000 liens) : 
+
+| Scénario | Médiane | p95 | Max | Budget |
+|---|---|---|---|---|
+| Statique (`frame_budget_5000_tasks`, 3 positions × 3 zooms, 30 images chacune) | 0,84 à 0,95 ms (pire position 1,05 ms) | 0,98 à 1,35 ms (pire position 1,55 ms) | 1,99 ms | < 16 ms / < 32 ms |
+| `nav_down_held` (300 images) | 0,63 ms | 0,72 ms | 0,95 ms | < 16 ms / < 32 ms |
+| `nav_page_sweep` (124 images) | 2,67 ms | 3,02 ms | 4,71 ms | < 16 ms / < 32 ms |
+| `edit_latency` (20 validations) | 32,0 ms | 36,4 ms | 36,5 ms | < 100 ms / < 150 ms (porte) |
+| `bar_drag` (120 images) | 0,74 ms | 0,81 ms | 0,84 ms | < 16 ms / < 32 ms |
+| `usage_scroll` vertical (120 images, 12 blocs neufs) | 0,56 ms | 0,87 ms | 0,94 ms | < 16 ms / < 32 ms |
+| `usage_scroll` horizontal (120 images, 9 blocs neufs) | 0,61 ms | 0,88 ms | 0,99 ms | < 16 ms / < 32 ms ; bloc neuf < 32 ms |
+| `approval_banner` (120 images) | 0,58 ms | 0,67 ms | 0,85 ms | < 16 ms |
+
+Décomposition de `edit_latency` (médianes) : recalcul (`Session::apply`) 18,4 ms, `RowModel::build` 11,3 ms, reste (image, tessellation) 2,3 ms. Ouverture du réseau (lecture, calcul, `RowModel`) : 26,0 ms. Toutes les portes tiennent avec une marge d'un ordre de grandeur, sauf `edit_latency` (un tiers du budget).
+
 **Utilisation des ressources (J7 lot L11).** `usage_scroll` (ignoré, release ; 1 200 ressources, 5 000 tâches affectées, 1920×1080) : molette verticale 120 images, médiane 1,03 ms, p95 1,55 ms ; défilement horizontal au zoom Jour 120 images (9 blocs neufs du moteur), médiane 1,18 ms, p95 1,77 ms, pire image 2,64 ms (serveurdvp, 2026-10-21). `usage_counts_equal_at_1000_and_5000_tasks` (toujours exécuté) : formes, sommets et galleys de la vue identiques à 1 000 et 5 000 tâches (60 ressources).
 
 ## 4. Livraison
 
 - **Web** : `apps/planrs-web`, `Trunk.toml` (`public_url = "./"`, `filehash = true`), `index.html` minimal (canevas `planrs_canvas`, aucun JS écrit à la main ; `data-wasm-opt="z"`). `trunk build --release` produit `dist/`, à servir en HTTP statique (pas en `file://`).
 - **Workflow** `.github/workflows/desktop-build.yml`, déclenché par `workflow_dispatch` (visible une fois le fichier sur la branche par défaut) et par les tags `ui-*` : binaire macOS universel (`lipo` aarch64 + x86_64, non signé), binaire Linux x86_64, `dist/` web ; chaque artefact est un `.tar.gz` avec un `README.txt` (le bit exécutable survit ; le README macOS explique le premier lancement d'un binaire non signé, celui de Linux les prérequis). Aucune signature ni notarisation. Pas encore exécuté.
-- **CI** (`.github/workflows/ci.yml`) : `planrs-ui-egui` et `planrs-web` compilés en wasm32 par le job `checks` ; job `ui` pour les captures ; étape « Fluidité de l'interface (release) » dans le job `perf`.
+- **CI** (`.github/workflows/ci.yml`) : `planrs-ui-egui` et `planrs-web` compilés en wasm32 par le job `checks` ; job `ui` pour les captures et le relais réel (`cargo build -p planrs-cli` puis la cible `ui` avec `PLANRS_RELAY=required`) ; étape « Fluidité de l'interface (release) » dans le job `perf`, en série, rapport JSON publié en artefact `ui-perf-report` (J7 lot L16).
 
 ## 5. Limites connues et reportés
 
@@ -435,8 +452,11 @@ PLANRS_UI_SNAPSHOTS=1 WGPU_BACKEND=vulkan cargo test -p planrs-ui-egui --test ui
 # Mise à jour des références (la CI fait foi en cas d'écart de Mesa)
 PLANRS_UI_SNAPSHOTS=1 UPDATE_SNAPSHOTS=1 WGPU_BACKEND=vulkan cargo test -p planrs-ui-egui --test ui
 
-# Fluidité (release)
-cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture
+# Fluidité (release) ; rapport JSON par scénario dans target/tmp/ui-perf/
+cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture --test-threads=1
+
+# Relais avec le vrai binaire planrs mcp (Unix) : le binaire d'abord
+cargo build -p planrs-cli && PLANRS_RELAY=required cargo test -p planrs-ui-egui --test ui relay_app_real_mcp
 
 # Binaires desktop et dist/ web par la CI : pousser un tag ui-* (workflow desktop-build.yml)
 git tag ui-<suffixe> && git push origin ui-<suffixe>

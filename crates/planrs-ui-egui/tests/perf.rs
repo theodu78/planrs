@@ -23,8 +23,8 @@
 //!   validations de durée par Entrée sur des tâches réparties : image de la
 //!   validation, qui recalcule et reconstruit le `RowModel`, plus l'image
 //!   suivante), mesure publiée avec sa décomposition (recalcul,
-//!   `RowModel::build`, reste), porte au lot L16 (médiane < 100 ms, p95 <
-//!   150 ms).
+//!   `RowModel::build`, reste) ; **porte** depuis le lot L16 : médiane
+//!   < 100 ms, p95 < 150 ms.
 //! - J7 L3 (ignoré, release) : `approval_banner` (bandeau de validation
 //!   d'une écriture d'un agent affiché, défilement à chaque image), mêmes
 //!   seuils.
@@ -43,6 +43,13 @@
 //! représentatif). Le projet est construit directement
 //! (`planrs_tests::generate::ui_network`) et ouvert sans MSPDI
 //! (`App::open_project`, N8, J7 lot L14).
+//!
+//! Rapport (J7 lot L16) : chaque scénario mesuré écrit un fichier JSON
+//! `<scénario>.json` (médiane, p95, max, nombre d'images, formes, sommets,
+//! galleys, décomposition) dans `PLANRS_PERF_REPORT_DIR`, sinon
+//! `<CARGO_TARGET_DIR ou target>/tmp/ui-perf/` ; le job CI `perf` publie
+//! ce dossier en artefact `ui-perf-report`. Une erreur d'écriture est
+//! signalée sur stderr et ne fait pas échouer la mesure.
 //!
 //! `cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture`
 
@@ -64,6 +71,7 @@
 )]
 
 use std::hint::black_box;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use egui::epaint::{ClippedPrimitive, Primitive, Shape};
@@ -258,6 +266,44 @@ fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1_000.0
 }
 
+/// Dossier du rapport JSON : `PLANRS_PERF_REPORT_DIR`, sinon
+/// `<CARGO_TARGET_DIR ou target>/tmp/ui-perf`.
+fn report_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("PLANRS_PERF_REPORT_DIR") {
+        return PathBuf::from(dir);
+    }
+    let target = std::env::var_os("CARGO_TARGET_DIR").map_or_else(
+        || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target"),
+        PathBuf::from,
+    );
+    target.join("tmp").join("ui-perf")
+}
+
+/// Écrit le rapport JSON du scénario `label` (J7 lot L16) : `samples`
+/// triés, relevé de formes, `extra` (décomposition, seuils).
+fn report(label: &str, sorted: &[Duration], counts: Counts, extra: serde_json::Value) {
+    let mut value = serde_json::json!({
+        "scenario": label,
+        "frames": sorted.len(),
+        "median_ms": ms(percentile(sorted, 50)),
+        "p95_ms": ms(percentile(sorted, 95)),
+        "max_ms": sorted.last().map_or(0.0, |d| ms(*d)),
+        "shapes": counts.shapes,
+        "vertices": counts.vertices,
+        "galleys": counts.galleys,
+        "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+    });
+    if let (Some(into), serde_json::Value::Object(extra)) = (value.as_object_mut(), extra) {
+        into.extend(extra);
+    }
+    let dir = report_dir();
+    let file = dir.join(format!("{}.json", label.replace(' ', "_")));
+    let written = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&file, format!("{value:#}\n")));
+    if let Err(error) = written {
+        eprintln!("perf UI : rapport {} non écrit : {error}", file.display());
+    }
+}
+
 #[test]
 #[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
 fn frame_budget_5000_tasks() {
@@ -332,6 +378,12 @@ fn frame_budget_5000_tasks() {
             "perf UI {zoom:?} (3 positions × {FRAMES} images) : médiane {:.2} ms, p95 {:.2} ms",
             ms(percentile(&all, 50)),
             ms(percentile(&all, 95)),
+        );
+        report(
+            &format!("frame_budget_{}", format!("{zoom:?}").to_lowercase()),
+            &all,
+            bench.last,
+            serde_json::json!({ "budget_median_ms": BUDGET.as_millis(), "budget_p95_ms": SPIKE.as_millis() }),
         );
     }
     eprintln!(
@@ -420,15 +472,27 @@ fn stats(mut samples: Vec<Duration>) -> (Duration, Duration, Duration) {
     )
 }
 
-/// Seuils de fluidité de la navigation (ADR-0015 D12).
-fn assert_budget(label: &str, samples: Vec<Duration>, counts: Counts) {
+/// Seuils de fluidité de la navigation (ADR-0015 D12) ; rapport JSON écrit
+/// avant la vérification (un dépassement est publié aussi).
+fn assert_budget(label: &str, mut samples: Vec<Duration>, counts: Counts) {
     let n = samples.len();
-    let (median, p95, max) = stats(samples);
+    samples.sort();
+    let (median, p95, max) = (
+        percentile(&samples, 50),
+        percentile(&samples, 95),
+        *samples.last().unwrap(),
+    );
     eprintln!(
         "perf UI {label} ({n} images) : médiane {:.2} ms, p95 {:.2} ms, max {:.2} ms, {counts:?}",
         ms(median),
         ms(p95),
         ms(max),
+    );
+    report(
+        label,
+        &samples,
+        counts,
+        serde_json::json!({ "budget_median_ms": BUDGET.as_millis(), "budget_p95_ms": SPIKE.as_millis() }),
     );
     assert!(median < BUDGET, "{label} : médiane {median:?} ≥ {BUDGET:?}");
     assert!(p95 < SPIKE, "{label} : p95 {p95:?} ≥ {SPIKE:?}");
@@ -484,10 +548,16 @@ fn nav_page_sweep() {
     assert_budget("nav_page_sweep", samples, bench.last);
 }
 
+/// Budget de la latence d'édition (ADR-0015 D4, porte depuis le lot L16).
+const EDIT_BUDGET: Duration = Duration::from_millis(100);
+/// 95e centile de la latence d'édition.
+const EDIT_SPIKE: Duration = Duration::from_millis(150);
+
 /// J7 L1 : latence d'édition (ADR-0015 D4) : validation d'une durée par
 /// Entrée → recalcul → `RowModel` → image suivante, sur 20 tâches
-/// réparties. Mesure publiée, sans porte (lot L16) ; décomposition par une
-/// copie de la session (même lot appliqué, `RowModel::build` seul).
+/// réparties. Décomposition par une copie de la session (même lot
+/// appliqué, `RowModel::build` seul). **Porte** depuis le lot L16 :
+/// médiane < 100 ms, p95 < 150 ms.
 #[test]
 #[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
 fn edit_latency() {
@@ -542,20 +612,45 @@ fn edit_latency() {
         assert!(app.messages().is_empty(), "{:?}", app.messages());
         total.push(enter + next);
     }
-    let (median, p95, max) = stats(total);
+    total.sort();
+    let (median, p95, max) = (
+        percentile(&total, 50),
+        percentile(&total, 95),
+        *total.last().unwrap(),
+    );
     let (apply_median, _, _) = stats(apply);
     let (build_median, _, _) = stats(build);
+    let rest = (ms(median) - ms(apply_median) - ms(build_median)).max(0.0);
     eprintln!(
         "perf UI edit_latency (20 validations) : médiane {:.1} ms, p95 {:.1} ms, max {:.1} ms ; \
          décomposition (médianes) : recalcul (Session::apply) {:.1} ms, RowModel::build {:.1} ms, \
-         reste (image, tessellation) {:.1} ms ; budget L16 : médiane < 100 ms, p95 < 150 ms",
+         reste (image, tessellation) {:.1} ms ; porte : médiane < {} ms, p95 < {} ms",
         ms(median),
         ms(p95),
         ms(max),
         ms(apply_median),
         ms(build_median),
-        (ms(median) - ms(apply_median) - ms(build_median)).max(0.0),
+        rest,
+        EDIT_BUDGET.as_millis(),
+        EDIT_SPIKE.as_millis(),
     );
+    report(
+        "edit_latency",
+        &total,
+        bench.last,
+        serde_json::json!({
+            "apply_median_ms": ms(apply_median),
+            "row_model_build_median_ms": ms(build_median),
+            "rest_median_ms": rest,
+            "budget_median_ms": EDIT_BUDGET.as_millis(),
+            "budget_p95_ms": EDIT_SPIKE.as_millis(),
+        }),
+    );
+    assert!(
+        median < EDIT_BUDGET,
+        "edit_latency : médiane {median:?} ≥ {EDIT_BUDGET:?}"
+    );
+    assert!(p95 < EDIT_SPIKE, "edit_latency : p95 {p95:?} ≥ {EDIT_SPIKE:?}");
 }
 
 /// Relevé stabilisé après `events` (une image par lot d'événements).

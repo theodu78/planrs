@@ -77,6 +77,13 @@ pub fn app(language: LanguagePref, theme: ThemePref) -> App {
 /// Harnais de capture 1280×720, échelle 1, thème egui cohérent avec
 /// `UiState.theme`, OS fixé ; rendu logiciel en mode `Required` seulement.
 pub fn harness(language: LanguagePref, theme: ThemePref) -> Harness<'static, App> {
+    harness_with(app(language, theme), theme)
+}
+
+/// Comme [`harness`], pour une application déjà construite (J7 lot L16 :
+/// réseau généré ouvert par `App::open_project`) ; `theme` est celui de
+/// son `UiState`.
+pub fn harness_with(app: App, theme: ThemePref) -> Harness<'static, App> {
     let egui_theme = match theme {
         ThemePref::Dark => egui::Theme::Dark,
         ThemePref::Light | ThemePref::System => egui::Theme::Light,
@@ -92,7 +99,7 @@ pub fn harness(language: LanguagePref, theme: ThemePref) -> Harness<'static, App
         SnapshotMode::Required => builder.renderer(software_renderer()),
         SnapshotMode::Off => builder,
     };
-    builder.build_ui_state(planrs_ui_egui::ui, app(language, theme))
+    builder.build_ui_state(planrs_ui_egui::ui, app)
 }
 
 /// Compare la capture `name` (mode `Required`) ou signale qu'elle ne l'est

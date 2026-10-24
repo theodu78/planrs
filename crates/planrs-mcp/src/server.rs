@@ -422,8 +422,11 @@ impl PlanrsServer {
     }
 
     /// Résumé du document de l'application (`project.summary` relayé).
+    /// Paramètres `{}` et non `null` : l'application lit `NoParams` par
+    /// le routeur du registre, qui refuse `null` (`param.invalid`, constaté
+    /// par `relay_app_real_mcp`, J7 lot L16).
     fn relayed_summary(&self, client: &mut RelayClient) -> Result<Value, RelayError> {
-        client.call("project.summary", Value::Null, self.approval)
+        client.call("project.summary", json!({}), self.approval)
     }
 
     /// Client du canal vers `r`, délais et langue du serveur.

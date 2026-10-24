@@ -100,4 +100,4 @@ Suite : jalon 6 + 1 j (fin de T2), T5 à T20 décalés de + 1 j (fin de T2 lun 1
 
 ## 6. Hors J6
 
-« Mettre à jour les tâches » (0-100 % à la date d'état) ; réel par période ; options `Move*` à 1 ; fractionnements multiples d'une tâche en cours ; avancement saisi sur une récapitulative ; plans intermédiaires (`Start1`-`Start10`)  ; bornes concurrentes dans `explain_date` ; coûts et valeur acquise ; barres de ligne de base et colonne % dans l'interface (J7) ; `planrs variance` en CLI.
+« Mettre à jour les tâches » (0-100 % à la date d'état) ; réel par période ; options `Move*` à 1 ; fractionnements multiples d'une tâche en cours ; avancement saisi sur une récapitulative ; plans intermédiaires (`Start1`-`Start10`)  ; bornes concurrentes dans `explain_date` ; coûts et valeur acquise ; ~~barres de ligne de base et colonne % dans l'interface (J7)~~ (faits en J7 : colonnes de suivi au lot L6, Gantt de suivi au lot L7, fenêtre « Ligne de base » au lot L12, scénario `e2e_daily_use` au lot L16 ; `docs/features/ui.md`) ; `planrs variance` en CLI.

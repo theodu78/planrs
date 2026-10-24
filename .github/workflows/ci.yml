@@ -196,12 +196,26 @@ jobs:
       - name: Lecture MSPDI
         run: cargo test -p planrs-mspdi --release --test perf -- --ignored --nocapture
 
-      # Fluidité de l'interface (ADR-0011, décision 12) : 5 000 tâches et
-      # 10 000 liens dessinés par `planrs_ui_egui::ui` sur un contexte egui
-      # nu, médiane < 16 ms et p95 < 32 ms par image (mesuré en local :
-      # 0,8 ms de médiane, 0,9 ms de p95).
+      # Fluidité de l'interface (ADR-0011, décision 12 ; ADR-0015 D12, J7
+      # lot L16) : 5 000 tâches et 10 000 liens dessinés par
+      # `planrs_ui_egui::ui` sur un contexte egui nu ; images statiques,
+      # navigation, glisser d'une barre, bandeau, utilisation des ressources :
+      # médiane < 16 ms et p95 < 32 ms par image ; latence d'édition
+      # (`edit_latency`) : médiane < 100 ms, p95 < 150 ms (porte). Les
+      # scénarios tournent l'un après l'autre (en parallèle, ils se
+      # perturberaient) et écrivent chacun leur rapport JSON dans
+      # `target/tmp/ui-perf/`, publié en artefact même en cas d'échec.
       - name: Fluidité de l'interface (release)
-        run: cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture
+        run: cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture --test-threads=1
+
+      - name: Rapport de fluidité
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-perf-report
+          path: target/tmp/ui-perf/*.json
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Benchmark (informatif)
         run: cargo bench -p planrs-tests --bench schedule -- --warm-up-time 1 --measurement-time 5 --noplot

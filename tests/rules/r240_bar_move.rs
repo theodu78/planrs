@@ -15,7 +15,7 @@ use planrs_core::{
 use planrs_tests::moment;
 use planrs_tests::resource_edit::with_tasks;
 use planrs_tests::session::{push_tasks, session};
-use planrs_tests::task_edit::{apply, get, try_apply};
+use planrs_tests::task_edit::{apply, get};
 use serde_json::json;
 
 const T: TaskUid = TaskUid::new(1);
@@ -147,10 +147,10 @@ fn r240_weekend_normalized_by_engine() {
 }
 
 #[test]
-fn r240_manual_refused_by_registry() {
-    // Écart au cahier (« date saisie d'une manuelle ») : R-157 refuse un
-    // début sur une tâche manuelle ; le geste rend le lot, le registre le
-    // refuse (bandeau dans l'interface), rien ne change.
+fn r240_manual_moves_manual_dates() {
+    // Amendée par R-254 (J8, lot L2) : le lot du geste sur une tâche
+    // manuelle déplace ses valeurs manuelles (fin = début + durée), sans
+    // contrainte.
     let mut s = with_tasks(&[("M", "2j")]);
     let mut p = s.project().clone();
     p.tasks.get_mut(T).unwrap().mode = SchedulingMode::Manual {
@@ -160,17 +160,19 @@ fn r240_manual_refused_by_registry() {
     };
     s = session(p);
     let b = gesture::bar_move(&s, T, 1).unwrap().unwrap();
-    let before = s.project().clone();
-    let err = s.apply(&b, ApplyMode::Commit).unwrap_err();
-    assert_eq!(err.code, codes::TASK_MANUAL_UNSUPPORTED);
-    assert_eq!(s.project(), &before);
-    // Le même lot écrit à la main est refusé de la même façon.
-    assert!(
-        try_apply(
-            &mut s,
-            json!([{ "op": "task.update", "uid": 1, "start": "2026-10-20T08:00" }])
-        )
-        .is_err()
+    commit(&mut s, &b);
+    assert_eq!(
+        get(&s, 1).mode,
+        SchedulingMode::Manual {
+            start: Some(moment("2026-10-20T08:00")),
+            finish: Some(moment("2026-10-21T17:00")),
+            duration: Some(get(&s, 1).duration),
+        }
+    );
+    assert_eq!(get(&s, 1).constraint, Constraint::AsSoonAsPossible);
+    assert_eq!(
+        dates(&s, T),
+        (moment("2026-10-20T08:00"), moment("2026-10-21T17:00"))
     );
 }
 

@@ -426,7 +426,7 @@
                     "type": "null"
                   }
                 ],
-                "description": "Mode de planification (J8, R-253 ; refusé\n`command.not_yet_available` jusqu'au lot L2)."
+                "description": "Mode de planification (J8, R-253) : vers manuel, dates planifiées\ncourantes figées ; vers automatique, valeurs manuelles retirées.\nSur une feuille manuelle, `start`, `finish` et `duration` écrivent\nles valeurs manuelles, sans contrainte (R-254)."
               },
               "name": {
                 "description": "Nom (`null` refusé).",

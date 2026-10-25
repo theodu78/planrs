@@ -76,7 +76,10 @@ fn r157_zero_duration_milestone() {
 }
 
 #[test]
-fn r157_manual_dates_refused() {
+fn r157_manual_dates_entered_by_r254() {
+    // Amendée par R-254 (J8, lot L2) : les dates d'une feuille manuelle se
+    // saisissent (valeurs manuelles, sans contrainte) ; une date ne
+    // s'efface pas.
     let mut p = new_project("2026-11-02T08:00");
     push_tasks(&mut p, &[1], 1);
     p.tasks.get_mut(TaskUid::new(1)).unwrap().mode = SchedulingMode::Manual {
@@ -85,17 +88,19 @@ fn r157_manual_dates_refused() {
         duration: None,
     };
     let mut s = session(p);
-    for (field, value) in [
-        ("start", json!("2026-11-04T08:00")),
-        ("finish", json!(null)),
-        ("duration", json!({ "text": "2j" })),
-    ] {
-        let mut op = json!({ "op": "task.update", "uid": 1 });
-        op[field] = value;
-        let err = try_apply(&mut s, json!([op])).unwrap_err();
-        assert_eq!(err.code, codes::TASK_MANUAL_UNSUPPORTED, "{field}");
-        assert_eq!(err.field.as_deref(), Some(field));
-    }
+    let err = try_apply(&mut s, json!([{ "op": "task.update", "uid": 1, "finish": null }])).unwrap_err();
+    assert_eq!(err.code, codes::PARAM_INVALID);
+    assert_eq!(err.field.as_deref(), Some("finish"));
+    apply(
+        &mut s,
+        json!([{ "op": "task.update", "uid": 1, "start": "2026-11-04T08:00" }]),
+    );
+    let SchedulingMode::Manual { start, finish, .. } = get(&s, 1).mode else {
+        panic!("1 devrait rester manuelle");
+    };
+    assert_eq!(start, Some(planrs_tests::moment("2026-11-04T08:00")));
+    assert_eq!(finish, Some(planrs_tests::moment("2026-11-04T17:00")));
+    assert_eq!(get(&s, 1).constraint, planrs_core::Constraint::AsSoonAsPossible);
     // Le nom reste modifiable.
     apply(&mut s, json!([{ "op": "task.update", "uid": 1, "name": "M" }]));
     assert_eq!(get(&s, 1).name, "M");

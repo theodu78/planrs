@@ -1,10 +1,10 @@
 //! Contrat J8 (lot L0, ADR-0016) : types, squelettes et registre. Les
 //! entrées nouvelles (`style.*`, `project.export_pdf`) sont réservées au
 //! jalon 8 et refusées `command.not_yet_available` ; les champs nouveaux
-//! (`task.update.mode`, `render.gantt.style`) se lisent mais sont refusés
-//! de même, sans rien changer, jusqu'à leurs lots (L2, L4) ; les critères
-//! J8 de `task.list` sont exécutés depuis L2 (R-251) ; les squelettes
-//! répondent sans paniquer.
+//! (`render.gantt.style`) se lisent mais sont refusés de même, sans rien
+//! changer, jusqu'à leur lot (L4) ; les critères J8 de `task.list` et
+//! `task.update.mode` sont exécutés depuis L2 (R-251, R-253) ; les
+//! squelettes répondent sans paniquer.
 
 #![allow(
     clippy::unwrap_used,
@@ -57,7 +57,6 @@ fn contract_j8_reserved_and_new_fields_refused() {
         ("style.get", json!({})),
         ("style.apply", json!({ "template": "sobre" })),
         ("project.export_pdf", json!({ "path": "p.pdf" })),
-        ("task.update", json!({ "uid": 1, "mode": "manual" })),
         ("render.gantt", json!({ "style": "sobre" })),
     ] {
         let err = call_with(&mut s, &env, id, params).unwrap_err();

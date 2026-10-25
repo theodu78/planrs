@@ -59,7 +59,7 @@ pub fn default_columns() -> Vec<CsvColumn> {
 /// R-146 : garde de formule : `'` ajouté devant un texte qui commence par
 /// `=`, `+`, `-`, `@`, tabulation ou retour chariot, ou par `'` suivi de l'un
 /// d'eux ou de `'` (réciproque exacte de l'import, R-145).
-fn guard(s: &str) -> String {
+pub(crate) fn guard(s: &str) -> String {
     let risky = |c: Option<char>| matches!(c, Some('=' | '+' | '-' | '@' | '\t' | '\r'));
     let mut chars = s.chars();
     let first = chars.next();

@@ -18,6 +18,7 @@ mod header;
 mod import;
 mod preview;
 
+pub(crate) use export::guard;
 pub use export::{CsvExportOptions, default_columns, export};
 pub use import::{MAX_DIAGNOSTICS, MAX_DIAGNOSTICS_PER_CODE, import};
 pub use preview::{CsvPreview, PREVIEW_ROWS, Recognized, preview};

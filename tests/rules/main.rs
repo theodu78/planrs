@@ -237,6 +237,7 @@ mod r240_bar_move;
 mod r241_bar_resize;
 mod r242_progress_drag;
 mod r243_link_drag;
+mod r244_paste_rows;
 mod r245_assignment_usage;
 mod r246_quarter;
 mod r247_set_week;
@@ -248,6 +249,7 @@ mod r252_mark_percent;
 mod r253_mode_toggle;
 mod r254_manual_dates;
 mod r255_active_toggle;
+mod r256_external_paste;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

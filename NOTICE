@@ -1,0 +1,25 @@
+planrs
+Copyright (c) les auteurs de planrs.
+Code sous licence MIT OR Apache-2.0 (LICENSE-MIT, LICENSE-APACHE).
+
+Composants tiers distribués avec planrs
+---------------------------------------
+
+Police Inter (assets/fonts/Inter-Regular.ttf, assets/fonts/Inter-SemiBold.ttf)
+  Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)
+  Licence : SIL Open Font License 1.1 (assets/fonts/OFL.txt). Aucun nom de
+  police réservé (Reserved Font Name) n'est déclaré.
+  Source : https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip
+  (version 4.1, 2024-11-15), fichiers extras/ttf/Inter-Regular.ttf
+  (sha256 40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82) et
+  extras/ttf/Inter-SemiBold.ttf
+  (sha256 78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3).
+  Version modifiée : sous-ensemble (latin, grec, cyrillique, ponctuation,
+  flèches, symboles courants), sans hinting ni tables de façonnage, par
+  fonttools 4.60.1 :
+    pyftsubset Inter-<graisse>.ttf --unicodes="U+0020-007E,U+00A0-024F,
+      U+0300-036F,U+0370-03FF,U+0400-04FF,U+1E00-1EFF,U+2000-206F,
+      U+20A0-20CF,U+2100-214F,U+2190-21FF,U+2212,U+2215,U+2219,U+221E,
+      U+2248,U+2260,U+2264,U+2265,U+25A0-25FF,U+FFFD" --no-hinting
+      --layout-features='' --no-layout-closure --name-IDs='*'
+      --name-languages='*'

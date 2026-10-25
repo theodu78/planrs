@@ -251,7 +251,6 @@ text_ids! {
     StatusWarnings => "status-warnings",
     StatusNoDocument => "status-no-document",
     // Ouverture.
-    OpenInProgress => "open-in-progress",
     OpenErrorTitle => "open-error-title",
     OpenErrorRead => "open-error-read",
     OpenErrorMspdi => "open-error-mspdi",
@@ -623,6 +622,33 @@ text_ids! {
     RecoveryKept => "recovery-kept",
     RecoveredFileName => "recovered-file-name",
     // --- J7 L16 ---
+    // --- J8 L0 : codes de refus du contrat (ADR-0016) ---
+    ErrorPasteUnrecognized => "error-paste-unrecognized",
+    ErrorPasteTooLarge => "error-paste-too_large",
+    ErrorPasteLinksDropped => "error-paste-links_dropped",
+    ErrorStyleIgnored => "error-style-ignored",
+    ErrorStyleInvalid => "error-style-invalid",
+    ErrorPdfTooManyPages => "error-pdf-too_many_pages",
+    ErrorPdfGlyphMissing => "error-pdf-glyph_missing",
+    ErrorPdfLogoInvalid => "error-pdf-logo_invalid",
+    ErrorTaskManualFinishBeforeStart => "error-task-manual_finish_before_start",
+    ErrorControlBadEndpoint => "error-control-bad_endpoint",
+    // --- J8 L1 ---
+    // --- J8 L2 ---
+    // --- J8 L3 ---
+    // --- J8 L4 ---
+    // --- J8 L5 ---
+    // --- J8 L6 ---
+    // --- J8 L7 ---
+    // --- J8 L8 ---
+    // --- J8 L9 ---
+    // --- J8 L10 ---
+    // --- J8 L11 ---
+    // --- J8 L12 ---
+    // --- J8 L13 ---
+    // --- J8 L14 ---
+    // --- J8 L15 ---
+    // --- J8 L16 ---
 }
 
 /// Clé fluent du refus de code `code` : `error-<code>`, points changés en

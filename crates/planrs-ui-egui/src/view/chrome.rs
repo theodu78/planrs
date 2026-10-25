@@ -61,6 +61,10 @@ pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
                 });
                 ui.menu_button(texts.get(TextId::MenuTheme), |ui| theme_choices(ui, fc));
                 ui.menu_button(texts.get(TextId::MenuLanguage), |ui| language_choices(ui, fc));
+                // --- J8 L9 : filtres, tri, niveau ---
+                // --- J8 L11 : surbrillance du critique ---
+                // --- J8 L12 : volet IA, « Pourquoi cette date ? » ---
+                // --- J8 L15 : galerie, mise en page ---
                 ui.separator();
                 // Bascule du panneau des diagnostics : les compteurs de la
                 // barre d'état l'ouvrent aussi, mais rien ne les signale comme
@@ -99,6 +103,9 @@ fn file_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     menu_item(ui, fc, TextId::MenuSave, Some(save), has_doc, Action::Save);
     let save_as = Binding::Ui(UiBinding::SaveAs);
     menu_item(ui, fc, TextId::MenuSaveAs, Some(save_as), has_doc, Action::SaveAs);
+    // --- J8 L7 : Exporter en PDF ---
+    // --- J8 L10 : Importer CSV ---
+    // --- J8 L13 ---
     ui.separator();
     menu_item(ui, fc, TextId::MenuClose, None, has_doc, Action::CloseDocument);
     // Quitter : le navigateur ne laisse pas une page fermer son onglet.
@@ -235,6 +242,9 @@ fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let assign = Action::ShowDialog(DialogKind::AssignResources);
     menu_item(ui, fc, TextId::MenuAssignResources, None, has_doc, assign);
     ui.menu_button(texts.get(TextId::MenuProject), |ui| project_menu(ui, fc));
+    // --- J8 L9 : rechercher ---
+    // --- J8 L10 : couper, copier, coller ---
+    // --- J8 L15 : menu Tâche (%, mode, actif) ---
 }
 
 /// Barre d'outils : exemple, ouvrir, zoom, ajuster, thème, langue. Toujours

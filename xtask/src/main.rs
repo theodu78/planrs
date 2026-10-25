@@ -12,15 +12,21 @@
 //! - `panics` : complète clippy pour la règle 10 (ne jamais planter). Refuse
 //!   hors du code de test les `allow`/`expect` qui lèvent un interdit de la
 //!   règle 10 et la famille `assert!`, qu'aucune lint clippy ne refuse.
+//! - `fonts [--check]` : écrit (ou vérifie) la table des avances d'Inter de
+//!   `planrs-render` depuis `assets/fonts/` (H-R11).
+//! - `text-ids` : chaque `TextId` de l'interface est traduit en français et
+//!   en anglais et utilisé dans le code livré (ADR-0016 D14).
 //! - `rules` : vérifie la règle 4. Chaque fiche `R-xxx` active de
 //!   `docs/scheduling-rules.md` a une ligne « Tests » et au moins une
 //!   fonction `fn rxxx_` dans `tests/` ou `crates/`.
 
 mod corpus;
+mod fonts;
 mod layers;
 mod panics;
 mod rules;
 mod schema;
+mod text_ids;
 
 use std::process::ExitCode;
 
@@ -29,6 +35,9 @@ const USAGE: &str = "usage : cargo xtask <tâche>
 tâches :
   layers   vérifie les couches (règle 9)
   panics   vérifie les interdits de la règle 10 que clippy ne couvre pas
+  fonts [--check]
+           écrit (ou vérifie) la table des avances d'Inter (H-R11)
+  text-ids vérifie que chaque texte de l'interface est traduit (FR, EN) et utilisé
   rules    vérifie que chaque règle R-xxx a ses tests (règle 4)
   corpus fetch
            télécharge le corpus public (tests/corpus/files, sha256 vérifié)
@@ -41,6 +50,8 @@ fn main() -> ExitCode {
         Some("layers") => layers::run(),
         Some("panics") => panics::run(),
         Some("rules") => rules::run(),
+        Some("text-ids") => text_ids::run(),
+        Some("fonts") => fonts::run(args.get(1..).unwrap_or_default()),
         Some("corpus") => corpus::run(args.get(1..).unwrap_or_default()),
         Some("schema") => schema::run(args.get(1..).unwrap_or_default()),
         _ => {

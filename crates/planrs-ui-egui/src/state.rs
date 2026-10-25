@@ -12,7 +12,16 @@
 //! Gantt ([`GanttStyle`]) et fichiers récents ([`RecentFile`]), champs
 //! ajoutés avec valeur par défaut : la version reste 1 (un état J6 se lit
 //! sans avertissement).
+//!
+//! J8 (ADR-0016, contrat L0) : préférences de la vue des tâches
+//! ([`TaskViewPrefs`] : niveau affiché, surbrillance du critique), modèle
+//! de mise en forme par défaut, modèles personnels ([`NamedStyle`]) et
+//! écriture du style dans le fichier ; même règle, la version reste 1 (un
+//! état J7 se lit sans avertissement). Filtre, tri et repli sont des vues
+//! non persistées ([`TaskViewState`]).
 
+use planrs_automation::filter::{FilterPreset, TaskFilter};
+use planrs_render::style::{DocStyle, TemplateId};
 use serde::{Deserialize, Serialize};
 
 use crate::column::{Column, ColumnState};
@@ -39,6 +48,16 @@ pub const TABLE_WIDTH_DEFAULT: u16 = 642;
 /// Fichiers récents gardés au plus (H-UI-28).
 pub const MAX_RECENT_FILES: usize = 10;
 
+/// Modèles personnels gardés au plus (J8).
+pub const MAX_USER_TEMPLATES: usize = 32;
+
+/// Longueur maximale du nom d'un modèle personnel, en caractères (J8).
+pub const MAX_USER_TEMPLATE_NAME: usize = 64;
+
+/// Niveau hiérarchique affiché au plus par « Afficher jusqu'au niveau n »
+/// (H-UI-34).
+pub const MAX_OUTLINE_LEVEL: u8 = 9;
+
 /// Préférences d'interface persistées.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -64,6 +83,119 @@ pub struct UiState {
     /// Fichiers récents, le plus récent en tête, [`MAX_RECENT_FILES`] au
     /// plus (J7, H-UI-28).
     pub recent: Vec<RecentFile>,
+    /// Préférences de la vue des tâches (J8).
+    pub task_view: TaskViewPrefs,
+    /// Modèle des documents sans style (J8, H-UI-43 : Classique jusqu'au
+    /// lot L15).
+    pub default_template: TemplateId,
+    /// Modèles personnels, [`MAX_USER_TEMPLATES`] au plus (J8).
+    pub user_templates: Vec<NamedStyle>,
+    /// Écrire le style choisi dans le fichier (`<?planrs-style?>`, J8,
+    /// H-R12) ; faux : jamais.
+    pub write_style_to_file: bool,
+}
+
+/// Préférences persistées de la vue des tâches (J8, ADR-0016 D2) : seul
+/// « Afficher jusqu'au niveau n » et la surbrillance du critique sont
+/// gardés ; filtre, tri et repli ne le sont pas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskViewPrefs {
+    /// Niveau affiché (1 à 9 ; `None` : tous).
+    pub outline_level: Option<u8>,
+    /// Surbrillance du chemin critique (H-UI-38, vrai par défaut).
+    pub highlight_critical: bool,
+}
+
+impl Default for TaskViewPrefs {
+    fn default() -> Self {
+        Self {
+            outline_level: None,
+            highlight_critical: true,
+        }
+    }
+}
+
+/// Modèle personnel : nom et style (modèle de base et surcharges).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NamedStyle {
+    /// Nom affiché (≤ [`MAX_USER_TEMPLATE_NAME`] caractères).
+    pub name: String,
+    /// Style.
+    pub style: DocStyle,
+}
+
+/// Choix de filtre de la vue des tâches.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FilterChoice {
+    /// Filtre prédéfini.
+    Preset(FilterPreset),
+    /// Filtre personnalisé.
+    Custom(TaskFilter),
+}
+
+impl Default for FilterChoice {
+    fn default() -> Self {
+        Self::Preset(FilterPreset::All)
+    }
+}
+
+/// Clé de tri (H-UI-31).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SortKey {
+    /// Ordre des ID (Maj+F3).
+    #[default]
+    Id,
+    /// Nom.
+    Name,
+    /// Début.
+    Start,
+    /// Fin.
+    Finish,
+    /// Durée.
+    Duration,
+    /// % achevé.
+    PercentComplete,
+    /// Marge totale.
+    TotalSlack,
+}
+
+/// Tri de la vue des tâches (sans renumérotation).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SortSpec {
+    /// Clé.
+    pub key: SortKey,
+    /// Décroissant.
+    pub descending: bool,
+    /// « Conserver la structure » (tri des frères, coché par défaut).
+    pub keep_outline: bool,
+}
+
+/// État de la vue des tâches (J8, ADR-0016 D2) : une vue, rien d'écrit
+/// (P50). Contrat posé par le lot L0, lu par `RowView` en L5.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskViewState {
+    /// Filtre.
+    pub filter: FilterChoice,
+    /// Tri (`None` : ordre des ID).
+    pub sort: Option<SortSpec>,
+    /// Niveau affiché (`None` : tous).
+    pub outline_level: Option<u8>,
+    /// Surbrillance du chemin critique.
+    pub highlight_critical: bool,
+}
+
+impl Default for TaskViewState {
+    fn default() -> Self {
+        let prefs = TaskViewPrefs::default();
+        Self {
+            filter: FilterChoice::default(),
+            sort: None,
+            outline_level: prefs.outline_level,
+            highlight_critical: prefs.highlight_critical,
+        }
+    }
 }
 
 /// Vue principale (J7, ADR-0015 D6).
@@ -168,6 +300,10 @@ impl Default for UiState {
             view: ViewKind::default(),
             gantt_style: GanttStyle::default(),
             recent: Vec::new(),
+            task_view: TaskViewPrefs::default(),
+            default_template: TemplateId::Classique,
+            user_templates: Vec::new(),
+            write_style_to_file: true,
         }
     }
 }
@@ -223,6 +359,10 @@ impl UiState {
             view: reader.field("view", defaults.view),
             gantt_style: reader.field("gantt_style", defaults.gantt_style),
             recent: reader.field("recent", defaults.recent),
+            task_view: reader.field("task_view", defaults.task_view),
+            default_template: reader.field("default_template", defaults.default_template),
+            user_templates: reader.list("user_templates", defaults.user_templates),
+            write_style_to_file: reader.field("write_style_to_file", defaults.write_style_to_file),
         };
         let warning = (!reader.bad.is_empty()).then_some(StateLoadError::Fields(reader.bad));
         (state.normalized(), warning)
@@ -250,6 +390,16 @@ impl UiState {
             },
         );
         self.recent.truncate(MAX_RECENT_FILES);
+        self.user_templates.truncate(MAX_USER_TEMPLATES);
+        for t in &mut self.user_templates {
+            if t.name.chars().count() > MAX_USER_TEMPLATE_NAME {
+                t.name = t.name.chars().take(MAX_USER_TEMPLATE_NAME).collect();
+            }
+        }
+        self.task_view.outline_level = self
+            .task_view
+            .outline_level
+            .map(|n| n.clamp(1, MAX_OUTLINE_LEVEL));
     }
 
     /// Retire `path` des fichiers récents (fichier introuvable, H-UI-28).
@@ -267,6 +417,16 @@ impl UiState {
     pub fn normalized(mut self) -> Self {
         self.version = UI_STATE_VERSION;
         self.recent.truncate(MAX_RECENT_FILES);
+        self.user_templates.truncate(MAX_USER_TEMPLATES);
+        for t in &mut self.user_templates {
+            if t.name.chars().count() > MAX_USER_TEMPLATE_NAME {
+                t.name = t.name.chars().take(MAX_USER_TEMPLATE_NAME).collect();
+            }
+        }
+        self.task_view.outline_level = self
+            .task_view
+            .outline_level
+            .map(|n| n.clamp(1, MAX_OUTLINE_LEVEL));
         self.table_width = self.table_width.clamp(TABLE_WIDTH_MIN, TABLE_WIDTH_MAX);
         let columns = Column::ALL
             .iter()
@@ -351,6 +511,35 @@ impl FieldReader<'_> {
         }
     }
 
+    /// Champ liste `name` (J8, modèles personnels) : chaque entrée est lue
+    /// seule ; une entrée illisible est écartée et le champ relevé une
+    /// fois. Pas un tableau → `default`, relevé.
+    fn list<T: serde::de::DeserializeOwned>(&mut self, name: &'static str, default: Vec<T>) -> Vec<T> {
+        let Some(raw) = self.object.get(name) else {
+            return default;
+        };
+        let Some(entries) = raw.as_array() else {
+            log::warn!("état d'interface : champ « {name} » ignoré : tableau attendu");
+            self.bad.push(name);
+            return default;
+        };
+        let mut out = Vec::new();
+        let mut skipped = false;
+        for entry in entries {
+            match T::deserialize(entry) {
+                Ok(v) => out.push(v),
+                Err(error) => {
+                    log::warn!("état d'interface : entrée de « {name} » ignorée : {error}");
+                    skipped = true;
+                }
+            }
+        }
+        if skipped {
+            self.bad.push(name);
+        }
+        out
+    }
+
     /// Champ `columns` : un tableau dont chaque entrée est lue seule ; une
     /// entrée illisible (colonne inconnue d'une version future, largeur hors
     /// type…) est écartée et le champ relevé une fois. Pas un tableau →
@@ -392,9 +581,13 @@ impl FieldReader<'_> {
     reason = "tests : un échec doit s'arrêter net et lisiblement"
 )]
 mod tests {
+    use planrs_automation::filter::FilterPreset;
+    use planrs_render::style::TemplateId;
+
     use super::{
-        GanttStyle, LanguagePref, MAX_RECENT_FILES, RecentFile, StateLoadError, TABLE_WIDTH_DEFAULT,
-        TABLE_WIDTH_MAX, TABLE_WIDTH_MIN, ThemePref, UI_STATE_VERSION, UiState, ViewKind,
+        FilterChoice, GanttStyle, LanguagePref, MAX_OUTLINE_LEVEL, MAX_RECENT_FILES, MAX_USER_TEMPLATE_NAME,
+        MAX_USER_TEMPLATES, NamedStyle, RecentFile, StateLoadError, TABLE_WIDTH_DEFAULT, TABLE_WIDTH_MAX,
+        TABLE_WIDTH_MIN, TaskViewPrefs, TaskViewState, ThemePref, UI_STATE_VERSION, UiState, ViewKind,
     };
     use crate::column::{Column, ColumnState};
     use crate::timescale::TimeScaleZoom;
@@ -457,6 +650,72 @@ mod tests {
         let (read, warning) = UiState::from_json_lenient(r#"{"view":"calendar"}"#);
         assert_eq!(read.view, ViewKind::Gantt);
         assert!(matches!(warning, Some(StateLoadError::Fields(f)) if f == ["view"]));
+    }
+
+    /// État J7 (sans les champs J8) : lu sans avertissement, champs J8 à
+    /// leur défaut (contrat J8 L0 : la version reste 1).
+    #[test]
+    fn ui_state_v1_j7_reads_without_new_fields() {
+        const J7: &str = include_str!("../tests/fixtures/ui_state_v1_j7.json");
+        assert!(!J7.contains("task_view") && !J7.contains("default_template"));
+        let (state, warning) = UiState::from_json_lenient(J7);
+        assert!(warning.is_none(), "{warning:?}");
+        assert_eq!(state, UiState::default());
+        assert_eq!(state.default_template, TemplateId::Classique);
+        assert!(state.task_view.highlight_critical && state.write_style_to_file);
+    }
+
+    /// Champs J8 relus à l'identique ; bornes appliquées ; une entrée de
+    /// modèle personnel illisible est écartée seule.
+    #[test]
+    fn ui_state_v1_roundtrip() {
+        let sobre = planrs_render::style::parse_doc_style(r#"{"base":"sobre","v":1}"#).unwrap();
+        let state = UiState {
+            task_view: TaskViewPrefs {
+                outline_level: Some(2),
+                highlight_critical: false,
+            },
+            default_template: TemplateId::Sobre,
+            user_templates: vec![NamedStyle {
+                name: "Agence".to_owned(),
+                style: sobre.clone(),
+            }],
+            write_style_to_file: false,
+            ..UiState::default()
+        };
+        let (read, warning) = UiState::from_json_lenient(&state.to_json().unwrap());
+        assert!(warning.is_none(), "{warning:?}");
+        assert_eq!(read, state);
+
+        let json = r#"{"task_view":{"outline_level":40,"highlight_critical":true},
+            "user_templates":[{"name":"A","style":{"v":1,"base":"sobre"}},{"name":"B","style":{"v":1,"base":"inconnu"}}]}"#;
+        let (read, warning) = UiState::from_json_lenient(json);
+        assert_eq!(read.task_view.outline_level, Some(MAX_OUTLINE_LEVEL));
+        assert_eq!(read.user_templates.len(), 1);
+        assert_eq!(read.user_templates[0].style, sobre);
+        assert!(matches!(warning, Some(StateLoadError::Fields(f)) if f == ["user_templates"]));
+        let many: Vec<NamedStyle> = (0..40)
+            .map(|i| NamedStyle {
+                name: format!("{i}{}", "x".repeat(100)),
+                style: sobre.clone(),
+            })
+            .collect();
+        let state = UiState {
+            user_templates: many,
+            ..UiState::default()
+        }
+        .normalized();
+        assert_eq!(state.user_templates.len(), MAX_USER_TEMPLATES);
+        assert!(
+            state
+                .user_templates
+                .iter()
+                .all(|t| t.name.chars().count() == MAX_USER_TEMPLATE_NAME)
+        );
+        assert_eq!(
+            TaskViewState::default().filter,
+            FilterChoice::Preset(FilterPreset::All)
+        );
     }
 
     #[test]

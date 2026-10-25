@@ -357,6 +357,10 @@ pub(super) fn update(op: &TaskUpdate, ctx: &mut Ctx<'_>) -> Result<(), CommandEr
     if op.active == Patch::Clear {
         return Err(invalid("active", "booléen attendu"));
     }
+    // J8 (contrat L0) : `mode` exécuté par le lot L2 (R-253).
+    if !op.mode.is_keep() {
+        return Err(CommandError::not_yet(8).with_field("mode"));
+    }
     check_computed(op, uid, summary, manual)?;
     let duration = entered_duration(op, ctx, uid)?;
     let entered = entered_date(&op.start, &op.finish)?;

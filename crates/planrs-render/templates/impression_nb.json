@@ -1,0 +1,285 @@
+{
+  "v": 1,
+  "name": "Impression N&B",
+  "base": "impression_nb",
+  "colors": {
+    "light": {
+      "bg": "#FFFFFF",
+      "text": "#000000",
+      "text_strong": "#000000",
+      "text_muted": "#4D4D4D",
+      "header_bg": "#F0F0F0",
+      "grid": "#BFBFBF",
+      "grid_major": "#808080",
+      "band": [
+        "#FFFFFF",
+        "#F2F2F2"
+      ],
+      "non_working": "#E8E8E8",
+      "status_line": "#000000",
+      "today_line": "#000000",
+      "link": "#000000",
+      "link_critical": "#000000",
+      "selection": "#D9D9D9",
+      "cursor": "#000000",
+      "message_error_bg": "#F2F2F2",
+      "message_warning_bg": "#E6E6E6",
+      "bars": {
+        "task": {
+          "fill": "#595959"
+        },
+        "critical": {
+          "fill": "#000000"
+        },
+        "summary": {
+          "fill": "#000000"
+        },
+        "summary_critical": {
+          "fill": "#000000"
+        },
+        "milestone": {
+          "fill": "#000000"
+        },
+        "milestone_critical": {
+          "fill": "#000000"
+        },
+        "progress": {
+          "fill": "#FFFFFF"
+        },
+        "baseline": {
+          "fill": "#808080"
+        },
+        "inactive": {
+          "fill": "#FFFFFF",
+          "outline": "#595959"
+        },
+        "manual": {
+          "fill": "#FFFFFF",
+          "outline": "#000000"
+        },
+        "slack": {
+          "fill": "#595959"
+        },
+        "deadline": {
+          "fill": "#000000"
+        }
+      }
+    },
+    "dark": {
+      "bg": "#000000",
+      "text": "#FFFFFF",
+      "text_strong": "#FFFFFF",
+      "text_muted": "#BFBFBF",
+      "header_bg": "#141414",
+      "grid": "#474747",
+      "grid_major": "#808080",
+      "band": [
+        "#000000",
+        "#0F0F0F"
+      ],
+      "non_working": "#1A1A1A",
+      "status_line": "#FFFFFF",
+      "today_line": "#FFFFFF",
+      "link": "#FFFFFF",
+      "link_critical": "#FFFFFF",
+      "selection": "#333333",
+      "cursor": "#FFFFFF",
+      "message_error_bg": "#262626",
+      "message_warning_bg": "#333333",
+      "bars": {
+        "task": {
+          "fill": "#A6A6A6"
+        },
+        "critical": {
+          "fill": "#FFFFFF"
+        },
+        "summary": {
+          "fill": "#FFFFFF"
+        },
+        "summary_critical": {
+          "fill": "#FFFFFF"
+        },
+        "milestone": {
+          "fill": "#FFFFFF"
+        },
+        "milestone_critical": {
+          "fill": "#FFFFFF"
+        },
+        "progress": {
+          "fill": "#000000"
+        },
+        "baseline": {
+          "fill": "#808080"
+        },
+        "inactive": {
+          "fill": "#000000",
+          "outline": "#A6A6A6"
+        },
+        "manual": {
+          "fill": "#000000",
+          "outline": "#FFFFFF"
+        },
+        "slack": {
+          "fill": "#A6A6A6"
+        },
+        "deadline": {
+          "fill": "#FFFFFF"
+        }
+      }
+    },
+    "print": null
+  },
+  "bars": {
+    "task": {
+      "outline16": 0,
+      "shape": "bar",
+      "height_pct": 45,
+      "radius16": 32,
+      "pattern": "solid"
+    },
+    "critical": {
+      "outline16": 32,
+      "shape": "bar",
+      "height_pct": 45,
+      "radius16": 32,
+      "pattern": "hatch"
+    },
+    "summary": {
+      "outline16": 0,
+      "shape": "bracket",
+      "height_pct": 30,
+      "radius16": 0,
+      "pattern": "solid"
+    },
+    "summary_critical": {
+      "outline16": 32,
+      "shape": "bracket",
+      "height_pct": 30,
+      "radius16": 0,
+      "pattern": "hatch"
+    },
+    "milestone": {
+      "outline16": 0,
+      "shape": "diamond",
+      "height_pct": 55,
+      "radius16": 0,
+      "pattern": "solid"
+    },
+    "milestone_critical": {
+      "outline16": 32,
+      "shape": "diamond",
+      "height_pct": 55,
+      "radius16": 0,
+      "pattern": "hatch"
+    },
+    "progress": {
+      "outline16": 0,
+      "shape": "bar",
+      "height_pct": 35,
+      "radius16": 0,
+      "pattern": "solid"
+    },
+    "baseline": {
+      "outline16": 0,
+      "shape": "bar",
+      "height_pct": 20,
+      "radius16": 0,
+      "pattern": "solid"
+    },
+    "inactive": {
+      "outline16": 16,
+      "shape": "bar",
+      "height_pct": 45,
+      "radius16": 32,
+      "pattern": "outline"
+    },
+    "manual": {
+      "outline16": 16,
+      "shape": "bar",
+      "height_pct": 45,
+      "radius16": 32,
+      "pattern": "outline"
+    },
+    "slack": {
+      "outline16": 0,
+      "shape": "line",
+      "height_pct": 10,
+      "radius16": 0,
+      "pattern": "solid"
+    },
+    "deadline": {
+      "outline16": 0,
+      "shape": "line",
+      "height_pct": 100,
+      "radius16": 0,
+      "pattern": "solid"
+    }
+  },
+  "texts": {
+    "task": {
+      "right": "name"
+    },
+    "critical": {
+      "right": "name"
+    },
+    "milestone": {
+      "right": "finish"
+    },
+    "milestone_critical": {
+      "right": "finish"
+    },
+    "summary": {
+      "right": "name"
+    },
+    "summary_critical": {
+      "right": "name"
+    }
+  },
+  "scale": {
+    "tiers": "auto",
+    "week_numbers": false,
+    "shade_non_working": true,
+    "status_label": true,
+    "today_mark": true
+  },
+  "grid": {
+    "rows": "none",
+    "major_v": true,
+    "minor_v": true,
+    "row_lines": true
+  },
+  "density": "normal",
+  "font": {
+    "family": "inter",
+    "size16": 192
+  },
+  "legend": {
+    "show": true,
+    "every_page": true
+  },
+  "page": {
+    "paper": "a4",
+    "landscape": true,
+    "margins_mm": [
+      10,
+      10,
+      10,
+      10
+    ],
+    "fit": {
+      "pages_wide": 1
+    },
+    "repeat_table": true,
+    "header": [
+      "{projet}",
+      "",
+      "{date_etat}"
+    ],
+    "footer": [
+      "{fichier}",
+      "",
+      "Page {page}/{pages}"
+    ],
+    "logo": null
+  }
+}

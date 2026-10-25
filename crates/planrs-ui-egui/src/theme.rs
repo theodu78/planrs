@@ -5,6 +5,7 @@
 //! jalons sombres, comme l'usage de MS Project), non copiées (hypothèse).
 
 use egui::Color32;
+use planrs_render::style::{BarRole, PlanStyle, Rgb, Variant};
 
 /// Couleurs de dessin de la vue principale.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,6 +118,43 @@ impl Palette {
         progress: Color32::from_rgb(0x0F, 0x23, 0x40),
     };
 
+    /// Palette tirée d'un style du planning (ADR-0016 D5) pour une variante.
+    ///
+    /// Le séparateur table / Gantt prend la grille marquée (égaux en J7). Un
+    /// rôle de barre absent (style non validé) prend le texte courant.
+    #[must_use]
+    pub fn from_style(style: &PlanStyle, variant: Variant) -> Self {
+        let c = style.tokens(variant);
+        let rgb = |v: Rgb| Color32::from_rgb(v.0, v.1, v.2);
+        let fill = |role: BarRole| rgb(c.bars.get(&role).map_or(c.text, |p| p.fill));
+        let outline = |role: BarRole| rgb(c.bars.get(&role).map_or(c.text, |p| p.outline.unwrap_or(p.fill)));
+        Self {
+            background: rgb(c.bg),
+            text: rgb(c.text),
+            text_strong: rgb(c.text_strong),
+            text_weak: rgb(c.text_muted),
+            grid: rgb(c.grid),
+            grid_major: rgb(c.grid_major),
+            header_bg: rgb(c.header_bg),
+            selection: rgb(c.selection),
+            bar: fill(BarRole::Task),
+            bar_outline: outline(BarRole::Task),
+            critical: fill(BarRole::Critical),
+            milestone: fill(BarRole::Milestone),
+            summary: fill(BarRole::Summary),
+            link: rgb(c.link),
+            status_date: rgb(c.status_line),
+            splitter: rgb(c.grid_major),
+            non_working: rgb(c.non_working),
+            summary_critical: fill(BarRole::SummaryCritical),
+            message_error_bg: rgb(c.message_error_bg),
+            message_warning_bg: rgb(c.message_warning_bg),
+            cursor: rgb(c.cursor),
+            baseline: fill(BarRole::Baseline),
+            progress: fill(BarRole::Progress),
+        }
+    }
+
     /// Palette du thème résolu.
     #[must_use]
     pub const fn for_theme(theme: egui::Theme) -> Self {
@@ -138,27 +176,18 @@ impl Palette {
 mod tests {
     use egui::Color32;
 
-    use super::Palette;
+    use planrs_render::style::{TemplateId, Variant, template};
 
-    /// Luminance relative WCAG 2.x d'une couleur opaque (calcul de dessin,
-    /// hors moteur : les flottants sont admis ici).
-    fn luminance(color: Color32) -> f32 {
-        let channel = |c: u8| {
-            let c = f32::from(c) / 255.0;
-            if c <= 0.039_28 {
-                c / 12.92
-            } else {
-                ((c + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        0.2126 * channel(color.r()) + 0.7152 * channel(color.g()) + 0.0722 * channel(color.b())
+    use super::{Palette, Rgb};
+
+    /// Rapport de contraste WCAG en millièmes, par la fonction entière
+    /// partagée avec le rendu (`planrs_render::style::contrast_ratio`).
+    fn contrast(a: Color32, b: Color32) -> u32 {
+        planrs_render::style::contrast_ratio(Rgb(a.r(), a.g(), a.b()), Rgb(b.r(), b.g(), b.b()))
     }
 
-    /// Rapport de contraste WCAG entre deux couleurs (≥ 1).
-    fn contrast(a: Color32, b: Color32) -> f32 {
-        let (la, lb) = (luminance(a), luminance(b));
-        let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
-        (hi + 0.05) / (lo + 0.05)
+    fn luminance(c: Color32) -> u32 {
+        planrs_render::style::luminance_ppm(Rgb(c.r(), c.g(), c.b()))
     }
 
     fn palettes() -> [(&'static str, Palette); 2] {
@@ -167,9 +196,8 @@ mod tests {
 
     #[test]
     fn palette_contrast_helper_sane() {
-        let ratio = contrast(Color32::BLACK, Color32::WHITE);
-        assert!((ratio - 21.0).abs() < 0.01, "{ratio}");
-        assert!((contrast(Color32::WHITE, Color32::WHITE) - 1.0).abs() < f32::EPSILON);
+        assert_eq!(contrast(Color32::BLACK, Color32::WHITE), 21_000);
+        assert_eq!(contrast(Color32::WHITE, Color32::WHITE), 1000);
     }
 
     #[test]
@@ -182,11 +210,11 @@ mod tests {
             ] {
                 for (text_label, text) in [("texte", p.text), ("texte fort", p.text_strong)] {
                     let ratio = contrast(text, bg);
-                    assert!(ratio >= 4.5, "{name} : {text_label} sur {label} = {ratio:.2}");
+                    assert!(ratio >= 4500, "{name} : {text_label} sur {label} = {ratio}‰");
                 }
             }
             let weak = contrast(p.text_weak, p.background);
-            assert!(weak >= 3.0, "{name} : texte atténué = {weak:.2}");
+            assert!(weak >= 3000, "{name} : texte atténué = {weak}‰");
         }
     }
 
@@ -203,17 +231,14 @@ mod tests {
                 for (text_label, text) in [("texte fort", p.text_strong), ("texte", p.text)] {
                     let ratio = contrast(text, bg);
                     assert!(
-                        ratio >= 4.5,
-                        "{name} : {text_label} sur bandeau {label} = {ratio:.2}"
+                        ratio >= 4500,
+                        "{name} : {text_label} sur bandeau {label} = {ratio}‰"
                     );
                 }
                 assert_ne!(bg, p.background, "{name} : bandeau {label} non teinté");
             }
             let accent = contrast(p.critical, p.message_error_bg);
-            assert!(
-                accent >= 3.0,
-                "{name} : liseré critique sur bandeau = {accent:.2}"
-            );
+            assert!(accent >= 3000, "{name} : liseré critique sur bandeau = {accent}‰");
             // Erreur rougeâtre, avertissement jaunâtre.
             assert!(p.message_error_bg.r() > p.message_error_bg.b(), "{name}");
             assert!(p.message_warning_bg.g() > p.message_warning_bg.b(), "{name}");
@@ -233,7 +258,7 @@ mod tests {
                 ("date d'état", p.status_date),
             ] {
                 let ratio = contrast(color, p.background);
-                assert!(ratio >= 3.0, "{name} : {label} sur fond = {ratio:.2}");
+                assert!(ratio >= 3000, "{name} : {label} sur fond = {ratio}‰");
             }
         }
     }
@@ -250,7 +275,7 @@ mod tests {
                 ("sélection", p.selection),
             ] {
                 let ratio = contrast(p.cursor, bg);
-                assert!(ratio >= 3.0, "{name} : curseur sur {label} = {ratio:.2}");
+                assert!(ratio >= 3000, "{name} : curseur sur {label} = {ratio}‰");
             }
         }
     }
@@ -265,11 +290,11 @@ mod tests {
             assert_ne!(p.non_working, p.background, "{name}");
             for (label, bg) in [("fond", p.background), ("jour chômé", p.non_working)] {
                 let ratio = contrast(p.baseline, bg);
-                assert!(ratio >= 3.0, "{name} : ligne de base sur {label} = {ratio:.2}");
+                assert!(ratio >= 3000, "{name} : ligne de base sur {label} = {ratio}‰");
             }
             for (label, bar) in [("barre", p.bar), ("barre critique", p.critical)] {
                 let ratio = contrast(p.progress, bar);
-                assert!(ratio >= 3.0, "{name} : avancement dans la {label} = {ratio:.2}");
+                assert!(ratio >= 3000, "{name} : avancement dans la {label} = {ratio}‰");
             }
             for (label, color) in [
                 ("barre", p.bar),
@@ -280,7 +305,7 @@ mod tests {
                 ("date d'état", p.status_date),
             ] {
                 let ratio = contrast(color, p.non_working);
-                assert!(ratio >= 3.0, "{name} : {label} sur jour chômé = {ratio:.2}");
+                assert!(ratio >= 3000, "{name} : {label} sur jour chômé = {ratio}‰");
             }
             assert_ne!(p.baseline, p.bar, "{name}");
             // Ligne de base grise : aucune composante dominante nette.
@@ -298,6 +323,16 @@ mod tests {
             assert!(p.bar.b() > p.bar.r(), "{name}");
             assert_ne!(p.summary_critical, p.summary, "{name}");
         }
+    }
+
+    /// Le modèle Classique reproduit J7 champ par champ (ADR-0016 D6), dans
+    /// les deux thèmes ; l'impression part du clair.
+    #[test]
+    fn classique_equals_j7_palette() {
+        let style = template(TemplateId::Classique);
+        assert_eq!(Palette::from_style(&style, Variant::Light), Palette::LIGHT);
+        assert_eq!(Palette::from_style(&style, Variant::Dark), Palette::DARK);
+        assert_eq!(Palette::from_style(&style, Variant::Print), Palette::LIGHT);
     }
 
     #[test]

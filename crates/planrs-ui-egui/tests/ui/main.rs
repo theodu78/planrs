@@ -7,7 +7,10 @@
 //! structure sur la sélection (`structure.rs`). Modules J7 (`nav`, `relay`,
 //! `columns`, `tracking`, `gestures`, `task_info`, `resource_sheet`,
 //! `usage`, `dialogs`, `assign`, `desktop`, `recovery`, `e2e`) déclarés
-//! par le contrat (lot L0), remplis par leur lot.
+//! par le contrat (lot L0), remplis par leur lot. Modules J8 (`row_view`,
+//! `filters`, `search`, `outline`, `clipboard`, `csv_import`, `styled`,
+//! `ai_panel`, `pseudo`, `web_keys`, `j8_e2e`) déclarés vides par le contrat
+//! J8 (lot L0, ADR-0016), remplis par leur lot.
 //!
 //! Cible unique `ui` (un seul binaire lié à wgpu, ADR-0011, décision 12).
 //! Les libellés cherchés sont construits par `Texts` (jamais en dur : le
@@ -26,25 +29,36 @@
     reason = "tests : un échec doit s'arrêter net et lisiblement"
 )]
 
+mod ai_panel;
 mod assign;
+mod clipboard;
 mod columns;
 mod common;
+mod csv_import;
 mod desktop;
 mod dialogs;
 mod e2e;
 mod edit;
 mod files;
+mod filters;
 mod gestures;
+mod j8_e2e;
 mod nav;
+mod outline;
+mod pseudo;
 mod recovery;
 mod relay;
 mod resource_sheet;
+mod row_view;
+mod search;
 mod session;
 mod snapshots;
 mod structure;
+mod styled;
 mod task_info;
 mod tracking;
 mod usage;
+mod web_keys;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;

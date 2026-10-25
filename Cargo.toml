@@ -6,6 +6,7 @@ members = [
     "crates/planrs-core",
     "crates/planrs-mspdi",
     "crates/planrs-render",
+    "crates/planrs-pdf",
     "crates/planrs-automation",
     "crates/planrs-mcp",
     "crates/planrs-ui-egui",
@@ -30,6 +31,7 @@ repository = "https://github.com/theodu78/planrs"
 planrs-core = { path = "crates/planrs-core", version = "0.1.0" }
 planrs-mspdi = { path = "crates/planrs-mspdi", version = "0.1.0" }
 planrs-render = { path = "crates/planrs-render", version = "0.1.0" }
+planrs-pdf = { path = "crates/planrs-pdf", version = "0.1.0" }
 planrs-automation = { path = "crates/planrs-automation", version = "0.1.0" }
 planrs-mcp = { path = "crates/planrs-mcp", version = "0.1.0" }
 planrs-ui-egui = { path = "crates/planrs-ui-egui", version = "0.1.0" }
@@ -124,6 +126,11 @@ proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 # `tests/benches/schedule.rs`, exécuté par le job CI `perf`). Sans rayon ni
 # plotters : ni parallélisme ni graphiques, autant de crates en moins.
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+# Export PDF (planrs-pdf, ADR-0016 D8) : krilla épinglé exactement, sans
+# fonctions par défaut (ni rustybuzz, ni images matricielles : essai L0
+# consigné dans ADR-0016). skrifa à la version tirée par krilla (cmap).
+krilla = { version = "=0.8.2", default-features = false }
+skrifa = { version = "0.42.1", default-features = false, features = ["std"] }
 # Validation XSD des documents écrits (P26, ADR-0010 D17) : dépendance de
 # développement de planrs-tests, Rust pur, BSD-2-Clause.
 uppsala = "0.12.0"

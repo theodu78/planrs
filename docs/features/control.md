@@ -100,6 +100,17 @@ Application (`planrs-ui-egui/src/relay.rs`, file vidée en **début d'image**, a
 
 Les codes sont dans `control::codes` (propres au fil, distincts de `error::codes` qui couvre les commandes). Codes J7 des commandes relayées (`error::codes`) : `control.rejected`, `control.approval_timeout`, `control.not_relayable`, `control.not_attached`, `control.app_gone`, `control.screenshot_unavailable`, `control.screenshot_too_large` ; relecture finale J7 : `control.busy` (application occupée, rattachement gardé), `control.document_changed` (jeton du document précédent refusé, détachement).
 
+### Transport TCP en boucle locale (J8, ADR-0016 D12 ; contrat L0, implémentation L8)
+
+Sous Windows, le canal passe par TCP en boucle locale (std seul, même jeton par document) ; ailleurs, la socket Unix reste. Le rendez-vous porte l'adresse `endpoint` (`planrs_automation::control::Endpoint` : `unix:<chemin>` ou `tcp:127.0.0.1:<port>`, `Endpoint::parse` / `render`, refus `control.bad_endpoint` ; tests `c_ctl_11_*` dès L0). Squelette `control::tcp` : `bind_loopback` (non pris en charge jusqu'à L8), `accept_peer` (refuse tout pair jusqu'à L8).
+
+| Id | Contrat | Lot |
+|---|---|---|
+| C-CTL-11 | Écouteur TCP lié à `127.0.0.1:0` uniquement ; rendez-vous `endpoint = "tcp:127.0.0.1:<port>"` ; client commun aux deux transports | L0 (adresse), L8 |
+| C-CTL-12 | Pair dont l'adresse n'est pas en boucle locale ⇒ fermé sans lecture (fonction `accept_peer` testée sur adresses construites) | L8 |
+| C-CTL-13 | Sous transport TCP, rendez-vous dont la sonde `hello` échoue en 2 s ⇒ retiré (remplace la règle des 24 h) | L8 |
+| C-CTL-14 | Première ligne qui n'est pas une trame valide (ex. `GET / HTTP/1.1`) ⇒ connexion fermée sans réponse | L8 |
+
 ## 4. Sécurité
 
 - Seul l'utilisateur lit le dossier (0700) et le jeton (0600) ; la socket est elle aussi en 0600. Le jeton protège en plus contre une socket réutilisée par un autre processus au même chemin.

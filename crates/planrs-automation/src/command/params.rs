@@ -88,6 +88,36 @@ pub struct TaskListParams {
     /// Tâches affectées à cette ressource (UID, J5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource: Option<u32>,
+    /// Feuilles non achevées (< 100 %) seulement (J8, R-251 ; refusé
+    /// `command.not_yet_available` jusqu'au lot L2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incomplete: Option<bool>,
+    /// Jalons seulement (`true`) ou hors jalons (`false`) (J8, R-251).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub milestone: Option<bool>,
+    /// Tâches actives (`true`) ou inactives (`false`) (J8, R-251).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<bool>,
+    /// Nom contenant ce texte, sans casse ni accents (J8, R-251).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_contains: Option<String>,
+}
+
+impl TaskListParams {
+    /// Critères J8 posés (`incomplete`, `milestone`, `active`,
+    /// `name_contains`) : refusés tant que le lot L2 ne les exécute pas.
+    #[must_use]
+    pub fn j8_fields(&self) -> Vec<&'static str> {
+        [
+            ("incomplete", self.incomplete.is_some()),
+            ("milestone", self.milestone.is_some()),
+            ("active", self.active.is_some()),
+            ("name_contains", self.name_contains.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(name, set)| set.then_some(name))
+        .collect()
+    }
 }
 
 /// `resource.list` (J5, R-195) : ressources dans l'ordre des UID, filtrées
@@ -238,6 +268,10 @@ pub struct RenderGanttParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1, max = 200))]
     pub max_rows: Option<u32>,
+    /// Modèle de mise en forme (J8 ; refusé `command.not_yet_available`
+    /// jusqu'au lot L4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<super::style::TemplateJson>,
 }
 
 /// `project.save` : enregistre en MSPDI, sur le fichier ouvert ou sous
@@ -374,4 +408,80 @@ pub struct ScreenshotParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(max = 2))]
     pub scale_down: Option<u8>,
+}
+
+/// `project.export_pdf` (J8, contrat L0 ; exécution en L7) : écrit le
+/// planning en PDF.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExportPdfParams {
+    /// Chemin du fichier écrit.
+    pub path: String,
+    /// Modèle de mise en forme (défaut : style du document).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<super::style::TemplateJson>,
+    /// Mise en page (défaut : celle du style).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<PdfPageJson>,
+    /// Plage de jours (défaut : tout le projet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<PdfRangeJson>,
+    /// Lignes exportées (défaut : toutes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<PdfRowsJson>,
+}
+
+/// Papier d'un export PDF.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PaperJson {
+    /// A4.
+    A4,
+    /// A3.
+    A3,
+    /// Lettre US.
+    Letter,
+    /// Tabloïd US.
+    Tabloid,
+}
+
+/// Mise en page d'un export PDF.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PdfPageJson {
+    /// Papier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paper: Option<PaperJson>,
+    /// Paysage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landscape: Option<bool>,
+    /// Pages en largeur (1 à 20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 20))]
+    pub pages_wide: Option<u16>,
+}
+
+/// Plage de jours d'un export PDF.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PdfRangeJson {
+    /// Premier jour.
+    #[schemars(with = "DaySchema")]
+    pub from: Day,
+    /// Dernier jour.
+    #[schemars(with = "DaySchema")]
+    pub to: Day,
+}
+
+/// Lignes d'un export PDF.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PdfRowsJson {
+    /// Tâches critiques seulement.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub critical_only: bool,
+    /// Niveau hiérarchique maximal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub outline_max: Option<u16>,
 }

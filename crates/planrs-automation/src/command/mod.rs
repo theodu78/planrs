@@ -24,6 +24,7 @@ mod progress;
 mod project;
 mod refs;
 mod resource;
+pub mod style;
 mod task;
 
 pub use outline::is_summary_at;
@@ -467,6 +468,20 @@ pub struct TaskUpdate {
     /// refusé jusqu'au lot L7).
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
     pub work: Patch<DurationJson>,
+    /// Mode de planification (J8, R-253 ; refusé
+    /// `command.not_yet_available` jusqu'au lot L2).
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub mode: Patch<ModeJson>,
+}
+
+/// Mode de planification d'une tâche en JSON (J8, R-253).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModeJson {
+    /// Planification automatique.
+    Auto,
+    /// Planification manuelle (dates figées, S73).
+    Manual,
 }
 
 impl TaskUpdate {

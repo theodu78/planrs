@@ -140,6 +140,28 @@ pub mod codes {
     /// détache ; `open_project` du fichier voulu rattache de nouveau
     /// (relecture finale J7, relais F2).
     pub const CONTROL_DOCUMENT_CHANGED: &str = "control.document_changed";
+    /// Texte collé non reconnu : ni en-tête de CSV, ni colonne unique (J8,
+    /// R-256).
+    pub const PASTE_UNRECOGNIZED: &str = "paste.unrecognized";
+    /// Texte collé trop grand (10 000 lignes, 4 Mio ; J8, R-256).
+    pub const PASTE_TOO_LARGE: &str = "paste.too_large";
+    /// Liens externes au tampon non recréés au collage (J8, R-244).
+    pub const PASTE_LINKS_DROPPED: &str = "paste.links_dropped";
+    /// Style du document ignoré à la lecture (trop grand, version inconnue,
+    /// illisible ; J8, H-R12).
+    pub const STYLE_IGNORED: &str = "style.ignored";
+    /// Style ou surcharge invalide (`style.apply` ; J8).
+    pub const STYLE_INVALID: &str = "style.invalid";
+    /// Export PDF de plus de 1 000 pages (J8, P54).
+    pub const PDF_TOO_MANY_PAGES: &str = "pdf.too_many_pages";
+    /// Caractère absent des polices du PDF (J8, ADR-0016 D9).
+    pub const PDF_GLYPH_MISSING: &str = "pdf.glyph_missing";
+    /// Logo du PDF illisible ou hors bornes (256 Kio, 2 048 px ; J8).
+    pub const PDF_LOGO_INVALID: &str = "pdf.logo_invalid";
+    /// Fin saisie d'une tâche manuelle avant son début (J8, R-254).
+    pub const TASK_MANUAL_FINISH_BEFORE_START: &str = "task.manual_finish_before_start";
+    /// Adresse du canal de contrôle invalide (J8, C-CTL-11).
+    pub const CONTROL_BAD_ENDPOINT: &str = "control.bad_endpoint";
 }
 
 /// Commande refusée. L'état de la session est intact (atomicité du lot).

@@ -17,6 +17,9 @@ serde.workspace = true
 sha2.workspace = true
 syn.workspace = true
 toml.workspace = true
+# `cargo xtask fonts` : avances d'Inter ; version tirée par egui (déjà au
+# lock), distincte de la 0.42 de krilla.
+skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true

@@ -16,9 +16,11 @@ mod decode;
 mod export;
 mod header;
 mod import;
+mod preview;
 
 pub use export::{CsvExportOptions, default_columns, export};
 pub use import::{MAX_DIAGNOSTICS, MAX_DIAGNOSTICS_PER_CODE, import};
+pub use preview::{CsvPreview, PREVIEW_ROWS, Recognized, preview};
 
 use planrs_core::{Moment, Project, ScheduleAnchor};
 use serde::Serialize;
@@ -305,6 +307,11 @@ pub enum CsvError {
     #[serde(rename = "csv.error.encoding")]
     #[error("le fichier n'est pas dans l'encodage indiqué")]
     Encoding,
+    /// Fonction posée par le contrat J8 (L0), livrée par un lot ultérieur
+    /// (aperçu, L3).
+    #[serde(rename = "csv.error.not_yet_available")]
+    #[error("fonction pas encore disponible")]
+    NotYetAvailable,
 }
 
 impl CsvError {
@@ -318,6 +325,7 @@ impl CsvError {
             Self::NoKnownColumn => "csv.error.no_known_column",
             Self::TooManyRows => "csv.error.too_many_rows",
             Self::TooManyColumns => "csv.error.too_many_columns",
+            Self::NotYetAvailable => "csv.error.not_yet_available",
             Self::Encoding => "csv.error.encoding",
         }
     }
@@ -398,6 +406,7 @@ mod tests {
             CsvError::TooManyRows,
             CsvError::TooManyColumns,
             CsvError::Encoding,
+            CsvError::NotYetAvailable,
         ] {
             assert_eq!(serde_json::to_value(&e).unwrap()["code"], e.code());
             assert_ne!(e.to_string(), "");

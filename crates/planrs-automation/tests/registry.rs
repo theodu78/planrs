@@ -127,7 +127,24 @@ fn registry_reserved_not_listed() {
         .filter(|s| matches!(s.available, Availability::Milestone(_)))
         .map(|s| s.id)
         .collect();
-    assert_eq!(reserved, BTreeSet::new());
+    // Contrat J8 (lot L0, ADR-0016) : quatre entrées réservées au jalon 8,
+    // activées par les lots L6 (style) et L7 (PDF).
+    assert_eq!(
+        reserved,
+        BTreeSet::from(["project.export_pdf", "style.apply", "style.get", "style.list"])
+    );
+    for (id, name, kind) in [
+        ("project.export_pdf", "export_pdf", Kind::File),
+        ("style.apply", "apply_style", Kind::Write),
+        ("style.get", "get_style", Kind::Read),
+        ("style.list", "list_styles", Kind::Read),
+    ] {
+        let spec = lookup(id).unwrap();
+        assert_eq!(spec.available, Availability::Milestone(8), "{id}");
+        assert_eq!(spec.mcp_name, name, "{id}");
+        assert_eq!(spec.kind, kind, "{id}");
+        assert!(!spec.is_listed(), "{id}");
+    }
     for id in [
         "baseline.clear",
         "calendar.add",
@@ -141,7 +158,7 @@ fn registry_reserved_not_listed() {
         assert_eq!(spec.kind, Kind::Write, "{id}");
     }
     assert!(listed().all(|s| s.available == Availability::Now));
-    assert_eq!(listed().count(), REGISTRY.len() - 3);
+    assert_eq!(listed().count(), REGISTRY.len() - 3 - 4);
 }
 
 /// Contrat J7 (lot L0, ADR-0015 D11) : `app.ui_state`, `app.ui`,

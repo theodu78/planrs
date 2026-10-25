@@ -399,6 +399,29 @@
                   "null"
                 ]
               },
+              "mode": {
+                "anyOf": [
+                  {
+                    "description": "Mode de planification d'une tâche en JSON (J8, R-253).",
+                    "oneOf": [
+                      {
+                        "const": "auto",
+                        "description": "Planification automatique.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "manual",
+                        "description": "Planification manuelle (dates figées, S73).",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Mode de planification (J8, R-253 ; refusé\n`command.not_yet_available` jusqu'au lot L2)."
+              },
               "name": {
                 "description": "Nom (`null` refusé).",
                 "type": [

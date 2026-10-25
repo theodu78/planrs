@@ -1,0 +1,17 @@
+[package]
+name = "planrs-pdf"
+description = "Export PDF du planning de planrs (couche du rendu, sans interface)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+planrs-core.workspace = true
+planrs-render.workspace = true
+krilla.workspace = true
+skrifa.workspace = true
+
+[lints]
+workspace = true

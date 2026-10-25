@@ -27,6 +27,9 @@ Ce sont des choix d'affichage, pas des règles de calcul : pas de `R-xxx`. Ils r
 - **H-R8, date d'état.** Ligne verticale en tirets (6 / 4, 1,5 px) à la date d'état effective (date d'état, sinon date courante), seulement si elle est dans la plage.
 - **H-R9, couleurs.** Constantes `Rgb` reprises de `Palette::LIGHT` et `Palette::DARK` de l'interface (dette de duplication, ADR-0012 D10), une classe CSS par rôle.
 - **H-R10, échappement.** Tous les textes (noms, titre du document) : `& < > " '` en entités prédéfinies, tabulation et fins de ligne en espace, caractères interdits par XML 1.0 (contrôles C0 hors tabulation et fins de ligne, U+FFFE, U+FFFF) en U+FFFD. Aucune section CDATA, aucune référence numérique.
+- **H-R11, largeurs de texte (J8, ADR-0016 D9).** Largeurs tirées de la table d'Inter (`metrics_inter.rs`, écrite par `cargo xtask fonts` depuis `assets/fonts/`, fraîcheur vérifiée par `metrics_inter_fresh`) : chaque caractère prend l'avance de sa graisse (Regular ou SemiBold, cadratin 2 048), convertie en 1/16 px par arrondi inférieur `avance × taille16 / 2 048` (`i64`), **caractère par caractère**, sans crénage ni façonnage ; caractère absent ⇒ un cadratin. Exemple : « Murs » en 12 px (taille16 = 192) = 173 + 113 + 72 + 101 = 459 (28,69 px). Remplace l'estimation de H-R1 et de H-R5 dans les lots qui l'adoptent (L4) ; tests `h_r11_*` (`metrics.rs`). Statut : hypothèse (choix de conception).
+- **H-R12, style dans le fichier (J8).** Instruction `<?planrs-style {"v":1,"base":"sobre","over":{…}}?>` placée juste après la déclaration XML ; JSON compact, clés triées, `>` écrit `\u003e` ; à la lecture : première instruction de cible `planrs-style` avant l'élément racine, ≤ 64 Kio, sinon ignorée avec diagnostic `style.ignored` ; version inconnue ⇒ ignorée. Contrat posé en L0 (`planrs_render::parse_doc_style`) ; écriture et lecture MSPDI en L6.
+- **H-R13, PDF déterministe (J8).** Glyphes placés un par un aux avances de H-R11, date de création et identifiant du document fournis par l'appelant (identifiant = 16 premiers octets d'un hachage stable du contenu des pages), aucune horloge ni aléa ; deux appels ⇒ mêmes octets. Essai L0 : `planrs_pdf::smoke_page` (krilla 0.8.2), test `pdf_smoke_one_page` ; export complet en L7.
 
 ## 3. Bornes et rapport
 
@@ -39,7 +42,27 @@ Ce sont des choix d'affichage, pas des règles de calcul : pas de `R-xxx`. Ils r
 
 `crates/planrs-render/tests/golden.rs` : références octet à octet `tests/golden/*.svg` (régénérées par `PLANRS_BLESS=1`) — maison de démonstration de l'interface en français clair et anglais sombre, un lien de chaque type, jalon + tâche exclue + ligne vide + date d'état ; mêmes octets pour mêmes entrées à toutes les échelles ; filtre critique, par UID et par niveau ; exemple chiffré de l'axe (mer 04/11/2026 08:00 à l'échelle Semaine depuis lun 02/11 → x16 = 448 → `308.0000` avec la table). `tests/hostile.rs` : 256 cas de noms et titres hostiles (contrôles, `]]>`, balises, entités, 1 Mio) relus par quick-xml, texte visible conforme ; 5 000 tâches (400 montrées, 4 600 cachées, coupe à l'octet, borne absurde) ; plage de 166 ans coupée à 7 305 jours et bornes extrêmes sans panique. Tests unitaires de l'axe, des étiquettes, des tracés et de l'échappement dans `src/`.
 
-## 5. Dettes
+## 5. Style, géométrie, pagination, PDF (J8, ADR-0016)
+
+Sections posées par le lot L0 (contrat) ; chaque lot y ajoute ses lignes.
+
+### 5.1 Style
+
+`planrs_render::style` (contrat L0) : `PlanStyle` (sérialisé, `deny_unknown_fields`, aucun flottant, bornes vérifiées par `validate`), six modèles intégrés `templates/*.json` (Classique, Sobre, Contraste élevé, Présentation, Chantier, Impression N&B), chacun en variantes `light`, `dark` et `print` ; `template`, `resolve` (modèle + `StylePatch`), `parse_doc_style` (≤ 64 Kio) ; `contrast_ratio` (WCAG 2.2, entiers : luminance en millionièmes par une table sRGB de 256 entrées, rapport en millièmes).
+
+### 5.2 Géométrie
+
+`planrs_render::geometry` (contrat L0, implémentation L4) : axe entier unique, rectangles de barre, tracé des liens et placement des textes en 1/16 px (`i64`), lus par le SVG, le PDF et l'écran (H-UI-42, P55). Mesure des textes : `TextMeasure`, `InterMetrics` (H-R11).
+
+### 5.3 Pagination
+
+`planrs_render::paginate` (contrat L0, implémentation L7) : bandes de pages sans ligne coupée, en-têtes et échelle répétés, plafond `MAX_PAGES` = 1 000.
+
+### 5.4 PDF
+
+Crate `planrs-pdf` (couche du rendu, sans egui ni `planrs-automation`) : krilla 0.8.2 sans fonctions par défaut ; essai L0 (`smoke_page`) ; `pdf(pages, fonts, meta)` en L7 (H-R13).
+
+## 6. Dettes
 
 - Projection temps → abscisse, cellules d'en-tête et tracé des liens dupliqués avec `planrs-ui-egui` (`timescale.rs`, `view/gantt.rs`), en entiers ici et en `f32` là-bas ; le déplacement de `TimeAxis` vers `render` est prévu après le critère de fin J4 (ADR-0012 D10).
 - Palette dupliquée (H-R9).

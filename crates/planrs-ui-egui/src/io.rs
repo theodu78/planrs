@@ -499,3 +499,17 @@ mod tests {
         );
     }
 }
+
+/// Genre d'un enregistrement (J8, ADR-0016 D13 ; sur le web, chacun est un
+/// téléchargement). Contrat posé par le lot L0, câblé en L13.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveKind {
+    /// Projet MSPDI (`.xml`).
+    Mspdi,
+    /// Tâches en CSV.
+    Csv,
+    /// Gantt en SVG.
+    Svg,
+    /// Planning en PDF.
+    Pdf,
+}

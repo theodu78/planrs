@@ -22,9 +22,15 @@
 
 pub mod assign;
 pub mod baseline;
+pub mod csv_import;
+pub mod filter;
+pub mod gallery;
 pub mod link;
+pub mod page_setup;
+pub mod paste;
 pub mod project_info;
 pub mod reschedule;
+pub mod sort;
 pub mod task_info;
 pub mod working_time;
 

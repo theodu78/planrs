@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`project.export_pdf` (J8, contrat L0 ; exécution en L7) : écrit le\nplanning en PDF.",
+  "properties": {
+    "page": {
+      "additionalProperties": false,
+      "description": "Mise en page (défaut : celle du style).",
+      "properties": {
+        "landscape": {
+          "description": "Paysage.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "pages_wide": {
+          "description": "Pages en largeur (1 à 20).",
+          "format": "uint16",
+          "maximum": 20,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "paper": {
+          "anyOf": [
+            {
+              "description": "Papier d'un export PDF.",
+              "oneOf": [
+                {
+                  "const": "a4",
+                  "description": "A4.",
+                  "type": "string"
+                },
+                {
+                  "const": "a3",
+                  "description": "A3.",
+                  "type": "string"
+                },
+                {
+                  "const": "letter",
+                  "description": "Lettre US.",
+                  "type": "string"
+                },
+                {
+                  "const": "tabloid",
+                  "description": "Tabloïd US.",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Papier."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "path": {
+      "description": "Chemin du fichier écrit.",
+      "type": "string"
+    },
+    "range": {
+      "additionalProperties": false,
+      "description": "Plage de jours (défaut : tout le projet).",
+      "properties": {
+        "from": {
+          "description": "Premier jour.",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "type": "string"
+        },
+        "to": {
+          "description": "Dernier jour.",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "rows": {
+      "additionalProperties": false,
+      "description": "Lignes exportées (défaut : toutes).",
+      "properties": {
+        "critical_only": {
+          "description": "Tâches critiques seulement.",
+          "type": "boolean"
+        },
+        "outline_max": {
+          "description": "Niveau hiérarchique maximal.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "style": {
+      "anyOf": [
+        {
+          "description": "Modèle de mise en forme intégré, en JSON.",
+          "oneOf": [
+            {
+              "const": "classique",
+              "description": "Apparence de J7.",
+              "type": "string"
+            },
+            {
+              "const": "sobre",
+              "description": "Sobre.",
+              "type": "string"
+            },
+            {
+              "const": "contraste_eleve",
+              "description": "Contraste élevé.",
+              "type": "string"
+            },
+            {
+              "const": "presentation",
+              "description": "Présentation client.",
+              "type": "string"
+            },
+            {
+              "const": "chantier",
+              "description": "Chantier.",
+              "type": "string"
+            },
+            {
+              "const": "impression_nb",
+              "description": "Impression noir et blanc.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Modèle de mise en forme (défaut : style du document)."
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "title": "ExportPdfParams",
+  "type": "object"
+}

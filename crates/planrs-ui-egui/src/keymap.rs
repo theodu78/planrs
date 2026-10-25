@@ -273,7 +273,28 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
     doc_ui(COMMAND, Key::Equals, UiBinding::ZoomFiner),
     doc_ui(COMMAND, Key::Plus, UiBinding::ZoomFiner),
     doc_ui(COMMAND, Key::Minus, UiBinding::ZoomCoarser),
+    // --- J8 L9 ---
+    // --- J8 L10 ---
+    // --- J8 L12 ---
+    // --- J8 L13 ---
+    // --- J8 L15 ---
 ];
+
+/// Raccourcis que le navigateur ne rend jamais à la page (Ctrl/Cmd+N, W,
+/// T, Tab : H-UI-55) : jamais marqués interceptables.
+pub const WEB_NEVER: &[Key] = &[Key::N, Key::W, Key::T, Key::Tab];
+
+/// Vrai si l'entrée de [`KEYMAP`] doit être retenue au navigateur sur le
+/// web (H-UI-55 : Ctrl/Cmd+F, G, K, F3…), pour que planrs la reçoive.
+/// Écart au contrat écrit (« `Binding` gagne `web_interceptable` ») :
+/// `Binding` est une énumération et [`KEYMAP`] une table de triplets lus
+/// par les tests ; le drapeau est cette fonction. Squelette L0 : aucune
+/// entrée (lot L13).
+#[must_use]
+pub const fn web_interceptable(shortcut: &Shortcut, binding: Binding) -> bool {
+    let _ = (shortcut, binding);
+    false
+}
 
 /// État du clavier pour une image : contextes actifs de [`KEYMAP`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

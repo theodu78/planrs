@@ -29,6 +29,8 @@ pub mod gantt;
 pub mod main_view;
 pub mod recovery;
 pub mod resource_sheet;
+pub mod search;
+pub mod side_panel;
 pub mod table;
 pub mod timescale;
 pub mod usage;

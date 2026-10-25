@@ -178,7 +178,6 @@ status-no-document = No document open
 
 ## Ouverture de fichiers
 
-open-in-progress = Opening…
 open-error-title = Could not open the file
 open-error-read = Could not read the file: { $detail }
 open-error-mspdi = Unreadable MSPDI file: { $detail }
@@ -623,3 +622,47 @@ recovery-kept = Journal from another planrs version, or too large: it cannot be 
 recovered-file-name = { $stem } (recovered)
 
 # --- J7 L16 ---
+
+# --- J8 L0 : codes de refus du contrat (ADR-0016) ---
+error-paste-unrecognized = Pasted text not recognized: { $detail }
+error-paste-too_large = Pasted text too large: { $detail }
+error-paste-links_dropped = Links not copied: { $detail }
+error-style-ignored = File formatting ignored: { $detail }
+error-style-invalid = Invalid formatting: { $detail }
+error-pdf-too_many_pages = PDF too long: { $detail }
+error-pdf-glyph_missing = Character missing from the PDF fonts: { $detail }
+error-pdf-logo_invalid = Unreadable logo: { $detail }
+error-task-manual_finish_before_start = Manual task finish before its start: { $detail }
+error-control-bad_endpoint = Invalid control channel address: { $detail }
+
+# --- J8 L1 ---
+
+# --- J8 L2 ---
+
+# --- J8 L3 ---
+
+# --- J8 L4 ---
+
+# --- J8 L5 ---
+
+# --- J8 L6 ---
+
+# --- J8 L7 ---
+
+# --- J8 L8 ---
+
+# --- J8 L9 ---
+
+# --- J8 L10 ---
+
+# --- J8 L11 ---
+
+# --- J8 L12 ---
+
+# --- J8 L13 ---
+
+# --- J8 L14 ---
+
+# --- J8 L15 ---
+
+# --- J8 L16 ---

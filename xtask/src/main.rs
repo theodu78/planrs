@@ -16,6 +16,9 @@
 //!   `planrs-render` depuis `assets/fonts/` (H-R11).
 //! - `text-ids` : chaque `TextId` de l'interface est traduit en français et
 //!   en anglais et utilisé dans le code livré (ADR-0016 D14).
+//! - `release-check <tag>` : tag = version du workspace = première section
+//!   de `CHANGELOG.md` (C-REL-01) ; `release-notes <tag>` : notes de la
+//!   release (section du CHANGELOG et lien vers le guide d'installation).
 //! - `rules` : vérifie la règle 4. Chaque fiche `R-xxx` active de
 //!   `docs/scheduling-rules.md` a une ligne « Tests » et au moins une
 //!   fonction `fn rxxx_` dans `tests/` ou `crates/`.
@@ -24,6 +27,7 @@ mod corpus;
 mod fonts;
 mod layers;
 mod panics;
+mod release;
 mod rules;
 mod schema;
 mod text_ids;
@@ -39,6 +43,10 @@ tâches :
            écrit (ou vérifie) la table des avances d'Inter (H-R11)
   text-ids vérifie que chaque texte de l'interface est traduit (FR, EN) et utilisé
   rules    vérifie que chaque règle R-xxx a ses tests (règle 4)
+  release-check <tag>
+           vérifie tag = version du workspace = CHANGELOG.md (C-REL-01)
+  release-notes <tag>
+           imprime les notes de la release (section du CHANGELOG)
   corpus fetch
            télécharge le corpus public (tests/corpus/files, sha256 vérifié)
   schema fetch
@@ -51,6 +59,8 @@ fn main() -> ExitCode {
         Some("panics") => panics::run(),
         Some("rules") => rules::run(),
         Some("text-ids") => text_ids::run(),
+        Some("release-check") => release::run_check(args.get(1..).unwrap_or_default()),
+        Some("release-notes") => release::run_notes(args.get(1..).unwrap_or_default()),
         Some("fonts") => fonts::run(args.get(1..).unwrap_or_default()),
         Some("corpus") => corpus::run(args.get(1..).unwrap_or_default()),
         Some("schema") => schema::run(args.get(1..).unwrap_or_default()),

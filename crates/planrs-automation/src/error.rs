@@ -132,6 +132,14 @@ pub mod codes {
     pub const CONTROL_SCREENSHOT_UNAVAILABLE: &str = "control.screenshot_unavailable";
     /// Capture d'écran trop grande, même réduite (J7, C-CTL-08).
     pub const CONTROL_SCREENSHOT_TOO_LARGE: &str = "control.screenshot_too_large";
+    /// Application rattachée occupée (connexions ou file pleines) : appel à
+    /// refaire, le rattachement reste (relecture finale J7, relais F4).
+    pub const CONTROL_BUSY: &str = "control.busy";
+    /// L'application a changé de document depuis le rattachement (jeton du
+    /// document précédent refusé) : rien n'est fait, le serveur MCP se
+    /// détache ; `open_project` du fichier voulu rattache de nouveau
+    /// (relecture finale J7, relais F2).
+    pub const CONTROL_DOCUMENT_CHANGED: &str = "control.document_changed";
 }
 
 /// Commande refusée. L'état de la session est intact (atomicité du lot).

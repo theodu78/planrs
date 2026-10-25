@@ -89,6 +89,36 @@ impl ListenerHandle {
     }
 }
 
+impl ListenerHandle {
+    /// Remplace le jeton de l'écouteur (relecture finale J7, relais F2 :
+    /// un document neuf dans l'application). Les connexions déjà
+    /// authentifiées se terminent normalement ; tout `hello` suivant doit
+    /// porter le nouveau jeton, que [`ListenerHandle::rendezvous`] publie :
+    /// un agent rattaché au document précédent est refusé
+    /// (`control.bad_token`) au lieu d'agir en silence sur le nouveau.
+    ///
+    /// # Errors
+    ///
+    /// [`ControlError::Io`] si le générateur du système est indisponible
+    /// (le jeton précédent reste) ; [`ControlError::Unsupported`] hors
+    /// Unix.
+    pub fn rotate_token(&mut self) -> Result<(), ControlError> {
+        let token = super::new_token()?;
+        let bytes = decode_token(&token).ok_or(ControlError::InvalidToken)?;
+        #[cfg(unix)]
+        {
+            self.running.set_token(bytes);
+            self.token = token;
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = bytes;
+            Err(ControlError::Unsupported)
+        }
+    }
+}
+
 #[cfg(unix)]
 impl Drop for ListenerHandle {
     fn drop(&mut self) {
@@ -200,7 +230,7 @@ pub fn spawn_listener_with(
 
 #[cfg(unix)]
 mod unix {
-    use std::io::{BufReader, Write};
+    use std::io::{BufRead, BufReader, ErrorKind, Write};
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -220,10 +250,18 @@ mod unix {
     use crate::registry::{Kind, lookup};
     use crate::view::SummaryView;
 
-    /// Connexions servies en même temps ; au-delà, refusées.
+    /// Connexions servies en même temps ; au-delà, refusées par
+    /// `control.busy` (le client ne se détache pas).
     const MAX_CONNECTIONS: usize = 8;
-    /// Connexion sans requête fermée après ce délai.
+    /// Connexion authentifiée sans requête fermée après ce délai.
     const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+    /// Connexion fermée si son `hello` n'arrive pas dans ce délai (une place
+    /// sur huit n'est pas tenue 30 s par une connexion muette).
+    const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
+    /// Pas de la surveillance de la connexion d'un appel en attente : un
+    /// client parti (délai écoulé, processus mort) est vu en au plus ce
+    /// délai, et son appel expiré.
+    const HANGUP_POLL: Duration = Duration::from_millis(100);
     /// Délai d'écriture d'une réponse.
     const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
     /// Lecture servie par défaut (`query` sans `command`).
@@ -246,7 +284,8 @@ mod unix {
 
     struct Shared {
         stop: AtomicBool,
-        token: [u8; 32],
+        /// Jeton attendu, remplacé par `ListenerHandle::rotate_token`.
+        token: Mutex<[u8; 32]>,
         service: Service,
         active: AtomicUsize,
     }
@@ -258,6 +297,10 @@ mod unix {
     }
 
     impl Running {
+        pub(super) fn set_token(&self, token: [u8; 32]) {
+            *self.shared.token.lock().unwrap_or_else(PoisonError::into_inner) = token;
+        }
+
         pub(super) fn stop(&mut self) {
             self.shared.stop.store(true, Ordering::SeqCst);
             // Réveille `accept`. Socket injoignable (fichier supprimé,
@@ -298,7 +341,7 @@ mod unix {
             .map_err(|e| cleanup(ControlError::io("droits de la socket", &e)))?;
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
-            token,
+            token: Mutex::new(token),
             service,
             active: AtomicUsize::new(0),
         });
@@ -338,6 +381,17 @@ mod unix {
             };
             if shared.active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
                 shared.active.fetch_sub(1, Ordering::SeqCst);
+                // Refus dit au client (relecture finale J7, relais F4) :
+                // une fermeture muette se lisait « application partie » et
+                // détachait l'agent d'une application vivante.
+                let busy = Reply::error(
+                    0,
+                    codes::BUSY,
+                    format!("{MAX_CONNECTIONS} connexions déjà servies : réessayer"),
+                );
+                if stream.set_write_timeout(Some(WRITE_TIMEOUT)).is_ok() {
+                    let _ = send(&stream, &busy);
+                }
                 continue;
             }
             let guard = ActiveGuard(Arc::clone(shared));
@@ -355,12 +409,13 @@ mod unix {
     enum Step {
         /// Réponse immédiate, et si la connexion reste ouverte.
         Reply(Reply, bool),
-        /// Appel à relayer à l'application.
-        Relay(u64, RelayKind),
+        /// Appel à relayer à l'application, avec le délai de validation
+        /// demandé par le client (`approval_timeout_ms`), s'il y en a un.
+        Relay(u64, RelayKind, Option<Duration>),
     }
 
     fn serve(stream: &UnixStream, shared: &Shared) {
-        if stream.set_read_timeout(Some(IDLE_TIMEOUT)).is_err()
+        if stream.set_read_timeout(Some(HELLO_TIMEOUT)).is_err()
             || stream.set_write_timeout(Some(WRITE_TIMEOUT)).is_err()
         {
             return;
@@ -368,6 +423,15 @@ mod unix {
         let mut reader = BufReader::new(stream);
         let mut authenticated = false;
         loop {
+            // `hello` accepté : délai d'une connexion inactive.
+            let timeout = if authenticated {
+                IDLE_TIMEOUT
+            } else {
+                HELLO_TIMEOUT
+            };
+            if stream.set_read_timeout(Some(timeout)).is_err() {
+                return;
+            }
             let line = match read_line_bounded(&mut reader, MAX_LINE_BYTES) {
                 Ok(Some(line)) => line,
                 Ok(None) | Err(LineError::Io(_)) => return,
@@ -390,8 +454,8 @@ mod unix {
                         return;
                     }
                 }
-                Step::Relay(id, kind) => {
-                    if relay(stream, shared, id, kind).is_err() {
+                Step::Relay(id, kind, asked) => {
+                    if relay(&mut reader, shared, id, kind, asked).is_err() {
                         return;
                     }
                 }
@@ -432,7 +496,8 @@ mod unix {
         }
         if frame.method == Method::Hello {
             let given = frame.params.get("token").and_then(Value::as_str).unwrap_or("");
-            return if token_matches(&shared.token, given) {
+            let expected = *shared.token.lock().unwrap_or_else(PoisonError::into_inner);
+            return if token_matches(&expected, given) {
                 *authenticated = true;
                 let result = hello_result(&shared.service);
                 Step::Reply(Reply::Ok { id, result }, true)
@@ -463,7 +528,7 @@ mod unix {
                 ),
             },
             Service::Relay { .. } => match relay_kind(frame.method, frame.params) {
-                Ok(kind) => Step::Relay(id, kind),
+                Ok((kind, asked)) => Step::Relay(id, kind, asked),
                 Err((code, message)) => Step::Reply(Reply::error(id, code, message), true),
             },
         }
@@ -502,8 +567,28 @@ mod unix {
         }
     }
 
-    /// Appel relayé d'une requête authentifiée.
-    fn relay_kind(method: Method, params: Value) -> Result<RelayKind, (&'static str, String)> {
+    /// Délai de validation demandé par le client (`approval_timeout_ms`,
+    /// entier positif), retiré de `map`.
+    fn asked_timeout(map: &mut Map<String, Value>) -> Result<Option<Duration>, (&'static str, String)> {
+        match map.remove("approval_timeout_ms") {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => v
+                .as_u64()
+                .filter(|ms| *ms > 0)
+                .map(|ms| Some(Duration::from_millis(ms)))
+                .ok_or((
+                    codes::INVALID_FRAME,
+                    "« approval_timeout_ms » doit être un entier positif".to_owned(),
+                )),
+        }
+    }
+
+    /// Appel relayé d'une requête authentifiée, et le délai de validation
+    /// demandé (`execute` seulement).
+    fn relay_kind(
+        method: Method,
+        params: Value,
+    ) -> Result<(RelayKind, Option<Duration>), (&'static str, String)> {
         let mut map = object(params)?;
         match method {
             // Traité avant.
@@ -528,19 +613,20 @@ mod unix {
                         format!("« {tool} » n'est pas une lecture : passer par execute"),
                     ));
                 }
-                Ok(RelayKind::Execute { tool, params })
+                Ok((RelayKind::Execute { tool, params }, None))
             }
             Method::Execute => {
                 let Some(Value::String(tool)) = map.remove("tool") else {
                     return Err((codes::INVALID_FRAME, "« tool » (chaîne) attendu".to_owned()));
                 };
                 let params = map.remove("params").unwrap_or_else(|| Value::Object(Map::new()));
+                let asked = asked_timeout(&mut map)?;
                 no_more(&map)?;
-                Ok(RelayKind::Execute { tool, params })
+                Ok((RelayKind::Execute { tool, params }, asked))
             }
             Method::UiState => {
                 no_more(&map)?;
-                Ok(RelayKind::UiState)
+                Ok((RelayKind::UiState, None))
             }
             Method::Screenshot => {
                 let scale_down = match map.remove("scale_down") {
@@ -551,14 +637,26 @@ mod unix {
                     ))?,
                 };
                 no_more(&map)?;
-                Ok(RelayKind::Screenshot { scale_down })
+                Ok((RelayKind::Screenshot { scale_down }, None))
             }
         }
     }
 
     /// Relaie un appel à l'application et transmet ses réponses ; rend
-    /// l'erreur d'écriture sur la connexion (connexion à fermer).
-    fn relay(stream: &UnixStream, shared: &Shared, id: u64, kind: RelayKind) -> std::io::Result<()> {
+    /// l'erreur d'écriture sur la connexion (connexion à fermer). Délai :
+    /// celui de l'écouteur, ou celui demandé par le client s'il est plus
+    /// court (relecture finale J7, relais F1 : sinon l'agent apprenait
+    /// « rien n'a été appliqué » alors que le bandeau restait acceptable).
+    /// Pendant l'attente, la connexion est surveillée : client parti ⇒
+    /// appel expiré, bandeau retiré.
+    fn relay(
+        reader: &mut BufReader<&UnixStream>,
+        shared: &Shared,
+        id: u64,
+        kind: RelayKind,
+        asked: Option<Duration>,
+    ) -> std::io::Result<()> {
+        let stream = *reader.get_ref();
         let Service::Relay { inbox, wake, options } = &shared.service else {
             return send(stream, &Reply::error(id, codes::UNSUPPORTED, "relais non servi"));
         };
@@ -593,11 +691,14 @@ mod unix {
                 );
             }
         }
+        let timeout = asked.map_or(options.approval_timeout, |asked| {
+            asked.min(options.approval_timeout)
+        });
         let start = Instant::now();
         let mut pending = false;
         loop {
-            let left = options.approval_timeout.saturating_sub(start.elapsed());
-            match rx.recv_timeout(left) {
+            let left = timeout.saturating_sub(start.elapsed());
+            match rx.recv_timeout(left.min(HANGUP_POLL)) {
                 Ok(reply @ Reply::PendingApproval { .. }) => {
                     pending = true;
                     send(stream, &reply)?;
@@ -609,9 +710,18 @@ mod unix {
                         &Reply::error(id, codes::INTERNAL, "appel abandonné par l'application"),
                     );
                 }
+                Err(RecvTimeoutError::Timeout) if !left.is_zero() && left > HANGUP_POLL => {
+                    if hung_up(reader) {
+                        // Client parti : plus personne à qui répondre.
+                        if state.expire() {
+                            cancel(inbox, wake, id, &state);
+                        }
+                        return Err(std::io::Error::from(ErrorKind::ConnectionAborted));
+                    }
+                }
                 Err(RecvTimeoutError::Timeout) => {
                     if state.expire() {
-                        cancel(inbox, wake, id);
+                        cancel(inbox, wake, id, &state);
                         return send(stream, &expired(id, pending));
                     }
                     // Pris juste avant l'expiration : la réponse suit.
@@ -622,6 +732,21 @@ mod unix {
                 }
             }
         }
+    }
+
+    /// Vrai si le client a fermé la connexion (fin de flux), lu sans
+    /// attendre ; un octet reçu reste dans le tampon du lecteur.
+    fn hung_up(reader: &mut BufReader<&UnixStream>) -> bool {
+        let stream = *reader.get_ref();
+        if stream.set_nonblocking(true).is_err() {
+            return false;
+        }
+        let gone = match reader.fill_buf() {
+            Ok(buf) => buf.is_empty(),
+            Err(e) => !matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted),
+        };
+        let _ = stream.set_nonblocking(false);
+        gone
     }
 
     /// Réponse d'un appel expiré : validation attendue (`approval_timeout`)
@@ -639,14 +764,17 @@ mod unix {
     }
 
     /// Signale à l'application l'abandon de l'appel `id` (bandeau retiré) ;
-    /// file pleine ou fermée : l'application voit l'appel expiré à la
-    /// prochaine image ([`CallState::is_pending`]).
-    fn cancel(inbox: &SyncSender<RelayCall>, wake: &Waker, id: u64) {
+    /// le `state` de l'appel abandonné l'accompagne : l'application ne
+    /// retire que cet appel-là, pas celui d'un autre agent au même `id`
+    /// (relecture finale J7, relais F3). File pleine ou fermée :
+    /// l'application voit l'appel expiré à la prochaine image
+    /// ([`CallState::is_pending`]).
+    fn cancel(inbox: &SyncSender<RelayCall>, wake: &Waker, id: u64, state: &Arc<CallState>) {
         let (reply, _) = sync_channel(1);
         let call = RelayCall {
             id,
             kind: RelayKind::Cancel(id),
-            state: Arc::new(CallState::new()),
+            state: Arc::clone(state),
             reply,
         };
         if inbox.try_send(call).is_ok() {

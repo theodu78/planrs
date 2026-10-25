@@ -250,9 +250,11 @@ fn relay_attach_single_rendezvous() {
     let frames = app.frames();
     assert_eq!(frames.len(), 1);
     assert_eq!(frames[0].method, Method::Execute);
+    // Délai de validation transmis à l'application (relecture finale J7,
+    // relais F1 : un seul côté tranche l'expiration).
     assert_eq!(
         frames[0].params,
-        json!({ "tool": "project.summary", "params": {} })
+        json!({ "tool": "project.summary", "params": {}, "approval_timeout_ms": 120_000 })
     );
 
     // Deux applications vivantes : aucun rattachement au démarrage.
@@ -482,6 +484,38 @@ fn c_ctl_06_app_gone_detaches() {
     assert_eq!(code(&r), "control.app_gone");
     assert!(!s.is_attached());
     assert_eq!(code(&call(&s, "list_tasks", &json!({}))), "session.none");
+}
+
+/// Relecture finale J7, relais F2 : l'application a changé de document
+/// (nouveau jeton) ⇒ `control.document_changed`, détachement, rien n'est
+/// envoyé à l'application ; `open_project` du nouveau fichier rattache.
+#[test]
+fn relay_document_changed_detaches() {
+    let dir = TempDir::new("docchg");
+    let plan = dir.plan("a.xml");
+    let other = dir.plan("b.xml");
+    let app = FakeApp::start(&dir.0, "a", Some(&plan), echo());
+    let s = server(&dir.0);
+    let v = ok(&call(
+        &s,
+        "open_project",
+        &json!({ "path": plan.to_str().unwrap() }),
+    ));
+    assert_eq!(v["attached"], json!(true));
+    // Même écouteur (même socket), nouveau jeton et nouveau document.
+    drop(app);
+    let app = FakeApp::start(&dir.0, "a", Some(&other), echo());
+    let r = call(&s, "update_task", &json!({ "uid": 5, "name": "Ailleurs" }));
+    assert_eq!(code(&r), "control.document_changed");
+    assert!(!s.is_attached());
+    assert!(app.frames().is_empty(), "rien n'atteint le nouveau document");
+    assert_eq!(code(&call(&s, "project_summary", &json!({}))), "session.none");
+    let v = ok(&call(
+        &s,
+        "open_project",
+        &json!({ "path": other.to_str().unwrap() }),
+    ));
+    assert_eq!(v["attached"], json!(true));
 }
 
 #[tokio::test]

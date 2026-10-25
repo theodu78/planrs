@@ -91,6 +91,9 @@ struct ControlRendezvous {
     listener_failed: bool,
     /// Chemin (tel qu'ouvert) du document dont le rendez-vous est publié.
     path: Option<String>,
+    /// Numéro d'ouverture du dernier document vu : un document neuf change
+    /// le jeton de l'écouteur (relecture finale J7, relais F2).
+    opening: Option<u64>,
 }
 
 impl ControlRendezvous {
@@ -105,6 +108,7 @@ impl ControlRendezvous {
             listener: None,
             listener_failed: false,
             path: None,
+            opening: None,
         };
         (control, rx)
     }
@@ -157,9 +161,28 @@ impl ControlRendezvous {
 }
 
 impl DocumentObserver for ControlRendezvous {
+    /// Rendez-vous du chemin du document. Un document **neuf** (autre
+    /// numéro d'ouverture : autre fichier, même fichier rouvert, « Nouveau »)
+    /// change le jeton de l'écouteur avant la publication : un agent
+    /// rattaché au document précédent est refusé
+    /// (`control.document_changed`) au lieu d'agir sur celui-ci par les
+    /// mêmes UID ; « Enregistrer sous » (même ouverture) garde le jeton.
     fn document_changed(&mut self, document: Option<&OpenDocument>) {
         let path = document.and_then(|document| document.origin.path.as_deref());
-        if path != self.path.as_deref() {
+        let opening = document.map(|document| document.opening);
+        let mut rotated = false;
+        if opening.is_some() && opening != self.opening {
+            if self.opening.is_some()
+                && let Some(listener) = &mut self.listener
+            {
+                match listener.rotate_token() {
+                    Ok(()) => rotated = true,
+                    Err(error) => eprintln!("{PRODUCT_NAME} : jeton du canal non renouvelé ({error})"),
+                }
+            }
+            self.opening = opening;
+        }
+        if rotated || path != self.path.as_deref() {
             self.publish_for(path);
         }
     }
@@ -319,6 +342,45 @@ mod tests {
             demo: false,
         };
         OpenDocument::new(loaded, origin, 1)
+    }
+
+    /// Relecture finale J7, relais F2 : un document neuf (autre ouverture)
+    /// change le jeton publié ; « Enregistrer sous » (même ouverture, autre
+    /// chemin) le garde.
+    #[cfg(unix)]
+    #[test]
+    fn desktop_new_document_rotates_token() {
+        let root = std::env::temp_dir().join(format!("planrs-rot-{}", std::process::id()));
+        let dir = root.join("control");
+        std::fs::create_dir_all(&root).unwrap();
+        let first = root.join("a.xml");
+        let second = root.join("b.xml");
+        for file in [&first, &second] {
+            std::fs::write(file, planrs_ui_egui::DEMO_MSPDI).unwrap();
+        }
+        let (mut observer, _inbox) = ControlRendezvous::new(std::sync::Arc::new(|| {}));
+        observer.dir = Some(dir.clone());
+        let doc = demo_at(&first);
+        observer.document_changed(Some(&doc));
+        let token = find_live_for_in(&dir, &first).unwrap().token;
+        // Même fichier, autre ouverture : nouveau jeton.
+        let mut reopened = demo_at(&first);
+        reopened.opening = 2;
+        observer.document_changed(Some(&reopened));
+        let rotated = find_live_for_in(&dir, &first).unwrap().token;
+        assert_ne!(rotated, token);
+        // « Enregistrer sous » : même ouverture, autre chemin, même jeton.
+        let mut saved_as = reopened.clone();
+        saved_as.set_origin(planrs_ui_egui::DocOrigin {
+            name: "b.xml".to_owned(),
+            path: Some(second.to_str().unwrap().to_owned()),
+            demo: false,
+        });
+        observer.document_changed(Some(&saved_as));
+        assert_eq!(find_live_for_in(&dir, &second).unwrap().token, rotated);
+        assert!(find_live_for_in(&dir, &first).is_none());
+        drop(observer);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     /// Le rendez-vous suit le chemin du document : publié à l'ouverture

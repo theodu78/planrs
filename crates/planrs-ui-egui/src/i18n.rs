@@ -372,6 +372,8 @@ text_ids! {
     ErrorControlAppGone => "error-control-app_gone",
     ErrorControlScreenshotUnavailable => "error-control-screenshot_unavailable",
     ErrorControlScreenshotTooLarge => "error-control-screenshot_too_large",
+    ErrorControlBusy => "error-control-busy",
+    ErrorControlDocumentChanged => "error-control-document_changed",
     // --- J7 L1 ---
     TableLabel => "table-label",
     NavCursorLabel => "nav-cursor-label",

@@ -330,8 +330,9 @@ impl PlanrsServer {
             Backend::Relay { client, .. } => match client.call(id, params, self.approval) {
                 Ok(v) => Ok(v),
                 Err(e) => {
-                    if e.is_app_gone() {
-                        // C-CTL-06 : retour en local, sans projet.
+                    if e.detaches() {
+                        // C-CTL-06 : retour en local, sans projet (document
+                        // de l'application changé : même retour).
                         *backend = Backend::Local(self.fresh());
                     }
                     Err(e.into())
@@ -413,7 +414,7 @@ impl PlanrsServer {
                 "attached": true,
             })),
             Err(e) => {
-                if same && e.is_app_gone() {
+                if same && e.detaches() {
                     *backend = Backend::Local(self.fresh());
                 }
                 Err(e.into())

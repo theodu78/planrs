@@ -323,6 +323,8 @@ error-control-not_attached = No attached application: { $detail }
 error-control-app_gone = Application closed: { $detail }
 error-control-screenshot_unavailable = Screenshot unavailable: { $detail }
 error-control-screenshot_too_large = Screenshot too large: { $detail }
+error-control-busy = Application busy: { $detail }
+error-control-document_changed = Application document changed: { $detail }
 
 # --- J7 L1 ---
 table-label = Task table

@@ -14,8 +14,8 @@
 //!    l'origine `Agent` et le « maintenant » de la demande, puis `ok` ;
 //! 3. Refuser ⇒ `control.rejected` ; projet, historique, génération et
 //!    drapeau modifié intacts ;
-//! 4. délai de l'écouteur ⇒ `Cancel(id)` (ou appel vu expiré) : bandeau
-//!    retiré.
+//! 4. délai de l'écouteur, ou client parti ⇒ `Cancel(id)` portant l'état
+//!    de l'appel abandonné (ou appel vu expiré) : ce bandeau-là retiré.
 //!
 //! Lectures (genres `Read`, `Analysis`, `history.list`) servies aussitôt,
 //! même JSON que `Workspace::call` (C-CTL-09). `project.open`,
@@ -150,9 +150,26 @@ impl Relay {
         &self.pending
     }
 
-    /// Retire l'écriture `id` de la file.
-    fn take(&mut self, id: u64) -> Option<PendingApproval> {
-        let pos = self.pending.iter().position(|p| p.id == id)?;
+    /// Retire l'écriture affichée au bandeau (tête de file) si c'est
+    /// l'appel `id` : Accepter et Refuser ne visent que ce qui est affiché
+    /// (deux agents peuvent avoir des appels de même `id`, relecture finale
+    /// J7, relais F3).
+    fn take_front(&mut self, id: u64) -> Option<PendingApproval> {
+        if self.pending.front().is_some_and(|p| p.id == id) {
+            self.pending.pop_front()
+        } else {
+            None
+        }
+    }
+
+    /// Retire l'appel abandonné par l'écouteur : même `id` **et** même
+    /// état partagé (celui que porte le `Cancel`), jamais l'appel d'un
+    /// autre agent au même `id`.
+    fn take_cancelled(&mut self, id: u64, state: &Arc<CallState>) -> Option<PendingApproval> {
+        let pos = self
+            .pending
+            .iter()
+            .position(|p| p.id == id && Arc::ptr_eq(&p.state, state))?;
         self.pending.remove(pos)
     }
 }
@@ -360,7 +377,7 @@ impl App {
         } = call;
         if let RelayKind::Cancel(target) = kind {
             if let Some(relay) = &mut self.relay {
-                drop(relay.take(target));
+                drop(relay.take_cancelled(target, &state));
             }
             return;
         }
@@ -629,7 +646,7 @@ impl App {
         let Some(relay) = &mut self.relay else {
             return;
         };
-        let Some(mut pending) = relay.take(id) else {
+        let Some(mut pending) = relay.take_front(id) else {
             return;
         };
         if !pending.state.is_pending() {
@@ -700,7 +717,7 @@ impl App {
         let Some(relay) = &mut self.relay else {
             return;
         };
-        let Some(pending) = relay.take(id) else {
+        let Some(pending) = relay.take_front(id) else {
             return;
         };
         self.reject_pending(&pending, "refusé par l'utilisateur : rien n'a été appliqué");

@@ -7,6 +7,7 @@
 1. L'application crée un jeton (`new_token` : 32 octets de `getrandom`, 64 chiffres hexadécimaux), une file bornée (`sync_channel(RELAY_QUEUE)`, 64), lance l'écouteur du relais (`spawn_listener_in(dir, token, inbox, wake)`, `wake` = `ctx.request_repaint`) et publie son rendez-vous (`publish(&handle.rendezvous(canonical_project(path)))`). Le récepteur de la file est remis à `App::control_inbox`.
 2. `planrs mcp`, avant d'ouvrir un fichier, appelle `find_live_for(path)`. Un rendez-vous vivant qui tient ce fichier ⇒ rattachement (`RelayClient`, lot L2) ; en `--headless`, erreur `file.open_in_app`.
 3. À la fermeture, `RendezvousGuard` supprime le fichier et `ListenerHandle` arrête le fil et supprime la socket (`Drop`). Après un plantage, le prochain `find_live_for` nettoie.
+4. **Document neuf** (autre numéro d'ouverture : autre fichier, même fichier rouvert, « Nouveau ») : l'application change le jeton de l'écouteur (`ListenerHandle::rotate_token`) puis republie son rendez-vous. Un agent rattaché au document précédent voit son `hello` refusé : `control.document_changed`, rien n'est fait, le serveur MCP se détache (`open_project` du fichier voulu rattache de nouveau). « Enregistrer sous » (même ouverture) garde le jeton. Relecture finale J7, relais F2 : un seul écouteur et un seul jeton servaient tous les documents, si bien que les appels d'un agent rattaché à A (UID compris) s'exécutaient en silence sur B après l'ouverture de B dans l'application (tests `relay_rotated_token_refuses_previous_document`, `relay_document_changed_detaches`, `desktop_new_document_rotates_token`).
 
 ## 2. Dossier d'état et rendez-vous
 
@@ -26,7 +27,7 @@
 
 - Canonicalise `path` (fichier absent ⇒ `None`), lit les `.json` du dossier dans l'ordre de leur nom (64 Kio au plus chacun).
 - Fichier de version 1 illisible : supprimé. Autre version, ou sans `v` : ignoré et **conservé** (appartient à une autre version de l'application). `.tmp` : ignoré.
-- Rendez-vous qui désigne `path` : sondé par `probe` (`hello` avec son jeton, délai 2 s). Réponse `ok` ⇒ rendu. Fichier supprimé seulement sur une preuve de mort : refus du jeton (rendez-vous périmé), socket absente ou sans écouteur (`ECONNREFUSED`). Tout autre échec (délai, connexion fermée sans réponse parce que l'application sert déjà ses 8 connexions, réponse illisible) ⇒ application tenue pour vivante, rendez-vous gardé et rendu : la garde ADR-0002 n'est jamais levée par une application occupée (test `control_busy_app_kept_live`).
+- Rendez-vous qui désigne `path` : sondé par `probe` (`hello` avec son jeton, délai 2 s). Réponse `ok` ⇒ rendu. Fichier supprimé seulement sur une preuve de mort : refus du jeton (rendez-vous périmé), socket absente ou sans écouteur (`ECONNREFUSED`). Tout autre échec (délai, `control.busy` parce que l'application sert déjà ses 8 connexions, connexion fermée sans réponse, réponse illisible) ⇒ application tenue pour vivante, rendez-vous gardé et rendu : la garde ADR-0002 n'est jamais levée par une application occupée (test `control_busy_app_kept_live`).
 - Rendez-vous d'un autre fichier : sous Unix, supprimé si sa socket n'existe plus (nettoyage au passage, sans connexion) ; sinon laissé.
 - **Windows (hypothèse J4, à remplacer en J7)** : pas d'écouteur (le named pipe demanderait un runtime côté interface) ; un rendez-vous est tenu pour vivant si son fichier a été écrit il y a moins de 24 h. Conséquence connue : une application plantée bloque son fichier jusqu'à 24 h, ou jusqu'à suppression manuelle du rendez-vous.
 
@@ -53,17 +54,17 @@ JSON par lignes (`\n`, un `\r` final toléré), 8 Mio au plus par ligne (`MAX_LI
 | Méthode | `params` | Appel poussé dans la file |
 |---|---|---|
 | `query` | `null`, ou `{ command?, params? }` (défaut `project.summary`, `{}`) ; `command` du genre `Read` ou `Analysis` seulement, sinon `control.unsupported` | `Execute { tool: command, params }` |
-| `execute` | `{ tool, params? }` (`params` absent : `{}`) | `Execute { tool, params }` |
+| `execute` | `{ tool, params?, approval_timeout_ms? }` (`params` absent : `{}` ; `approval_timeout_ms` : délai de validation voulu par le client, entier > 0) | `Execute { tool, params }` |
 | `ui_state` | `null` ou `{}` | `UiState` |
 | `screenshot` | `{ scale_down? }` | `Screenshot { scale_down }` |
 
 Écouteur (`spawn_listener_in`, réglages `ListenerOptions` par `spawn_listener_with`) :
 - l'écouteur ne touche jamais la session : un fil par connexion pousse un `RelayCall { id, kind, state: Arc<CallState>, reply }` par `try_send`, réveille l'interface (`Waker`), puis attend les réponses sur `reply` ; une requête à la fois par connexion ;
-- file pleine ⇒ `control.busy`, connexion maintenue ; application partie (file fermée) ⇒ `control.app_gone` ;
-- délai `approval_timeout` (120 s par défaut, `APPROVAL_TIMEOUT`) depuis la mise en file : `CallState::expire()` ; s'il réussit, `Cancel(id)` est poussé dans la file (l'application retire son bandeau) et l'agent reçoit `control.approval_timeout` (après `pending_approval`) ou `control.app_gone` (aucune réponse) ; s'il échoue, l'application vient de prendre l'appel et sa réponse est attendue `reply_grace` (10 s) au plus. La course Accepter/délai est donc tranchée par `CallState` (`Pending` → `Taken` ou `Expired`, une seule fois) : rien n'est appliqué après l'expiration.
+- file pleine ⇒ `control.busy`, connexion maintenue ; application partie (file fermée) ⇒ `control.app_gone` ; plus de 8 connexions ⇒ `control.busy` (id 0) puis fermeture : le client ne se détache pas (relecture finale J7, relais F4 ; une fermeture muette se lisait « application partie ») ; `hello` attendu 5 s au plus, puis 30 s d'inactivité ;
+- délai `approval_timeout` (120 s par défaut, `APPROVAL_TIMEOUT`) depuis la mise en file, ou `approval_timeout_ms` du client s'il est plus court (relecture finale J7, relais F1 : avec `--approval-timeout 30`, l'agent apprenait « rien n'a été appliqué » à 40 s alors que le bandeau restait acceptable jusqu'à 120 s, d'où un doublon à la relance) : `CallState::expire()` ; s'il réussit, `Cancel(id)` est poussé dans la file avec l'état de l'appel abandonné (l'application retire **ce** bandeau, pas celui d'un autre agent au même id) et l'agent reçoit `control.approval_timeout` (après `pending_approval`) ou `control.app_gone` (aucune réponse) ; s'il échoue, l'application vient de prendre l'appel et sa réponse est attendue `reply_grace` (10 s) au plus. La course Accepter/délai est donc tranchée par `CallState` (`Pending` → `Taken` ou `Expired`, une seule fois) : rien n'est appliqué après l'expiration. Pendant l'attente, la connexion est surveillée (lecture non bloquante tous les 100 ms) : client parti (délai du client écoulé, processus mort) ⇒ appel expiré et `Cancel`, plus rien n'est acceptable.
 
 Application (`planrs-ui-egui/src/relay.rs`, file vidée en **début d'image**, avant le dessin) :
-- appel déjà expiré dans la file : ignoré ; `Cancel(id)` : écriture `id` retirée ;
+- appel déjà expiré dans la file : ignoré ; `Cancel(id)` : écriture `id` **de même état** retirée (deux `planrs mcp` numérotent leurs appels de la même façon, relecture finale J7, relais F3) ; Accepter et Refuser ne visent que le bandeau affiché (tête de file) ;
 - `app.ui_state` (ou méthode `ui_state`) ⇒ `{ ui_state, selection (UID triés), active, view, visible_rows: [première, dernière], dirty, generation, opening }` ;
 - `app.ui` ⇒ actions d'interface (`select`, `scroll_to`, `zoom`, `view`, `theme`, `language`), appliquées en fin d'image, sans historique ; au moins un champ ; UID absent de la vue ⇒ `task.not_found` ; réponse `{ applied }` ;
 - `app.screenshot` (ou méthode `screenshot`) ⇒ capture de la fenêtre (desktop, J7 lot L14, C-CTL-08) : `{ mime_type, data (PNG en base64), width, height, scale_down, bytes }`, réduite de moitié `scale_down` fois (0 à 2) puis encore, deux fois au plus, tant que le base64 dépasse 6 Mio (sinon `control.screenshot_too_large`) ; aucune image en 5 s, ou capture non activée (kittest, web) ⇒ `control.screenshot_unavailable` (`docs/features/ui.md` § 1.21) ;
@@ -81,7 +82,7 @@ Application (`planrs-ui-egui/src/relay.rs`, file vidée en **début d'image**, a
 
 ### Écouteur J4 (`spawn_hello_listener_in`, gardé pour les tests des surfaces)
 
-- Socket Unix `<pid>-<n>.sock` en 0600 dans le dossier d'état ; un fil `planrs-control` accepte, un fil par connexion, 8 connexions simultanées au plus (au-delà, fermées sans réponse). Connexion inactive fermée après 30 s ; écriture bornée à 5 s.
+- Socket Unix `<pid>-<n>.sock` en 0600 dans le dossier d'état ; un fil `planrs-control` accepte, un fil par connexion, 8 connexions simultanées au plus (au-delà, `control.busy` puis fermeture). `hello` attendu 5 s au plus, puis connexion inactive fermée après 30 s ; écriture bornée à 5 s.
 - Première requête : `hello` avec le jeton. Comparaison en temps constant (décodage hexadécimal puis boucle XOR sur 32 octets ; un jeton mal formé suit la même boucle). Majuscules acceptées.
 - `query` : `params` nul, `{}` ou `{"command":"project.summary"}` ⇒ `SummaryView` du document (ou `null`). Toute autre lecture ⇒ `control.unsupported`.
 - `execute`, `ui_state`, `screenshot` ⇒ `control.unsupported`, connexion maintenue.
@@ -94,10 +95,10 @@ Application (`planrs-ui-egui/src/relay.rs`, file vidée en **début d'image**, a
 | `control.invalid_frame` | JSON invalide, champ ou méthode inconnus, `params` mal formés ; `id` repris s'il se lit | fermée avant `hello`, maintenue après |
 | `control.unsupported_version` | `v` ≠ 1 | idem |
 | `control.unsupported` | méthode non servie par l'écouteur J4, `query` d'une commande qui n'est pas une lecture (relais) | maintenue |
-| `control.busy` | file de l'application pleine (relais) | maintenue |
+| `control.busy` | file de l'application pleine (relais) ; plus de 8 connexions (id 0) | maintenue ; fermée (connexions) |
 | `control.internal` | sérialisation impossible du résumé | maintenue |
 
-Les codes sont dans `control::codes` (propres au fil, distincts de `error::codes` qui couvre les commandes). Codes J7 des commandes relayées (`error::codes`) : `control.rejected`, `control.approval_timeout`, `control.not_relayable`, `control.not_attached`, `control.app_gone`, `control.screenshot_unavailable`, `control.screenshot_too_large`.
+Les codes sont dans `control::codes` (propres au fil, distincts de `error::codes` qui couvre les commandes). Codes J7 des commandes relayées (`error::codes`) : `control.rejected`, `control.approval_timeout`, `control.not_relayable`, `control.not_attached`, `control.app_gone`, `control.screenshot_unavailable`, `control.screenshot_too_large` ; relecture finale J7 : `control.busy` (application occupée, rattachement gardé), `control.document_changed` (jeton du document précédent refusé, détachement).
 
 ## 4. Sécurité
 
@@ -107,11 +108,11 @@ Les codes sont dans `control::codes` (propres au fil, distincts de `error::codes
 
 ## 5. Tests
 
-`crates/planrs-automation/tests/control.rs` : `control_frame_roundtrip`, `control_line_too_long_refused` (lecteur et socket), `control_rendezvous_mode_0600` (Unix), `control_stale_rendezvous_removed`, `control_hello_wrong_token_refused`, `control_find_live_matches_canonical_path` (détour `sub/..` et lien symbolique), `control_unsupported_methods_in_j4` ; relais J7 : `c_ctl_01_bad_token_closes`, `relay_queue_full_busy`, `c_ctl_04_listener_expires_and_cancels`, `relay_methods_become_calls`, `relay_call_with_marks_agent_source` ; hors Unix, `control_find_live_by_age_without_listener` (compilé pour Windows). Tests unitaires du jeton dans `control/mod.rs`.
+`crates/planrs-automation/tests/control.rs` : `control_frame_roundtrip`, `control_line_too_long_refused` (lecteur et socket), `control_rendezvous_mode_0600` (Unix), `control_stale_rendezvous_removed`, `control_hello_wrong_token_refused`, `control_find_live_matches_canonical_path` (détour `sub/..` et lien symbolique), `control_unsupported_methods_in_j4` ; relais J7 : `c_ctl_01_bad_token_closes`, `relay_queue_full_busy`, `c_ctl_04_listener_expires_and_cancels`, `relay_methods_become_calls`, `relay_call_with_marks_agent_source` ; relecture finale J7 : `relay_asked_timeout_shorter_wins`, `relay_client_hangup_expires_call`, `relay_connections_full_busy`, `relay_rotated_token_refuses_previous_document` ; hors Unix, `control_find_live_by_age_without_listener` (compilé pour Windows). Tests unitaires du jeton dans `control/mod.rs`.
 
 `crates/planrs-ui-egui/tests/ui/e2e.rs` (J7 lot L16, Unix) : `relay_app_real_mcp`, application kittest avec écouteur réel et rendez-vous publié dans un dossier temporaire (`PLANRS_CONTROL_DIR`), **vrai binaire** `planrs mcp` rattaché au démarrage (un seul rendez-vous vivant), scénario `tests/mcp/scenarios/relay_j7.jsonl` (11 appels : écriture acceptée, refusée, édition de l'utilisateur pendant une attente puis double Accepter (C-CTL-07), `ui_state`, `ui_action`, `screenshot` ⇒ `control.screenshot_unavailable`, `open_project` du fichier tenu ⇒ résumé rattaché, `undo` relayé, application fermée ⇒ `control.app_gone` puis `session.none` (C-CTL-06)) ; résultats et journal du serveur égaux au scénario ; P47 contre un rejeu local. Binaire : `PLANRS_MCP_BIN`, sinon à côté de `deps/` ; `PLANRS_RELAY=required` en CI (job `ui`).
 
-`crates/planrs-ui-egui/tests/ui/relay.rs` (application réelle, file en mémoire, et socket réelle sous Unix) : `c_ctl_02_pending_then_ok` (et `…_over_socket`), `c_ctl_03_reject_leaves_state`, `c_ctl_04_timeout_then_accept_does_nothing` (et `c_ctl_04_timeout_over_socket`), `c_ctl_05_open_not_relayable`, `c_ctl_07_stale_generation_new_preview`, `c_ctl_09_read_same_as_local`, `h_ui_27_banner_keyboard`, `relay_agent_entry_single_undo`, `relay_ui_state_and_ui_actions`, `relay_expired_in_queue_is_skipped`, `p47_relay_replays_like_local` (30 appels). Fluidité : `approval_banner` dans `tests/perf.rs` (release, ignoré par défaut).
+`crates/planrs-ui-egui/tests/ui/relay.rs` (application réelle, file en mémoire, et socket réelle sous Unix) : `c_ctl_02_pending_then_ok` (et `…_over_socket`), `c_ctl_03_reject_leaves_state`, `c_ctl_04_timeout_then_accept_does_nothing` (et `c_ctl_04_timeout_over_socket`, `c_ctl_04_client_timeout_shorter_than_listener`), `relay_cancel_same_id_other_agent_kept`, `c_ctl_05_open_not_relayable`, `c_ctl_07_stale_generation_new_preview`, `c_ctl_09_read_same_as_local`, `h_ui_27_banner_keyboard`, `h_ui_27_banner_enter_or_space_never_accepts`, `relay_agent_entry_single_undo`, `relay_ui_state_and_ui_actions`, `relay_expired_in_queue_is_skipped`, `p47_relay_replays_like_local` (30 appels). Fluidité : `approval_banner` dans `tests/perf.rs` (release, ignoré par défaut).
 
 ## 6. Limites et suites
 
@@ -120,4 +121,4 @@ Les codes sont dans `control::codes` (propres au fil, distincts de `error::codes
 - Essai réel n° 4 (Claude rattaché à l'application ouverte) : hors lot, session principale.
 - La garde d'un enregistrement relayé sonde les rendez-vous (`find_live_for_in`, 2 s au plus par application) sur le fil de l'interface, avant l'affichage du bandeau.
 - Windows : écouteur sur named pipe et sonde réelle en J7 ; d'ici là, règle des 24 h ci-dessus.
-- Le rendez-vous ne dit qu'un projet par fichier ; une application à plusieurs documents publie un rendez-vous par document (même écouteur, `handle.rendezvous(...)` appelé plusieurs fois).
+- Le rendez-vous ne dit qu'un projet par fichier ; l'application J7 n'a qu'un document à la fois (un jeton par document, changé à chaque ouverture). Une application à plusieurs documents demanderait un écouteur (ou un jeton) par document.

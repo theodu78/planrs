@@ -10,11 +10,17 @@
 //! inactive par l'application (elle ne pourrait pas être distinguée d'une
 //! application partie, et rejouer une écriture déjà reçue la doublerait).
 //!
-//! Erreurs (C-CTL-06) : connexion impossible, jeton refusé, flux fermé ou
-//! application muette ⇒ `control.app_gone` (le serveur MCP se détache) ;
-//! validation attendue au-delà du délai ⇒ `control.approval_timeout` (le
-//! rattachement est gardé). Hors Unix, pas de relais (J7 : règle des 24 h
-//! sous Windows, ADR-0015).
+//! Erreurs (C-CTL-06) : connexion impossible, flux fermé ou application
+//! muette ⇒ `control.app_gone` (le serveur MCP se détache) ; jeton refusé
+//! (l'application a changé de document, son écouteur a pris un nouveau
+//! jeton) ⇒ `control.document_changed` (détachement aussi) ; application
+//! occupée (`control.busy` de l'écouteur) ⇒ `control.busy` (rattachement
+//! gardé) ; validation attendue au-delà du délai ⇒
+//! `control.approval_timeout` (le rattachement est gardé). Le délai de
+//! validation est transmis à l'application (`approval_timeout_ms` d'un
+//! `execute`), qui le prend s'il est plus court que le sien : l'expiration
+//! est tranchée d'un seul côté. Hors Unix, pas de relais (J7 : règle des
+//! 24 h sous Windows, ADR-0015).
 
 use std::path::Path;
 use std::time::Duration;
@@ -63,6 +69,16 @@ impl RelayError {
     #[must_use]
     pub fn is_app_gone(&self) -> bool {
         matches!(self, Self::Control(e) if e.code == codes::CONTROL_APP_GONE)
+    }
+
+    /// Vrai si le client doit se détacher : application partie, ou document
+    /// de l'application changé depuis le rattachement.
+    #[must_use]
+    pub fn detaches(&self) -> bool {
+        matches!(
+            self,
+            Self::Control(e) if e.code == codes::CONTROL_APP_GONE || e.code == codes::CONTROL_DOCUMENT_CHANGED
+        )
     }
 }
 
@@ -148,12 +164,13 @@ impl RelayClient {
         let id = self.take_id();
         #[cfg(unix)]
         {
+            let approval_ms = u64::try_from(approval.as_millis()).unwrap_or(u64::MAX).max(1);
             let (method, params) = match tool {
                 "app.ui_state" => (Method::UiState, params),
                 "app.screenshot" => (Method::Screenshot, params),
                 _ => (
                     Method::Execute,
-                    serde_json::json!({ "tool": tool, "params": params }),
+                    serde_json::json!({ "tool": tool, "params": params, "approval_timeout_ms": approval_ms }),
                 ),
             };
             let frame = Frame {
@@ -197,7 +214,7 @@ impl RelayClient {
             .iter()
             .take(MAX_SCANNED)
             .filter_map(|f| read_v1(f))
-            .filter(|r| super::probe(r).is_ok());
+            .filter(super::rendezvous::answers);
         let first = live.next()?;
         live.next().is_none().then_some(first)
     }
@@ -271,12 +288,20 @@ mod unix {
             method: Method::Hello,
             params: serde_json::json!({ "token": r.token }),
         };
-        send(&stream, &hello).map_err(|e| ControlError::io("envoi du hello", &e))?;
+        // Un envoi refusé n'est pas encore une application partie : un
+        // écouteur saturé répond `control.busy` puis ferme, parfois avant
+        // d'avoir lu le hello ; sa réponse reste lisible.
+        let sent = send(&stream, &hello);
         let mut reader = BufReader::new(&stream);
         loop {
             let line = match read_line_bounded(&mut reader, MAX_LINE_BYTES) {
                 Ok(Some(line)) => line,
-                Ok(None) => return Err(ControlError::Io("connexion fermée".to_owned())),
+                Ok(None) => {
+                    return Err(match &sent {
+                        Err(e) => ControlError::io("envoi du hello", e),
+                        Ok(()) => ControlError::Io("connexion fermée".to_owned()),
+                    });
+                }
                 Err(LineError::TooLong) => return Err(ControlError::Io("réponse trop longue".to_owned())),
                 Err(LineError::Io(e)) => return Err(ControlError::io("réponse au hello", &e)),
             };
@@ -303,13 +328,29 @@ mod unix {
     ) -> Result<Value, RelayError> {
         let lang = client.lang;
         let stream = open(&client.rendezvous, hello_id, client.hello_timeout).map_err(|e| {
-            RelayError::Control(ToolError::simple(
-                codes::CONTROL_APP_GONE,
-                format!(
-                    "{} ({e})",
-                    tr(lang, "application injoignable", "application unreachable")
+            let (code, text) = match &e {
+                ControlError::Refused(w) if w.code == super::super::codes::BUSY => (
+                    codes::CONTROL_BUSY,
+                    tr(
+                        lang,
+                        "application occupée : réessayer",
+                        "application busy: try again",
+                    ),
                 ),
-            ))
+                ControlError::Refused(w) if w.code == super::super::codes::BAD_TOKEN => (
+                    codes::CONTROL_DOCUMENT_CHANGED,
+                    tr(
+                        lang,
+                        "l'application a changé de document : rien n'a été fait, rouvrir le projet voulu",
+                        "the application switched documents: nothing was done, reopen the intended project",
+                    ),
+                ),
+                _ => (
+                    codes::CONTROL_APP_GONE,
+                    tr(lang, "application injoignable", "application unreachable"),
+                ),
+            };
+            RelayError::Control(ToolError::simple(code, format!("{text} ({e})")))
         })?;
         if send(&stream, frame).is_err() {
             return Err(client.gone(

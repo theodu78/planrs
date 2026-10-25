@@ -322,6 +322,8 @@ error-control-not_attached = Aucune application rattachée : { $detail }
 error-control-app_gone = Application fermée : { $detail }
 error-control-screenshot_unavailable = Capture indisponible : { $detail }
 error-control-screenshot_too_large = Capture trop grande : { $detail }
+error-control-busy = Application occupée : { $detail }
+error-control-document_changed = Document de l'application changé : { $detail }
 
 # --- J7 L1 ---
 table-label = Table des tâches

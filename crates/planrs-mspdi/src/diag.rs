@@ -101,6 +101,13 @@ pub enum ImportCode {
         /// Valeurs relues remplacées.
         count: u32,
     },
+    /// Instruction `<?planrs-style?>` ignorée (H-R12, J8) : trop grande,
+    /// seconde, après la racine, ou contenu invalide ; le document s'ouvre
+    /// avec le modèle par défaut.
+    StyleIgnored {
+        /// Raison.
+        reason: crate::style_pi::StyleIgnoredReason,
+    },
 }
 
 impl ImportCode {
@@ -122,6 +129,7 @@ impl ImportCode {
             Self::NotPreserved => "mspdi.not_preserved".to_owned(),
             Self::HonorConstraintsOff => "mspdi.honor_constraints_off".to_owned(),
             Self::ProgressInconsistent { .. } => "mspdi.progress_inconsistent".to_owned(),
+            Self::StyleIgnored { .. } => "style.ignored".to_owned(),
         }
     }
 
@@ -142,6 +150,7 @@ impl ImportCode {
             Self::NotPreserved => 11,
             Self::HonorConstraintsOff => 12,
             Self::ProgressInconsistent { .. } => 13,
+            Self::StyleIgnored { .. } => 14,
         }
     }
 
@@ -156,7 +165,8 @@ impl ImportCode {
             | Self::Inconsistent
             | Self::Truncated { .. }
             | Self::LinkIgnored { .. }
-            | Self::Unsupported { .. } => Severity::Warning,
+            | Self::Unsupported { .. }
+            | Self::StyleIgnored { .. } => Severity::Warning,
             Self::MissingRequired | Self::DanglingReference => Severity::Error,
             Self::NotPreserved | Self::HonorConstraintsOff | Self::ProgressInconsistent { .. } => {
                 Severity::Info
@@ -230,6 +240,7 @@ impl fmt::Display for ImportDiagnostic {
             ImportCode::Unsupported { what } => write!(f, " ({what})")?,
             ImportCode::Truncated { dropped } => write!(f, " ({dropped} diagnostics supprimés)")?,
             ImportCode::ProgressInconsistent { count } => write!(f, " ({count} restes relus remplacés)")?,
+            ImportCode::StyleIgnored { reason } => write!(f, " ({})", reason.as_str())?,
             _ => {}
         }
         if !self.element.is_empty() {
@@ -249,7 +260,7 @@ impl fmt::Display for ImportDiagnostic {
 }
 
 /// Nombre de rangs de [`ImportCode`] (plafond par code).
-const RANKS: usize = 14;
+const RANKS: usize = 15;
 
 /// Collecteur de diagnostics, avec l'index des lignes de l'entrée ; borné
 /// par [`MAX_DIAGNOSTICS`] et [`MAX_DIAGNOSTICS_PER_CODE`].

@@ -152,7 +152,8 @@ fn honor_constraints_off(f: &Fields<'_>, project: &Project, sink: &mut Sink<'_>)
 }
 
 /// `Extras` du projet (R-087) : déclarations `xmlns:préfixe` de la racine,
-/// puis enfants capturés de `Project`, dans l'ordre canonique.
+/// puis enfants capturés de `Project`, dans l'ordre canonique, puis le
+/// style du document s'il a été lu (H-R12).
 fn project_extras(raw: &RawDocument<'_>, project: &Project) -> Extras {
     let mut out: Vec<ExtraEntry> = raw
         .prefixes
@@ -173,6 +174,8 @@ fn project_extras(raw: &RawDocument<'_>, project: &Project) -> Extras {
     out.extend(extras::collect_with(&raw.fields, Parent::Project, None, written));
     let mut extras = Extras(out);
     extras::canonical_order(&mut extras, Parent::Project);
+    // Style du document (H-R12) : entrée d'origine `planrs`, en fin de liste.
+    crate::style_pi::set(&mut extras, raw.style.clone());
     extras
 }
 

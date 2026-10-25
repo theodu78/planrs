@@ -25,6 +25,8 @@
 //! - [`extras`] : éléments non modélisés conservés (clés, ordre canonique) ;
 //! - [`schema`] : table unique des éléments du schéma (séquences pj15,
 //!   classes, ordre observé ; R-087, R-121) ;
+//! - [`style_pi`] : style du document dans le fichier
+//!   (`<?planrs-style?>`, H-R12, J8) ;
 //! - [`write`] : écriture MSPDI, profils d'ordre, diagnostics d'écriture
 //!   (R-120 à R-132).
 
@@ -35,6 +37,7 @@ pub mod extras;
 mod normalize;
 pub mod scalar;
 pub mod schema;
+pub mod style_pi;
 pub mod write;
 
 mod assignment;

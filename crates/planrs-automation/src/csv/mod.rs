@@ -18,12 +18,27 @@ mod header;
 mod import;
 mod preview;
 
+pub(crate) use export::guard;
 pub use export::{CsvExportOptions, default_columns, export};
 pub use import::{MAX_DIAGNOSTICS, MAX_DIAGNOSTICS_PER_CODE, import};
 pub use preview::{CsvPreview, PREVIEW_ROWS, Recognized, preview};
 
 use planrs_core::{Moment, Project, ScheduleAnchor};
 use serde::Serialize;
+
+/// R-144 : sort d'un intitulé de colonne d'en-tête (casse, accents,
+/// espaces et ponctuation ignorés ; français ou anglais) : colonne lue,
+/// connue mais non prise en charge, ou inconnue (jamais
+/// [`Recognized::Duplicate`], qui dépend des autres colonnes). Sert aussi
+/// au collage d'un texte externe (R-256).
+#[must_use]
+pub fn recognize(header: &str) -> Recognized {
+    match header::recognize(header) {
+        Some((header::Field::Column(c), _)) => Recognized::Column(c),
+        Some((header::Field::Unsupported, _)) => Recognized::Unsupported,
+        None => Recognized::Unknown,
+    }
+}
 
 /// Bornes de l'import (règle 10 : un fichier hostile ne fait pas croître la
 /// mémoire sans borne).

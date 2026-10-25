@@ -3,7 +3,8 @@
 //! jalon 8 et refusées `command.not_yet_available` ; les champs nouveaux
 //! (`render.gantt.style`) se lisent mais sont refusés de même, sans rien
 //! changer, jusqu'à leur lot (L4) ; les critères J8 de `task.list` et
-//! `task.update.mode` sont exécutés depuis L2 (R-251, R-253) ; les
+//! `task.update.mode` sont exécutés depuis L2 (R-251, R-253), le
+//! presse-papiers et l'aperçu CSV depuis L3 (R-244, R-256) ; les
 //! squelettes répondent sans paniquer.
 
 #![allow(
@@ -95,10 +96,15 @@ fn contract_j8_skeletons_answer_without_panic() {
         Err(HelperError::UnknownTask(TaskUid::new(9)))
     );
     assert_eq!(PercentStep::P75.hundredths(), 7_500);
-    assert_eq!(RowClip::capture(&s, &uids), Err(ClipError::NotYetAvailable));
+    // Presse-papiers (L3, R-244, R-256).
+    assert_eq!(RowClip::capture(&s, &uids).map(|c| c.tasks.len()), Ok(2));
     let empty = RowClip::default();
-    assert!(clip::paste_batch(&s, &empty, &Placement::End, &PasteOptions::default()).is_err());
-    assert!(clip::paste_text(&s, "A\nB", &Placement::End, Language::Fr).is_err());
+    assert_eq!(
+        clip::paste_batch(&s, &empty, &Placement::End, &PasteOptions::default()).map(|_| ()),
+        Err(ClipError::Unrecognized)
+    );
+    let pasted = clip::paste_text(&s, "A\nB", &Placement::End, Language::Fr).unwrap();
+    assert_eq!((pasted.0.ops.len(), pasted.1.tasks), (2, 2));
     assert!(PasteOptions::default().links);
 
     // Filtre (L2, R-251) : « Toutes » montre tout ; critique = Murs seule.
@@ -117,8 +123,7 @@ fn contract_j8_skeletons_answer_without_panic() {
 
     let opts =
         planrs_automation::csv::CsvImportOptions::new(planrs_core::ScheduleAnchor::FromStart(now()), now());
-    assert_eq!(
-        planrs_automation::csv::preview(b"Nom;Duree\nA;1j\n", &opts),
-        Err(planrs_automation::csv::CsvError::NotYetAvailable)
-    );
+    // Aperçu CSV (L3).
+    let p = planrs_automation::csv::preview(b"Nom;Duree\nA;1j\n", &opts).unwrap();
+    assert_eq!(p.rows, vec![vec!["A".to_owned(), "1j".to_owned()]]);
 }

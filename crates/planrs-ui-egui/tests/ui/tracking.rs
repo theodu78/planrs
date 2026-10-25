@@ -316,6 +316,44 @@ fn n3_compile_once_per_generation() {
     assert_eq!(compiles(&harness), 2);
 }
 
+/// Relecture finale J7 (performances, F5) : avec une ligne de base, les
+/// écarts de `RowModel::build` (reconstruit à chaque édition) prennent les
+/// calendriers du cache du document : une compilation par génération, pas
+/// une de plus à chaque reconstruction des lignes.
+#[test]
+fn n3_row_model_uses_document_calendars() {
+    let mut harness = harness();
+    open_tracking(&mut harness);
+    let doc = harness.state().document.as_ref().unwrap();
+    assert!(
+        doc.project()
+            .tasks
+            .iter()
+            .any(|t| t.baselines.contains_key(&planrs_core::BaselineNumber::PRIMARY)),
+        "ligne de base 0 attendue dans tracking_j6.xml"
+    );
+    let before = doc.calendar_compiles();
+    // Une édition, sans image : seule la reconstruction des lignes a pu
+    // demander les calendriers de la nouvelle génération.
+    harness
+        .state_mut()
+        .execute(&rename(MASONRY, "Maçonnerie ter"), EditOrigin::User)
+        .unwrap();
+    let doc = harness.state().document.as_ref().unwrap();
+    assert_eq!(
+        doc.calendar_compiles(),
+        before + 1,
+        "écarts calculés hors du cache du document"
+    );
+    let labels = Texts::new(Language::Fr).format_labels().clone();
+    drop(planrs_ui_egui::rows::RowModel::build(doc, &labels));
+    assert_eq!(
+        doc.calendar_compiles(),
+        before + 1,
+        "recompilé à la reconstruction"
+    );
+}
+
 /// Résumé du moteur pour le début de la tâche `uid` (gabarit de R-233).
 fn engine_summary(app: &App, uid: u32) -> String {
     let query = Query::Explain(ExplainParams {

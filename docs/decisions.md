@@ -757,3 +757,4 @@ Derniers numéros pris : R-236, O43, S59, P44, H-UI-12. Cahier d'implémentation
 - *`app.ui_state`* : l'`UiState` rendu à l'agent n'a plus `recent` (chemins et noms des derniers fichiers de l'utilisateur, sans rapport avec la session).
 - *Utilisation des ressources* : une ressource compte dépliée dans la clé du cache dès qu'une de ses lignes d'affectation est dans la fenêtre de 32 lignes (sinon cellules d'affectation vides quand la fenêtre commence au milieu de ses affectations).
 - *Glisser l'avancement* (R-242) : aucun lot si le % que R-201 stockerait égale le % courant (refaire le même geste sur une durée qui ne tombe pas juste ajoutait une entrée d'annulation sans effet).
+- *Écarts de la ligne de base dans `RowModel::build`* : calendriers du cache du document (`OpenDocument::calendars`) au lieu d'une compilation à chaque reconstruction ; scénario de fluidité `edit_latency_baseline` (ligne de base posée), même porte que `edit_latency`.

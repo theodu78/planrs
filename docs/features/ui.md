@@ -381,7 +381,7 @@ Décomposition de `edit_latency` (médianes) : recalcul (`Session::apply` en mod
 | `usage_scroll` horizontal (120 images, 9 blocs neufs) | 0,61 ms | 0,88 ms | 0,99 ms | < 16 ms / < 32 ms ; bloc neuf < 32 ms |
 | `approval_banner` (120 images) | 0,58 ms | 0,67 ms | 0,85 ms | < 16 ms |
 
-Décomposition de `edit_latency` (médianes) : recalcul (`Session::apply`) 18,4 ms, `RowModel::build` 11,3 ms, reste (image, tessellation) 2,3 ms. Ouverture du réseau (lecture, calcul, `RowModel`) : 26,0 ms. Toutes les portes tiennent avec une marge d'un ordre de grandeur, sauf `edit_latency` (un tiers du budget).
+Décomposition de `edit_latency` (médianes) : recalcul (`Session::apply`) 18,4 ms, `RowModel::build` 11,3 ms, reste (image, tessellation) 2,3 ms. `edit_latency_baseline` (relecture finale J7) : même porte, ligne de base 0 posée sur les 5 000 tâches ; `RowModel::build` prend les calendriers du cache du document (`OpenDocument::calendars`, N3) au lieu de les recompiler à chaque reconstruction. Ouverture du réseau (lecture, calcul, `RowModel`) : 26,0 ms. Toutes les portes tiennent avec une marge d'un ordre de grandeur, sauf `edit_latency` (un tiers du budget).
 
 **Utilisation des ressources (J7 lot L11).** `usage_scroll` (ignoré, release ; 1 200 ressources, 5 000 tâches affectées, 1920×1080) : molette verticale 120 images, médiane 1,03 ms, p95 1,55 ms ; défilement horizontal au zoom Jour 120 images (9 blocs neufs du moteur), médiane 1,18 ms, p95 1,77 ms, pire image 2,64 ms (serveurdvp, 2026-10-21). `usage_counts_equal_at_1000_and_5000_tasks` (toujours exécuté) : formes, sommets et galleys de la vue identiques à 1 000 et 5 000 tâches (60 ressources).
 

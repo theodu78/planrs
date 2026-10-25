@@ -637,7 +637,7 @@ fn row_clicked(
     // Double-clic (ou triple : deux clics suivant de près un premier) :
     // sur l'ID, « Informations sur la tâche » (H-UI-19, J7 lot L9) ;
     // ailleurs, la saisie de la cellule.
-    if (response.double_clicked() || response.triple_clicked()) && edit.editing.is_none() {
+    if (response.double_clicked() || response.triple_clicked()) && edit.editing.is_none() && !fc.window_open {
         match uid {
             Some(uid) if cursor.column == Column::Id => {
                 fc.actions
@@ -706,7 +706,7 @@ fn open_from_keys(
     cursor: &TableCursor,
 ) {
     let ctx = ui.ctx();
-    if edit.editing.is_some() || focus_elsewhere(ctx) || ctx.any_popup_open() {
+    if edit.editing.is_some() || fc.window_open || focus_elsewhere(ctx) || ctx.any_popup_open() {
         return;
     }
     let Some((uid, i)) = current_row(fc, sheet.rows) else {

@@ -1974,6 +1974,37 @@ impl App {
         KeyState { document, table }
     }
 
+    /// Raccourcis de l'image, avant le dessin (la touche consommée
+    /// n'atteint aucun widget). Fenêtre ouverte : dessinée d'abord, ses
+    /// touches non prises retirées ; saisie de cellule ouverte : aucun.
+    fn read_keys(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        if self.view.dialog.is_some() {
+            // « Affecter des ressources » (non modale) : les raccourcis à
+            // Ctrl/Cmd qui ne touchent pas la structure (enregistrer,
+            // annuler, ouvrir, quitter…) restent actifs hors de ses champs
+            // (relecture finale J7, F9).
+            if self
+                .view
+                .dialog
+                .as_ref()
+                .is_some_and(|d| matches!(d.body, DialogBody::Assign(_)))
+                && !ctx.text_edit_focused()
+            {
+                let keys = KeyState {
+                    document: self.document.is_some(),
+                    table: false,
+                };
+                crate::keymap::dispatch_beside_window(ctx, keys, actions);
+            }
+            self.show_dialog(ctx);
+        } else if self.view.edit.editing.is_none() && self.view.resources.edit.editing.is_none() {
+            // Saisie de cellule ouverte : aucun raccourci, même si sa zone
+            // n'a pas encore le focus (relecture finale J7, F2 : Retour
+            // arrière supprimait la tâche).
+            crate::keymap::dispatch(ctx, self.key_state(ctx), actions);
+        }
+    }
+
     /// Une image complète dans `ui` (appelée par [`crate::ui`]) : relève des
     /// ouvertures, réglages, panneaux, vue centrale, puis réducteur.
     pub(crate) fn show(&mut self, ui: &mut egui::Ui) {
@@ -1999,17 +2030,10 @@ impl App {
         }
         let mut actions = std::mem::take(&mut self.actions);
         // Raccourcis avant le dessin : la touche consommée n'atteint aucun
-        // widget. Fenêtre ouverte (J7, lot L9) : aucun raccourci, la fenêtre
-        // est dessinée d'abord et les touches qu'elle n'a pas prises sont
-        // retirées de l'image (rien n'atteint la table ni le Gantt).
-        if self.view.dialog.is_some() {
-            self.show_dialog(&ctx);
-        } else if self.view.edit.editing.is_none() && self.view.resources.edit.editing.is_none() {
-            // Saisie de cellule ouverte : aucun raccourci, même si sa zone
-            // n'a pas encore le focus (relecture finale J7, F2 : Retour
-            // arrière supprimait la tâche).
-            crate::keymap::dispatch(&ctx, self.key_state(&ctx), &mut actions);
-        }
+        // widget. Fenêtre ouverte (J7, lot L9) : la fenêtre est dessinée
+        // d'abord et les touches qu'elle n'a pas prises sont retirées de
+        // l'image (rien n'atteint la table ni le Gantt).
+        self.read_keys(&ctx, &mut actions);
         let mut stats = FrameStats::default();
         #[cfg(not(target_arch = "wasm32"))]
         let recovery_offer = self.recovery_offer();
@@ -2035,6 +2059,7 @@ impl App {
                 selected: &self.selected,
                 actions: &mut actions,
                 stats: &mut stats,
+                window_open: self.view.dialog.is_some(),
             };
             view::chrome::menu_bar(ui, &mut fc);
             view::chrome::toolbar(ui, &mut fc);

@@ -397,7 +397,7 @@ fn row_clicked(
         cursor.column = column;
     }
     fc.actions.push(Action::FocusPane(Pane::Table));
-    if (response.double_clicked() || response.triple_clicked()) && edit.editing.is_none() {
+    if (response.double_clicked() || response.triple_clicked()) && edit.editing.is_none() && !fc.window_open {
         open_editor(sheet, edit, cursor, list_index, fc.doc);
     }
 }
@@ -439,7 +439,12 @@ fn open_from_keys(
     list_index: &mut usize,
 ) {
     let ctx = ui.ctx();
-    if edit.editing.is_some() || focus_elsewhere(ctx) || ctx.any_popup_open() || fc.doc.is_none() {
+    if edit.editing.is_some()
+        || fc.window_open
+        || focus_elsewhere(ctx)
+        || ctx.any_popup_open()
+        || fc.doc.is_none()
+    {
         return;
     }
     if !sheet.editable(cursor.column) {

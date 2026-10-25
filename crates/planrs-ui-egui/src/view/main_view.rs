@@ -961,6 +961,7 @@ mod tests {
                 selected: &crate::selection::Selection::default(),
                 actions: &mut actions,
                 stats: &mut stats,
+                window_open: false,
             };
             super::show(ui, &mut fc, view);
         });

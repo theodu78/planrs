@@ -385,6 +385,37 @@ pub fn shortcut_for_os(binding: Binding, os: egui::os::OperatingSystem) -> Optio
     }
 }
 
+/// Liaisons gardées à côté d'une fenêtre non modale (« Affecter des
+/// ressources ») : à Ctrl/Cmd, sans effet sur la structure ni la sélection
+/// (la fenêtre relit la sélection ; Suppr ou Inser pendant une saisie
+/// d'unités, ADR-0015 L13, restent exclus).
+const BESIDE_WINDOW: [Binding; 7] = [
+    Binding::Command("history.undo"),
+    Binding::Command("history.redo"),
+    Binding::Command("project.save"),
+    Binding::Command("project.new"),
+    Binding::Ui(UiBinding::SaveAs),
+    Binding::Ui(UiBinding::OpenFile),
+    Binding::Ui(UiBinding::Quit),
+];
+
+/// Raccourcis de [`BESIDE_WINDOW`] seulement (fenêtre non modale ouverte,
+/// aucun de ses champs focalisé : l'appelant le vérifie), comme
+/// [`dispatch`] (relecture finale J7, F9 : Cmd+S, Cmd+Z et Cmd+Q étaient
+/// perdus tant que la fenêtre était ouverte).
+pub fn dispatch_beside_window(ctx: &egui::Context, keys: KeyState, actions: &mut Vec<Action>) {
+    for (context, shortcut, binding) in KEYMAP {
+        if !keys.allows(*context) || !BESIDE_WINDOW.contains(binding) {
+            continue;
+        }
+        if ctx.input_mut(|input| input.consume_shortcut(shortcut))
+            && let Some(action) = entry_action(shortcut, *binding)
+        {
+            actions.push(action);
+        }
+    }
+}
+
 /// Appuis d'une même touche gardés par image (répétition du clavier) :
 /// au-delà, ignorés (une image lente ne fait pas sauter la table).
 const MAX_PRESSES_PER_FRAME: usize = 8;

@@ -8,9 +8,12 @@
 //! Hypothèses d'affichage H-R : `docs/features/render.md`.
 
 mod axis;
+mod metrics;
+mod metrics_inter;
 mod request;
 mod scene;
 mod svg;
 
+pub use metrics::{FontRef, FontWeight, InterMetrics, TextMeasure};
 pub use request::{GanttRequest, Lang, RangeSpec, RenderLimits, RenderReport, RowFilter, Theme, Zoom};
 pub use svg::svg;

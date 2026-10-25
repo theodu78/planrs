@@ -10,8 +10,8 @@ use krilla::page::PageSettings;
 use krilla::paint::Fill;
 use krilla::text::{Font, GlyphId, KrillaGlyph};
 use skrifa::MetadataProvider;
-use skrifa::raw::TableProvider;
 use skrifa::instance::{LocationRef, Size};
+use skrifa::raw::TableProvider;
 
 use crate::PdfError;
 

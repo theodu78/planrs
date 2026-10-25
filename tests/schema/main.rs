@@ -295,3 +295,31 @@ fn p26_observed_reordered_equals_strict() {
         );
     }
 }
+
+/// H-R12 (J8, lot L6) : l'instruction `<?planrs-style?>` ne change rien à
+/// la conformité pj15 de la sortie stricte.
+#[test]
+fn style_xsd_strict_with_pi() {
+    use planrs_mspdi::write::{Computed, OrderProfile, WriteOptions, write};
+    let Some(text) = schema_text() else {
+        return;
+    };
+    let validator = validator(&text);
+    let strict = WriteOptions {
+        profile: OrderProfile::Strict,
+        ..WriteOptions::default()
+    };
+    let mut p = generate::project(3);
+    planrs_mspdi::style_pi::set(
+        &mut p.extras,
+        Some(r#"{"base":"presentation","over":{"density":"airy"},"v":1}"#.to_owned()),
+    );
+    let s = planrs_core::schedule(&p);
+    let xml = String::from_utf8(write(&p, Computed::Schedule(&s), &strict).xml).expect("UTF-8");
+    assert!(xml.contains("?>\n<?planrs-style {"), "instruction écrite");
+    let errs: Vec<String> = errors(&validator, &xml)
+        .into_iter()
+        .filter(|e| !e.contains("exceeds maxLength"))
+        .collect();
+    assert!(errs.is_empty(), "{errs:#?}");
+}

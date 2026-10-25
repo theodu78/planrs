@@ -955,6 +955,8 @@ mod tests {
             ("name", Arg::Str("Plans".into())),
             ("column", Arg::Str("Durée".into())),
             ("value", Arg::Str("5 jours".into())),
+            ("document", Arg::Str("maison.xml".into())),
+            ("stem", Arg::Str("maison".into())),
         ]
     }
 

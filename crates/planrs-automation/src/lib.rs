@@ -18,10 +18,16 @@
 //! - [`csv`] : import et export des tâches en CSV, depuis et vers MS Project
 //!   ou un tableur (R-144 à R-146).
 //!
+//! J8 (ADR-0016, contrat L0) : [`filter`] (filtre partagé, R-251),
+//! [`helpers`] (raccourcis d'édition, R-252, R-253, R-255), [`clip`]
+//! (presse-papiers de lignes, R-244, R-256), [`render_text`] (textes du
+//! rendu, règle 3), [`command::style`] (style du document).
+//!
 //! Aucune entrée/sortie hors de `files` et `control` (absents en wasm) : du
 //! texte ou des octets en entrée, une valeur du modèle en sortie.
 
 pub mod analysis;
+pub mod clip;
 pub mod command;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod control;
@@ -33,7 +39,9 @@ pub mod error;
 pub mod explain;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod files;
+pub mod filter;
 pub mod gesture;
+pub mod helpers;
 pub mod history;
 pub mod journal;
 pub mod json;
@@ -41,6 +49,7 @@ pub mod outcome;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod recovery;
 pub mod registry;
+pub mod render_text;
 pub mod session;
 pub mod text;
 mod uid;

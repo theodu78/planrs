@@ -16,15 +16,18 @@
 //! 4. à la fermeture, le garde et la poignée suppriment fichier et socket.
 
 mod client;
+mod endpoint;
 mod frame;
 mod listener;
 mod relay;
 mod rendezvous;
+pub mod tcp;
 
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub use client::{RELAY_MARGIN, RelayClient, RelayError};
+pub use endpoint::Endpoint;
 pub use frame::{
     Frame, LineError, MAX_LINE_BYTES, Method, PROTOCOL_VERSION, Reply, WireError, codes, read_line_bounded,
     to_line,
@@ -60,6 +63,10 @@ pub enum ControlError {
     /// L'application a refusé la requête.
     #[error("canal de contrôle : refus {}", .0.code)]
     Refused(WireError),
+    /// Adresse de rendez-vous illisible ou hors boucle locale
+    /// (`control.bad_endpoint`, J8, C-CTL-11).
+    #[error("adresse du canal de contrôle invalide : {0}")]
+    BadEndpoint(String),
 }
 
 impl ControlError {

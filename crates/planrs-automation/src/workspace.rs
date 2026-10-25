@@ -193,6 +193,10 @@ fn read(session: Option<&Session>, lang: Language, id: &str, params: Value) -> R
         }
         "task.list" => {
             let p = parse_params::<TaskListParams>(params).map_err(cmd)?;
+            // J8 (contrat L0) : critères exécutés par le lot L2 (R-251).
+            if let Some(field) = p.j8_fields().first() {
+                return Err(cmd(CommandError::not_yet(8).with_field(field)));
+            }
             to_value(&view::list(need(session, lang)?, &p).map_err(cmd)?)
         }
         "task.get" => {
@@ -234,6 +238,10 @@ fn read(session: Option<&Session>, lang: Language, id: &str, params: Value) -> R
         }
         "render.gantt" => {
             let p = parse_params::<RenderGanttParams>(params).map_err(cmd)?;
+            // J8 (contrat L0) : style exécuté par le lot L4.
+            if p.style.is_some() {
+                return Err(cmd(CommandError::not_yet(8).with_field("style")));
+            }
             render(need(session, lang)?, lang, &p)
         }
         _ => Err(unknown_command(id, lang)),

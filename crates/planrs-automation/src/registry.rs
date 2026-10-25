@@ -6,9 +6,11 @@
 //! entrées J6 (contrat du lot L0, activées par les lots L7 et L8 de J6) et
 //! les cinq écritures J7 (`calendar.add`, `calendar.update`,
 //! `calendar.set_week`, `calendar.delete`, `baseline.clear`, contrat J7 L0,
-//! activées par le lot L5). Une entrée réservée à un jalon futur
+//! activées par le lot L5), puis les quatre entrées J8 réservées au jalon 8
+//! par le contrat L0 (`project.export_pdf`, `style.apply`, `style.get`,
+//! `style.list`, activées par les lots L6 et L7). Une entrée réservée à un jalon futur
 //! (`Availability::Milestone`) n'est pas listée et est refusée
-//! `command.not_yet_available` (aucune en J7). Les trois entrées `app.*` (genre [`Kind::Ui`]) ne sont servies que
+//! `command.not_yet_available`. Les trois entrées `app.*` (genre [`Kind::Ui`]) ne sont servies que
 //! par une application rattachée (`Availability::Attached`, ADR-0015 D11) :
 //! non listées par une surface « headless », refusées
 //! `control.not_attached`. Le schéma de chaque
@@ -20,10 +22,11 @@ use schemars::generate::SchemaSettings;
 use schemars::{JsonSchema, Schema};
 
 use crate::command::params::{
-    ApplyBatchParams, ExplainParams, ExportMspdiParams, ImportCsvParams, NewProjectParams, NoParams,
-    OpenProjectParams, RenderGanttParams, ResourceListParams, SaveProjectParams, ScreenshotParams,
+    ApplyBatchParams, ExplainParams, ExportMspdiParams, ExportPdfParams, ImportCsvParams, NewProjectParams,
+    NoParams, OpenProjectParams, RenderGanttParams, ResourceListParams, SaveProjectParams, ScreenshotParams,
     TaskGetParams, TaskListParams, UiActionParams, UsageParams, VarianceParams, WhatIfParams,
 };
+use crate::command::style::StyleApply;
 use crate::command::{
     AnchorSpec, AssignmentAdd, AssignmentKey, AssignmentUpdate, BaselineClear, BaselineSet, CalendarAdd,
     CalendarDelete, CalendarException, CalendarExceptionKey, CalendarSetWeek, CalendarUpdate, LinkKey,
@@ -144,10 +147,6 @@ const fn now(
 
 /// Entrée réservée au jalon `milestone` (non listée, refusée
 /// `command.not_yet_available`).
-#[allow(
-    dead_code,
-    reason = "aucune entrée réservée depuis le lot L5 de J7 ; gardée pour les jalons suivants"
-)]
 const fn reserved(
     milestone: u8,
     id: &'static str,
@@ -407,6 +406,15 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Écrit une copie du projet au format MSPDI (XML de MS Project).",
         "Write a copy of the project as MSPDI (MS Project XML).",
     ),
+    reserved(
+        8,
+        "project.export_pdf",
+        "export_pdf",
+        Kind::File,
+        schema_of::<ExportPdfParams>,
+        "Écrit le planning en PDF (style, mise en page, plage et lignes facultatifs).",
+        "Write the schedule as PDF (optional style, page setup, range and rows).",
+    ),
     now(
         "project.import_csv",
         "import_csv",
@@ -510,6 +518,33 @@ pub static REGISTRY: &[CommandSpec] = &[
         schema_of::<ResourceUpdate>,
         "Modifie une ressource (nom, capacité, calendrier, initiales, groupe…).",
         "Update a resource (name, capacity, calendar, initials, group…).",
+    ),
+    reserved(
+        8,
+        "style.apply",
+        "apply_style",
+        Kind::Write,
+        schema_of::<StyleApply>,
+        "Applique un modèle de mise en forme ou une surcharge au document, ou revient au modèle par défaut.",
+        "Apply a formatting template or an override to the document, or reset to the default template.",
+    ),
+    reserved(
+        8,
+        "style.get",
+        "get_style",
+        Kind::Read,
+        schema_of::<NoParams>,
+        "Style du document : modèle de base, surcharges et style résolu.",
+        "Document style: base template, overrides and resolved style.",
+    ),
+    reserved(
+        8,
+        "style.list",
+        "list_styles",
+        Kind::Read,
+        schema_of::<NoParams>,
+        "Modèles de mise en forme intégrés et personnels.",
+        "Built-in and personal formatting templates.",
     ),
     now(
         "task.add",

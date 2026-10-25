@@ -2,7 +2,8 @@
 //! `dry_run` ou `detail`), annotations (lot L8).
 //!
 //! Seules les entrées disponibles (`Availability::Now`) sont listées ; une
-//! entrée réservée à un jalon futur (aucune depuis le lot L5 de J7) reste
+//! entrée réservée à un jalon futur (J8 : `list_styles`, `get_style`,
+//! `apply_style`, `export_pdf`, contrat L0) reste
 //! appelable par son nom et répond `command.not_yet_available` (erreur
 //! structurée, C-MCP-05).
 

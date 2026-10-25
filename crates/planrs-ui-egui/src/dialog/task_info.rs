@@ -736,6 +736,7 @@ const fn empty_update(uid: TaskUid) -> TaskUpdate {
         task_type: Patch::Keep,
         effort_driven: Patch::Keep,
         work: Patch::Keep,
+        mode: Patch::Keep,
     }
 }
 

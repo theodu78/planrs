@@ -1,0 +1,121 @@
+//! Contrat J8 (lot L0, ADR-0016) : types, squelettes et registre. Les
+//! entrées nouvelles (`style.*`, `project.export_pdf`) sont réservées au
+//! jalon 8 et refusées `command.not_yet_available` ; les champs nouveaux
+//! (`task.update.mode`, critères J8 de `task.list`, `render.gantt.style`)
+//! se lisent mais sont refusés de même, sans rien changer, jusqu'à leurs
+//! lots (L2, L4) ; les squelettes répondent sans paniquer.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "tests : un échec doit s'arrêter net et lisiblement"
+)]
+
+use planrs_automation::clip::{self, ClipError, PasteOptions, RowClip};
+use planrs_automation::error::codes;
+use planrs_automation::filter::{FilterCtx, FilterPreset, TaskFilter};
+use planrs_automation::helpers::{self, HelperError, PercentStep};
+use planrs_automation::text::Language;
+use planrs_automation::{AnchorSpec, ApplyMode, Batch, CallEnv, NewProject, Placement, Session, call_with};
+use planrs_core::TaskUid;
+use serde_json::json;
+
+fn now() -> planrs_core::Moment {
+    "2026-10-19T08:00".parse().unwrap()
+}
+
+fn session() -> Session {
+    let init = NewProject {
+        name: "P".to_owned(),
+        anchor: AnchorSpec::Start(now()),
+        lang: None,
+    };
+    let mut s = Session::new_project(init, now()).unwrap();
+    let batch = Batch::from_json(json!({
+        "format_version": 1,
+        "ops": [
+            { "op": "task.add", "name": "Fondations", "duration": { "text": "5j" } },
+            { "op": "task.add", "name": "Murs", "duration": { "text": "10j" } }
+        ]
+    }))
+    .unwrap();
+    s.apply(&batch, ApplyMode::Commit).unwrap();
+    s
+}
+
+#[test]
+fn contract_j8_reserved_and_new_fields_refused() {
+    let mut s = session();
+    let before = s.project().clone();
+    let generation = s.generation();
+    let env = CallEnv::new(now(), Language::Fr);
+    for (id, params) in [
+        ("style.list", json!({})),
+        ("style.get", json!({})),
+        ("style.apply", json!({ "template": "sobre" })),
+        ("project.export_pdf", json!({ "path": "p.pdf" })),
+        ("task.update", json!({ "uid": 1, "mode": "manual" })),
+        ("task.list", json!({ "incomplete": true })),
+        ("task.list", json!({ "name_contains": "mur" })),
+        ("render.gantt", json!({ "style": "sobre" })),
+    ] {
+        let err = call_with(&mut s, &env, id, params).unwrap_err();
+        assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{id}");
+    }
+    // Paramètres mal formés : refusés comme avant.
+    let err = call_with(
+        &mut s,
+        &env,
+        "task.update",
+        json!({ "uid": 1, "mode": "hybride" }),
+    )
+    .unwrap_err();
+    assert_eq!(err.code, codes::PARAM_INVALID);
+    // Lectures J7 inchangées.
+    assert!(call_with(&mut s, &env, "task.list", json!({ "critical": true })).is_ok());
+    assert!(call_with(&mut s, &env, "render.gantt", json!({})).is_ok());
+    assert_eq!(s.project(), &before);
+    assert_eq!(s.generation(), generation);
+}
+
+#[test]
+fn contract_j8_skeletons_answer_without_panic() {
+    let s = session();
+    let uids = [TaskUid::new(1), TaskUid::new(2)];
+    assert_eq!(
+        helpers::mark_percent(&s, &uids, PercentStep::P50),
+        Err(HelperError::NotYetAvailable)
+    );
+    assert_eq!(helpers::toggle_mode(&s, &uids), Err(HelperError::NotYetAvailable));
+    assert_eq!(
+        helpers::toggle_active(&s, &uids),
+        Err(HelperError::NotYetAvailable)
+    );
+    assert_eq!(PercentStep::P75.hundredths(), 7_500);
+    assert_eq!(RowClip::capture(&s, &uids), Err(ClipError::NotYetAvailable));
+    let empty = RowClip::default();
+    assert!(clip::paste_batch(&s, &empty, &Placement::End, &PasteOptions::default()).is_err());
+    assert!(clip::paste_text(&s, "A\nB", &Placement::End, Language::Fr).is_err());
+    assert!(PasteOptions::default().links);
+
+    // Filtre transparent jusqu'à L2 : toutes les lignes montrées.
+    let ctx = FilterCtx {
+        project: s.project(),
+        schedule: s.schedule(),
+        status: now(),
+    };
+    let hits = TaskFilter::from_preset(&FilterPreset::Critical).hits(&ctx);
+    assert_eq!(hits.shown, vec![true, true]);
+    assert_eq!(TaskFilter::from_preset(&FilterPreset::Late).late, Some(true));
+    assert!(TaskFilter::from_preset(&FilterPreset::All).show_related_summaries);
+    assert_eq!(planrs_automation::filter::fold_text("Écrêté"), "ecrete");
+
+    let opts =
+        planrs_automation::csv::CsvImportOptions::new(planrs_core::ScheduleAnchor::FromStart(now()), now());
+    assert_eq!(
+        planrs_automation::csv::preview(b"Nom;Duree\nA;1j\n", &opts),
+        Err(planrs_automation::csv::CsvError::NotYetAvailable)
+    );
+}

@@ -6,11 +6,13 @@
 //! retard » et « inachevée » lisent le planning du moteur (règle 3). Un
 //! filtre est une vue : il n'écrit rien (P50).
 //!
-//! Contrat posé par le lot L0, implémenté en L2 : jusque-là [`TaskFilter`]
-//! laisse passer toute tâche et [`fold_text`] replie seulement la casse et
-//! les accents latins usuels.
+//! Implémenté en L2 (R-251) : conjonction des critères posés, récapitulatives
+//! liées en option, repli du texte par NFD (`unicode-normalization`).
 
-use planrs_core::{Day, Moment, Project, Schedule, Task};
+use std::collections::BTreeSet;
+
+use planrs_core::schedule::{TaskRole, TaskSchedule};
+use planrs_core::{BaselineNumber, Day, Moment, Percent, ProgressState, Project, Schedule, Task, TaskUid};
 
 /// Critères d'un filtre ; une tâche passe si elle satisfait **tous** les
 /// critères posés (`None` : critère absent).
@@ -115,30 +117,209 @@ impl TaskFilter {
         f
     }
 
-    /// Vrai si la tâche `t` (position `pos`) satisfait tous les critères.
-    /// Squelette L0 : toujours vrai (filtre transparent) jusqu'à L2.
+    /// Vrai si aucun critère n'est posé (filtre « Toutes ») : toute ligne
+    /// passe, lignes vides comprises.
     #[must_use]
-    pub fn matches(&self, ctx: &FilterCtx<'_>, pos: usize, t: &Task) -> bool {
-        let _ = (ctx, pos, t);
-        true
+    pub fn is_empty(&self) -> bool {
+        self.critical.is_none()
+            && self.late.is_none()
+            && self.incomplete.is_none()
+            && self.milestone.is_none()
+            && self.summary.is_none()
+            && self.active.is_none()
+            && self.resource.is_none()
+            && self.from.is_none()
+            && self.to.is_none()
+            && self.outline_max.is_none()
+            && self.name_contains.is_none()
     }
 
-    /// Lignes montrées sur tout le projet. Squelette L0 : toutes.
+    /// Vrai si la tâche `t` (position `pos`) satisfait tous les critères
+    /// posés (R-251). Une ligne vide ne passe que le filtre vide. Pour tout
+    /// le projet, préférer [`TaskFilter::hits`] (préparation faite une fois).
+    #[must_use]
+    pub fn matches(&self, ctx: &FilterCtx<'_>, pos: usize, t: &Task) -> bool {
+        let prepared = Prepared::new(self, ctx);
+        let summary = summary_at(ctx.project, pos);
+        prepared.matches(self, ctx, t, summary)
+    }
+
+    /// Lignes montrées sur tout le projet (R-251) : tâches retenues par les
+    /// critères, plus, avec `show_related_summaries`, leurs récapitulatives
+    /// ancêtres. Une passe sur les tâches, plus une remontée par ancêtre
+    /// ajouté (chaque ancêtre n'est ajouté qu'une fois).
     #[must_use]
     pub fn hits(&self, ctx: &FilterCtx<'_>) -> FilterHits {
-        let len = ctx.project.tasks.len();
+        let tasks = &ctx.project.tasks;
+        let len = tasks.len();
+        let summaries = summary_flags(ctx.project);
+        let prepared = Prepared::new(self, ctx);
+        let mut shown = vec![false; len];
+        let mut direct = 0u32;
+        let mut related = 0u32;
+        // Ancêtres de la tâche courante : positions de niveaux croissants
+        // (lignes vides ignorées, R-052).
+        let mut stack: Vec<(usize, u16)> = Vec::new();
+        for (pos, t) in tasks.iter().enumerate() {
+            if t.is_null {
+                if self.is_empty()
+                    && let Some(slot) = shown.get_mut(pos)
+                {
+                    *slot = true;
+                }
+                continue;
+            }
+            let level = t.outline_level.get();
+            while stack.last().is_some_and(|&(_, l)| l >= level) {
+                stack.pop();
+            }
+            let summary = summaries.get(pos).copied().unwrap_or(false);
+            if prepared.matches(self, ctx, t, summary) {
+                direct = direct.saturating_add(1);
+                if let Some(slot) = shown.get_mut(pos) {
+                    *slot = true;
+                }
+                if self.show_related_summaries {
+                    for &(anc, _) in stack.iter().rev() {
+                        match shown.get_mut(anc) {
+                            Some(slot) if !*slot => {
+                                *slot = true;
+                                related = related.saturating_add(1);
+                            }
+                            // Déjà montré : ses propres ancêtres aussi.
+                            _ => break,
+                        }
+                    }
+                }
+            }
+            stack.push((pos, level));
+        }
         FilterHits {
-            shown: vec![true; len],
-            direct: u32::try_from(len).unwrap_or(u32::MAX),
-            related: 0,
+            shown,
+            direct,
+            related,
         }
     }
 }
 
-/// Texte replié pour la recherche : sans casse ni accents (L2 : NFD par
-/// `unicode-normalization`, marques combinantes retirées, minuscules ;
-/// squelette L0 : repli des accents latins usuels).
+/// Récapitulative à la position `pos` (R-052, lignes vides ignorées).
+fn summary_at(project: &Project, pos: usize) -> bool {
+    crate::command::outline::is_summary_at(&project.tasks, pos)
+}
+
+/// Drapeau récapitulatif de chaque position, en une passe à rebours : une
+/// tâche non vide est récapitulative si la tâche non vide suivante est plus
+/// profonde (R-052).
+fn summary_flags(project: &Project) -> Vec<bool> {
+    let tasks = &project.tasks;
+    let mut flags = vec![false; tasks.len()];
+    let mut next_level: Option<u16> = None;
+    for (pos, t) in tasks.iter().enumerate().rev() {
+        if t.is_null {
+            continue;
+        }
+        let level = t.outline_level.get();
+        if let Some(slot) = flags.get_mut(pos) {
+            *slot = next_level.is_some_and(|n| n > level);
+        }
+        next_level = Some(level);
+    }
+    flags
+}
+
+/// Préparation d'un filtre : texte replié une fois, tâches affectées à la
+/// ressource nommée.
+struct Prepared {
+    /// `name_contains` replié.
+    needle: Option<String>,
+    /// Tâches affectées à une ressource du nom cherché.
+    with_resource: BTreeSet<TaskUid>,
+}
+
+impl Prepared {
+    fn new(f: &TaskFilter, ctx: &FilterCtx<'_>) -> Self {
+        let mut with_resource = BTreeSet::new();
+        if let Some(name) = &f.resource {
+            let wanted: BTreeSet<_> = ctx
+                .project
+                .resources
+                .iter()
+                .filter(|r| r.name == *name)
+                .map(planrs_core::HasUid::uid)
+                .collect();
+            if !wanted.is_empty() {
+                with_resource.extend(
+                    ctx.project
+                        .assignments
+                        .iter()
+                        .filter(|a| a.resource.is_some_and(|r| wanted.contains(&r)))
+                        .map(|a| a.task),
+                );
+            }
+        }
+        Self {
+            needle: f.name_contains.as_deref().map(fold_text),
+            with_resource,
+        }
+    }
+
+    /// Conjonction des critères posés sur la tâche non vide `t`.
+    fn matches(&self, f: &TaskFilter, ctx: &FilterCtx<'_>, t: &Task, summary: bool) -> bool {
+        if t.is_null {
+            return f.is_empty();
+        }
+        let s = ctx.schedule.scheduled(t.uid());
+        let want = |c: Option<bool>, v: bool| c.is_none_or(|w| w == v);
+        let critical = s.is_some_and(|s| s.critical);
+        let late = s.is_some_and(|s| is_late(t, s, ctx.status));
+        let incomplete = s.is_some_and(|s| s.role == TaskRole::Leaf && s.percent_complete < Percent::FULL);
+        want(f.critical, critical)
+            && want(f.late, late)
+            && want(f.incomplete, incomplete)
+            && want(f.milestone, t.milestone)
+            && want(f.summary, summary)
+            && want(f.active, t.active)
+            && (f.resource.is_none() || self.with_resource.contains(&t.uid()))
+            && f.from
+                .is_none_or(|from| s.is_some_and(|s| s.finish.day() >= from))
+            && f.to.is_none_or(|to| s.is_some_and(|s| s.start.day() <= to))
+            && f.outline_max.is_none_or(|m| t.outline_level.get() <= m)
+            && self
+                .needle
+                .as_deref()
+                .is_none_or(|n| fold_text(&t.name).contains(n))
+    }
+}
+
+/// R-236 : tâche planifiée en retard. Vrai si sa fin planifiée dépasse son
+/// échéance (J4) ou la fin de sa ligne de base 0, ou si, à la date d'état
+/// effective `status` (R-034), elle n'est pas achevée alors que sa fin
+/// planifiée est atteinte, ou pas commencée alors que son début planifié
+/// est passé. État d'avancement lu dans le `Schedule` (R-200, R-210).
+pub(crate) fn is_late(t: &Task, s: &TaskSchedule, status: Moment) -> bool {
+    let past_deadline = t.deadline.is_some_and(|d| s.finish > d);
+    let past_baseline = t
+        .baselines
+        .get(&BaselineNumber::PRIMARY)
+        .and_then(|b| b.finish)
+        .is_some_and(|f| s.finish > f);
+    let state = s.progress.map_or(ProgressState::NotStarted, |g| g.state);
+    let unfinished = state != ProgressState::Complete && s.finish <= status;
+    let unstarted = state == ProgressState::NotStarted && s.start < status;
+    past_deadline || past_baseline || unfinished || unstarted
+}
+
+/// Texte replié pour la recherche (R-251) : décomposition canonique (NFD,
+/// `unicode-normalization`), marques combinantes retirées, minuscules
+/// (`char::to_lowercase`, tables Unicode de la bibliothèque standard :
+/// même résultat sur toutes les plateformes). « Plâtrerie » ⇒
+/// « platrerie » ; « Œ » ⇒ « œ » (ligature gardée).
 #[must_use]
 pub fn fold_text(s: &str) -> String {
-    crate::text::lex::fold(s.chars())
+    use unicode_normalization::UnicodeNormalization;
+    use unicode_normalization::char::is_combining_mark;
+    s.nfd()
+        .filter(|c| !is_combining_mark(*c))
+        .flat_map(char::to_lowercase)
+        .collect()
 }

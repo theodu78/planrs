@@ -20,6 +20,7 @@
 use std::path::{Path, PathBuf};
 
 pub mod corpus;
+pub mod daily;
 pub mod generate;
 pub mod mspdi;
 pub mod net;

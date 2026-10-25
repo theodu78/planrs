@@ -193,10 +193,6 @@ fn read(session: Option<&Session>, lang: Language, id: &str, params: Value) -> R
         }
         "task.list" => {
             let p = parse_params::<TaskListParams>(params).map_err(cmd)?;
-            // J8 (contrat L0) : critères exécutés par le lot L2 (R-251).
-            if let Some(field) = p.j8_fields().first() {
-                return Err(cmd(CommandError::not_yet(8).with_field(field)));
-            }
             to_value(&view::list(need(session, lang)?, &p).map_err(cmd)?)
         }
         "task.get" => {

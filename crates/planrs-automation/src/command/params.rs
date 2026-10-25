@@ -88,8 +88,8 @@ pub struct TaskListParams {
     /// Tâches affectées à cette ressource (UID, J5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource: Option<u32>,
-    /// Feuilles non achevées (< 100 %) seulement (J8, R-251 ; refusé
-    /// `command.not_yet_available` jusqu'au lot L2).
+    /// Feuilles planifiées non achevées (< 100 %) seulement (`true`), ou
+    /// les autres tâches (`false`) (J8, R-251).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub incomplete: Option<bool>,
     /// Jalons seulement (`true`) ou hors jalons (`false`) (J8, R-251).
@@ -98,26 +98,11 @@ pub struct TaskListParams {
     /// Tâches actives (`true`) ou inactives (`false`) (J8, R-251).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active: Option<bool>,
-    /// Nom contenant ce texte, sans casse ni accents (J8, R-251).
+    /// Nom contenant ce texte, sans casse ni accents (J8, R-251 ; au plus
+    /// 256 caractères).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = 256))]
     pub name_contains: Option<String>,
-}
-
-impl TaskListParams {
-    /// Critères J8 posés (`incomplete`, `milestone`, `active`,
-    /// `name_contains`) : refusés tant que le lot L2 ne les exécute pas.
-    #[must_use]
-    pub fn j8_fields(&self) -> Vec<&'static str> {
-        [
-            ("incomplete", self.incomplete.is_some()),
-            ("milestone", self.milestone.is_some()),
-            ("active", self.active.is_some()),
-            ("name_contains", self.name_contains.is_some()),
-        ]
-        .into_iter()
-        .filter_map(|(name, set)| set.then_some(name))
-        .collect()
-    }
 }
 
 /// `resource.list` (J5, R-195) : ressources dans l'ordre des UID, filtrées

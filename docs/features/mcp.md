@@ -17,7 +17,7 @@ Générés depuis `planrs_automation::REGISTRY` (`tools.rs`, sans macro `#[tool]
 | Genre | Outils (49 listés) |
 |---|---|
 | Fichiers | `new_project`, `open_project`, `import_csv`, `save_project`, `export_mspdi` |
-| Lecture | `project_summary`, `list_tasks` (paginé : 50, au plus 500 ; filtre `resource`), `get_task`, `critical_path`, `render_gantt`, `list_resources` (paginé : 50, au plus 500 ; filtre `overallocated`) |
+| Lecture | `project_summary`, `list_tasks` (paginé : 50, au plus 500 ; filtre `resource` ; J8 : `incomplete`, `milestone`, `active`, `name_contains`, R-251), `get_task`, `critical_path`, `render_gantt`, `list_resources` (paginé : 50, au plus 500 ; filtre `overallocated`) |
 | Analyse | `resource_usage`, `explain_date`, `what_if`, `baseline_variance` (J6) |
 | Écriture (`dry_run`, `detail`) | `add_task`, `update_task`, `delete_task`, `move_task`, `indent_task`, `outdent_task`, `add_link`, `update_link`, `remove_link`, `set_constraint`, `set_deadline`, `set_project_start`, `set_project_info`, `set_status_date`, `edit_calendar`, `remove_calendar_exception`, `add_resource`, `update_resource`, `delete_resource`, `assign_resource`, `update_assignment`, `unassign_resource`, `update_progress`, `reschedule_remaining`, `set_baseline` (J6), `add_calendar`, `update_calendar`, `set_work_week`, `delete_calendar`, `clear_baseline` (J7), `apply_batch` |
 | Historique | `undo`, `redo`, `history` |

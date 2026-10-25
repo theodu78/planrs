@@ -116,6 +116,9 @@ cab = "0.6.0"
 # AND BSD-3-Clause), plutôt que des décodeurs faits main.
 csv = "1.4.0"
 encoding_rs = "0.8.42"
+# Repli des noms pour le filtre partagé (R-251, ADR-0016 D2) : NFD puis
+# marques combinantes retirées (MIT OR Apache-2.0, lot J8 L2).
+unicode-normalization = { version = "0.1.25", default-features = false, features = ["std"] }
 # Dépendances de développement de planrs-core (ADR-0008) : JSON de référence et
 # aller-retour serde, tests de propriétés. proptest sans `fork` ni `timeout`
 # (inutiles ici, et autant de crates en moins).

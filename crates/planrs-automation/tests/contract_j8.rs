@@ -1,9 +1,10 @@
 //! Contrat J8 (lot L0, ADR-0016) : types, squelettes et registre. Les
 //! entrées nouvelles (`style.*`, `project.export_pdf`) sont réservées au
 //! jalon 8 et refusées `command.not_yet_available` ; les champs nouveaux
-//! (`task.update.mode`, critères J8 de `task.list`, `render.gantt.style`)
-//! se lisent mais sont refusés de même, sans rien changer, jusqu'à leurs
-//! lots (L2, L4) ; les squelettes répondent sans paniquer.
+//! (`task.update.mode`, `render.gantt.style`) se lisent mais sont refusés
+//! de même, sans rien changer, jusqu'à leurs lots (L2, L4) ; les critères
+//! J8 de `task.list` sont exécutés depuis L2 (R-251) ; les squelettes
+//! répondent sans paniquer.
 
 #![allow(
     clippy::unwrap_used,
@@ -57,8 +58,6 @@ fn contract_j8_reserved_and_new_fields_refused() {
         ("style.apply", json!({ "template": "sobre" })),
         ("project.export_pdf", json!({ "path": "p.pdf" })),
         ("task.update", json!({ "uid": 1, "mode": "manual" })),
-        ("task.list", json!({ "incomplete": true })),
-        ("task.list", json!({ "name_contains": "mur" })),
         ("render.gantt", json!({ "style": "sobre" })),
     ] {
         let err = call_with(&mut s, &env, id, params).unwrap_err();
@@ -100,14 +99,16 @@ fn contract_j8_skeletons_answer_without_panic() {
     assert!(clip::paste_text(&s, "A\nB", &Placement::End, Language::Fr).is_err());
     assert!(PasteOptions::default().links);
 
-    // Filtre transparent jusqu'à L2 : toutes les lignes montrées.
+    // Filtre (L2, R-251) : « Toutes » montre tout ; critique = Murs seule.
     let ctx = FilterCtx {
         project: s.project(),
         schedule: s.schedule(),
         status: now(),
     };
-    let hits = TaskFilter::from_preset(&FilterPreset::Critical).hits(&ctx);
+    let hits = TaskFilter::from_preset(&FilterPreset::All).hits(&ctx);
     assert_eq!(hits.shown, vec![true, true]);
+    let hits = TaskFilter::from_preset(&FilterPreset::Critical).hits(&ctx);
+    assert_eq!(hits.shown, vec![false, true]);
     assert_eq!(TaskFilter::from_preset(&FilterPreset::Late).late, Some(true));
     assert!(TaskFilter::from_preset(&FilterPreset::All).show_related_summaries);
     assert_eq!(planrs_automation::filter::fold_text("Écrêté"), "ecrete");

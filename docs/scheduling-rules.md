@@ -1727,3 +1727,16 @@ Règles J7 (ADR-0015 D7, D8, lots L4 et L5) : utilisation par affectation et tot
 ### Usage quotidien (R-244, R-251 à R-256)
 
 Section posée par le contrat J8 (lot L0, ADR-0016) ; fiches écrites par les lots qui les implémentent, avec leurs tests dans le même commit : R-251 à R-255 en L2 (filtre partagé, % en un clic, bascules manuel/auto et actif/inactif, dates d'une tâche manuelle), R-244 et R-256 en L3 (collage). Formulations de départ : `docs/plans/j8.md` § 2.3 ; sources S73 à S79 et observations O49 à O51 ci-dessus.
+
+## R-251 — Filtre de tâches partagé (`TaskFilter`)
+- **Formulation** (lot L2) : `planrs_automation::filter::TaskFilter`, prédicat pur partagé par l'interface (vue filtrée), `task.list` et `list_tasks`. Une tâche non vide passe si elle satisfait **tous** les critères posés (`None` : absent ; `Some(b)` : la propriété vaut `b`) :
+  - `critical` : critique du moteur (R-050) ; `late` : R-236 inchangée (fonction déplacée de `view.rs` vers `filter.rs`) ; `incomplete` : feuille **planifiée** (rôle du moteur, non exclue) dont le % achevé du planning est < 10 000 (jalon compris) ;
+  - `milestone` (drapeau de la tâche), `summary` (R-052, lignes vides ignorées), `active` (drapeau propre de la tâche, non celui hérité d'une récapitulative inactive) ;
+  - `resource` : affectée à une ressource de **ce nom exact** (casse comprise ; homonymes : toutes) ; `task.list.resource` reste l'UID de J5, comparé hors de `TaskFilter` (rejeux inchangés) ;
+  - `from` / `to` : dates planifiées touchant la plage (fin ≥ `from`, début ≤ `to`, jours) ; `outline_max` : niveau ≤ n ; `name_contains` : sous-chaîne de `fold_text(nom)` (NFD par `unicode-normalization`, marques combinantes retirées, minuscules par `char::to_lowercase` ; ligatures gardées : « Œ » ⇒ « œ »), au plus 256 caractères dans `task.list` (`limit.exceeded`) ;
+  - une tâche non planifiée (exclue, inactive) ne passe ni `critical`/`late`/`incomplete` à `true`, ni un critère de dates ; une ligne vide ne passe que le filtre vide (« Toutes ») ;
+  - `show_related_summaries` (vrai pour `from_preset`, l'interface ; faux pour `task.list` : sortie J4-J7 inchangée) ajoute les récapitulatives ancêtres d'une tâche retenue (`FilterHits.related` les compte, `direct` les tâches retenues) ; `hits` fait une passe et ajoute chaque ancêtre une fois.
+  - Exemple : P avec 2 à 100 %, « Inachevées » ⇒ 3, 4, 6, 7 retenues, 1 et 5 ajoutées ; `task.list { incomplete: true }` ⇒ 3, 4, 6, 7 ; « platre » ⇒ 6 « Plâtrerie » ; critique ∧ feuille ∧ « m » ⇒ 3.
+- **Source** : support.microsoft.com, « Filter tasks or resources » (S79 : F3 retire les filtres ; rien sur les récapitulatives liées) ; critères, repli du texte et récapitulatives liées : hypothèse.
+- **Statut** : `hypothèse`.
+- **Tests** : `tests/rules/r251_task_filter.rs` (`r251_incomplete_leaf_only`, `r251_related_summaries`, `r251_name_contains_folds_accents`, `r251_resource_exact_name`, `r251_conjunction`).

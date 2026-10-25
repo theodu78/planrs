@@ -441,7 +441,7 @@ fn bar_gesture(
                 kind,
                 origin_x: p.x - left,
                 days: 0,
-                over_row: geom::row_at(p.y - origin.y, row_h, rows.len()),
+                over_row: link_target(rows, axis, origin, row_h, tracking, p, uid),
                 preview: None,
             };
             d.days = gesture_days(&d, rows, axis, left, p.x);
@@ -470,7 +470,7 @@ fn bar_gesture(
             current.days = days;
             current.preview = gesture_preview(doc, current);
         }
-        current.over_row = geom::row_at(p.y - origin.y, row_h, rows.len());
+        current.over_row = link_target(rows, axis, origin, row_h, tracking, p, current.uid);
     }
     let released = background.drag_stopped() || !ui.input(|i| i.pointer.primary_down());
     if released {
@@ -488,6 +488,27 @@ fn bar_gesture(
     true
 }
 
+/// Ligne de la barre d'une **autre** tâche sous le pointeur `p` (corps,
+/// bords compris), cible d'un lien (R-243 : lâcher sur la barre de B ;
+/// relecture finale J7, F7 : lâcher n'importe où sur une autre ligne,
+/// même dans le vide, liait au lieu de déplacer).
+fn link_target(
+    rows: &RowModel,
+    axis: &TimeAxis,
+    origin: Pos2,
+    row_h: f32,
+    tracking: bool,
+    p: Pos2,
+    from: TaskUid,
+) -> Option<usize> {
+    match gantt::hit_test(rows, axis, origin, row_h, tracking, p) {
+        GanttHit::Bar(uid) | GanttHit::BarStart(uid) | GanttHit::BarEnd(uid) if uid != from => {
+            rows.index_of(uid)
+        }
+        _ => None,
+    }
+}
+
 /// Curseur au survol d'une barre : bords redimensionnables, intérieur
 /// saisissable.
 fn hover_cursor(ui: &egui::Ui, hit: GanttHit) {
@@ -500,8 +521,8 @@ fn hover_cursor(ui: &egui::Ui, hit: GanttHit) {
 }
 
 /// Lâcher du glisser `d` : un seul lot (`ExecOn`), ou le refus du geste au
-/// bandeau ; lien vers une autre ligne (R-243 : ligne vide, tâche exclue ou
-/// la même tâche ⇒ rien), déplacement (R-240 ; récapitulative : rien),
+/// bandeau ; lien vers la barre d'une autre tâche sous le pointeur (R-243 ;
+/// ailleurs, même sur une autre ligne, le geste reste un déplacement), déplacement (R-240 ; récapitulative : rien),
 /// redimensionnement (R-241), avancement (R-242, seulement si le pointeur
 /// a bougé d'au moins un demi-jour).
 fn drop_gesture(fc: &mut FrameCtx<'_>, doc: &OpenDocument, rows: &RowModel, d: &BarDrag, moved: bool) {

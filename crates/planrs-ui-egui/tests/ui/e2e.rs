@@ -325,8 +325,18 @@ fn e2e_daily_use() {
     );
     assert_eq!(history(app), (3, 0));
 
-    // 5. Tracer un lien : de la barre déplacée vers une ligne suivante.
-    let target = (i + 1..i + 6)
+    // 5. Tracer un lien : de la barre déplacée vers la barre d'une ligne
+    // suivante (R-243 : lâcher sur la barre), visible à l'écran : zoom Mois
+    // pour que les barres voisines tiennent dans la largeur du Gantt.
+    harness
+        .state_mut()
+        .dispatch(Action::SetZoom(planrs_ui_egui::TimeScaleZoom::Month));
+    harness.run();
+    let (left, width) = {
+        let view = harness.state().view();
+        (view.last_gantt_left, view.last_gantt_width)
+    };
+    let target = (i + 1..i + 12)
         .find(|&j| {
             let app = harness.state();
             app.rows().unwrap().row(j).is_some_and(|row| {
@@ -335,13 +345,21 @@ fn e2e_daily_use() {
                         .predecessors
                         .iter()
                         .any(|l| l.predecessor == moved)
+                    && {
+                        let (tx0, tx1) = bar_x(harness, j);
+                        tx1.min(left + width - 4.0) - tx0.max(left + 4.0) > 6.0
+                    }
             })
         })
         .expect("aucune ligne cible");
     let target_uid = uid_at(harness.state(), target);
     let (x0, x1) = bar_x(harness, i);
     let from = pos2(f32::midpoint(x0, x1), row_y(harness, i));
-    let to = pos2(from.x, row_y(harness, target));
+    // Lâcher sur la partie visible de la barre de la cible (lâché hors
+    // d'une barre, le geste reste un déplacement).
+    let (tx0, tx1) = bar_x(harness, target);
+    let x = f32::midpoint(tx0.max(left + 4.0), tx1.min(left + width - 4.0));
+    let to = pos2(x, row_y(harness, target));
     drag(harness, from, to);
     let app = harness.state();
     quiet(app);

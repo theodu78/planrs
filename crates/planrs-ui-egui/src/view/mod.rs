@@ -162,7 +162,8 @@ pub struct BarDrag {
     pub origin_x: f32,
     /// Écart courant en jours entiers (`TimeAxis::days_for_dx`).
     pub days: i64,
-    /// Ligne survolée (tracer un lien).
+    /// Ligne de la barre d'une autre tâche sous le pointeur (tracer un
+    /// lien, R-243) ; `None` ailleurs, même sur une autre ligne.
     pub over_row: Option<usize>,
     /// Aperçu pour `days`, recalculé seulement quand `days` change.
     pub preview: Option<Preview>,

@@ -1,17 +1,31 @@
-# Construction des binaires de l'interface (desktop macOS universel, Linux) et
-# du paquet web statique (`dist/` de trunk), publiés comme artefacts `.tar.gz`
-# (upload-artifact perd le bit exécutable : on archive nous-mêmes).
+# Construction des artefacts de plateforme de planrs (J8, lot L1) :
+# - macOS : `planrs.app` universel (x86_64 + arm64) signé ad hoc, avec la
+#   CLI dans `cli/planrs`, dans un DMG ;
+# - Windows : zip de `planrs-desktop.exe`, `planrs.exe` et `README.txt` ;
+# - Linux : archive construite dans un conteneur `debian:bookworm` (glibc
+#   2.36 : les binaires tournent sur toute distribution plus récente) ;
+# - web : `dist` de trunk.
+# Chaque artefact s'appelle `planrs-<version>-<plateforme>.<ext>`, version du
+# workspace (job `version`).
 #
-# Déclenchement : tag `ui-*` poussé (le workflow du commit tagué est utilisé),
-# ou à la main (`workflow_dispatch`, visible seulement une fois ce fichier sur
-# la branche par défaut). Aucun secret, aucune signature ni notarisation
-# (ADR-0011, décision 13).
+# Deux usages, une seule définition des builds :
+# - préversions : tag `ui-*` poussé, ou lancement manuel (`workflow_dispatch`,
+#   visible une fois ce fichier sur la branche par défaut) ; artefacts
+#   d'Actions seulement, ni vérification ni publication ;
+# - release : appelé par `release.yml` (`workflow_call`), qui vérifie les
+#   artefacts (C-REL-02 à C-REL-06) puis les publie.
+# Aucun secret ; jeton en lecture seule.
 name: Desktop build
 
 on:
   workflow_dispatch: {}
   push:
     tags: ['ui-*']
+  workflow_call:
+    outputs:
+      version:
+        description: Version du workspace (noms des artefacts, `--version` attendu)
+        value: ${{ jobs.version.outputs.version }}
 
 permissions:
   contents: read
@@ -20,9 +34,29 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  macos:
-    name: macOS (universel aarch64 + x86_64)
+  version:
+    name: Version du workspace
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Lire [workspace.package] version
+        id: read
+        run: |
+          version="$(python3 -I -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          echo "version : $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build-macos:
+    name: macOS (DMG universel)
+    needs: version
     runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      # Même plancher que `LSMinimumSystemVersion` de l'Info.plist.
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - uses: actions/checkout@v7
 
@@ -32,64 +66,137 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Cible x86_64
-        run: rustup target add x86_64-apple-darwin
-
-      - name: Build aarch64
-        run: cargo build --release --locked -p planrs --target aarch64-apple-darwin
-
-      - name: Build x86_64
-        run: cargo build --release --locked -p planrs --target x86_64-apple-darwin
-
-      - name: Binaire universel et archive
+      - name: Build (x86_64 puis arm64)
         run: |
-          lipo -create -output planrs-desktop \
-            target/aarch64-apple-darwin/release/planrs-desktop \
-            target/x86_64-apple-darwin/release/planrs-desktop
-          chmod +x planrs-desktop
-          lipo -info planrs-desktop
-          echo "planrs-desktop : binaire macOS universel (Apple Silicon et Intel), NON signé." > README.txt
-          echo "Premier lancement : clic droit sur le fichier puis Ouvrir, ou dans le Terminal : xattr -d com.apple.quarantine planrs-desktop" >> README.txt
-          echo "Lancer ensuite par double-clic ou dans le Terminal : ./planrs-desktop" >> README.txt
-          tar czf planrs-desktop-macos-universal.tar.gz planrs-desktop README.txt
+          for target in x86_64-apple-darwin aarch64-apple-darwin; do
+            cargo build --release --locked -p planrs -p planrs-cli --target "$target"
+          done
+
+      - name: Binaires universels
+        run: |
+          mkdir -p universal
+          for bin in planrs-desktop planrs; do
+            lipo -create -output "universal/$bin" \
+              "target/x86_64-apple-darwin/release/$bin" \
+              "target/aarch64-apple-darwin/release/$bin"
+            lipo -archs "universal/$bin"
+          done
+
+      - name: planrs.app, icône, signature ad hoc, DMG
+        run: |
+          app=stage/planrs.app
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" stage/cli
+          short="${VERSION%%-*}"
+          sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHORT_VERSION@/$short/g" \
+            packaging/macos/Info.plist > "$app/Contents/Info.plist"
+          plutil -lint "$app/Contents/Info.plist"
+          cp universal/planrs-desktop "$app/Contents/MacOS/planrs-desktop"
+          # Icône : jeu iconutil (1x et 2x) tiré de assets/icon (cargo xtask icon).
+          mkdir planrs.iconset
+          for n in 16 32 128 256 512; do
+            cp "assets/icon/planrs-$n.png" "planrs.iconset/icon_${n}x${n}.png"
+            cp "assets/icon/planrs-$((n * 2)).png" "planrs.iconset/icon_${n}x${n}@2x.png"
+          done
+          iconutil -c icns planrs.iconset -o "$app/Contents/Resources/planrs.icns"
+          cp universal/planrs stage/cli/planrs
+          cp packaging/macos/LISEZ-MOI.txt stage/LISEZ-MOI.txt
+          ln -s /Applications stage/Applications
+          codesign --force -s - stage/cli/planrs
+          codesign --force --deep -s - "$app"
+          hdiutil create -volname "planrs $VERSION" -srcfolder stage -format UDZO -ov \
+            "planrs-$VERSION-macos-universal.dmg"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: planrs-desktop-macos-universal
-          path: planrs-desktop-macos-universal.tar.gz
+          name: planrs-${{ needs.version.outputs.version }}-macos-universal.dmg
+          path: planrs-${{ needs.version.outputs.version }}-macos-universal.dmg
           if-no-files-found: error
 
-  linux:
-    name: Linux (x86_64)
-    runs-on: ubuntu-24.04
+  build-windows:
+    name: Windows (zip x86_64)
+    needs: version
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --release --locked -p planrs
+        run: cargo build --release --locked -p planrs -p planrs-cli --target x86_64-pc-windows-msvc
 
-      - name: Archive
+      - name: Zip
         run: |
-          cp target/release/planrs-desktop planrs-desktop
-          chmod +x planrs-desktop
-          echo "planrs-desktop : binaire Linux x86_64, non signé ; lancer : ./planrs-desktop" > README.txt
-          echo "« Ouvrir... » exige un portail XDG (xdg-desktop-portal, présent sur GNOME et KDE) ; sinon, utiliser l'exemple." >> README.txt
-          echo "Requis : libxkbcommon-x11-0 (X11) ou une session Wayland, et un pilote Vulkan ou OpenGL." >> README.txt
-          tar czf planrs-desktop-linux-x86_64.tar.gz planrs-desktop README.txt
+          dir="planrs-$VERSION-windows-x86_64"
+          mkdir "$dir"
+          cp target/x86_64-pc-windows-msvc/release/planrs-desktop.exe \
+            target/x86_64-pc-windows-msvc/release/planrs.exe \
+            packaging/windows/README.txt "$dir/"
+          7z a -tzip "$dir.zip" "$dir"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: planrs-desktop-linux-x86_64
-          path: planrs-desktop-linux-x86_64.tar.gz
+          name: planrs-${{ needs.version.outputs.version }}-windows-x86_64.zip
+          path: planrs-${{ needs.version.outputs.version }}-windows-x86_64.zip
           if-no-files-found: error
 
-  web:
-    name: Web (trunk, wasm32)
+  build-linux:
+    name: Linux (x86_64, debian:bookworm)
+    needs: version
     runs-on: ubuntu-24.04
+    container: debian:bookworm
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      # Avant le checkout : git (clone réel) ; gcc et libc6-dev pour l'édition
+      # de liens ; aucun autre paquet système n'est exigé à la compilation.
+      - name: Outils du conteneur
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git gcc libc6-dev
+
+      - uses: actions/checkout@v7
+
+      - name: rustup (stable, profil minimal)
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked -p planrs -p planrs-cli
+
+      - name: Archive
+        run: |
+          dir="planrs-$VERSION-linux-x86_64"
+          mkdir "$dir"
+          cp target/release/planrs-desktop target/release/planrs packaging/linux/planrs.desktop "$dir/"
+          cp assets/icon/planrs-256.png "$dir/planrs.png"
+          chmod +x "$dir/planrs-desktop" "$dir/planrs"
+          tar czf "$dir.tar.gz" "$dir"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planrs-${{ needs.version.outputs.version }}-linux-x86_64.tar.gz
+          path: planrs-${{ needs.version.outputs.version }}-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  build-web:
+    name: Web (trunk, wasm32)
+    needs: version
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
 
@@ -109,14 +216,17 @@ jobs:
 
       - name: Archive
         run: |
-          ls -l apps/planrs-web/dist
-          echo "Version web de planrs : fichiers statiques, à servir en HTTP (pas en file://)." > apps/planrs-web/dist/README.txt
-          echo "Par exemple, depuis le dossier qui contient dist : python3 -m http.server -d dist 8080" >> apps/planrs-web/dist/README.txt
-          echo "Puis ouvrir http://localhost:8080 dans un navigateur récent (WebGPU ou WebGL2)." >> apps/planrs-web/dist/README.txt
-          tar czf planrs-web-dist.tar.gz -C apps/planrs-web dist
+          dist=apps/planrs-web/dist
+          ls -l "$dist"
+          {
+            echo "Version web de planrs $VERSION : fichiers statiques, à servir en HTTP (pas en file://)."
+            echo "Par exemple, depuis le dossier qui contient dist : python3 -m http.server -d dist 8080"
+            echo "Puis ouvrir http://localhost:8080 dans un navigateur récent (WebGPU ou WebGL2)."
+          } > "$dist/README.txt"
+          tar czf "planrs-$VERSION-web.tar.gz" -C apps/planrs-web dist
 
       - uses: actions/upload-artifact@v4
         with:
-          name: planrs-web-dist
-          path: planrs-web-dist.tar.gz
+          name: planrs-${{ needs.version.outputs.version }}-web.tar.gz
+          path: planrs-${{ needs.version.outputs.version }}-web.tar.gz
           if-no-files-found: error

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Info.plist de planrs.app (J8, lot L1). Gabarit : @VERSION@ (version
+  complète, ex. 1.0.0-rc.1) et @SHORT_VERSION@ (X.Y.Z seul, forme exigée
+  par CFBundleShortVersionString) sont remplacés par le job build-macos
+  de desktop-build.yml (appelé par release.yml). Identifiant du bundle et nom : docs/rename.md.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>fr</string>
+	<key>CFBundleDisplayName</key>
+	<string>planrs</string>
+	<key>CFBundleExecutable</key>
+	<string>planrs-desktop</string>
+	<key>CFBundleIconFile</key>
+	<string>planrs</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.theodu78.planrs</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>planrs</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@SHORT_VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@SHORT_VERSION@</string>
+	<key>CFBundleGetInfoString</key>
+	<string>planrs @VERSION@</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Les contributeurs de planrs, MIT OR Apache-2.0</string>
+</dict>
+</plist>

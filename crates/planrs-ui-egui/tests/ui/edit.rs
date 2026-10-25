@@ -422,6 +422,73 @@ fn ui_edit_keymap_inactive_while_editing() {
     assert_eq!(history_entries(harness.state()), 0, "Ctrl+Z rendu à l'historique");
 }
 
+/// Réseau généré de 80 tâches, tâche de la ligne 2 sélectionnée (colonne
+/// Nom), table défilée jusqu'à la ligne 60 : la ligne 2 est hors de l'écran.
+fn offscreen_selection() -> (Harness<'static, App>, TaskUid) {
+    let mut app = crate::new_app();
+    let origin = planrs_ui_egui::DocOrigin {
+        name: "réseau".to_owned(),
+        path: None,
+        demo: false,
+    };
+    app.open_project(planrs_tests::generate::ui_network(4, 19, 50), origin);
+    let mut harness = crate::harness_for(app);
+    harness.run();
+    let uid = harness.state().rows().unwrap().row(2).unwrap().uid;
+    harness.state_mut().dispatch(Action::Select(Some(uid)));
+    harness.run();
+    harness.state_mut().dispatch(Action::ScrollToRow(60));
+    harness.run();
+    assert_eq!(harness.state().view().cursor.column, Column::Name);
+    assert!(
+        !harness.state().last_frame.table_rows.contains(&2),
+        "{:?}",
+        harness.state().last_frame.table_rows
+    );
+    (harness, uid)
+}
+
+/// Nom de la tâche `uid`.
+fn task_name(app: &App, uid: TaskUid) -> Option<String> {
+    app.document
+        .as_ref()
+        .unwrap()
+        .project()
+        .tasks
+        .get(uid)
+        .map(|task| task.name.clone())
+}
+
+/// Relecture finale J7, F2 : une frappe sur une ligne hors de l'écran
+/// amène la ligne à l'écran et la saisie reçoit tout le texte (« Revue »,
+/// pas « R ») ; Retour arrière pendant la saisie efface un caractère, il ne
+/// supprime pas la tâche.
+#[test]
+fn ui_edit_offscreen_row_is_revealed_and_keeps_typing() {
+    let (mut harness, uid) = offscreen_selection();
+    type_text(&mut harness, "R");
+    type_text(&mut harness, "evue");
+    assert!(
+        harness.state().last_frame.table_rows.contains(&2),
+        "ligne amenée à l'écran"
+    );
+    press(&mut harness, Key::Enter);
+    assert_eq!(task_name(harness.state(), uid).as_deref(), Some("Revue"));
+
+    let (mut harness, uid) = offscreen_selection();
+    let tasks = harness.state().document.as_ref().unwrap().project().tasks.len();
+    type_text(&mut harness, "R");
+    // Retour arrière et frappe dans l'image qui suit l'ouverture (zone de
+    // saisie pas encore focalisée).
+    harness.key_press(Key::Backspace);
+    harness.event(Event::Text("Z".to_owned()));
+    harness.run();
+    press(&mut harness, Key::Enter);
+    let doc = harness.state().document.as_ref().unwrap();
+    assert_eq!(doc.project().tasks.len(), tasks, "aucune tâche supprimée");
+    assert_eq!(task_name(harness.state(), uid).as_deref(), Some("Z"));
+}
+
 fn history_entries(app: &App) -> usize {
     app.document.as_ref().unwrap().session.history().entries.len()
 }

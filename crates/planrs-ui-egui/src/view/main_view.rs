@@ -129,6 +129,9 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
     } = paint_rows(ui, fc, view, &layout, &axis);
     view.last_scroll_y = scroll_y;
     view.last_body_height = view_h;
+    if std::mem::take(&mut view.edit.reveal) {
+        reveal_edited_row(fc, view);
+    }
     context_menu(ui, fc, context_click);
 
     // Molette horizontale (ou Maj + molette) au-dessus du Gantt : la
@@ -172,6 +175,33 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
         fc.actions.push(Action::ScrollGanttX(dx));
     }
     ui.advance_cursor_after_rect(avail);
+}
+
+/// Saisie ouverte (F2, frappe, double-clic) : sa ligne, si elle n'est pas
+/// entièrement à l'écran, y est amenée avec une ligne de marge (H-UI-17) ;
+/// la zone de saisie est dessinée dès l'image suivante (relecture finale J7,
+/// F2 : une saisie ouverte hors de l'écran ne recevait pas la frappe).
+fn reveal_edited_row(fc: &FrameCtx<'_>, view: &mut ViewTransient) {
+    let (Some(rows), Some(state)) = (fc.rows, view.edit.editing.as_ref()) else {
+        return;
+    };
+    let index = match state.uid {
+        Some(uid) => match rows.index_of(uid) {
+            Some(index) => index,
+            None => return,
+        },
+        None => rows.len(),
+    };
+    let row_h = fc.metrics.row_h;
+    let top = geom::index_to_f32(index) * row_h;
+    let (offset, height) = (view.last_scroll_y, view.last_body_height);
+    if top >= offset && top + row_h <= offset + height {
+        return;
+    }
+    if let Some(y) = crate::nav::ensure_visible(offset, index, row_h, height, rows.len().saturating_add(1)) {
+        view.pending_scroll_y = Some(y);
+        view.last_scroll_y = y;
+    }
 }
 
 /// Résultat du corps : défilement horizontal demandé et clic droit.

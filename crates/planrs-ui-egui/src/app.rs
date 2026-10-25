@@ -1966,7 +1966,10 @@ impl App {
         // retirées de l'image (rien n'atteint la table ni le Gantt).
         if self.view.dialog.is_some() {
             self.show_dialog(&ctx);
-        } else {
+        } else if self.view.edit.editing.is_none() && self.view.resources.edit.editing.is_none() {
+            // Saisie de cellule ouverte : aucun raccourci, même si sa zone
+            // n'a pas encore le focus (relecture finale J7, F2 : Retour
+            // arrière supprimait la tâche).
             crate::keymap::dispatch(&ctx, self.key_state(&ctx), &mut actions);
         }
         let mut stats = FrameStats::default();

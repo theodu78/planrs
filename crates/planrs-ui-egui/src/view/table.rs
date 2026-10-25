@@ -751,6 +751,12 @@ fn edit_cells(
         close_editor(ui, edit);
         return;
     };
+    // Zone de saisie sans le focus (pas encore dessinée : ligne hors de la
+    // plage, ou focus demandé pour cette image) : la frappe va au tampon,
+    // rien n'est perdu (relecture finale J7, F2).
+    if !ui.memory(|memory| memory.has_focus(grid::editor_id())) {
+        absorb_keys(ui, edit);
+    }
     let mut finish = finish_keys(ui);
     if finish.is_none() && grid::scrolled(ui) {
         finish = Some(Finish::Commit(Move::Stay));
@@ -772,6 +778,24 @@ fn edit_cells(
         }
         Some(Finish::Commit(motion)) => commit(ui, fc, edit, cursor, motion),
     }
+}
+
+/// Frappe reçue alors que la zone de saisie n'a pas encore le focus :
+/// caractères ajoutés au tampon, Retour arrière en retire un par appui.
+fn absorb_keys(ui: &egui::Ui, edit: &mut TableEdit) {
+    let Some(state) = edit.editing.as_mut() else {
+        return;
+    };
+    let typed = take_typed(ui.ctx());
+    let erased = ui.input_mut(|input| input.count_and_consume_key(Modifiers::NONE, Key::Backspace));
+    if typed.is_empty() && erased == 0 {
+        return;
+    }
+    state.buffer.push_str(&typed);
+    for _ in 0..erased {
+        state.buffer.pop();
+    }
+    state.error = None;
 }
 
 /// Dessine la zone de saisie dans `rect` (et l'erreur dessous) ; rend vrai

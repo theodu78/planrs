@@ -749,3 +749,4 @@ Derniers numéros pris : R-236, O43, S59, P44, H-UI-12. Cahier d'implémentation
 
 **Relecture finale J7 (2026-10-25, branche `j7-review`).** Constats d'une relecture vérifiée par un adversaire, corrigés avec un test qui échoue sans le correctif :
 - *P49 en CI* : `PROPTEST_CASES=10000` (CI) l'emporte sur `with_cases(1 024)` et les `prop_assume` (cibles un week-end) dépassaient le plafond de rejets de proptest : écart recalé vers l'avant jusqu'à un jour ouvré, aucun rejet.
+- *Saisie hors de l'écran* : F2 ou une frappe sur une ligne courante défilée hors de l'écran amène la ligne à l'écran (`TableEdit::reveal`) ; la frappe reçue avant que la zone ait le focus va au tampon ; aucun raccourci tant qu'une saisie est ouverte (Retour arrière supprimait la tâche hors de l'écran).

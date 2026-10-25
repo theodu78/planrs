@@ -128,13 +128,18 @@ pub struct TableEdit {
     /// Donner le focus à la zone de saisie (curseur en fin de texte) à la
     /// prochaine image.
     pub focus_pending: bool,
+    /// Amener la ligne éditée à l'écran (saisie ouverte par F2 ou la frappe
+    /// sur une ligne hors de la plage dessinée, relecture finale J7, F2) :
+    /// lu par la vue principale après le dessin des lignes.
+    pub reveal: bool,
 }
 
 impl TableEdit {
-    /// Ouvre une saisie et demande le focus.
+    /// Ouvre une saisie, demande le focus et la ligne à l'écran.
     pub fn start(&mut self, state: EditState) {
         self.editing = Some(state);
         self.focus_pending = true;
+        self.reveal = true;
     }
 }
 

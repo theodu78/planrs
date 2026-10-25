@@ -149,14 +149,14 @@
     "summary": {
       "outline16": 0,
       "shape": "bracket",
-      "height_pct": 30,
+      "height_pct": 36,
       "radius16": 0,
       "pattern": "solid"
     },
     "summary_critical": {
       "outline16": 0,
       "shape": "bracket",
-      "height_pct": 30,
+      "height_pct": 36,
       "radius16": 0,
       "pattern": "solid"
     },
@@ -177,7 +177,7 @@
     "progress": {
       "outline16": 0,
       "shape": "bar",
-      "height_pct": 35,
+      "height_pct": 23,
       "radius16": 0,
       "pattern": "solid"
     },
@@ -221,8 +221,8 @@
   "scale": {
     "tiers": "auto",
     "week_numbers": false,
-    "shade_non_working": true,
-    "status_label": true,
+    "shade_non_working": false,
+    "status_label": false,
     "today_mark": false
   },
   "grid": {
@@ -237,7 +237,7 @@
     "size16": 192
   },
   "legend": {
-    "show": true,
+    "show": false,
     "every_page": false
   },
   "page": {

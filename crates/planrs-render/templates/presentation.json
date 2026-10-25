@@ -233,10 +233,10 @@
       "right": "finish"
     },
     "summary": {
-      "inside": "name"
+      "right": "start_finish"
     },
     "summary_critical": {
-      "inside": "name"
+      "right": "start_finish"
     }
   },
   "scale": {

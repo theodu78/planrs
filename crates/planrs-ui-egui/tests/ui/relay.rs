@@ -479,8 +479,15 @@ fn relay_agent_entry_single_undo() {
 #[test]
 fn relay_ui_state_and_ui_actions() {
     let (mut harness, tx) = relay_harness();
+    harness
+        .state_mut()
+        .state
+        .remember_recent("/home/u/clients/autre-client.xml", "autre-client.xml");
     let sent = push(&tx, RelayKind::UiState);
     let state = ok_value(finish(&mut harness, &sent, true));
+    // Relecture finale J7, relais F7 : aucun chemin d'un autre projet.
+    assert!(state["ui_state"].get("recent").is_none(), "{}", state["ui_state"]);
+    assert!(!state.to_string().contains("autre-client"));
     assert_eq!(state["view"], "gantt");
     assert_eq!(state["dirty"], false);
     assert_eq!(state["generation"], 0);

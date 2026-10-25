@@ -613,15 +613,21 @@ impl App {
     }
 
     /// `app.ui_state` : préférences, sélection, vue, lignes visibles,
-    /// document modifié, génération, numéro d'ouverture.
+    /// document modifié, génération, numéro d'ouverture. Les fichiers récents
+    /// (`recent`) ne sont **pas** rendus : chemins et noms d'autres projets
+    /// de l'utilisateur, sans rapport avec la session de l'agent (relecture
+    /// finale J7, relais F7).
     #[must_use]
     pub fn ui_state_json(&self) -> Value {
-        let ui_state = self
+        let mut ui_state = self
             .state
             .to_json()
             .ok()
             .and_then(|s| serde_json::from_str::<Value>(&s).ok())
             .unwrap_or(Value::Null);
+        if let Value::Object(map) = &mut ui_state {
+            map.remove("recent");
+        }
         let mut selection: Vec<u32> = self.selected.click_order().iter().map(|uid| uid.get()).collect();
         selection.sort_unstable();
         let visible = self.rows.as_ref().map(|rows| {

@@ -82,14 +82,17 @@ fn contract_j8_reserved_and_new_fields_refused() {
 fn contract_j8_skeletons_answer_without_panic() {
     let s = session();
     let uids = [TaskUid::new(1), TaskUid::new(2)];
-    assert_eq!(
+    // Raccourcis (L2, R-252, R-253, R-255) : des lots ordinaires.
+    for b in [
         helpers::mark_percent(&s, &uids, PercentStep::P50),
-        Err(HelperError::NotYetAvailable)
-    );
-    assert_eq!(helpers::toggle_mode(&s, &uids), Err(HelperError::NotYetAvailable));
-    assert_eq!(
+        helpers::toggle_mode(&s, &uids),
         helpers::toggle_active(&s, &uids),
-        Err(HelperError::NotYetAvailable)
+    ] {
+        assert_eq!(b.unwrap().map(|b| b.ops.len()), Some(2));
+    }
+    assert_eq!(
+        helpers::toggle_active(&s, &[TaskUid::new(9)]),
+        Err(HelperError::UnknownTask(TaskUid::new(9)))
     );
     assert_eq!(PercentStep::P75.hundredths(), 7_500);
     assert_eq!(RowClip::capture(&s, &uids), Err(ClipError::NotYetAvailable));

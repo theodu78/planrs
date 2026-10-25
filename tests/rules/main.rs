@@ -244,8 +244,10 @@ mod r248_calendar_commands;
 mod r249_project_calendar;
 mod r250_baseline_clear;
 mod r251_task_filter;
+mod r252_mark_percent;
 mod r253_mode_toggle;
 mod r254_manual_dates;
+mod r255_active_toggle;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

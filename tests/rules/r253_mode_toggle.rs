@@ -138,3 +138,34 @@ fn r253_manual_to_auto_recalc_keeps_constraint() {
         SchedulingMode::Manual { start: Some(a), finish: Some(b), .. } if a == start && b == finish
     ));
 }
+
+#[test]
+fn r253_toggle_mode_helper() {
+    // Raccourci de l'interface (H-UI-36) : une tâche automatique dans la
+    // sélection ⇒ toutes en manuel ; sinon toutes en automatique ; sans
+    // cascade aux descendants ; un lot.
+    use planrs_automation::helpers;
+    use planrs_tests::daily::uids;
+    let mut s = plan_p();
+    apply(
+        &mut s,
+        json!([{ "op": "task.update", "uid": 6, "mode": "manual" }]),
+    );
+    let b = helpers::toggle_mode(&s, &uids(&[6, 2, 6])).unwrap().unwrap();
+    assert_eq!(b.ops.len(), 1);
+    s.apply(&b, planrs_automation::ApplyMode::Commit).unwrap();
+    assert!(matches!(get(&s, 2).mode, SchedulingMode::Manual { .. }));
+    assert_eq!(
+        dates(&s, 2),
+        (moment("2026-10-19T08:00"), moment("2026-10-23T17:00"))
+    );
+    let b = helpers::toggle_mode(&s, &uids(&[2, 6])).unwrap().unwrap();
+    assert_eq!(b.ops.len(), 2);
+    s.apply(&b, planrs_automation::ApplyMode::Commit).unwrap();
+    assert_eq!(get(&s, 2).mode, SchedulingMode::Auto);
+    assert_eq!(get(&s, 6).mode, SchedulingMode::Auto);
+    // Récapitulative seule : elle bascule, pas ses enfants.
+    let b = helpers::toggle_mode(&s, &uids(&[5])).unwrap().unwrap();
+    assert_eq!(b.ops.len(), 1);
+    assert_eq!(helpers::toggle_mode(&s, &[]), Ok(None));
+}

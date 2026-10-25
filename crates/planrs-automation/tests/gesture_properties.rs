@@ -4,10 +4,12 @@
 //! d'origine, `bar_resize(n)` puis `bar_resize(−n)` la durée d'origine ;
 //! l'aperçu (`gesture::preview`) donne le début et la fin calculés après
 //! application ; chaque geste appliqué fait une seule entrée d'annulation
-//! (1 024 cas). Écarts tirés pour que la cible tombe un jour ouvré (une
-//! cible chômée est recalée par le moteur, R-090 : l'aller-retour ne rend
-//! alors pas l'origine, par construction) ; déplacements vers l'avant
-//! seulement (rien ne passe avant le début du projet, R-036).
+//! (1 024 cas). Écarts recalés vers l'avant jusqu'à ce que la cible tombe
+//! un jour ouvré (une cible chômée est recalée par le moteur, R-090 :
+//! l'aller-retour ne rend alors pas l'origine, par construction) ; pas de
+//! `prop_assume` : avec `PROPTEST_CASES=10000` (CI), les rejets dépassaient
+//! le plafond global de proptest. Déplacements vers l'avant seulement (rien
+//! ne passe avant le début du projet, R-036).
 
 #![allow(
     clippy::unwrap_used,
@@ -70,6 +72,16 @@ fn commit(s: &mut Session, b: &Batch) {
     assert_eq!(s.history().entries.len(), before + 1);
 }
 
+/// Premier écart `≥ n` qui satisfait `ok` (recalage vers l'avant au lieu
+/// d'un rejet : la boucle finit, une cible ouvrée est au plus 2 jours plus
+/// loin et `target > start` devient vrai pour un écart assez grand).
+fn next_working_offset(mut n: i64, ok: impl Fn(i64) -> bool) -> i64 {
+    while !ok(n) {
+        n += 1;
+    }
+    n
+}
+
 /// Durée en texte : heures (1 à 60 h) ou jours (1 à 10 j).
 fn duration_text() -> impl Strategy<Value = String> {
     prop_oneof![
@@ -90,7 +102,7 @@ proptest! {
         let mut s = session(&durations);
         let uid = TaskUid::new(u32::try_from(pick % durations.len()).unwrap() + 1);
         let (start, _) = dates(&s, uid);
-        prop_assume!(working_day(plus_days(start, n)));
+        let n = next_working_offset(n, |n| working_day(plus_days(start, n)));
         let set = CalendarSet::compile(s.project()).0;
         let p = gesture::preview(&s, &set, uid, GestureKind::Move, n).unwrap();
         let b = gesture::bar_move(&s, uid, n).unwrap().unwrap();
@@ -107,12 +119,14 @@ proptest! {
         pick in 0_usize..8,
         n in -12_i64..=20,
     ) {
-        prop_assume!(n != 0);
         let mut s = session(&durations);
         let uid = TaskUid::new(u32::try_from(pick % durations.len()).unwrap() + 1);
         let (start, finish) = dates(&s, uid);
+        let n = next_working_offset(n, |n| {
+            let target = plus_days(finish, n);
+            n != 0 && target > start && working_day(target)
+        });
         let target = plus_days(finish, n);
-        prop_assume!(target > start && working_day(target));
         let original = duration(&s, uid);
         let set = CalendarSet::compile(s.project()).0;
         let p = gesture::preview(&s, &set, uid, GestureKind::Resize, n).unwrap();

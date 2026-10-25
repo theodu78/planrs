@@ -455,6 +455,44 @@ fn task_info_ok_single_undo() {
     assert_eq!(history_entries(harness.state()), 0);
 }
 
+/// Relecture finale J7, F8 : Entrée dans un champ valide la fenêtre comme
+/// « OK » ; dans les notes (multiligne), Entrée va à la ligne et la fenêtre
+/// reste ouverte.
+#[test]
+fn task_info_enter_validates() {
+    let mut harness = harness();
+    open_demo(&mut harness);
+    open_info(&mut harness, 3);
+    retype(&mut harness, &fr(TextId::TaskInfoDuration), "12j");
+    harness.key_press(Key::Enter);
+    harness.run();
+    let app = harness.state();
+    assert!(info(app).is_none(), "Entrée n'a pas validé la fenêtre");
+    assert_eq!(history_entries(app), 1);
+    let task = app
+        .document
+        .as_ref()
+        .unwrap()
+        .project()
+        .tasks
+        .get(uid(3))
+        .unwrap();
+    assert_eq!(task.duration.minutes().get(), 12 * 480);
+    // Notes : Entrée reste dans la zone multiligne.
+    open_info(&mut harness, 3);
+    click_label(&mut harness, &fr(TextId::TaskInfoTabNotes));
+    retype(&mut harness, &fr(TextId::TaskInfoNotes), "Ligne 1");
+    harness.key_press(Key::Enter);
+    harness.run();
+    let state = info(harness.state()).expect("fenêtre gardée : Entrée dans les notes");
+    assert!(
+        state.draft.notes.starts_with("Ligne 1"),
+        "{:?}",
+        state.draft.notes
+    );
+    assert_eq!(history_entries(harness.state()), 1);
+}
+
 /// Un refus du registre s'affiche dans la fenêtre, sur l'onglet du champ ;
 /// rien n'est appliqué ni affiché dans le bandeau.
 #[test]
@@ -521,8 +559,9 @@ fn task_info_keys_do_not_leak_to_table() {
     harness.key_press_modifiers(Modifiers::SHIFT, Key::F2);
     harness.run();
     assert!(info(harness.state()).is_some());
-    // Aucun champ focalisé : la frappe irait à la table sans la garde.
-    for key in [Key::ArrowDown, Key::Enter, Key::Delete, Key::F2, Key::Tab] {
+    // Aucun champ focalisé : la frappe irait à la table sans la garde
+    // (Entrée valide la fenêtre : `task_info_enter_validates`).
+    for key in [Key::ArrowDown, Key::Delete, Key::F2, Key::Tab] {
         harness.key_press(key);
         harness.run();
     }

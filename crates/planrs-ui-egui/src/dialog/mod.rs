@@ -36,6 +36,33 @@ use planrs_core::TaskUid;
 use crate::action::DialogKind;
 use crate::app::{App, EditOrigin};
 
+/// Lu **avant** le dessin d'une fenêtre : Entrée la validera-t-elle à cette
+/// image ? Aucun widget focalisé, ou une zone de saisie d'une ligne (Entrée y
+/// termine le champ, puis valide la fenêtre) ; jamais la zone multiligne
+/// `multiline` (Notes : Entrée y va à la ligne), ni un bouton, une case ou
+/// une liste focalisés (Entrée les actionne). Relecture finale J7, F8 :
+/// aucune fenêtre ne se validait par Entrée, contrairement à MS Project.
+pub(crate) fn enter_armed(ctx: &egui::Context, multiline: Option<egui::Id>) -> bool {
+    let focused = ctx.memory(egui::Memory::focused);
+    let on_multiline = multiline.is_some_and(|id| focused == Some(id));
+    !on_multiline && (focused.is_none() || ctx.text_edit_focused())
+}
+
+/// Lu **après** le dessin : Entrée (sans modificateur) valide la fenêtre
+/// du dessus si elle était armée ([`enter_armed`]) et qu'aucune liste
+/// déroulante n'est ouverte ; la touche est consommée.
+pub(crate) fn enter_pressed(
+    ctx: &egui::Context,
+    armed: bool,
+    is_top_modal: bool,
+    any_popup_open: bool,
+) -> bool {
+    armed
+        && is_top_modal
+        && !any_popup_open
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+}
+
 /// Fenêtre ouverte (état transitoire de la vue, jamais sérialisé).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DialogState {

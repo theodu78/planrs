@@ -1010,6 +1010,7 @@ fn combo<T: Copy + PartialEq>(
 /// d'abord) ; un clic hors de la fenêtre ne la ferme pas (brouillon gardé).
 pub fn show(ctx: &egui::Context, texts: &Texts, state: &mut TaskInfoState) -> Outcome {
     let mut outcome = Outcome::Open;
+    let armed = super::enter_armed(ctx, Some(notes_id()));
     let response = egui::Modal::new(modal_id()).show(ctx, |ui| {
         ui.set_width(560.0);
         let title = texts.get_args(
@@ -1064,6 +1065,11 @@ pub fn show(ctx: &egui::Context, texts: &Texts, state: &mut TaskInfoState) -> Ou
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
     if escape {
         outcome = Outcome::Cancel;
+    }
+    if outcome == Outcome::Open
+        && super::enter_pressed(ctx, armed, response.is_top_modal, response.any_popup_open)
+    {
+        outcome = Outcome::Ok;
     }
     outcome
 }
@@ -1324,10 +1330,17 @@ fn advanced_tab(ui: &mut egui::Ui, texts: &Texts, state: &mut TaskInfoState) {
 }
 
 /// Onglet Notes.
+/// Identifiant de la zone des notes (multiligne : Entrée n'y valide pas la
+/// fenêtre).
+fn notes_id() -> egui::Id {
+    egui::Id::unique("planrs.task-info.notes")
+}
+
 fn notes_tab(ui: &mut egui::Ui, texts: &Texts, state: &mut TaskInfoState) {
     let label = texts.get(TextId::TaskInfoNotes);
     let response = ui.add(
         egui::TextEdit::multiline(&mut state.draft.notes)
+            .id(notes_id())
             .desired_width(f32::INFINITY)
             .desired_rows(10),
     );

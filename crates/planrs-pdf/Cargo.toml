@@ -8,6 +8,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+planrs-core.workspace = true
+planrs-render.workspace = true
 krilla.workspace = true
 skrifa.workspace = true
 

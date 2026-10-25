@@ -88,7 +88,7 @@ mod tests {
 
     use super::*;
 
-    static INTER: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+    use crate::INTER_REGULAR as INTER;
 
     #[test]
     fn pdf_smoke_one_page() {

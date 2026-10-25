@@ -3500,6 +3500,8 @@ name = "planrs-pdf"
 version = "0.1.0"
 dependencies = [
  "krilla",
+ "planrs-core",
+ "planrs-render",
  "skrifa 0.42.1",
 ]
 

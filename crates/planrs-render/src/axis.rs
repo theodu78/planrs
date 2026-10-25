@@ -9,6 +9,7 @@
 
 use planrs_core::{Day, Moment, Project, Schedule, Weekday, round_div};
 
+use crate::metrics::{FontRef, InterMetrics, TextMeasure};
 use crate::request::{Lang, RangeSpec, Zoom};
 
 /// Minutes d'un jour civil.
@@ -352,15 +353,19 @@ pub(crate) struct Cell {
     pub label: String,
 }
 
-/// Cellules d'un niveau sur toute la plage (au plus [`MAX_CELLS`]).
+/// Cellules d'un niveau sur toute la plage (au plus [`MAX_CELLS`]) ;
+/// étiquettes mesurées dans `font` (H-R11), numéros de semaine ISO si
+/// `week_numbers` (niveau Semaine).
 pub(crate) fn tier_cells(
     axis: &Axis,
     span: DaySpan,
     unit: TierUnit,
     week_start: Weekday,
     lang: Lang,
+    font: FontRef,
+    week_numbers: bool,
 ) -> Vec<Cell> {
-    let level = label_level(unit, axis.px16, lang);
+    let level = label_level(unit, axis.px16, lang, font, week_numbers);
     let mut cells = Vec::new();
     let mut cur = unit_start(span.start, unit, week_start);
     while cells.len() < MAX_CELLS && cur < span.end {
@@ -372,7 +377,7 @@ pub(crate) fn tier_cells(
         let x0 = axis.x16_day(cur.max(span.start));
         let x1 = axis.x16_day(next.min(span.end));
         let label = level
-            .and_then(|k| label_variants(cur, unit, lang).into_iter().nth(k))
+            .and_then(|k| label_variants(cur, unit, lang, week_numbers).into_iter().nth(k))
             .unwrap_or_default();
         cells.push(Cell {
             x0,
@@ -431,8 +436,9 @@ fn pick<'a>(names: &[&'a str], i: usize) -> &'a str {
 }
 
 /// Variantes d'étiquette d'une cellule, de la plus longue à la plus courte
-/// (H-R, mêmes formes que l'en-tête de l'interface, sans numéro de semaine).
-fn label_variants(day: Day, unit: TierUnit, lang: Lang) -> Vec<String> {
+/// (H-R5, mêmes formes que l'en-tête de l'interface) ; semaine numérotée
+/// « S43 » / « W43 » si `week_numbers` (H-R5, modèle Chantier).
+fn label_variants(day: Day, unit: TierUnit, lang: Lang, week_numbers: bool) -> Vec<String> {
     let (year, month, dom) = ymd(day);
     let month_i = usize::try_from(month.saturating_sub(1)).unwrap_or(0);
     let (month_long, short) = match lang {
@@ -447,6 +453,14 @@ fn label_variants(day: Day, unit: TierUnit, lang: Lang) -> Vec<String> {
                 Lang::En => pick(&WEEKDAY_INITIALS_EN, wd),
             };
             vec![format!("{initial} {dom}"), dom.to_string()]
+        }
+        TierUnit::Week if week_numbers => {
+            let n = crate::scene::iso_week(day.checked_add_days(3).unwrap_or(day));
+            let prefix = match lang {
+                Lang::Fr => "S",
+                Lang::En => "W",
+            };
+            vec![format!("{prefix}{n} · {dom}"), format!("{prefix}{n}")]
         }
         TierUnit::Week => {
             let full = match lang {
@@ -482,17 +496,16 @@ fn label_variants(day: Day, unit: TierUnit, lang: Lang) -> Vec<String> {
     }
 }
 
-/// Largeur estimée d'une étiquette en 1/16 px : `caractères × 125` (≈ 0,6 ×
-/// 13 px) plus 4 px de marge, sans mesure de police (H-R).
-pub(crate) fn estimated_width16(text: &str) -> i64 {
-    let chars = i64::try_from(text.chars().count()).unwrap_or(i64::MAX);
-    chars.saturating_mul(125).saturating_add(4 * SUB)
+/// Largeur d'une étiquette en 1/16 px : mesure d'Inter (H-R11) plus 4 px
+/// de marge.
+pub(crate) fn label_width16(text: &str, font: FontRef) -> i64 {
+    InterMetrics.width16(text, font).saturating_add(4 * SUB)
 }
 
 /// Rang de variante commun à un niveau : la plus longue dont toutes les
 /// formes (les douze mois de 2026) tiennent dans la plus petite cellule de
 /// l'unité ; `None` si aucune ne tient.
-fn label_level(unit: TierUnit, px16: i64, lang: Lang) -> Option<usize> {
+fn label_level(unit: TierUnit, px16: i64, lang: Lang, font: FontRef, week_numbers: bool) -> Option<usize> {
     let width = unit.min_days().saturating_mul(px16);
     let dom = match unit {
         TierUnit::Day | TierUnit::Week => 28,
@@ -500,13 +513,13 @@ fn label_level(unit: TierUnit, px16: i64, lang: Lang) -> Option<usize> {
     };
     let samples: Vec<Vec<String>> = (1..=12_u32)
         .filter_map(|m| format!("2026-{m:02}-{dom:02}").parse::<Day>().ok())
-        .map(|d| label_variants(d, unit, lang))
+        .map(|d| label_variants(d, unit, lang, week_numbers))
         .collect();
     let levels = samples.iter().map(Vec::len).max().unwrap_or(0);
     (0..levels).find(|&k| {
         samples
             .iter()
-            .all(|variants| variants.get(k).is_none_or(|v| estimated_width16(v) <= width))
+            .all(|variants| variants.get(k).is_none_or(|v| label_width16(v, font) <= width))
     })
 }
 
@@ -563,17 +576,27 @@ mod tests {
         assert_eq!(resolve_scale(Zoom::Auto { width_px: 1200 }, 600), Scale::Quarter);
     }
 
+    const BODY: FontRef = FontRef {
+        weight: crate::metrics::FontWeight::Regular,
+        size16: 192,
+    };
+
     #[test]
     fn labels_fit_their_cells() {
-        assert_eq!(label_level(TierUnit::Month, 192, Lang::Fr), Some(0));
-        assert_eq!(label_level(TierUnit::Week, 192, Lang::Fr), Some(0));
+        assert_eq!(label_level(TierUnit::Month, 192, Lang::Fr, BODY, false), Some(0));
+        assert_eq!(label_level(TierUnit::Week, 192, Lang::Fr, BODY, false), Some(0));
+        let d: Day = "2026-11-02".parse().unwrap();
+        assert_eq!(label_variants(d, TierUnit::Week, Lang::En, false)[0], "Nov 2");
         assert_eq!(
-            label_variants("2026-11-02".parse().unwrap(), TierUnit::Week, Lang::En)[0],
-            "Nov 2"
-        );
-        assert_eq!(
-            label_variants("2026-11-02".parse().unwrap(), TierUnit::Quarter, Lang::Fr)[0],
+            label_variants(d, TierUnit::Quarter, Lang::Fr, false)[0],
             "T4 2026"
         );
+        // Chantier : semaine ISO (lun 19/10/2026 = S43).
+        let w: Day = "2026-10-19".parse().unwrap();
+        assert_eq!(
+            label_variants(w, TierUnit::Week, Lang::Fr, true),
+            ["S43 · 19", "S43"]
+        );
+        assert_eq!(label_variants(w, TierUnit::Week, Lang::En, true)[1], "W43");
     }
 }

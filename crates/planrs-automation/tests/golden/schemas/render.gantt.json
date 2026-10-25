@@ -66,7 +66,7 @@
           "type": "null"
         }
       ],
-      "description": "Modèle de mise en forme (J8 ; refusé `command.not_yet_available`\njusqu'au lot L4)."
+      "description": "Modèle de mise en forme (défaut : Classique, apparence J7)."
     },
     "to": {
       "description": "Dernier jour affiché (défaut : fin du projet).",

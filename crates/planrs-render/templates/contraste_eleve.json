@@ -165,14 +165,14 @@
     "milestone": {
       "outline16": 0,
       "shape": "diamond",
-      "height_pct": 55,
+      "height_pct": 69,
       "radius16": 0,
       "pattern": "solid"
     },
     "milestone_critical": {
       "outline16": 32,
       "shape": "diamond",
-      "height_pct": 55,
+      "height_pct": 69,
       "radius16": 0,
       "pattern": "hatch"
     },

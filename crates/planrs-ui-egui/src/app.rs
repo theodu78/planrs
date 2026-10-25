@@ -508,22 +508,34 @@ impl App {
     /// Reconstruit les caches d'affichage après une édition : modèle de
     /// lignes, diagnostics, plage = union de l'ancienne et de la nouvelle
     /// plage par défaut (la nouvelle seule si l'union dépasse
-    /// [`MAX_RANGE_DAYS`]). La sélection est gardée par UID (retirée si la
-    /// tâche n'existe plus) ; les défilements sont gardés (bornés).
+    /// [`MAX_RANGE_DAYS`]). La sélection est gardée par UID ; si la tâche
+    /// active n'existe plus (suppression, annulation d'une insertion,
+    /// écriture d'un agent), la tâche qui occupe maintenant sa ligne devient
+    /// active, ou la dernière en fin de liste, comme MS Project (relecture
+    /// finale J7, F4 : le curseur sautait sur la ligne vide de fin) ; les
+    /// défilements sont gardés (bornés).
     pub fn refresh(&mut self) {
         let Some(document) = &mut self.document else {
             return;
         };
+        let old_index = self
+            .selection
+            .and_then(|uid| self.rows.as_ref().and_then(|rows| rows.index_of(uid)));
         let range = default_range(document.project(), document.schedule()).span;
         document.range = union_span(document.range, range);
-        self.rows = Some(RowModel::build(document, self.texts.format_labels()));
-        self.diagnostics = DiagnosticsView::build(document);
+        let rows = RowModel::build(document, self.texts.format_labels());
         if self
             .selection
             .is_some_and(|uid| !document.project().tasks.contains(uid))
         {
-            self.selection = None;
+            self.selection = old_index.and_then(|index| {
+                rows.row(index)
+                    .or_else(|| rows.len().checked_sub(1).and_then(|last| rows.row(last)))
+                    .map(|row| row.uid)
+            });
         }
+        self.rows = Some(rows);
+        self.diagnostics = DiagnosticsView::build(document);
         self.selected.retain(|uid| document.project().tasks.contains(uid));
         self.sync_selection();
         self.clamp_gantt_scroll();

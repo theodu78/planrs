@@ -16,6 +16,8 @@
 //!   `planrs-render` depuis `assets/fonts/` (H-R11).
 //! - `text-ids` : chaque `TextId` de l'interface est traduit en français et
 //!   en anglais et utilisé dans le code livré (ADR-0016 D14).
+//! - `icon [--check]` : écrit (ou vérifie) l'icône de l'application en PNG
+//!   (`assets/icon/`, 16 à 1 024 px), dessin déterministe.
 //! - `release-check <tag>` : tag = version du workspace = première section
 //!   de `CHANGELOG.md` (C-REL-01) ; `release-notes <tag>` : notes de la
 //!   release (section du CHANGELOG et lien vers le guide d'installation).
@@ -25,6 +27,7 @@
 
 mod corpus;
 mod fonts;
+mod icon;
 mod layers;
 mod panics;
 mod release;
@@ -41,6 +44,8 @@ tâches :
   panics   vérifie les interdits de la règle 10 que clippy ne couvre pas
   fonts [--check]
            écrit (ou vérifie) la table des avances d'Inter (H-R11)
+  icon [--check]
+           écrit (ou vérifie) l'icône de l'application (assets/icon, PNG)
   text-ids vérifie que chaque texte de l'interface est traduit (FR, EN) et utilisé
   rules    vérifie que chaque règle R-xxx a ses tests (règle 4)
   release-check <tag>
@@ -59,6 +64,7 @@ fn main() -> ExitCode {
         Some("panics") => panics::run(),
         Some("rules") => rules::run(),
         Some("text-ids") => text_ids::run(),
+        Some("icon") => icon::run(args.get(1..).unwrap_or_default()),
         Some("release-check") => release::run_check(args.get(1..).unwrap_or_default()),
         Some("release-notes") => release::run_notes(args.get(1..).unwrap_or_default()),
         Some("fonts") => fonts::run(args.get(1..).unwrap_or_default()),

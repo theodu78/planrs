@@ -2,10 +2,12 @@
 //! `dry_run` ou `detail`), annotations (lot L8).
 //!
 //! Seules les entrées disponibles (`Availability::Now`) sont listées ; une
-//! entrée réservée à un jalon futur (J8 : `list_styles`, `get_style`,
-//! `apply_style`, `export_pdf`, contrat L0) reste
+//! entrée réservée à un jalon futur (J8 : `export_pdf`, contrat L0) reste
 //! appelable par son nom et répond `command.not_yet_available` (erreur
-//! structurée, C-MCP-05).
+//! structurée, C-MCP-05). Les outils de style (J8, lot L6 : `list_styles`,
+//! `get_style`, `apply_style`, `set_bar_style`, `reset_style`,
+//! `save_style_as_template`) sont listés ; aucun n'est destructif (une
+//! annulation rend le style d'avant).
 
 use std::sync::Arc;
 

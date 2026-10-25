@@ -163,6 +163,38 @@ async fn replay_memory(name: &str, saved: Option<&str>) -> Scenario {
     scenario
 }
 
+/// Scénario J8 (lot L6, `docs/plans/j8.md`) : modèles listés, Présentation
+/// appliquée (simulée puis validée), style lu, mise en forme directe d'un
+/// type de barre (contraste signalé) annulée, modèle nommé, refus de
+/// `reset` avec `template`, enregistrement puis annulation du style.
+#[tokio::test]
+async fn replay_style_j8_memory() {
+    let s = replay_memory("style_j8", Some("style_j8.xml")).await;
+    if replay::blessing() {
+        return;
+    }
+    let ok = |i: usize| ok_at(&s, i);
+    assert_eq!(ok(2)["templates"].as_array().map(Vec::len), Some(6));
+    assert_eq!(ok(3)["committed"], json!(false));
+    assert_eq!(ok(5)["source"], json!("document"));
+    assert_eq!(ok(5)["base"], json!("presentation"));
+    let issues = ok(7)["contrast_issues"].as_array().cloned().unwrap_or_default();
+    assert!(
+        issues.iter().any(|i| i["role"] == json!("critical")),
+        "{issues:?}"
+    );
+    assert_eq!(ok(9)["name"], json!("Client"));
+    assert_eq!(
+        error_code(s.calls[10].expected.as_ref().unwrap()),
+        Some("param.invalid")
+    );
+    // Fichier enregistré avec le style choisi ; l'annulation qui suit le
+    // retire de la session.
+    let saved = std::fs::read_to_string(replay::expected_xml_path(&root(), "style_j8")).unwrap();
+    assert!(saved.contains("<?planrs-style {\"base\":\"presentation\",\"v\":1}?>"));
+    assert_eq!(ok(13)["source"], json!("default"));
+}
+
 /// Vérifications 1 et 5, plus le journal produit égal au scénario.
 #[tokio::test]
 async fn replay_build_30_memory() {

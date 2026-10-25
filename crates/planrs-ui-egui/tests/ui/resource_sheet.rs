@@ -163,7 +163,7 @@ fn sheet_task_table_unchanged() {
     let app = harness.state();
     let rows = app.rows().unwrap();
     let texts = app.texts();
-    let sheet = TaskSheet::new(rows, &app.state, texts);
+    let sheet = TaskSheet::new(app.visible_rows().unwrap(), &app.state, texts);
     assert_eq!(sheet.len(), rows.len());
     let visible: Vec<(Column, u16)> = app.state.visible_columns().map(|c| (c.column, c.width)).collect();
     assert_eq!(sheet.columns(), visible.as_slice());
@@ -201,7 +201,7 @@ fn sheet_task_table_unchanged() {
             }
             let app = harness.state();
             assert_eq!(app.view().cursor.column, column);
-            let sheet = TaskSheet::new(app.rows().unwrap(), &app.state, app.texts());
+            let sheet = TaskSheet::new(app.visible_rows().unwrap(), &app.state, app.texts());
             let page = nav::page_rows(app.view().last_body_height, ROW_H);
             let want = grid::nav_target(&sheet, &app.view().cursor, mv, page);
             harness.state_mut().dispatch(Action::Nav { mv, extend: false });

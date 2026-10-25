@@ -25,7 +25,8 @@ use crate::edit::text_language;
 use crate::geom::{BarZone, GanttHit, bar_zone, index_to_f32, near_polyline, row_at};
 use crate::i18n::{Arg, Language, Texts, error_text_id};
 use crate::query::{Query, QueryValue};
-use crate::rows::{Row, RowKind, RowModel};
+use crate::row_view::{DisplayRow, VisibleRows};
+use crate::rows::{Row, RowKind};
 use crate::state::GanttStyle;
 use crate::theme::Palette;
 use crate::timescale::{TierUnit, TimeAxis, TimeScaleZoom, tier_spans};
@@ -610,9 +611,12 @@ fn background_shapes(
             }
         }
     }
-    if let Some(rows) = fc.rows.filter(|_| !fc.selected.is_empty()) {
+    if let Some(rows) = fc.visible().filter(|_| !fc.selected.is_empty()) {
         for i in range.clone() {
-            if rows.row(i).is_some_and(|r| fc.selected.contains(r.uid)) {
+            if rows
+                .row(DisplayRow::at(i))
+                .is_some_and(|r| fc.selected.contains(r.uid))
+            {
                 let top = origin.y + index_to_f32(i) * row_h;
                 let rect = Rect::from_min_max(pos2(clip.left(), top), pos2(clip.right(), top + row_h));
                 if rect.is_finite() {
@@ -651,9 +655,9 @@ struct Body<'a> {
 }
 
 impl Body<'_> {
-    /// Barre de la ligne `i` du modèle.
-    fn bar(&self, rows: &RowModel, i: usize) -> Option<BarGeom> {
-        rows.row(i).and_then(|r| {
+    /// Barre de la ligne affichée `i`.
+    fn bar(&self, rows: VisibleRows<'_>, i: usize) -> Option<BarGeom> {
+        rows.row(DisplayRow::at(i)).and_then(|r| {
             BarGeom::of(
                 r,
                 self.axis,
@@ -668,7 +672,7 @@ impl Body<'_> {
 /// Liens qui touchent les lignes `range` (intersection d'intervalles) ;
 /// rend le nombre de liens dessinés.
 fn link_shapes(
-    rows: &RowModel,
+    rows: VisibleRows<'_>,
     palette: &Palette,
     body: &Body<'_>,
     range: &Range<usize>,
@@ -676,10 +680,8 @@ fn link_shapes(
 ) -> usize {
     let m = &body.m;
     let mut painted = 0_usize;
-    for link in rows.links_touching(range.clone()) {
-        let (Ok(from), Ok(to)) = (usize::try_from(link.from), usize::try_from(link.to)) else {
-            continue;
-        };
+    for (shown, link) in rows.links_touching(range.clone()) {
+        let (from, to) = (shown.from.index(), shown.to.index());
         let (Some(p), Some(s)) = (body.bar(rows, from), body.bar(rows, to)) else {
             continue;
         };
@@ -760,7 +762,13 @@ pub fn explain_tip_text(doc: &OpenDocument, texts: &Texts, uid: TaskUid) -> Stri
 /// Infobulle de la barre sous le pointeur (H-UI-26), après le délai
 /// d'egui : une zone de survol (sans clic ni glisser, le fond garde
 /// sélection et défilement) posée seulement sur la barre survolée.
-fn bar_tooltip(ui: &mut egui::Ui, fc: &FrameCtx<'_>, rows: &RowModel, body: &Body<'_>, range: &Range<usize>) {
+fn bar_tooltip(
+    ui: &mut egui::Ui,
+    fc: &FrameCtx<'_>,
+    rows: VisibleRows<'_>,
+    body: &Body<'_>,
+    range: &Range<usize>,
+) {
     let Some(doc) = fc.doc else {
         return;
     };
@@ -773,7 +781,7 @@ fn bar_tooltip(ui: &mut egui::Ui, fc: &FrameCtx<'_>, rows: &RowModel, body: &Bod
     let Some(i) = row_at(p.y - body.origin.y, body.m.row_h, rows.len()).filter(|i| range.contains(i)) else {
         return;
     };
-    let (Some(row), Some(bar)) = (rows.row(i), body.bar(rows, i)) else {
+    let (Some(row), Some(bar)) = (rows.row(DisplayRow::at(i)), body.bar(rows, i)) else {
         return;
     };
     let hover = bar.hover_rect();
@@ -835,7 +843,7 @@ pub fn paint_body(
     let mut shapes = Vec::new();
     background_shapes(fc, axis, origin, &range, clip, &mut shapes);
     let mut links = 0;
-    if let Some(rows) = fc.rows {
+    if let Some(rows) = fc.visible() {
         let body = Body {
             axis,
             origin,
@@ -845,7 +853,7 @@ pub fn paint_body(
         };
         links = link_shapes(rows, fc.palette, &body, &range, &mut shapes);
         for i in range.clone() {
-            let Some(row) = rows.row(i) else {
+            let Some(row) = rows.row(DisplayRow::at(i)) else {
                 continue;
             };
             if tracking
@@ -886,10 +894,10 @@ const LINK_HIT_TOL: f32 = 3.0;
 /// H-UI-21) : zone de la barre de sa ligne (bande verticale de la barre et
 /// 2 points autour ; losange d'un jalon), sinon tracé d'un lien qui
 /// traverse sa ligne, sinon rien. `origin` : coin haut-gauche écran de la
-/// ligne 0. Indices et UID seulement : aucune date.
+/// ligne 0. Indices (lignes affichées) et UID seulement : aucune date.
 #[must_use]
 pub fn hit_test(
-    rows: &RowModel,
+    rows: VisibleRows<'_>,
     axis: &TimeAxis,
     origin: Pos2,
     row_h: f32,
@@ -909,7 +917,7 @@ pub fn hit_test(
         },
         tracking,
     };
-    if let (Some(row), Some(bar)) = (rows.row(i), body.bar(rows, i)) {
+    if let (Some(row), Some(bar)) = (rows.row(DisplayRow::at(i)), body.bar(rows, i)) {
         let band = bar.hover_rect();
         let (left, right) = if bar.kind == RowKind::Milestone {
             (band.left(), band.right())
@@ -925,11 +933,9 @@ pub fn hit_test(
             }
         }
     }
-    for link in rows.links_touching(i..i.saturating_add(1)) {
-        let (Ok(from), Ok(to)) = (usize::try_from(link.from), usize::try_from(link.to)) else {
-            continue;
-        };
-        let (Some(pred), Some(succ)) = (rows.row(from), rows.row(to)) else {
+    for (shown, link) in rows.links_touching(i..i.saturating_add(1)) {
+        let (from, to) = (shown.from.index(), shown.to.index());
+        let (Some(pred), Some(succ)) = (rows.row(shown.from), rows.row(shown.to)) else {
             continue;
         };
         let (Some(pb), Some(sb)) = (body.bar(rows, from), body.bar(rows, to)) else {
@@ -956,19 +962,20 @@ pub fn paint_drag(
     drag: &BarDrag,
     hover: Option<Pos2>,
 ) {
-    let Some(rows) = fc.rows else {
+    let Some(rows) = fc.visible() else {
         return;
     };
-    let Some(i) = rows.index_of(drag.uid) else {
+    let Some(d) = rows.display_of(drag.uid) else {
         return;
     };
+    let i = d.index();
     let row_h = fc.metrics.row_h;
     let top = row_top(origin, i, row_h);
     let yc = top + row_h / 2.0;
     let half = LinkMetrics::default().bar_half_h + 1.0;
     let painter = ui.painter_at(clip);
     let stroke = Stroke::new(1.5, fc.palette.text_strong);
-    let linking = drag.kind == GestureKind::Move && drag.over_row.is_some_and(|r| r != i);
+    let linking = drag.kind == GestureKind::Move && drag.over_row.is_some_and(|r| r != d);
     if linking {
         if let Some(p) = hover.filter(|p| p.is_finite()) {
             let from = pos2(clip.left() + drag.origin_x, yc);
@@ -1208,6 +1215,7 @@ mod tests {
 
         use crate::app::{DocOrigin, OpenDocument};
         use crate::i18n::{Language, Texts};
+        use crate::row_view::RowView;
         use crate::rows::RowModel;
         use crate::state::UiState;
         use crate::timescale::TimeScaleZoom;
@@ -1224,6 +1232,7 @@ mod tests {
         let doc = OpenDocument::new(loaded, origin, 1);
         let texts = Texts::new(Language::Fr);
         let rows = RowModel::build(&doc, texts.format_labels());
+        let row_view = RowView::unfiltered(&rows);
         let palette = Palette::LIGHT;
         let metrics = Metrics::default();
         let selection = rows.row(2).map(|r| r.uid);
@@ -1249,6 +1258,7 @@ mod tests {
                     state: &state,
                     doc: Some(&doc),
                     rows: Some(&rows),
+                    row_view: Some(&row_view),
                     texts: &texts,
                     palette: &palette,
                     metrics: &metrics,

@@ -786,14 +786,29 @@ fn nav_move_strategy() -> impl Strategy<Value = (NavMove, bool)> {
     (proptest::sample::select(NavMove::ALL.to_vec()), any::<bool>())
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(48))]
+/// Nombre de cas de P45 côté application, borné quelle que soit
+/// `PROPTEST_CASES` : chaque cas pilote une application `egui_kittest`
+/// (≈ 1 s), et la macro `proptest!` remplace `with_cases` par la variable
+/// (`contextualize_config`, CI à 10 000 : plus de 1 h 30).
+const P45_APP_CASES: u32 = 48;
 
-    /// P45 côté application : après toute suite de déplacements, le
-    /// curseur est dans la grille, la ligne du curseur est la tâche active,
-    /// et hors extension la sélection est la seule ligne du curseur.
-    #[test]
-    fn p45_selection_follows_cursor(moves in proptest::collection::vec(nav_move_strategy(), 1..24)) {
+/// P45 côté application : après toute suite de déplacements, le
+/// curseur est dans la grille, la ligne du curseur est la tâche active,
+/// et hors extension la sélection est la seule ligne du curseur.
+///
+/// `TestRunner` construit à la main : `Config::with_cases` fixe `cases`
+/// après les variables d'environnement (les autres, graine comprise,
+/// restent prises en compte), et rien ne la recontextualise ensuite.
+#[test]
+fn p45_selection_follows_cursor() {
+    let config = ProptestConfig {
+        source_file: Some(file!()),
+        test_name: Some(concat!(module_path!(), "::p45_selection_follows_cursor")),
+        ..ProptestConfig::with_cases(P45_APP_CASES)
+    };
+    let mut runner = proptest::test_runner::TestRunner::new(config);
+    let strategy = proptest::collection::vec(nav_move_strategy(), 1..24);
+    let result = runner.run(&strategy, |moves| {
         let mut harness = harness();
         open_demo(&mut harness);
         for (mv, extend) in moves {
@@ -814,5 +829,9 @@ proptest! {
                 prop_assert_eq!(app.selection, app.rows().unwrap().row(row).map(|r| r.uid));
             }
         }
+        Ok(())
+    });
+    if let Err(e) = result {
+        panic!("{e}\n{runner}");
     }
 }

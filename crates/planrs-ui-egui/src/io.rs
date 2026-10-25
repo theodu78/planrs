@@ -419,6 +419,41 @@ pub fn suggested_file_name(name: &str) -> String {
     }
 }
 
+/// Document ouvert depuis un CSV des tâches (H-UI-40, lot L3) : même chemin
+/// que l'ouverture MSPDI (nouveau document, planning calculé, historique
+/// vide), diagnostics de l'import ligne par ligne et réglages retenus.
+#[derive(Debug)]
+pub struct CsvLoaded {
+    /// Document ouvert.
+    pub document: LoadedDocument,
+    /// Diagnostics de l'import (R-144, R-145), dans l'ordre des lignes.
+    pub diagnostics: Vec<planrs_automation::csv::CsvDiagnostic>,
+    /// Séparateur, paramètres régionaux et encodage retenus.
+    pub detected: planrs_automation::csv::Detected,
+}
+
+/// Importe un CSV des tâches comme un nouveau document (Fichier → Importer
+/// CSV…, H-UI-40). `now` est la date courante injectée : aucune horloge
+/// n'est lue ici (ni dans `opts`, que l'appelant remplit).
+///
+/// # Errors
+///
+/// [`planrs_automation::csv::CsvError`] : refus du fichier entier (trop
+/// grand, vide, sans en-tête exploitable, bornes) ; une valeur illisible
+/// est un diagnostic de sa ligne.
+pub fn load_csv(
+    bytes: &[u8],
+    opts: &planrs_automation::csv::CsvImportOptions,
+    now: Moment,
+) -> Result<CsvLoaded, planrs_automation::csv::CsvError> {
+    let imported = planrs_automation::csv::import(bytes, opts)?;
+    Ok(CsvLoaded {
+        document: document::load_project(imported.project, now),
+        diagnostics: imported.diagnostics,
+        detected: imported.detected,
+    })
+}
+
 /// Futur d'un sélecteur natif, envoyé au fil d'attente.
 #[cfg(not(target_arch = "wasm32"))]
 type PickFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Option<rfd::FileHandle>> + Send>>;
@@ -482,7 +517,44 @@ impl FileService for NoFileService {
 
 #[cfg(test)]
 mod tests {
-    use super::suggested_file_name;
+    #![allow(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        reason = "tests : les interdits de la règle 10 ne s'appliquent pas, un échec doit paniquer"
+    )]
+
+    use super::{load_csv, suggested_file_name};
+    use planrs_automation::csv::{CsvError, CsvImportOptions, CsvLocale};
+    use planrs_core::{Moment, ScheduleAnchor};
+
+    #[test]
+    fn load_csv_opens_a_new_document_with_diagnostics() {
+        let now: Moment = "2026-10-19T08:00".parse().unwrap();
+        let opts = CsvImportOptions::new(ScheduleAnchor::FromStart(now), now);
+        let loaded = load_csv(
+            "Nom;Durée;Couleur\nCoffrage;3j;bleu\nFerraillage;zz;\n".as_bytes(),
+            &opts,
+            now,
+        )
+        .unwrap();
+        let session = &loaded.document.session;
+        assert_eq!(session.project().tasks.len(), 2);
+        assert!(
+            session
+                .schedule()
+                .scheduled(planrs_core::TaskUid::new(1))
+                .is_some()
+        );
+        assert!(!session.is_dirty());
+        assert_eq!(loaded.detected.locale, CsvLocale::Fr);
+        let codes: Vec<&str> = loaded.diagnostics.iter().map(|d| d.code.code()).collect();
+        assert_eq!(codes, ["csv.unknown_column", "csv.bad_value"]);
+        assert_eq!(loaded.document.import_diagnostics.len(), 0);
+        assert_eq!(
+            load_csv(b"", &opts, now).map(|_| ()).unwrap_err(),
+            CsvError::Empty
+        );
+    }
 
     #[test]
     fn suggested_file_name_is_safe_and_xml() {

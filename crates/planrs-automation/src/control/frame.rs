@@ -1,4 +1,5 @@
-//! Trames JSON par lignes du canal (≤ 8 Mio par ligne ; lot L10).
+//! Trames JSON par lignes du canal (≤ 8 Mio par ligne ; lot L10 de J4,
+//! méthodes du relais J7 au lot L3).
 //!
 //! Une requête [`Frame`] ou une réponse [`Reply`] tient sur une ligne
 //! terminée par `\n` (un `\r` final est toléré en lecture). Une ligne plus
@@ -8,7 +9,9 @@
 use std::io::{self, BufRead};
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
+
+use crate::workspace::ToolError;
 
 /// Version du protocole.
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -28,8 +31,11 @@ pub mod codes {
     pub const BAD_TOKEN: &str = "control.bad_token";
     /// Requête avant un `hello` accepté.
     pub const UNAUTHENTICATED: &str = "control.unauthenticated";
-    /// Méthode ou lecture non prise en charge (réservée à J7).
+    /// Méthode ou lecture non prise en charge par cet écouteur.
     pub const UNSUPPORTED: &str = "control.unsupported";
+    /// File des appels de l'application pleine (J7) : réessayer ; la
+    /// connexion est maintenue.
+    pub const BUSY: &str = "control.busy";
     /// Erreur interne de l'application (sérialisation).
     pub const INTERNAL: &str = "control.internal";
 }
@@ -49,37 +55,30 @@ pub struct Frame {
     pub params: Value,
 }
 
-/// Méthode.
+/// Méthode. Les méthodes `undo`, `redo` et `history` du contrat J4 sont
+/// retirées en J7 : `execute { tool: "history.undo" }` (un seul chemin
+/// d'exécution, ADR-0015).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Method {
     /// Présentation avec le jeton.
     Hello,
-    /// Lecture.
+    /// Lecture (`{ command, params }`, genre `Read` ou `Analysis`).
     Query,
-    /// Lot de commandes (J7).
+    /// Outil du registre (`{ tool, params }`).
     Execute,
-    /// Annuler (J7).
-    Undo,
-    /// Rétablir (J7).
-    Redo,
-    /// Historique (J7).
-    History,
-    /// État de l'interface (réservé).
+    /// État de l'interface (`app.ui_state`).
     UiState,
-    /// Capture (réservé).
+    /// Capture (`app.screenshot`, `{ scale_down }`).
     Screenshot,
 }
 
 impl Method {
     /// Toutes les méthodes, dans l'ordre de déclaration.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 5] = [
         Self::Hello,
         Self::Query,
         Self::Execute,
-        Self::Undo,
-        Self::Redo,
-        Self::History,
         Self::UiState,
         Self::Screenshot,
     ];
@@ -91,9 +90,6 @@ impl Method {
             Self::Hello => "hello",
             Self::Query => "query",
             Self::Execute => "execute",
-            Self::Undo => "undo",
-            Self::Redo => "redo",
-            Self::History => "history",
             Self::UiState => "ui_state",
             Self::Screenshot => "screenshot",
         }
@@ -124,7 +120,8 @@ pub enum Reply {
         /// Erreur.
         error: WireError,
     },
-    /// En attente d'approbation (réservé J7).
+    /// Écriture en attente de la validation de l'utilisateur (J7,
+    /// C-CTL-02) : la réponse finale suit sur la même connexion, même `id`.
     PendingApproval {
         /// Requête.
         id: u64,
@@ -140,7 +137,19 @@ impl Reply {
             error: WireError {
                 code: code.to_owned(),
                 message: message.into(),
+                details: Map::new(),
             },
+        }
+    }
+
+    /// Réponse d'erreur d'un outil refusé : tous ses champs (`op_index`,
+    /// `field`, `subject`, `diagnostics`), comme l'erreur structurée du
+    /// serveur MCP local (C-CTL-09).
+    #[must_use]
+    pub fn tool_error(id: u64, error: &ToolError) -> Self {
+        Self::Err {
+            id,
+            error: WireError::from_tool(error),
         }
     }
 
@@ -156,10 +165,32 @@ impl Reply {
 /// Erreur transmise sur le canal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireError {
-    /// Code stable ([`codes`]).
+    /// Code stable ([`codes`], ou celui de la commande refusée).
     pub code: String,
     /// Message.
     pub message: String,
+    /// Autres champs de l'erreur d'outil (`op_index`, `field`, `subject`,
+    /// `diagnostics`), à plat ; vide pour une erreur du canal.
+    #[serde(flatten)]
+    pub details: Map<String, Value>,
+}
+
+impl WireError {
+    /// Erreur du fil d'une erreur d'outil, champs compris.
+    #[must_use]
+    pub fn from_tool(error: &ToolError) -> Self {
+        let mut details = match serde_json::to_value(error) {
+            Ok(Value::Object(map)) => map,
+            _ => Map::new(),
+        };
+        details.remove("code");
+        details.remove("message");
+        Self {
+            code: error.code.to_owned(),
+            message: error.message.clone(),
+            details,
+        }
+    }
 }
 
 /// Échec de lecture d'une ligne.

@@ -5,12 +5,16 @@
 //! Une action sérialisée préfigure aussi le canal de contrôle (ADR-0002).
 
 use planrs_automation::Batch;
+use planrs_automation::gesture::GestureError;
 use planrs_core::TaskUid;
 
+use crate::column::Column;
+use crate::nav::NavMove;
 use crate::selection::SelectMode;
-use crate::state::{LanguagePref, ThemePref};
+use crate::state::{GanttStyle, LanguagePref, ThemePref, ViewKind};
 use crate::structure::StructureOp;
 use crate::timescale::TimeScaleZoom;
+use crate::view::Pane;
 
 /// Intention de l'utilisateur, appliquée en fin d'image. Pas `Copy` :
 /// [`Action::Exec`] porte un lot de commandes (ADR-0012 D11).
@@ -97,6 +101,119 @@ pub enum Action {
     Structure(StructureOp),
     /// Réponse à la confirmation d'une suppression de récapitulative.
     ConfirmDelete(bool),
+    // --- J7 (contrat L0, ADR-0015) : sans effet tant que leur lot ne les
+    // câble pas (réducteur d'`App`).
+    /// Déplacement au clavier dans la grille (H-UI-13 à H-UI-16, lot L1) ;
+    /// `extend` : étend la sélection de lignes depuis l'ancre.
+    Nav {
+        /// Déplacement.
+        mv: NavMove,
+        /// Extension de la sélection (Maj).
+        extend: bool,
+    },
+    /// Donne le focus clavier à un volet (lot L1).
+    FocusPane(Pane),
+    /// Change la vue principale (lots L10, L11).
+    SetView(ViewKind),
+    /// Change le style du Gantt (lot L7).
+    SetGanttStyle(GanttStyle),
+    /// Ouvre une fenêtre (lots L8, L9, L12, L13).
+    ShowDialog(DialogKind),
+    /// « Informations sur la tâche » de la tâche active (Maj+F2, H-UI-19,
+    /// lot L9) : la tâche est résolue par le réducteur.
+    ShowTaskInformation,
+    /// Ferme la fenêtre ouverte (Échap, Annuler).
+    CloseDialog,
+    /// Affiche ou masque une colonne (lot L6 ; ID et Nom restent visibles).
+    ToggleColumn(Column),
+    /// Largeur d'une colonne (bord de l'en-tête glissé, lot L6), bornée par
+    /// `UiState::normalized`.
+    SetColumnWidth {
+        /// Colonne.
+        column: Column,
+        /// Largeur en points logiques.
+        width: u16,
+    },
+    /// Défilement horizontal de la table, delta en points (lot L6).
+    ScrollTableX(f32),
+    /// Alt+←/→ : une graduation fine de l'échelle (H-UI-18, lot L1).
+    TimescaleStep(i8),
+    /// Alt+Page haut/bas : une largeur visible du Gantt (H-UI-18, lot L1).
+    TimescalePage(i8),
+    /// Alt+Origine : début du projet (H-UI-18, lot L1).
+    TimescaleToStart,
+    /// Alt+Fin : fin du projet (H-UI-18, lot L1).
+    TimescaleToEnd,
+    /// Zoom au pas voisin, ancré au centre du Gantt (positif : plus fin ;
+    /// H-UI-18, lot L1).
+    ZoomBy(i8),
+    /// Accepte l'écriture relayée `id` (bandeau, H-UI-27, lot L3).
+    Approve(u64),
+    /// Refuse l'écriture relayée `id` (lot L3).
+    Reject(u64),
+    /// Ouvre le fichier récent d'indice donné (H-UI-28, lot L14).
+    OpenRecent(usize),
+    /// Réponse au bandeau de reprise après plantage (lot L15).
+    Recover(RecoverChoice),
+    /// Action d'interface demandée par un agent (`app.ui`, lot L3).
+    Ui(UiOp),
+    /// Geste du Gantt refusé au lâcher (J7, lot L8 : barre commencée,
+    /// jalon, écart hors limites) : message au bandeau.
+    GestureRefused(GestureError),
+}
+
+/// Fenêtre à ouvrir (J7, ADR-0015 D6 ; `Action::OpenDialog` reste le
+/// sélecteur de fichiers).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DialogKind {
+    /// « Informations sur la tâche » (lot L9).
+    TaskInformation(TaskUid),
+    /// Boîte d'un lien (H-UI-21, lot L8).
+    Link {
+        /// Prédécesseur.
+        predecessor: TaskUid,
+        /// Successeur.
+        successor: TaskUid,
+    },
+    /// « Informations sur le projet » (lot L12).
+    ProjectInformation,
+    /// « Modifier le temps de travail » (lot L12).
+    WorkingTime,
+    /// « Ligne de base » : définir ou effacer (lot L12).
+    Baseline,
+    /// « Replanifier le reste » (lot L12).
+    Reschedule,
+    /// « Affecter des ressources » (lot L13).
+    AssignResources,
+}
+
+/// Action d'interface d'un agent (`app.ui`, J7) : sans historique, sans
+/// effet sur le projet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiOp {
+    /// Sélectionne la tâche d'UID donné (ou aucune).
+    Select(Option<u32>),
+    /// Fait défiler jusqu'à la tâche d'UID donné.
+    ScrollTo(u32),
+    /// Zoom de l'échelle de temps.
+    Zoom(TimeScaleZoom),
+    /// Vue principale.
+    View(ViewKind),
+    /// Thème.
+    Theme(ThemePref),
+    /// Langue.
+    Language(LanguagePref),
+}
+
+/// Réponse au bandeau de reprise après plantage (J7, lot L15).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RecoverChoice {
+    /// Restaure l'orphelin d'identifiant donné.
+    Restore(String),
+    /// Jette l'orphelin d'identifiant donné.
+    Discard(String),
+    /// Décide plus tard (le bandeau revient au prochain démarrage).
+    Later,
 }
 
 /// Réponse au bandeau de confirmation d'un document modifié (fermer, ouvrir

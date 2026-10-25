@@ -263,6 +263,7 @@ pub fn what_if(session: &Session, params: &WhatIfParams, lang: Language) -> Resu
     };
     let options = ApplyOptions {
         detail: params.detail,
+        ..ApplyOptions::default()
     };
     let sim = match session.simulate(&batch, options) {
         Ok(sim) => sim,

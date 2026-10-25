@@ -7,6 +7,11 @@
 //! a pu écrire davantage), champ illisible → sa valeur par défaut sans perdre
 //! les autres, entrée de colonne illisible (colonne d'une version future)
 //! ignorée.
+//!
+//! J7 (ADR-0015 D6, contrat L0) : vue principale ([`ViewKind`]), style du
+//! Gantt ([`GanttStyle`]) et fichiers récents ([`RecentFile`]), champs
+//! ajoutés avec valeur par défaut : la version reste 1 (un état J6 se lit
+//! sans avertissement).
 
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +36,9 @@ pub const TABLE_WIDTH_MAX: u16 = 4_000;
 /// Largeur par défaut de la table : somme des colonnes visibles par défaut.
 pub const TABLE_WIDTH_DEFAULT: u16 = 642;
 
+/// Fichiers récents gardés au plus (H-UI-28).
+pub const MAX_RECENT_FILES: usize = 10;
+
 /// Préférences d'interface persistées.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -49,6 +57,47 @@ pub struct UiState {
     pub table_width: u16,
     /// Panneau des diagnostics ouvert.
     pub diagnostics_open: bool,
+    /// Vue principale (J7).
+    pub view: ViewKind,
+    /// Style du Gantt (J7).
+    pub gantt_style: GanttStyle,
+    /// Fichiers récents, le plus récent en tête, [`MAX_RECENT_FILES`] au
+    /// plus (J7, H-UI-28).
+    pub recent: Vec<RecentFile>,
+}
+
+/// Vue principale (J7, ADR-0015 D6).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewKind {
+    /// Diagramme de Gantt (table des tâches et barres).
+    #[default]
+    Gantt,
+    /// Feuille des ressources (lot L10).
+    ResourceSheet,
+    /// Utilisation des ressources (lot L11).
+    ResourceUsage,
+}
+
+/// Style du Gantt (J7, H-UI-22).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GanttStyle {
+    /// Barres planifiées seules.
+    #[default]
+    Standard,
+    /// Gantt de suivi : ligne de base 0, bande d'avancement (lot L7).
+    Tracking,
+}
+
+/// Fichier récent (J7, H-UI-28) : chemin et nom affiché.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecentFile {
+    /// Chemin du fichier.
+    pub path: String,
+    /// Nom affiché.
+    pub name: String,
 }
 
 /// Langue demandée par l'utilisateur.
@@ -116,6 +165,9 @@ impl Default for UiState {
             columns: Column::ALL.iter().map(|&c| ColumnState::default_for(c)).collect(),
             table_width: TABLE_WIDTH_DEFAULT,
             diagnostics_open: false,
+            view: ViewKind::default(),
+            gantt_style: GanttStyle::default(),
+            recent: Vec::new(),
         }
     }
 }
@@ -168,6 +220,9 @@ impl UiState {
             columns: reader.columns(defaults.columns),
             table_width: reader.field("table_width", defaults.table_width),
             diagnostics_open: reader.field("diagnostics_open", defaults.diagnostics_open),
+            view: reader.field("view", defaults.view),
+            gantt_style: reader.field("gantt_style", defaults.gantt_style),
+            recent: reader.field("recent", defaults.recent),
         };
         let warning = (!reader.bad.is_empty()).then_some(StateLoadError::Fields(reader.bad));
         (state.normalized(), warning)
@@ -182,14 +237,36 @@ impl UiState {
         serde_json::to_string(self)
     }
 
+    /// Inscrit `path` en tête des fichiers récents (H-UI-28) : une entrée
+    /// déjà présente remonte (nom mis à jour), le plus ancien sort au-delà
+    /// de [`MAX_RECENT_FILES`].
+    pub fn remember_recent(&mut self, path: &str, name: &str) {
+        self.recent.retain(|recent| recent.path != path);
+        self.recent.insert(
+            0,
+            RecentFile {
+                path: path.to_owned(),
+                name: name.to_owned(),
+            },
+        );
+        self.recent.truncate(MAX_RECENT_FILES);
+    }
+
+    /// Retire `path` des fichiers récents (fichier introuvable, H-UI-28).
+    pub fn forget_recent(&mut self, path: &str) {
+        self.recent.retain(|recent| recent.path != path);
+    }
+
     /// Bornes appliquées, colonnes complétées et dédoublonnées dans l'ordre
     /// de [`Column::ALL`] (la première occurrence d'une colonne l'emporte),
     /// largeurs bornées à `[Column::MIN_WIDTH, Column::MAX_WIDTH]`, largeur
     /// de table bornée à `[TABLE_WIDTH_MIN, TABLE_WIDTH_MAX]`, ID et Nom
-    /// forcés visibles, version ramenée à [`UI_STATE_VERSION`].
+    /// forcés visibles, version ramenée à [`UI_STATE_VERSION`], fichiers
+    /// récents coupés à [`MAX_RECENT_FILES`].
     #[must_use]
     pub fn normalized(mut self) -> Self {
         self.version = UI_STATE_VERSION;
+        self.recent.truncate(MAX_RECENT_FILES);
         self.table_width = self.table_width.clamp(TABLE_WIDTH_MIN, TABLE_WIDTH_MAX);
         let columns = Column::ALL
             .iter()
@@ -220,6 +297,35 @@ impl UiState {
     /// Colonnes visibles, dans l'ordre d'affichage.
     pub fn visible_columns(&self) -> impl Iterator<Item = ColumnState> + '_ {
         self.columns.iter().copied().filter(|state| state.visible)
+    }
+
+    /// Affiche ou masque `column` (J7, lot L6) ; l'ID et le Nom restent
+    /// visibles (H-UI-12). Rend vrai si la visibilité a changé.
+    pub fn toggle_column(&mut self, column: Column) -> bool {
+        if !column.hideable() {
+            return false;
+        }
+        match self.columns.iter_mut().find(|state| state.column == column) {
+            Some(state) => {
+                state.visible = !state.visible;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Largeur de `column`, bornée à `[Column::MIN_WIDTH, Column::MAX_WIDTH]`
+    /// comme par [`UiState::normalized`] (J7, lot L6). Rend vrai si elle a
+    /// changé.
+    pub fn set_column_width(&mut self, column: Column, width: u16) -> bool {
+        let width = width.clamp(Column::MIN_WIDTH, Column::MAX_WIDTH);
+        match self.columns.iter_mut().find(|state| state.column == column) {
+            Some(state) if state.width != width => {
+                state.width = width;
+                true
+            }
+            _ => false,
+        }
     }
 }
 
@@ -287,8 +393,8 @@ impl FieldReader<'_> {
 )]
 mod tests {
     use super::{
-        LanguagePref, StateLoadError, TABLE_WIDTH_DEFAULT, TABLE_WIDTH_MAX, TABLE_WIDTH_MIN, ThemePref,
-        UI_STATE_VERSION, UiState,
+        GanttStyle, LanguagePref, MAX_RECENT_FILES, RecentFile, StateLoadError, TABLE_WIDTH_DEFAULT,
+        TABLE_WIDTH_MAX, TABLE_WIDTH_MIN, ThemePref, UI_STATE_VERSION, UiState, ViewKind,
     };
     use crate::column::{Column, ColumnState};
     use crate::timescale::TimeScaleZoom;
@@ -307,6 +413,50 @@ mod tests {
         let (state, warning) = UiState::from_json_lenient(REFERENCE_V1);
         assert!(warning.is_none(), "{warning:?}");
         assert_eq!(state, UiState::default());
+    }
+
+    /// État J6 (sans `view`, `gantt_style` ni `recent`, 8 colonnes) : lu
+    /// sans avertissement, champs J7 à leur défaut, colonnes J7 ajoutées
+    /// masquées (contrat J7 L0 : la version reste 1).
+    #[test]
+    fn ui_state_v1_without_new_fields_reads() {
+        const J6: &str = include_str!("../tests/fixtures/ui_state_v1_j6.json");
+        assert!(!J6.contains("gantt_style") && !J6.contains("percent_complete"));
+        let (state, warning) = UiState::from_json_lenient(J6);
+        assert!(warning.is_none(), "{warning:?}");
+        assert_eq!(state, UiState::default());
+        assert_eq!(state.view, ViewKind::Gantt);
+        assert_eq!(state.gantt_style, GanttStyle::Standard);
+        assert_eq!(state.recent.len(), 0);
+        let j7: Vec<ColumnState> = state.columns.iter().copied().skip(8).collect();
+        assert_eq!(j7.len(), 5);
+        assert!(j7.iter().all(|c| !c.visible));
+    }
+
+    /// Champs J7 relus ; fichiers récents coupés à 10 (H-UI-28).
+    #[test]
+    fn ui_state_j7_fields_round_trip() {
+        let recent: Vec<RecentFile> = (0..12)
+            .map(|i| RecentFile {
+                path: format!("/p/{i}.xml"),
+                name: format!("{i}.xml"),
+            })
+            .collect();
+        let state = UiState {
+            view: ViewKind::ResourceUsage,
+            gantt_style: GanttStyle::Tracking,
+            recent,
+            ..UiState::default()
+        };
+        let (read, warning) = UiState::from_json_lenient(&state.to_json().unwrap());
+        assert!(warning.is_none(), "{warning:?}");
+        assert_eq!(read.view, ViewKind::ResourceUsage);
+        assert_eq!(read.gantt_style, GanttStyle::Tracking);
+        assert_eq!(read.recent.len(), MAX_RECENT_FILES);
+        assert_eq!(read.recent[0].name, "0.xml");
+        let (read, warning) = UiState::from_json_lenient(r#"{"view":"calendar"}"#);
+        assert_eq!(read.view, ViewKind::Gantt);
+        assert!(matches!(warning, Some(StateLoadError::Fields(f)) if f == ["view"]));
     }
 
     #[test]

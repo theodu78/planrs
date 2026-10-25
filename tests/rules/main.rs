@@ -233,6 +233,16 @@ mod r233_explain_summaries;
 mod r234_what_if;
 mod r235_progress_views;
 mod r236_late_filter;
+mod r240_bar_move;
+mod r241_bar_resize;
+mod r242_progress_drag;
+mod r243_link_drag;
+mod r245_assignment_usage;
+mod r246_quarter;
+mod r247_set_week;
+mod r248_calendar_commands;
+mod r249_project_calendar;
+mod r250_baseline_clear;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

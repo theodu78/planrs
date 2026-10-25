@@ -56,6 +56,11 @@ col-finish = Fin
 col-predecessors = Prédécesseurs
 col-total-slack = Marge totale
 col-critical = Critique
+col-percent-complete = % achevé
+col-resource-names = Noms ressources
+col-baseline-start = Début de référence
+col-baseline-finish = Fin de référence
+col-finish-variance = Variation de fin
 yes = Oui
 no = Non
 
@@ -302,3 +307,318 @@ blank-row-label = Ligne vide (nouvelle tâche)
 cell-edit-label = Saisie : { $column }
 edit-error-unknown-id = Aucune tâche d'ID { $id }
 edit-error-not-editable = Colonne calculée, non modifiable
+
+## J7 — L0 : Codes de refus du contrat (ADR-0015)
+
+error-calendar-name_taken = Nom de calendrier déjà pris : { $detail }
+error-calendar-base_not_base = Base de calendrier invalide : { $detail }
+error-calendar-in_use = Calendrier utilisé : { $detail }
+error-gesture-not_draggable = Geste impossible sur cette barre : { $detail }
+error-usage-limit = Rapport d'utilisation trop grand : { $detail }
+error-control-rejected = Refusé dans l'application : { $detail }
+error-control-approval_timeout = Aucune réponse dans le délai : { $detail }
+error-control-not_relayable = Commande non relayable : { $detail }
+error-control-not_attached = Aucune application rattachée : { $detail }
+error-control-app_gone = Application fermée : { $detail }
+error-control-screenshot_unavailable = Capture indisponible : { $detail }
+error-control-screenshot_too_large = Capture trop grande : { $detail }
+error-control-busy = Application occupée : { $detail }
+error-control-document_changed = Document de l'application changé : { $detail }
+
+# --- J7 L1 ---
+table-label = Table des tâches
+nav-cursor-label = Ligne { $id }, { $column }, { $value }
+nav-cursor-blank-label = Ligne vide, { $column }
+nav-cursor-empty-value = vide
+
+# --- J7 L2 ---
+
+# --- J7 L3 ---
+approval-title = L'agent propose sur « { $document } » : { $name }
+approval-changed =
+    { $count ->
+        [0] aucune tâche modifiée
+        [one] { $count } tâche modifiée
+       *[other] { $count } tâches modifiées
+    }
+approval-finish = fin { $value }
+approval-finish-same = fin inchangée
+approval-critical = chemin critique modifié
+approval-warnings =
+    { $count ->
+        [one] { $count } avertissement
+       *[other] { $count } avertissements
+    }
+approval-queued =
+    { $count ->
+        [one] { $count } autre proposition en attente
+       *[other] { $count } autres propositions en attente
+    }
+approval-accept = Accepter
+approval-reject = Refuser
+menu-undo-agent = Annuler : agent — { $detail }
+menu-undo-agent-ops =
+    { $count ->
+        [one] { $count } opération
+       *[other] { $count } opérations
+    }
+
+# --- J7 L4 ---
+
+# --- J7 L5 ---
+
+# --- J7 L6 ---
+fmt-percent-suffix = {"\u00A0%"}
+column-header-label = Colonne { $column }
+column-resize-label = Largeur de la colonne { $column }
+column-menu-hide = Masquer la colonne
+table-scroll-label = Défilement horizontal de la table
+
+# --- J7 L7 ---
+menu-gantt-standard = Diagramme de Gantt
+menu-gantt-tracking = Gantt de suivi
+
+# --- J7 L8 ---
+gantt-reason-summary = récapitulative (seul le lien est permis)
+gantt-reason-started = tâche commencée
+gantt-reason-milestone = jalon
+gantt-reason-excluded = tâche exclue du calcul
+gantt-reason-blank = ligne vide
+gantt-reason-overflow = écart hors des dates permises
+gantt-reason-same-task = lien d'une tâche vers elle-même
+link-dialog-title = Dépendance
+link-dialog-from = De
+link-dialog-to = À
+link-dialog-type = Type
+link-dialog-lag = Décalage
+link-dialog-delete = Supprimer
+link-dialog-stale = Le projet a changé : la dépendance a été relue.
+link-dialog-task = { $id } { $name }
+
+# --- J7 L9 ---
+task-info-menu = Informations sur la tâche…
+task-info-title = Informations sur la tâche — { $id } { $name }
+task-info-tab-general = Général
+task-info-tab-predecessors = Prédécesseurs
+task-info-tab-resources = Ressources
+task-info-tab-advanced = Avancé
+task-info-tab-notes = Notes
+task-info-name = Nom
+task-info-duration = Durée
+task-info-percent = % achevé
+task-info-start = Début
+task-info-finish = Fin
+task-info-active = Active
+task-info-pred-id = ID
+task-info-pred-type = Type
+task-info-pred-lag = Décalage
+task-info-row-field = { $column }, ligne { $count }
+task-info-add-predecessor = Ajouter un prédécesseur
+task-info-add-resource = Affecter une ressource
+task-info-remove-row = Retirer
+task-info-resource-name = Ressource
+task-info-resource-units = Unités
+task-info-no-resource = Aucune ressource dans le projet.
+task-info-constraint = Type de contrainte
+task-info-constraint-date = Date de contrainte
+task-info-deadline = Échéance
+task-info-task-type = Type de tâche
+task-info-effort-driven = Pilotée par l'effort
+task-info-notes = Notes de la tâche
+task-info-link-fs = Fin à début (FD)
+task-info-link-ss = Début à début (DD)
+task-info-link-ff = Fin à fin (FF)
+task-info-link-sf = Début à fin (DF)
+task-info-constraint-asap = Dès que possible
+task-info-constraint-alap = Le plus tard possible
+task-info-constraint-mso = Doit commencer le
+task-info-constraint-mfo = Doit finir le
+task-info-constraint-snet = Début au plus tôt le
+task-info-constraint-snlt = Début au plus tard le
+task-info-constraint-fnet = Fin au plus tôt le
+task-info-constraint-fnlt = Fin au plus tard le
+task-info-type-fixed-units = Capacité fixe
+task-info-type-fixed-duration = Durée fixe
+task-info-type-fixed-work = Travail fixe
+task-info-ok = OK
+task-info-cancel = Annuler
+task-info-stale = Le projet a changé depuis l'ouverture : les valeurs ont été relues, rien n'a été appliqué.
+task-info-date-required = Date obligatoire pour ce type de contrainte
+task-info-bad-id = ID illisible : { $id }
+task-info-duplicate-predecessor = Prédécesseur en double : { $id }
+task-info-duplicate-resource = Ressource affectée deux fois : { $name }
+task-info-unknown-resource = Ressource inconnue
+
+# --- J7 L10 ---
+menu-view-resource-sheet = Feuille des ressources
+res-sheet-label = Feuille des ressources
+res-col-indicator = Ind.
+res-col-name = Nom de la ressource
+res-col-kind = Type
+res-col-material-label = Étiquette
+res-col-initials = Initiales
+res-col-group = Groupe
+res-col-max-units = Capacité max.
+res-col-standard-rate = Taux standard
+res-col-overtime-rate = Taux heures sup.
+res-col-cost-per-use = Coût/utilisation
+res-col-calendar = Calendrier
+res-kind-work = Travail
+res-kind-material = Matériel
+res-kind-cost = Coût
+rate-minute = /min
+rate-hour = /h
+rate-day = /j
+rate-week = /sem
+rate-month = /mois
+rate-year = /an
+res-row-label = Ressource { $id } : { $name }
+res-blank-row-label = Ligne vide (nouvelle ressource)
+res-name-first = Saisir d'abord le nom de la ressource
+res-unknown-calendar = Aucun calendrier nommé « { $name } »
+res-calendar-none = (aucun)
+res-delete-title = Supprimer une ressource affectée
+res-delete-text =
+    { $count ->
+        [one] « { $name } » est affectée à une tâche : l'affectation sera retirée avec elle.
+       *[other] « { $name } » a { $count } affectations : elles seront retirées avec elle.
+    }
+
+# --- J7 L11 ---
+menu-view-resource-usage = Utilisation des ressources
+usage-sheet-label = Utilisation des ressources
+usage-periods-label = Travail par période
+usage-col-expand = +/-
+usage-col-name = Nom de la ressource
+usage-col-work = Travail
+usage-hours-suffix = {"\u00A0"}h
+usage-expand = Développer { $name }
+usage-collapse = Réduire { $name }
+usage-assignment-label = Affectation : { $name } ({ $detail })
+usage-limit = Utilisation trop grande pour être affichée : replier des ressources ({ $detail }).
+
+# --- J7 L12 ---
+menu-project = Projet
+menu-project-info = Informations sur le projet…
+menu-working-time = Modifier le temps de travail…
+menu-baseline = Ligne de base…
+menu-reschedule = Replanifier le travail restant…
+scope-project = Projet entier
+scope-selection = { $count ->
+        [one] Tâche sélectionnée (1)
+       *[other] Tâches sélectionnées ({ $count })
+    }
+wt-title = Modifier le temps de travail
+wt-calendar = Pour le calendrier
+wt-project-calendar = { $name } (calendrier du projet)
+wt-resource-calendar = { $name } (ressource)
+wt-new = Nouveau calendrier…
+wt-delete = Supprimer le calendrier
+wt-name = Nom du calendrier
+wt-base-of = Calendrier de base : { $name }
+wt-new-name = Nom du nouveau calendrier
+wt-new-base = Nouveau calendrier de base
+wt-new-copy = Copie de « { $name } »
+wt-create = Créer
+wt-new-cancel = Ne pas créer
+wt-prev-month = Mois précédent
+wt-next-month = Mois suivant
+wt-month-title = { $name } { $value }
+wt-month-unavailable = Calendrier indisponible : { $detail }
+wt-state-working = Ouvré : { $value }
+wt-state-non-working = Chômé
+wt-legend-working = Ouvré
+wt-legend-non-working = Chômé
+wt-legend-exception = Exception
+wt-tab-exceptions = Exceptions
+wt-tab-week = Semaine de travail
+wt-exc-name = Nom
+wt-exc-from = Début
+wt-exc-to = Fin
+wt-exc-working = Ouvré
+wt-exc-ranges = Plages
+wt-exc-recurring = Récurrente (lecture seule)
+wt-exc-add = Ajouter une exception
+wt-week-inherit = Hérité de la base
+wt-week-non-working = Jour chômé
+wt-week-working = Horaires définis
+wt-week-setting = Réglage du { $name }
+wt-week-ranges = Plages du { $name }
+wt-week-inherited = Base : { $value }
+wt-bad-ranges = Plages attendues sous la forme 08:00-12:00, 13:00-17:00
+pi-title = Informations sur le projet
+pi-direction = Planifier à partir de
+pi-from-start = la date de début du projet
+pi-from-finish = la date de fin du projet
+pi-start = Date de début
+pi-finish = Date de fin
+pi-status = Date d'état
+pi-status-hint = Vide : NA (la date du jour sert de date d'état)
+pi-calendar = Calendrier
+bl-title = Ligne de base
+bl-set = Définir la ligne de base
+bl-clear = Effacer la ligne de base
+bl-number = Numéro
+bl-baseline-0 = Ligne de base
+bl-baseline-n = Ligne de base { $count }
+bl-rollup = Cumul des lignes de base
+bl-rollup-none = Aucun cumul
+bl-rollup-all = Vers toutes les tâches récapitulatives
+bl-rollup-from = Des sous-tâches vers les récapitulatives sélectionnées
+bl-confirm = { $detail } Remplacer la ligne de base enregistrée ?
+bl-replace = Remplacer
+rs-title = Replanifier le travail restant
+rs-after = Replanifier après le
+
+# --- J7 L13 ---
+menu-assign-resources = Affecter des ressources…
+as-title = Affecter des ressources
+as-task-one = Tâche : { $name }
+as-task-many = { $count ->
+        [one] { $count } tâche sélectionnée
+       *[other] { $count } tâches sélectionnées
+    }
+as-no-task = Aucune tâche sélectionnée
+as-filter = Filtrer par nom
+as-resource = Nom de la ressource
+as-units = Unités
+as-units-of = Unités de { $name }
+as-assigned = Affectée
+as-assigned-all = oui
+as-assigned-some = { $count } sur { $value }
+as-assign = Affecter
+as-remove = Retirer
+as-update-units = Modifier les unités
+as-close = Fermer
+as-no-resource = Aucune ressource
+as-hint = Clic sur une ressource pour la choisir (Ctrl ou Cmd + clic : plusieurs) ; unités laissées vides : valeur par défaut.
+
+# --- J7 L14 ---
+open-error-read-file = Lecture de « { $name } » impossible : { $detail }
+open-error-mspdi-file = « { $name } » : fichier MSPDI illisible : { $detail }
+open-error-missing = « { $name } » est introuvable, retiré des fichiers récents : { $detail }
+menu-recent = Fichiers récents
+menu-recent-empty = Aucun fichier récent
+menu-recent-missing = { $name } (introuvable)
+
+# --- J7 L15 ---
+recovery-title = Récupérer « { $name } » ({ $count ->
+        [one] { $count } modification
+       *[other] { $count } modifications
+    }) ?
+recovery-checkpointed = Les modifications antérieures au dernier point de reprise ne pourront plus être annulées.
+recovery-restore = Restaurer
+recovery-discard = Ignorer
+recovery-later = Plus tard
+recovery-partial = Récupération partielle de « { $name } » : { $count ->
+        [one] { $count } modification rejouée
+       *[other] { $count } modifications rejouées
+    }, la suivante est refusée : { $detail }
+recovery-failed = Récupération de « { $name } » impossible : { $detail }
+recovery-discard-failed = Suppression du journal de reprise impossible : { $detail }
+recovery-journal-cut = Reprise après plantage interrompue pour ce document : { $detail }. L'édition continue ; enregistrez régulièrement.
+recovery-file-changed = Le fichier a changé sur le disque depuis : la version récupérée s'ouvrira sans chemin (Enregistrer sous), pour ne pas l'écraser.
+recovery-kept = Journal d'une autre version de planrs, ou trop grand : il ne se restaure pas ici. Ignorer le supprime.
+recovered-file-name = { $stem } (récupéré)
+
+# --- J7 L16 ---

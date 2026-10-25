@@ -1,6 +1,7 @@
 //! Benchmark informatif du moteur (spécification J2 § 6), exécuté en CI
 //! (job `perf`) sans seuil : le seuil bloquant est le test `tests/perf`.
-//! `cargo bench -p planrs-tests --bench schedule`.
+//! `cargo bench -p planrs-tests --bench schedule`. Comprend l'utilisation
+//! des ressources par blocs de 64 semaines (J7, lot L4).
 
 #![allow(
     clippy::unwrap_used,
@@ -11,7 +12,8 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use planrs_core::schedule;
+use planrs_core::resource::{Granularity, usage_by_assignment, usage_with};
+use planrs_core::{CalendarSet, HasUid, Moment, ResourceUid, schedule};
 use planrs_tests::generate::{
     assigned_network, assigned_progress_network, chain, fan_in, large_network, progress_network,
 };
@@ -36,6 +38,44 @@ fn bench(c: &mut Criterion) {
     let progress = progress_network(2026);
     c.bench_function("schedule/5000_progress", |b| {
         b.iter(|| schedule(black_box(&progress)));
+    });
+    // J7 (lot L4, ADR-0015 D7) : un bloc de 64 semaines de l'utilisation,
+    // toutes ressources, sur des calendriers déjà compilés ; journalisé
+    // (cible < 10 ms), sans seuil.
+    let sched = schedule(&assigned);
+    let (set, _) = CalendarSet::compile(&assigned);
+    let resources: Vec<ResourceUid> = assigned.resources.iter().map(HasUid::uid).collect();
+    let from: Moment = sched.project_start;
+    let to = from
+        .checked_add(planrs_core::Minutes::new(64 * 7 * 1_440))
+        .unwrap();
+    c.bench_function("usage/5000_assigned_64_weeks", |b| {
+        b.iter(|| {
+            usage_with(
+                black_box(&assigned),
+                &sched,
+                &set,
+                from,
+                to,
+                Granularity::Week,
+                &resources,
+            )
+            .unwrap()
+        });
+    });
+    c.bench_function("usage/5000_assigned_64_weeks_by_assignment", |b| {
+        b.iter(|| {
+            usage_by_assignment(
+                black_box(&assigned),
+                &sched,
+                &set,
+                from,
+                to,
+                Granularity::Week,
+                &resources,
+            )
+            .unwrap()
+        });
     });
     let assigned_progress = assigned_progress_network(2026);
     c.bench_function("schedule/5000_assigned_progress", |b| {

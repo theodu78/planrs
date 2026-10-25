@@ -4,7 +4,10 @@
 //! session d'édition, annuler/rétablir et raccourcis (`session.rs`) ;
 //! édition des cellules et ligne vide de fin (`edit.rs`) ;
 //! Nouveau, Enregistrer, document modifié (`files.rs`) ; commandes de
-//! structure sur la sélection (`structure.rs`).
+//! structure sur la sélection (`structure.rs`). Modules J7 (`nav`, `relay`,
+//! `columns`, `tracking`, `gestures`, `task_info`, `resource_sheet`,
+//! `usage`, `dialogs`, `assign`, `desktop`, `recovery`, `e2e`) déclarés
+//! par le contrat (lot L0), remplis par leur lot.
 //!
 //! Cible unique `ui` (un seul binaire lié à wgpu, ADR-0011, décision 12).
 //! Les libellés cherchés sont construits par `Texts` (jamais en dur : le
@@ -23,12 +26,25 @@
     reason = "tests : un échec doit s'arrêter net et lisiblement"
 )]
 
+mod assign;
+mod columns;
 mod common;
+mod desktop;
+mod dialogs;
+mod e2e;
 mod edit;
 mod files;
+mod gestures;
+mod nav;
+mod recovery;
+mod relay;
+mod resource_sheet;
 mod session;
 mod snapshots;
 mod structure;
+mod task_info;
+mod tracking;
+mod usage;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -573,7 +589,8 @@ fn open_event_success_installs_new_generation() {
     let doc = app.document.as_ref().unwrap();
     assert_eq!(doc.opening, 2);
     assert_eq!(doc.origin.name, "maison.xml");
-    assert!(app.selection.is_none());
+    // J7 L1 : curseur (et sélection) sur la première ligne du document.
+    assert_eq!(app.selection, app.rows().unwrap().row(0).map(|row| row.uid));
     assert!(!app.view().needs_fit, "zoom ajusté dès l'image suivante");
     assert!(app.messages().is_empty(), "{:?}", app.messages());
 }

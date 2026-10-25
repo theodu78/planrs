@@ -8,7 +8,7 @@
 use planrs_automation::error::codes;
 use planrs_automation::{CommandErrorKind, SideEffect};
 use planrs_core::calendar::CalendarKind;
-use planrs_core::{AssignmentUid, CalendarUid, ResourceKind, ResourceUid};
+use planrs_core::{AssignmentUid, CalendarUid, Money, Rate, RateUnit, ResourceKind, ResourceUid};
 use planrs_tests::resource_edit::{duration, fresh, resource, units_work, with_tasks};
 use planrs_tests::task_edit::{apply, try_apply};
 use serde_json::json;
@@ -311,4 +311,105 @@ fn r195_update_fields() {
         let err = try_apply(&mut s, json!([op.clone()])).unwrap_err();
         assert_eq!(err.field.as_deref(), Some(field), "{op}");
     }
+}
+
+#[test]
+fn r195_rates_stored_not_computed() {
+    // R-195 amendée (J7, O46, ADR-0013 D7) : taux stockés tels que saisis
+    // (montant en centièmes, unité d'origine), jamais convertis ni
+    // calculés ; écrits avec leur format (`StandardRateFormat` 3 : jour).
+    let mut s = with_tasks(&[("T", "2j")]);
+    apply(
+        &mut s,
+        json!([
+            { "op": "resource.add", "name": "Maçon" },
+            { "op": "resource.add", "name": "Béton", "kind": "material", "material_label": "m³" },
+            { "op": "resource.add", "name": "Frais", "kind": "cost" },
+            { "op": "assignment.add", "task": 1, "resource": 1 }
+        ]),
+    );
+    let schedule = s.schedule().clone();
+    let o = apply(
+        &mut s,
+        json!([
+            { "op": "resource.update", "uid": 1, "standard_rate": { "amount": 12_000, "per": "day" },
+              "overtime_rate": { "amount": 2_250 }, "cost_per_use": { "amount": 500 } },
+            { "op": "resource.update", "uid": 2, "standard_rate": { "amount": 415_875 } }
+        ]),
+    );
+    assert_eq!(o.diff.changed_total, 0);
+    assert_eq!(s.schedule(), &schedule);
+    let r = resource(&s, 1);
+    assert_eq!(
+        (r.standard_rate, r.overtime_rate, r.cost_per_use),
+        (
+            Rate {
+                amount: Money::new(12_000).unwrap(),
+                per: RateUnit::Day
+            },
+            Rate {
+                amount: Money::new(2_250).unwrap(),
+                per: RateUnit::Hour
+            },
+            Money::new(500).unwrap()
+        )
+    );
+    assert_eq!(resource(&s, 2).standard_rate.per, RateUnit::MaterialUnit);
+    // Écrit puis relu : mêmes taux, même format.
+    let w = s.save_bytes(&planrs_mspdi::write::WriteOptions::default());
+    assert!(String::from_utf8_lossy(&w.xml).contains("<StandardRateFormat>3</StandardRateFormat>"));
+    let doc = planrs_tests::mspdi::reread(&w.xml);
+    let back = doc.project.resources.get(ResourceUid::new(1)).unwrap();
+    assert_eq!(
+        (back.standard_rate, back.overtime_rate, back.cost_per_use),
+        (r_rates(&s, 1))
+    );
+    // `null` : remis à 0.
+    apply(
+        &mut s,
+        json!([{ "op": "resource.update", "uid": 1, "overtime_rate": null }]),
+    );
+    assert_eq!(resource(&s, 1).overtime_rate, Rate::default());
+    // Refus : montant négatif, unité de matériau sur une ressource de
+    // travail, unité de temps sur une matérielle, heures supplémentaires
+    // d'une matérielle, taux d'une ressource de coût, `per` d'un coût par
+    // utilisation.
+    for (op, field) in [
+        (
+            json!({ "op": "resource.update", "uid": 1, "standard_rate": { "amount": -1 } }),
+            "standard_rate",
+        ),
+        (
+            json!({ "op": "resource.update", "uid": 1, "standard_rate": { "amount": 1, "per": "material_unit" } }),
+            "standard_rate",
+        ),
+        (
+            json!({ "op": "resource.update", "uid": 2, "standard_rate": { "amount": 1, "per": "hour" } }),
+            "standard_rate",
+        ),
+        (
+            json!({ "op": "resource.update", "uid": 2, "overtime_rate": { "amount": 1 } }),
+            "overtime_rate",
+        ),
+        (
+            json!({ "op": "resource.update", "uid": 3, "standard_rate": { "amount": 1 } }),
+            "standard_rate",
+        ),
+        (
+            json!({ "op": "resource.update", "uid": 1, "cost_per_use": { "amount": 1, "per": "day" } }),
+            "cost_per_use",
+        ),
+    ] {
+        let err = try_apply(&mut s, json!([op.clone()])).unwrap_err();
+        assert_eq!(
+            (err.code, err.field.as_deref()),
+            (codes::PARAM_INVALID, Some(field)),
+            "{op}"
+        );
+    }
+}
+
+fn r_rates(s: &planrs_automation::Session, uid: u32) -> (Rate, Rate, Money) {
+    let r = resource(s, uid);
+    (r.standard_rate, r.overtime_rate, r.cost_per_use)
 }

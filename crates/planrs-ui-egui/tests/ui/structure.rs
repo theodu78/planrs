@@ -159,7 +159,10 @@ fn ui_delete_summary_confirms_cascade() {
     assert_eq!(generation(harness.state()), 0);
     assert!(harness.query_by_label(&fr(TextId::ConfirmDeleteTitle)).is_none());
 
-    // Confirmer : le bloc part, `cascade`.
+    // Confirmer : le bloc part, `cascade` ; la tâche qui suit le bloc prend
+    // sa ligne et devient active (relecture finale J7, F4).
+    let at = rows(harness.state()).index_of(uid(23)).unwrap();
+    let after = rows(harness.state()).row(at + 4).unwrap().uid;
     press(&mut harness, "task.delete");
     harness.get_by_label(&fr(TextId::ConfirmDeleteYes)).click();
     harness.run();
@@ -170,7 +173,8 @@ fn ui_delete_summary_confirms_cascade() {
         assert!(!project(app).tasks.contains(uid(n)), "{n}");
     }
     assert_eq!(project(app).tasks.len(), 45);
-    assert_eq!(app.selection, None);
+    assert_eq!(app.selection, Some(after));
+    assert_eq!(rows(app).index_of(after), Some(at));
     let history = app.document.as_ref().unwrap().session.history();
     assert_eq!(history.entries.len(), 1);
 
@@ -181,6 +185,17 @@ fn ui_delete_summary_confirms_cascade() {
     assert!(app.pending_delete().is_none());
     assert!(!project(app).tasks.contains(uid(27)));
     assert_eq!(generation(app), 2);
+
+    // La dernière tâche supprimée : la précédente devient active, pas la
+    // ligne vide.
+    let len = rows(harness.state()).len();
+    let last = rows(harness.state()).row(len - 1).unwrap().uid;
+    let before_last = rows(harness.state()).row(len - 2).unwrap().uid;
+    click_row(&mut harness, last, Modifiers::NONE);
+    press(&mut harness, "task.delete");
+    let app = harness.state();
+    assert!(app.pending_delete().is_none(), "dernière ligne : une feuille");
+    assert_eq!(app.selection, Some(before_last));
 }
 
 /// Une demande de confirmation devenue caduque (document modifié entre-temps)
@@ -453,6 +468,9 @@ fn click_edit_menu(harness: &mut Harness<'static, App>, item: TextId) {
 fn ui_edit_menu_structure_entries() {
     let mut harness = harness();
     open_demo(&mut harness);
+    // L'ouverture sélectionne la première ligne (J7 L1) : sans sélection.
+    harness.state_mut().dispatch(Action::Select(None));
+    harness.run();
     harness.get_by_label(&fr(TextId::MenuEdit)).click();
     harness.run();
     for (text, enabled) in [

@@ -2,8 +2,9 @@
 //! `dry_run` ou `detail`), annotations (lot L8).
 //!
 //! Seules les entrées disponibles (`Availability::Now`) sont listées ; une
-//! entrée réservée (J6) reste appelable par son nom et répond
-//! `command.not_yet_available` (erreur structurée, C-MCP-05).
+//! entrée réservée à un jalon futur (aucune depuis le lot L5 de J7) reste
+//! appelable par son nom et répond `command.not_yet_available` (erreur
+//! structurée, C-MCP-05).
 
 use std::sync::Arc;
 
@@ -30,6 +31,12 @@ pub(crate) fn tool_for(spec: &CommandSpec, lang: Language) -> Tool {
             .destructive(is_destructive(spec.id))
             .idempotent(false)
             .open_world(false),
+        // `app.*` (J7) : interface de l'application rattachée, sans effet
+        // sur le projet ; `app.ui` change l'affichage.
+        Kind::Ui => ToolAnnotations::new()
+            .read_only(spec.id != "app.ui")
+            .destructive(false)
+            .open_world(false),
     };
     Tool::new(
         spec.mcp_name,
@@ -40,9 +47,12 @@ pub(crate) fn tool_for(spec: &CommandSpec, lang: Language) -> Tool {
 }
 
 /// Suppression d'un élément du modèle : annotation `destructive_hint`
-/// (J5 : `delete_resource`).
+/// (J5 : `delete_resource` ; J7 : `delete_calendar`, `clear_baseline`).
 fn is_destructive(id: &str) -> bool {
-    matches!(id, "task.delete" | "resource.delete")
+    matches!(
+        id,
+        "task.delete" | "resource.delete" | "calendar.delete" | "baseline.clear"
+    )
 }
 
 /// Schéma d'entrée : schéma des paramètres, plus `dry_run` et `detail`
@@ -120,7 +130,10 @@ mod tests {
         for spec in REGISTRY.iter().filter(|s| s.is_listed()) {
             let tool = tool_for(spec, Language::Fr);
             let hint = tool.annotations.and_then(|a| a.destructive_hint);
-            let expected = matches!(spec.id, "task.delete" | "resource.delete");
+            let expected = matches!(
+                spec.id,
+                "task.delete" | "resource.delete" | "calendar.delete" | "baseline.clear"
+            );
             assert_eq!(hint == Some(true), expected, "{}", spec.id);
         }
     }

@@ -15,6 +15,16 @@
 //! que `Select`, réécrit ici d'après les modificateurs de l'image) ; un clic
 //! droit sur une ligne la sélectionne (si elle ne l'est pas déjà) et ouvre
 //! le menu des commandes de structure (`Action::Structure`).
+//!
+//! Gestes du Gantt (J7, lot L8, H-UI-20, H-UI-21, R-240 à R-243) : un
+//! glisser qui part d'une barre ([`gantt::hit_test`]) devient un
+//! [`BarDrag`] ; l'interface n'en garde qu'un écart en jours entiers
+//! (`TimeAxis::days_for_dx`), l'aperçu vient de
+//! `planrs_automation::gesture::preview` (recalculé quand l'écart change,
+//! jamais de recalcul du planning) et le lâcher pousse un seul lot
+//! (`ExecOn`). Glisser dans le vide : défilement, inchangé. Double-clic sur
+//! une barre : « Informations sur la tâche » ; sur un lien : boîte
+//! « Dépendance ». Échap annule le glisser.
 
 use egui::containers::menu::menu_style;
 use egui::scroll_area::ScrollBarVisibility;
@@ -23,14 +33,18 @@ use egui::{
     SetOpenCommand, Stroke, pos2, vec2,
 };
 
+use planrs_automation::gesture::{self, GestureKind};
 use planrs_core::TaskUid;
 
-use super::{FrameCtx, OVERSCAN, ViewTransient, gantt, table, timescale};
-use crate::action::Action;
-use crate::geom::{self, MainLayout};
+use super::{BarDrag, FrameCtx, OVERSCAN, Pane, ViewTransient, gantt, table, timescale};
+use crate::action::{Action, DialogKind};
+use crate::app::OpenDocument;
+use crate::geom::{self, GanttHit, MainLayout};
 use crate::i18n::TextId;
-use crate::keymap::{self, Binding};
+use crate::keymap::{self, Binding, UiBinding};
+use crate::rows::{RowKind, RowModel};
 use crate::selection::SelectMode;
+use crate::state::GanttStyle;
 use crate::structure::StructureOp;
 use crate::timescale::TimeAxis;
 
@@ -84,6 +98,16 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
     let scroll_x = clamp_scroll(view.gantt_scroll_x, max_scroll);
     view.gantt_scroll_x = scroll_x;
     let axis = TimeAxis::new(doc.range, fc.state.zoom, layout.gantt_clip.left() - scroll_x);
+    // Défilement horizontal de la table (J7, lot L6) : borné à chaque image
+    // (une colonne masquée ou rétrécie réduit le maximum).
+    let table_w = layout.table_clip.width();
+    view.last_table_width = table_w;
+    let columns_w: f32 = fc.state.visible_columns().map(|c| f32::from(c.width)).sum();
+    let table_max = max_scroll_x(columns_w, table_w);
+    let table_x = clamp_scroll(view.table_scroll_x, table_max);
+    view.table_scroll_x = table_x;
+    let table_zone = layout.table_clip.union(layout.table_header);
+    let table_hovered = ui.rect_contains_pointer(table_zone);
 
     let gantt_zone = layout.gantt_clip.union(layout.gantt_header);
     let hovered = ui.rect_contains_pointer(gantt_zone);
@@ -93,14 +117,21 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
         zoom_delta: i.zoom_delta(),
     });
 
-    table::paint_header(ui, fc, layout.table_header);
+    table::paint_header(ui, fc, layout.table_header, table_x);
     timescale::paint_header(ui, fc, &axis, layout.gantt_header);
     paint_corners(ui, fc, &layout, avail);
 
     let RowsOut {
         dx: mut delta_x,
         context_click,
+        scroll_y,
+        view_h,
     } = paint_rows(ui, fc, view, &layout, &axis);
+    view.last_scroll_y = scroll_y;
+    view.last_body_height = view_h;
+    if std::mem::take(&mut view.edit.reveal) {
+        reveal_edited_row(fc, view);
+    }
     context_menu(ui, fc, context_click);
 
     // Molette horizontale (ou Maj + molette) au-dessus du Gantt : la
@@ -114,9 +145,29 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
         }
         zoom_from_wheel(fc, view, &layout, input);
     }
+    // Maj + molette au-dessus de la table : défilement horizontal de la
+    // table (H-UI-17, lot L6).
+    let mut wheel_table = 0.0;
+    if table_hovered && !input.hovered {
+        let wheel_x = ui.input(|i| i.smooth_scroll_delta.x);
+        if wheel_x.is_finite() && wheel_x.abs() > f32::EPSILON {
+            wheel_table -= wheel_x;
+            ui.input_mut(|i| i.smooth_scroll_delta.x = 0.0);
+        }
+    }
 
     paint_splitter(ui, fc, &layout, avail);
-    delta_x += paint_hbar(ui, fc, &layout, scroll_x, content_w, max_scroll);
+    delta_x += paint_hbar(ui, fc, &layout, scroll_x, content_w);
+    let under_table = Rect::from_min_max(
+        pos2(layout.table_clip.left(), layout.gantt_hbar.top()),
+        pos2(layout.table_clip.right(), layout.gantt_hbar.bottom()),
+    );
+    wheel_table += table::paint_hbar(ui, fc, under_table, table_x, table_w);
+    let table_target = clamp_scroll(table_x + wheel_table, table_max);
+    let table_step = table_target - table_x;
+    if table_step.abs() > f32::EPSILON {
+        fc.actions.push(Action::ScrollTableX(table_step));
+    }
 
     let target = clamp_scroll(scroll_x + delta_x, max_scroll);
     let dx = target - scroll_x;
@@ -126,12 +177,43 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
     ui.advance_cursor_after_rect(avail);
 }
 
+/// Saisie ouverte (F2, frappe, double-clic) : sa ligne, si elle n'est pas
+/// entièrement à l'écran, y est amenée avec une ligne de marge (H-UI-17) ;
+/// la zone de saisie est dessinée dès l'image suivante (relecture finale J7,
+/// F2 : une saisie ouverte hors de l'écran ne recevait pas la frappe).
+fn reveal_edited_row(fc: &FrameCtx<'_>, view: &mut ViewTransient) {
+    let (Some(rows), Some(state)) = (fc.rows, view.edit.editing.as_ref()) else {
+        return;
+    };
+    let index = match state.uid {
+        Some(uid) => match rows.index_of(uid) {
+            Some(index) => index,
+            None => return,
+        },
+        None => rows.len(),
+    };
+    let row_h = fc.metrics.row_h;
+    let top = geom::index_to_f32(index) * row_h;
+    let (offset, height) = (view.last_scroll_y, view.last_body_height);
+    if top >= offset && top + row_h <= offset + height {
+        return;
+    }
+    if let Some(y) = crate::nav::ensure_visible(offset, index, row_h, height, rows.len().saturating_add(1)) {
+        view.pending_scroll_y = Some(y);
+        view.last_scroll_y = y;
+    }
+}
+
 /// Résultat du corps : défilement horizontal demandé et clic droit.
 struct RowsOut {
     /// Défilement horizontal demandé par un glisser sur le Gantt.
     dx: f32,
     /// Clic droit sur le corps, s'il y en a eu un.
     context_click: Option<ContextClick>,
+    /// Haut de la fenêtre visible, en points depuis la ligne 0.
+    scroll_y: f32,
+    /// Hauteur de la fenêtre visible.
+    view_h: f32,
 }
 
 /// Clic droit sur le corps de la vue.
@@ -158,6 +240,29 @@ fn apply_click_modifiers(actions: &mut [Action], start: usize, modifiers: egui::
     }
 }
 
+/// Défilement vertical demandé, borné au défilement maximal : un décalage
+/// au-delà ferait revenir la zone par un rebond animé sur une dizaine
+/// d'images. egui borne d'abord par le maximum de l'image précédente : si le
+/// contenu vient de grandir (ligne ajoutée), le reste du défilement attend
+/// l'image suivante (la demande reste dans `pending_scroll_y`).
+fn take_pending_scroll_y(view: &mut ViewTransient, body_h: f32, content_h: f32) -> Option<f32> {
+    let y = view.pending_scroll_y.take().filter(|y| y.is_finite())?;
+    let max_of = |content: f32| {
+        let max = (content - body_h).max(0.0);
+        if max.is_finite() { max } else { 0.0 }
+    };
+    let max_now = max_of(content_h);
+    let max_y = if view.last_content_h > 0.0 {
+        max_now.min(max_of(view.last_content_h))
+    } else {
+        max_now
+    };
+    if y > max_y && max_now > max_y {
+        view.pending_scroll_y = Some(y);
+    }
+    Some(y.clamp(0.0, max_y))
+}
+
 /// `ScrollArea` verticale unique : corps de la table et du Gantt sur la même
 /// plage de lignes, fond cliquable (sélection, glisser horizontal du Gantt).
 fn paint_rows(
@@ -182,15 +287,10 @@ fn paint_rows(
         .auto_shrink([false, false])
         .content_margin(egui::Margin::ZERO)
         .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible);
-    if let Some(y) = view.pending_scroll_y.take()
-        && y.is_finite()
-    {
-        // Borné au défilement maximal : un décalage au-delà ferait revenir
-        // la zone par un rebond animé sur une dizaine d'images.
-        let max_y = (content_h - layout.body.height()).max(0.0);
-        let max_y = if max_y.is_finite() { max_y } else { 0.0 };
-        area = area.vertical_scroll_offset(y.clamp(0.0, max_y));
+    if let Some(y) = take_pending_scroll_y(view, layout.body.height(), content_h) {
+        area = area.vertical_scroll_offset(y);
     }
+    view.last_content_h = content_h;
     let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(layout.body));
     // Barre verticale pleine, toujours visible (relecture B, I4) : elle
     // occupe `Metrics::vbar_w` à droite du corps, que la mise en page
@@ -198,7 +298,10 @@ fn paint_rows(
     body_ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
     let table_clip = layout.table_clip;
     let gantt_clip = layout.gantt_clip;
+    let table_scroll_x = view.table_scroll_x;
     let edit = &mut view.edit;
+    let cursor = &mut view.cursor;
+    let drag = &mut view.drag;
     let out = area.show_viewport(&mut body_ui, |ui, viewport| {
         let origin = ui.max_rect().min;
         ui.set_min_size(vec2(ui.available_width().max(0.0), content_h));
@@ -211,14 +314,24 @@ fn paint_rows(
             Sense::click_and_drag(),
         );
         let first_action = fc.actions.len();
-        table::paint_body(ui, fc, edit, origin, range.clone(), table_clip);
+        table::paint_body(
+            ui,
+            fc,
+            edit,
+            cursor,
+            origin,
+            range.clone(),
+            table_clip,
+            table_scroll_x,
+        );
         gantt::paint_body(ui, fc, axis, origin, range, gantt_clip);
 
         let mut dx = 0.0;
         if background.clicked()
             && let Some(p) = background.interact_pointer_pos()
         {
-            let uid = if gantt_clip.contains(p) {
+            let in_gantt = gantt_clip.contains(p);
+            let uid = if in_gantt {
                 geom::row_at(p.y - origin.y, row_h, len)
                     .and_then(|i| fc.rows.and_then(|rows| rows.row(i)))
                     .map(|row| row.uid)
@@ -226,6 +339,9 @@ fn paint_rows(
                 None
             };
             fc.actions.push(Action::Select(uid));
+            // Clic dans le Gantt : le clavier quitte la table (J7, L1).
+            let pane = if in_gantt { Pane::Gantt } else { Pane::Table };
+            fc.actions.push(Action::FocusPane(pane));
         }
         let modifiers = ui.input(|i| i.modifiers);
         apply_click_modifiers(fc.actions, first_action, modifiers);
@@ -237,17 +353,243 @@ fn paint_rows(
         let from_gantt = ui
             .input(|i| i.pointer.press_origin())
             .is_some_and(|p| gantt_clip.contains(p));
-        if background.dragged_by(PointerButton::Primary) && from_gantt {
+        let gesture = bar_gesture(ui, fc, drag, &background, origin, axis, gantt_clip, from_gantt);
+        if let Some(d) = drag.as_ref() {
+            let pointer = ui.input(|i| i.pointer.interact_pos());
+            gantt::paint_drag(ui, fc, axis, origin, gantt_clip, d, pointer);
+        }
+        gantt_double_click(fc, &background, origin, axis, gantt_clip);
+        if !gesture && background.dragged_by(PointerButton::Primary) && from_gantt {
             let drag = background.drag_delta().x;
             if drag.is_finite() {
                 dx -= drag;
             }
             ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
         }
-        RowsOut { dx, context_click }
+        RowsOut {
+            dx,
+            context_click,
+            scroll_y: viewport.top(),
+            view_h: viewport.height(),
+        }
     });
     // Les plages dessinées sont relevées par chaque volet lui-même.
     out.inner
+}
+
+/// Écart en jours du glisser `d` pour l'abscisse écran `x` : depuis le
+/// point de départ (déplacer, redimensionner), depuis le début de la barre
+/// (avancement, R-242). `left` : bord gauche du Gantt.
+fn gesture_days(d: &BarDrag, rows: &RowModel, axis: &TimeAxis, left: f32, x: f32) -> i64 {
+    match d.kind {
+        GestureKind::Move | GestureKind::Resize => axis.days_for_dx(x - left - d.origin_x),
+        GestureKind::Progress => {
+            let start_x = rows
+                .index_of(d.uid)
+                .and_then(|i| rows.row(i))
+                .and_then(|row| row.bar)
+                .map_or(left + d.origin_x, |(start, _)| axis.x(start));
+            axis.days_for_dx(x - start_x)
+        }
+    }
+}
+
+/// Aperçu du glisser `d` (calendrier seul, sans recalcul) ; refus : aucun.
+fn gesture_preview(doc: &OpenDocument, d: &BarDrag) -> Option<gesture::Preview> {
+    gesture::preview(&doc.session, &doc.calendars(), d.uid, d.kind, d.days).ok()
+}
+
+/// Glisser d'une barre : début sur une zone de barre (H-UI-20), suivi de
+/// l'écart et de la ligne survolée, lâcher ou Échap. Rend vrai tant qu'un
+/// geste tient le glisser du fond (pas de défilement).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "contexte de l'image passé tel quel, comme les autres volets"
+)]
+fn bar_gesture(
+    ui: &egui::Ui,
+    fc: &mut FrameCtx<'_>,
+    drag: &mut Option<BarDrag>,
+    background: &egui::Response,
+    origin: Pos2,
+    axis: &TimeAxis,
+    gantt_clip: Rect,
+    from_gantt: bool,
+) -> bool {
+    let (Some(doc), Some(rows)) = (fc.doc, fc.rows) else {
+        *drag = None;
+        return false;
+    };
+    let row_h = fc.metrics.row_h;
+    let tracking = fc.state.gantt_style == GanttStyle::Tracking;
+    let left = gantt_clip.left();
+    let pointer = ui.input(|i| i.pointer.interact_pos());
+    if drag.is_none()
+        && from_gantt
+        && background.drag_started_by(PointerButton::Primary)
+        && let Some(p) = ui.input(|i| i.pointer.press_origin())
+    {
+        let start = match gantt::hit_test(rows, axis, origin, row_h, tracking, p) {
+            GanttHit::Bar(uid) => Some((uid, GestureKind::Move)),
+            GanttHit::BarStart(uid) => Some((uid, GestureKind::Progress)),
+            GanttHit::BarEnd(uid) => Some((uid, GestureKind::Resize)),
+            GanttHit::Link(..) | GanttHit::Empty => None,
+        };
+        if let Some((uid, kind)) = start {
+            let mut d = BarDrag {
+                uid,
+                kind,
+                origin_x: p.x - left,
+                days: 0,
+                over_row: link_target(rows, axis, origin, row_h, tracking, p, uid),
+                preview: None,
+            };
+            d.days = gesture_days(&d, rows, axis, left, p.x);
+            d.preview = gesture_preview(doc, &d);
+            *drag = Some(d);
+            fc.actions.push(Action::Select(Some(uid)));
+            fc.actions.push(Action::FocusPane(Pane::Gantt));
+        }
+    }
+    let Some(current) = drag.as_mut() else {
+        if !from_gantt
+            && let Some(p) = ui.ctx().pointer_hover_pos()
+            && gantt_clip.contains(p)
+        {
+            hover_cursor(ui, gantt::hit_test(rows, axis, origin, row_h, tracking, p));
+        }
+        return false;
+    };
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        *drag = None;
+        return true;
+    }
+    if let Some(p) = pointer.filter(|p| p.is_finite()) {
+        let days = gesture_days(current, rows, axis, left, p.x);
+        if days != current.days {
+            current.days = days;
+            current.preview = gesture_preview(doc, current);
+        }
+        current.over_row = link_target(rows, axis, origin, row_h, tracking, p, current.uid);
+    }
+    let released = background.drag_stopped() || !ui.input(|i| i.pointer.primary_down());
+    if released {
+        let done = *current;
+        *drag = None;
+        let moved = pointer.is_some_and(|p| axis.days_for_dx(p.x - left - done.origin_x) != 0);
+        drop_gesture(fc, doc, rows, &done, moved);
+    } else {
+        let icon = match current.kind {
+            GestureKind::Move => CursorIcon::Grabbing,
+            GestureKind::Resize | GestureKind::Progress => CursorIcon::ResizeHorizontal,
+        };
+        ui.ctx().set_cursor_icon(icon);
+    }
+    true
+}
+
+/// Ligne de la barre d'une **autre** tâche sous le pointeur `p` (corps,
+/// bords compris), cible d'un lien (R-243 : lâcher sur la barre de B ;
+/// relecture finale J7, F7 : lâcher n'importe où sur une autre ligne,
+/// même dans le vide, liait au lieu de déplacer).
+fn link_target(
+    rows: &RowModel,
+    axis: &TimeAxis,
+    origin: Pos2,
+    row_h: f32,
+    tracking: bool,
+    p: Pos2,
+    from: TaskUid,
+) -> Option<usize> {
+    match gantt::hit_test(rows, axis, origin, row_h, tracking, p) {
+        GanttHit::Bar(uid) | GanttHit::BarStart(uid) | GanttHit::BarEnd(uid) if uid != from => {
+            rows.index_of(uid)
+        }
+        _ => None,
+    }
+}
+
+/// Curseur au survol d'une barre : bords redimensionnables, intérieur
+/// saisissable.
+fn hover_cursor(ui: &egui::Ui, hit: GanttHit) {
+    match hit {
+        GanttHit::BarStart(_) | GanttHit::BarEnd(_) => ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal),
+        GanttHit::Bar(_) => ui.ctx().set_cursor_icon(CursorIcon::Grab),
+        GanttHit::Link(..) => ui.ctx().set_cursor_icon(CursorIcon::PointingHand),
+        GanttHit::Empty => {}
+    }
+}
+
+/// Lâcher du glisser `d` : un seul lot (`ExecOn`), ou le refus du geste au
+/// bandeau ; lien vers la barre d'une autre tâche sous le pointeur (R-243 ;
+/// ailleurs, même sur une autre ligne, le geste reste un déplacement), déplacement (R-240 ; récapitulative : rien),
+/// redimensionnement (R-241), avancement (R-242, seulement si le pointeur
+/// a bougé d'au moins un demi-jour).
+fn drop_gesture(fc: &mut FrameCtx<'_>, doc: &OpenDocument, rows: &RowModel, d: &BarDrag, moved: bool) {
+    let s = &doc.session;
+    let origin_row = rows.index_of(d.uid);
+    let result = match d.kind {
+        GestureKind::Move => {
+            if let Some(target) = d.over_row.filter(|&r| Some(r) != origin_row) {
+                let batch = rows
+                    .row(target)
+                    .and_then(|row| gesture::link_drag(s, d.uid, row.uid).ok());
+                Ok(batch)
+            } else if origin_row
+                .and_then(|i| rows.row(i))
+                .is_some_and(|row| row.kind == RowKind::Summary)
+            {
+                Ok(None)
+            } else {
+                gesture::bar_move(s, d.uid, d.days)
+            }
+        }
+        GestureKind::Resize => gesture::bar_resize(s, &doc.calendars(), d.uid, d.days),
+        GestureKind::Progress if moved => gesture::progress_drag(s, &doc.calendars(), d.uid, d.days),
+        GestureKind::Progress => Ok(None),
+    };
+    match result {
+        Ok(Some(batch)) => fc.actions.push(Action::ExecOn {
+            opening: doc.opening,
+            batch,
+        }),
+        Ok(None) => {}
+        Err(error) => fc.actions.push(Action::GestureRefused(error)),
+    }
+}
+
+/// Double-clic dans le Gantt : « Informations sur la tâche » sur une barre
+/// (H-UI-19), boîte « Dépendance » sur un lien (H-UI-21).
+fn gantt_double_click(
+    fc: &mut FrameCtx<'_>,
+    background: &egui::Response,
+    origin: Pos2,
+    axis: &TimeAxis,
+    gantt_clip: Rect,
+) {
+    // Un triple-clic compte aussi (un clic précédent, ailleurs, à moins du
+    // délai d'egui, transforme le double-clic en triple, comme dans la table).
+    if !(background.double_clicked() || background.triple_clicked()) {
+        return;
+    }
+    let (Some(rows), Some(p)) = (fc.rows, background.interact_pointer_pos()) else {
+        return;
+    };
+    if !gantt_clip.contains(p) {
+        return;
+    }
+    let tracking = fc.state.gantt_style == GanttStyle::Tracking;
+    let kind = match gantt::hit_test(rows, axis, origin, fc.metrics.row_h, tracking, p) {
+        GanttHit::Bar(uid) | GanttHit::BarStart(uid) | GanttHit::BarEnd(uid) => {
+            DialogKind::TaskInformation(uid)
+        }
+        GanttHit::Link(predecessor, successor) => DialogKind::Link {
+            predecessor,
+            successor,
+        },
+        GanttHit::Empty => return,
+    };
+    fc.actions.push(Action::ShowDialog(kind));
 }
 
 /// Position d'un clic droit relâché dans cette image au-dessus de `zone`, sur
@@ -304,6 +646,7 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
     let texts = fc.texts;
     let ctx = ui.ctx().clone();
     let mut chosen = None;
+    let mut information = false;
     Popup::new(
         Id::unique("planrs.structure-menu"),
         ctx.clone(),
@@ -317,7 +660,7 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
     .show(|ui| {
         for (op, text, command, needs_selection) in CONTEXT_ENTRIES {
             let mut button = egui::Button::new(texts.get(text));
-            if let Some(shortcut) = keymap::shortcut_for(Binding::Command(command)) {
+            if let Some(shortcut) = keymap::shortcut_for_os(Binding::Command(command), ctx.os()) {
                 button = button.shortcut_text(keymap::shortcut_text(&ctx, shortcut));
             }
             if ui
@@ -327,15 +670,27 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
                 chosen = Some(op);
             }
         }
+        // « Informations sur la tâche » (H-UI-19, J7 lot L9).
+        ui.separator();
+        let mut button = egui::Button::new(texts.get(TextId::TaskInfoMenu));
+        if let Some(shortcut) = keymap::shortcut_for_os(Binding::Ui(UiBinding::TaskInformation), ctx.os()) {
+            button = button.shortcut_text(keymap::shortcut_text(&ctx, shortcut));
+        }
+        if ui.add_enabled(has_selection, button).clicked() {
+            information = true;
+        }
     });
     if let Some(op) = chosen {
         fc.actions.push(Action::Structure(op));
+    }
+    if information {
+        fc.actions.push(Action::ShowTaskInformation);
     }
 }
 
 /// Coins à droite de l'en-tête et de la barre horizontale du Gantt, au-dessus
 /// et au-dessous de la barre verticale : même fond que l'en-tête.
-fn paint_corners(ui: &egui::Ui, fc: &mut FrameCtx<'_>, layout: &MainLayout, avail: Rect) {
+pub(crate) fn paint_corners(ui: &egui::Ui, fc: &mut FrameCtx<'_>, layout: &MainLayout, avail: Rect) {
     let corners = [
         Rect::from_min_max(
             pos2(layout.gantt_header.right(), layout.gantt_header.top()),
@@ -385,7 +740,7 @@ fn zoom_from_wheel(fc: &mut FrameCtx<'_>, view: &mut ViewTransient, layout: &Mai
 
 /// Séparateur table / Gantt, glissable : `SetTableWidth` d'après la position
 /// du pointeur (pas de perte d'arrondi d'une image à l'autre).
-fn paint_splitter(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, layout: &MainLayout, avail: Rect) {
+pub(crate) fn paint_splitter(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, layout: &MainLayout, avail: Rect) {
     let rect = layout.splitter;
     if !rect.is_finite() || !rect.is_positive() {
         return;
@@ -417,36 +772,65 @@ fn paint_splitter(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, layout: &MainLayout,
     }
 }
 
-/// Barre horizontale minimale du Gantt (piste et curseur proportionnel),
-/// glissable ; un clic sur la piste avance d'une page. Rend le défilement
-/// demandé, en pixels de contenu.
+/// Barre horizontale du Gantt : rend le défilement demandé, en pixels de
+/// contenu.
 fn paint_hbar(
     ui: &mut egui::Ui,
     fc: &mut FrameCtx<'_>,
     layout: &MainLayout,
     scroll_x: f32,
     content_w: f32,
-    max_scroll: f32,
 ) -> f32 {
+    hbar(
+        ui,
+        fc,
+        layout.gantt_hbar,
+        &HBarSpec {
+            id: Id::unique("planrs.gantt-hbar"),
+            label: TextId::GanttScrollLabel,
+            scroll: scroll_x,
+            content_w,
+            visible_w: layout.gantt_clip.width(),
+        },
+    )
+}
+
+/// Paramètres d'une barre de défilement horizontale ([`hbar`]).
+#[derive(Clone, Copy)]
+pub(crate) struct HBarSpec {
+    /// Identifiant de la zone interactive.
+    pub id: Id,
+    /// Nom accessible.
+    pub label: TextId,
+    /// Défilement courant, en points de contenu.
+    pub scroll: f32,
+    /// Largeur du contenu.
+    pub content_w: f32,
+    /// Largeur visible.
+    pub visible_w: f32,
+}
+
+/// Barre horizontale minimale (piste et curseur proportionnel), glissable ;
+/// un clic sur la piste avance d'une page. Rend le défilement demandé, en
+/// points de contenu (Gantt, et table au lot L6 de J7).
+pub(crate) fn hbar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, track: Rect, spec: &HBarSpec) -> f32 {
     let palette = fc.palette;
-    let painter = ui.painter();
-    // Bande sous la table : même fond que la piste.
-    let under_table = Rect::from_min_max(
-        pos2(layout.table_clip.left(), layout.gantt_hbar.top()),
-        pos2(layout.table_clip.right(), layout.gantt_hbar.bottom()),
-    );
-    if under_table.is_finite() && under_table.is_positive() {
-        painter.rect_filled(under_table, 0.0, palette.header_bg);
-    }
-    let track = layout.gantt_hbar;
     if !track.is_finite() || !track.is_positive() {
         return 0.0;
     }
+    let painter = ui.painter();
     painter.rect_filled(track, 0.0, palette.header_bg);
     painter.hline(track.x_range(), track.top() + 0.5, Stroke::new(1.0, palette.grid));
-    fc.stats.shapes = fc.stats.shapes.saturating_add(3);
+    fc.stats.shapes = fc.stats.shapes.saturating_add(2);
 
-    let visible_w = layout.gantt_clip.width();
+    let HBarSpec {
+        id,
+        label,
+        scroll: scroll_x,
+        content_w,
+        visible_w,
+    } = *spec;
+    let max_scroll = max_scroll_x(content_w, visible_w);
     let ratio = if content_w > 0.0 && content_w.is_finite() {
         (visible_w / content_w).clamp(0.0, 1.0)
     } else {
@@ -467,10 +851,8 @@ fn paint_hbar(
     );
 
     let texts = fc.texts;
-    let response = ui.interact(track, Id::unique("planrs.gantt-hbar"), Sense::click_and_drag());
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::Role::ScrollBar, true, texts.get(TextId::GanttScrollLabel))
-    });
+    let response = ui.interact(track, id, Sense::click_and_drag());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ScrollBar, true, texts.get(label)));
     let active = response.hovered() || response.dragged();
     if thumb.is_finite() && thumb.is_positive() && max_scroll > 0.0 {
         let color = if active {
@@ -579,6 +961,7 @@ mod tests {
                 selected: &crate::selection::Selection::default(),
                 actions: &mut actions,
                 stats: &mut stats,
+                window_open: false,
             };
             super::show(ui, &mut fc, view);
         });

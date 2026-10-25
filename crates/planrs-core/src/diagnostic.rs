@@ -634,6 +634,13 @@ pub enum Diagnostic {
         /// Nombre de tâches sautées.
         count: u32,
     },
+    /// `baseline.clear` sans rien à effacer : aucune entité de la portée
+    /// ne porte la ligne (info, J7, R-250 ; aucun changement).
+    #[serde(rename = "baseline.nothing_to_clear")]
+    BaselineNothingToClear {
+        /// Numéro de la ligne.
+        number: BaselineNumber,
+    },
     /// Invariant interne du calcul violé : jamais attendu, anomalie à
     /// signaler (erreur).
     #[serde(rename = "schedule.internal")]
@@ -738,7 +745,8 @@ impl Diagnostic {
             | Self::ProgressActualStartMissing { .. }
             | Self::ConstraintIgnoredInProgress { .. }
             | Self::BaselineCostNotComputed { .. }
-            | Self::BaselineTaskSkipped { .. } => Severity::Info,
+            | Self::BaselineTaskSkipped { .. }
+            | Self::BaselineNothingToClear { .. } => Severity::Info,
         }
     }
 
@@ -769,6 +777,7 @@ impl Diagnostic {
             | Self::ProgressOptionUnsupported { .. }
             | Self::BaselineCostNotComputed { .. }
             | Self::BaselineTaskSkipped { .. }
+            | Self::BaselineNothingToClear { .. }
             | Self::ScheduleInternal { .. } => Subject::Project,
             Self::TaskReservedUid => Subject::Task(TaskUid::PROJECT_SUMMARY),
             Self::TaskOutlineJump { task }
@@ -920,6 +929,7 @@ impl Diagnostic {
             Self::ConstraintIgnoredInProgress { .. } => "constraint.ignored_in_progress",
             Self::BaselineCostNotComputed { .. } => "baseline.cost_not_computed",
             Self::BaselineTaskSkipped { .. } => "baseline.task_skipped",
+            Self::BaselineNothingToClear { .. } => "baseline.nothing_to_clear",
             Self::ScheduleInternal { .. } => "schedule.internal",
         }
     }
@@ -1250,6 +1260,9 @@ impl fmt::Display for Diagnostic {
             ),
             Self::BaselineTaskSkipped { count } => {
                 write!(f, "{count} tâche(s) non planifiée(s) sans ligne de base")
+            }
+            Self::BaselineNothingToClear { number } => {
+                write!(f, "ligne de base {} : rien à effacer", number.get())
             }
             Self::ScheduleInternal { detail } => {
                 write!(
@@ -1927,6 +1940,12 @@ mod tests {
             (
                 Diagnostic::BaselineTaskSkipped { count: 2 },
                 "baseline.task_skipped",
+                Severity::Info,
+                Subject::Project,
+            ),
+            (
+                Diagnostic::BaselineNothingToClear { number: n },
+                "baseline.nothing_to_clear",
                 Severity::Info,
                 Subject::Project,
             ),

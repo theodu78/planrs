@@ -22,6 +22,7 @@ use planrs_ui_egui::column::Column;
 use planrs_ui_egui::edit::{EditError, date_edit_text, duration_edit_text, text_language};
 use planrs_ui_egui::format::{format_date, format_duration};
 use planrs_ui_egui::i18n::{Arg, Language, TextId, Texts};
+use planrs_ui_egui::nav::RowRef;
 use planrs_ui_egui::{Action, App};
 use proptest::prelude::*;
 
@@ -92,7 +93,7 @@ fn click_cell(harness: &mut Harness<'static, App>, index: usize, column: Column)
     click_at(harness, p);
     let uid = harness.state().rows().unwrap().row(index).unwrap().uid;
     assert_eq!(harness.state().selection, Some(uid));
-    assert_eq!(harness.state().view().edit.column, column);
+    assert_eq!(harness.state().view().cursor.column, column);
 }
 
 /// Frappe `text` (ouvre la saisie si aucune n'est ouverte).
@@ -248,7 +249,7 @@ fn ui_blank_row_creates_task() {
     let p = cell_point(&harness, &blank, Column::Name);
     click_at(&mut harness, p);
     assert!(harness.state().selection.is_none());
-    assert!(harness.state().view().edit.blank);
+    assert_eq!(harness.state().view().cursor.row, RowRef::Blank);
     let count = harness.state().document.as_ref().unwrap().project().tasks.len();
     for (k, name) in ["Réception", "Nettoyage"].into_iter().enumerate() {
         type_text(&mut harness, name);
@@ -262,7 +263,7 @@ fn ui_blank_row_creates_task() {
         assert_eq!(last.outline_level.get(), 1);
         // La ligne vide reste la ligne courante : saisie à la suite.
         assert!(app.selection.is_none());
-        assert!(app.view().edit.blank);
+        assert_eq!(app.view().cursor.row, RowRef::Blank);
     }
     let rows = harness.state().rows().unwrap();
     assert_eq!(rows.text(rows.len() - 1, Column::Name), "Nettoyage");
@@ -367,11 +368,11 @@ fn ui_edit_then_undo_exact() {
     // Tab sans modification : rien n'est envoyé, la cellule suivante devient
     // courante.
     press(&mut harness, Key::Tab);
-    assert_eq!(harness.state().view().edit.column, Column::Start);
+    assert_eq!(harness.state().view().cursor.column, Column::Start);
     assert_eq!(harness.state().document.as_ref().unwrap().generation(), 0);
     type_text(&mut harness, "04/01/2027");
     press(&mut harness, Key::Tab);
-    assert_eq!(harness.state().view().edit.column, Column::Finish);
+    assert_eq!(harness.state().view().cursor.column, Column::Finish);
     assert_eq!(harness.state().document.as_ref().unwrap().generation(), 1);
     assert_ne!(harness.state().document.as_ref().unwrap().project(), &project);
     harness.state_mut().dispatch(Action::Undo);
@@ -419,6 +420,97 @@ fn ui_edit_keymap_inactive_while_editing() {
     harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     harness.run();
     assert_eq!(history_entries(harness.state()), 0, "Ctrl+Z rendu à l'historique");
+}
+
+/// Réseau généré de 80 tâches, tâche de la ligne 2 sélectionnée (colonne
+/// Nom), table défilée jusqu'à la ligne 60 : la ligne 2 est hors de l'écran.
+fn offscreen_selection() -> (Harness<'static, App>, TaskUid) {
+    let mut app = crate::new_app();
+    let origin = planrs_ui_egui::DocOrigin {
+        name: "réseau".to_owned(),
+        path: None,
+        demo: false,
+    };
+    app.open_project(planrs_tests::generate::ui_network(4, 19, 50), origin);
+    let mut harness = crate::harness_for(app);
+    harness.run();
+    let uid = harness.state().rows().unwrap().row(2).unwrap().uid;
+    harness.state_mut().dispatch(Action::Select(Some(uid)));
+    harness.run();
+    harness.state_mut().dispatch(Action::ScrollToRow(60));
+    harness.run();
+    assert_eq!(harness.state().view().cursor.column, Column::Name);
+    assert!(
+        !harness.state().last_frame.table_rows.contains(&2),
+        "{:?}",
+        harness.state().last_frame.table_rows
+    );
+    (harness, uid)
+}
+
+/// Nom de la tâche `uid`.
+fn task_name(app: &App, uid: TaskUid) -> Option<String> {
+    app.document
+        .as_ref()
+        .unwrap()
+        .project()
+        .tasks
+        .get(uid)
+        .map(|task| task.name.clone())
+}
+
+/// Relecture finale J7, F2 : une frappe sur une ligne hors de l'écran
+/// amène la ligne à l'écran et la saisie reçoit tout le texte (« Revue »,
+/// pas « R ») ; Retour arrière pendant la saisie efface un caractère, il ne
+/// supprime pas la tâche.
+#[test]
+fn ui_edit_offscreen_row_is_revealed_and_keeps_typing() {
+    let (mut harness, uid) = offscreen_selection();
+    type_text(&mut harness, "R");
+    type_text(&mut harness, "evue");
+    assert!(
+        harness.state().last_frame.table_rows.contains(&2),
+        "ligne amenée à l'écran"
+    );
+    press(&mut harness, Key::Enter);
+    assert_eq!(task_name(harness.state(), uid).as_deref(), Some("Revue"));
+
+    let (mut harness, uid) = offscreen_selection();
+    let tasks = harness.state().document.as_ref().unwrap().project().tasks.len();
+    type_text(&mut harness, "R");
+    // Retour arrière et frappe dans l'image qui suit l'ouverture (zone de
+    // saisie pas encore focalisée).
+    harness.key_press(Key::Backspace);
+    harness.event(Event::Text("Z".to_owned()));
+    harness.run();
+    press(&mut harness, Key::Enter);
+    let doc = harness.state().document.as_ref().unwrap();
+    assert_eq!(doc.project().tasks.len(), tasks, "aucune tâche supprimée");
+    assert_eq!(task_name(harness.state(), uid).as_deref(), Some("Z"));
+}
+
+/// Relecture finale J7, F6 : Retour arrière (« delete » d'un Mac) sur la
+/// cellule Durée ouvre sa saisie vide ; la tâche n'est pas supprimée, Échap
+/// abandonne sans rien changer.
+#[test]
+fn ui_backspace_clears_cell_not_task() {
+    let (mut harness, _index, uid) = demo_cell(Column::Duration);
+    let tasks = harness.state().document.as_ref().unwrap().project().tasks.len();
+    press(&mut harness, Key::Backspace);
+    let app = harness.state();
+    assert_eq!(
+        app.document.as_ref().unwrap().project().tasks.len(),
+        tasks,
+        "tâche supprimée"
+    );
+    let editing = app.view().edit.editing.clone().expect("saisie ouverte");
+    assert_eq!(
+        (editing.uid, editing.column, editing.buffer.as_str()),
+        (Some(uid), Column::Duration, "")
+    );
+    press(&mut harness, Key::Escape);
+    assert!(harness.state().view().edit.editing.is_none());
+    assert_eq!(harness.state().document.as_ref().unwrap().generation(), 0);
 }
 
 fn history_entries(app: &App) -> usize {

@@ -8,12 +8,12 @@
 use planrs_core::Severity;
 
 use crate::action::Action;
-use crate::action::ConfirmChoice;
+use crate::action::{ConfirmChoice, DialogKind};
 use crate::app::{MAX_MESSAGES, UserMessage};
 use crate::format::format_date;
 use crate::i18n::{Arg, Language, TextId};
-use crate::keymap::{Binding, UiBinding, shortcut_for, shortcut_text};
-use crate::state::{LanguagePref, ThemePref};
+use crate::keymap::{Binding, UiBinding, shortcut_for_os, shortcut_text};
+use crate::state::{GanttStyle, LanguagePref, ThemePref, ViewKind};
 use crate::theme::Palette;
 use crate::timescale::TimeScaleZoom;
 
@@ -33,6 +33,12 @@ const THEME_CHOICES: [(ThemePref, TextId); 3] = [
     (ThemePref::Dark, TextId::ThemeDark),
 ];
 
+/// Styles du Gantt proposés, avec leur libellé (J7, lot L7).
+const GANTT_STYLE_CHOICES: [(GanttStyle, TextId); 2] = [
+    (GanttStyle::Standard, TextId::MenuGanttStandard),
+    (GanttStyle::Tracking, TextId::MenuGanttTracking),
+];
+
 /// Barre de menus (Fichier, Édition, Affichage).
 pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let texts = fc.texts;
@@ -42,6 +48,8 @@ pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
             ui.menu_button(texts.get(TextId::MenuFile), |ui| file_menu(ui, fc));
             ui.menu_button(texts.get(TextId::MenuEdit), |ui| edit_menu(ui, fc));
             ui.menu_button(texts.get(TextId::MenuView), |ui| {
+                ui.add_enabled_ui(has_doc, |ui| gantt_style_choices(ui, fc));
+                ui.separator();
                 ui.menu_button(texts.get(TextId::MenuZoom), |ui| {
                     ui.add_enabled_ui(has_doc, |ui| {
                         zoom_choices(ui, fc);
@@ -81,6 +89,11 @@ fn file_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     menu_item(ui, fc, TextId::MenuOpenDemo, None, true, Action::OpenDemo);
     let open = Binding::Ui(UiBinding::OpenFile);
     menu_item(ui, fc, TextId::MenuOpen, Some(open), true, Action::OpenDialog);
+    // Fichiers récents (H-UI-28) : chemins du desktop seulement.
+    if !cfg!(target_arch = "wasm32") {
+        let texts = fc.texts;
+        ui.menu_button(texts.get(TextId::MenuRecent), |ui| recent_menu(ui, fc));
+    }
     ui.separator();
     let save = Binding::Command("project.save");
     menu_item(ui, fc, TextId::MenuSave, Some(save), has_doc, Action::Save);
@@ -96,6 +109,54 @@ fn file_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     }
 }
 
+/// Sous-menu Fichier → Fichiers récents (H-UI-28) : le plus récent en
+/// tête, nom affiché et chemin en infobulle ; un fichier introuvable est
+/// grisé (« (introuvable) ») mais reste cliquable : la tentative
+/// d'ouverture le retire de la liste. L'existence n'est relue que pendant
+/// que le sous-menu est ouvert.
+fn recent_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    let texts = fc.texts;
+    if fc.state.recent.is_empty() {
+        ui.add_enabled(false, egui::Button::new(texts.get(TextId::MenuRecentEmpty)));
+        return;
+    }
+    for (index, recent) in fc.state.recent.iter().enumerate() {
+        let exists = std::path::Path::new(&recent.path).exists();
+        let label = if exists {
+            egui::RichText::new(recent.name.as_str())
+        } else {
+            let text = texts.get_args(
+                TextId::MenuRecentMissing,
+                &[("name", Arg::Str(recent.name.as_str().into()))],
+            );
+            egui::RichText::new(text).weak()
+        };
+        if ui
+            .add(egui::Button::new(label))
+            .on_hover_text(recent.path.as_str())
+            .clicked()
+        {
+            fc.actions.push(Action::OpenRecent(index));
+        }
+    }
+}
+
+/// Sous-menu Édition → Projet (J7, lot L12) : informations sur le projet,
+/// temps de travail, ligne de base, replanifier le travail restant ; grisé
+/// sans document. Sous-menu plutôt qu'un menu de la barre : la barre de
+/// menus figure dans toutes les captures de référence (écart consigné).
+fn project_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    let has_doc = fc.doc.is_some();
+    for (label, kind) in [
+        (TextId::MenuProjectInfo, DialogKind::ProjectInformation),
+        (TextId::MenuWorkingTime, DialogKind::WorkingTime),
+        (TextId::MenuBaseline, DialogKind::Baseline),
+        (TextId::MenuReschedule, DialogKind::Reschedule),
+    ] {
+        menu_item(ui, fc, label, None, has_doc, Action::ShowDialog(kind));
+    }
+}
+
 /// Entrée de menu : libellé traduit, raccourci éventuel de la liaison,
 /// action poussée au clic.
 fn menu_item(
@@ -107,7 +168,7 @@ fn menu_item(
     action: Action,
 ) {
     let mut button = egui::Button::new(fc.texts.get(label));
-    if let Some(shortcut) = binding.and_then(shortcut_for) {
+    if let Some(shortcut) = binding.and_then(|binding| shortcut_for_os(binding, ui.ctx().os())) {
         button = button.shortcut_text(shortcut_text(ui.ctx(), shortcut));
     }
     if ui.add_enabled(enabled, button).clicked() {
@@ -120,7 +181,7 @@ fn menu_item(
 /// contextuel (grisées sans document, et sans sélection sauf « Insérer une
 /// tâche ») ; raccourcis de [`crate::keymap::KEYMAP`] affichés. Rend la
 /// structure découvrable sans clic droit ni touche Inser (relecture finale
-/// J4, F5).
+/// J4, F5) ; enfin le sous-menu Projet (J7, lot L12).
 fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let texts = fc.texts;
     let history = fc.doc.map(|doc| doc.session.history());
@@ -130,9 +191,26 @@ fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
         (TextId::MenuUndo, "history.undo", can_undo, Action::Undo),
         (TextId::MenuRedo, "history.redo", can_redo, Action::Redo),
     ];
+    // Dernier lot annulable venu d'un agent (relais J7) : « Annuler :
+    // agent — libellé » (ou le nombre d'opérations).
+    let agent_undo = history
+        .as_ref()
+        .and_then(|h| h.entries.last())
+        .filter(|entry| entry.source == planrs_automation::EditSource::Agent)
+        .map(|entry| {
+            let detail = entry.label.clone().unwrap_or_else(|| {
+                let count = i64::try_from(entry.ops).unwrap_or(i64::MAX);
+                texts.get_args(TextId::MenuUndoAgentOps, &[("count", Arg::Count(count))])
+            });
+            texts.get_args(TextId::MenuUndoAgent, &[("detail", Arg::Str(detail.into()))])
+        });
     for (label, id, enabled, action) in items {
-        let mut button = egui::Button::new(texts.get(label));
-        if let Some(shortcut) = shortcut_for(Binding::Command(id)) {
+        let text = match (&agent_undo, label) {
+            (Some(text), TextId::MenuUndo) => text.clone(),
+            _ => texts.get(label),
+        };
+        let mut button = egui::Button::new(text);
+        if let Some(shortcut) = shortcut_for_os(Binding::Command(id), ui.ctx().os()) {
             button = button.shortcut_text(shortcut_text(ui.ctx(), shortcut));
         }
         if ui.add_enabled(enabled, button).clicked() {
@@ -144,7 +222,7 @@ fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let has_selection = fc.selection.is_some();
     for (op, label, id, needs_selection) in super::main_view::CONTEXT_ENTRIES {
         let mut button = egui::Button::new(texts.get(label));
-        if let Some(shortcut) = shortcut_for(Binding::Command(id)) {
+        if let Some(shortcut) = shortcut_for_os(Binding::Command(id), ui.ctx().os()) {
             button = button.shortcut_text(shortcut_text(ui.ctx(), shortcut));
         }
         let enabled = has_doc && (has_selection || !needs_selection);
@@ -152,6 +230,11 @@ fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
             fc.actions.push(Action::Structure(op));
         }
     }
+    ui.separator();
+    // « Affecter des ressources » (J7, lot L13) : aucun raccourci (S61).
+    let assign = Action::ShowDialog(DialogKind::AssignResources);
+    menu_item(ui, fc, TextId::MenuAssignResources, None, has_doc, assign);
+    ui.menu_button(texts.get(TextId::MenuProject), |ui| project_menu(ui, fc));
 }
 
 /// Barre d'outils : exemple, ouvrir, zoom, ajuster, thème, langue. Toujours
@@ -216,6 +299,33 @@ fn zoom_choices(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
         if choice(ui, has_doc && fc.state.zoom == zoom, &fc.texts.get(zoom.label())) {
             fc.actions.push(Action::SetZoom(zoom));
         }
+    }
+}
+
+/// Vue exclusive : Diagramme de Gantt / Gantt de suivi (J7, lot L7,
+/// H-UI-22 ; style du Gantt, qui ramène à la vue Gantt) / Feuille des
+/// ressources (lot L10) / Utilisation des ressources (lot L11) ; aucune
+/// n'est surlignée sans document.
+fn gantt_style_choices(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    let has_doc = fc.doc.is_some();
+    let gantt = fc.state.view == ViewKind::Gantt;
+    for (style, label) in GANTT_STYLE_CHOICES {
+        if choice(
+            ui,
+            has_doc && gantt && fc.state.gantt_style == style,
+            &fc.texts.get(label),
+        ) {
+            fc.actions.push(Action::SetView(ViewKind::Gantt));
+            fc.actions.push(Action::SetGanttStyle(style));
+        }
+    }
+    let sheet = fc.state.view == ViewKind::ResourceSheet;
+    if choice(ui, has_doc && sheet, &fc.texts.get(TextId::MenuViewResourceSheet)) {
+        fc.actions.push(Action::SetView(ViewKind::ResourceSheet));
+    }
+    let usage = fc.state.view == ViewKind::ResourceUsage;
+    if choice(ui, has_doc && usage, &fc.texts.get(TextId::MenuViewResourceUsage)) {
+        fc.actions.push(Action::SetView(ViewKind::ResourceUsage));
     }
 }
 

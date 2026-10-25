@@ -719,3 +719,149 @@ pub fn fan_in(n: u32) -> Project {
     }
     p
 }
+
+/// Voies FS parallèles de [`ui_network`] : la feuille `k` suit la feuille
+/// `k − 19`.
+const UI_LANES: usize = 19;
+
+/// Réseau de l'interface (J7 lot L14, N8) : `summaries` récapitulatives de
+/// `leaves` feuilles chacune, construit directement (sans MSPDI) pour le
+/// test de fluidité de `planrs-ui-egui` et l'exemple `snapshot --generate`.
+/// Au plus `max_links` liens entre feuilles proches, dans cet ordre de
+/// priorité : FS depuis la feuille `k − 19`, SS depuis `k − 1`, puis FF
+/// depuis `k − 2` pour une feuille sur neuf ; tous remontent la liste (aucun
+/// cycle, aucun lien vers une récapitulative). Durées de 4 à 16 heures, un
+/// jalon toutes les 97 feuilles ; calendrier Standard, début le lundi
+/// 05/01/2026 à 08:00. Même réseau que l'ancien MSPDI écrit par le test.
+///
+/// # Panics
+///
+/// Si une tâche générée est refusée (tailles de test seulement).
+#[must_use]
+pub fn ui_network(summaries: usize, leaves: usize, max_links: usize) -> Project {
+    let leaf_count = summaries * leaves;
+    let mut preds: Vec<Vec<(usize, LinkType)>> = vec![Vec::new(); leaf_count];
+    let mut links = 0;
+    for (k, list) in preds.iter_mut().enumerate().skip(UI_LANES) {
+        if links < max_links {
+            list.push((k - UI_LANES, LinkType::FinishToStart));
+            links += 1;
+        }
+    }
+    for (k, list) in preds.iter_mut().enumerate().skip(1) {
+        if links < max_links {
+            list.push((k - 1, LinkType::StartToStart));
+            links += 1;
+        }
+    }
+    for k in (9..leaf_count).step_by(9) {
+        if links < max_links {
+            preds[k].push((k - 2, LinkType::FinishToFinish));
+            links += 1;
+        }
+    }
+    let leaf_uid = |k: usize| {
+        TaskUid::new(u32::try_from((k / leaves) * (leaves + 1) + (k % leaves) + 2).unwrap_or(u32::MAX))
+    };
+    let start: Moment = "2026-01-05T08:00".parse().unwrap_or(Moment::MIN);
+    let mut p = Project::new(ProjectInit {
+        name: "Réseau de mesure".to_owned(),
+        anchor: ScheduleAnchor::FromStart(start),
+        current_date: start,
+        calendar_names: BuiltinCalendarNames::default(),
+    });
+    let options = p.options;
+    let mut uid = 0u32;
+    for s in 0..summaries {
+        uid += 1;
+        let mut t = Task::new(
+            TaskUid::new(uid),
+            format!("Lot {} — gros œuvre et second œuvre", s + 1),
+            &options,
+        );
+        t.outline_level = OutlineLevel::TOP;
+        t.duration =
+            Duration::new(Minutes::ZERO, DurationUnit::Day, TimeBasis::Working, false).unwrap_or(t.duration);
+        if let Err(e) = p.tasks.push(t) {
+            panic!("tâche générée invalide : {e}");
+        }
+        for j in 0..leaves {
+            uid += 1;
+            let k = s * leaves + j;
+            assert_eq!(leaf_uid(k), TaskUid::new(uid));
+            let milestone = k % 97 == 96;
+            let hours = if milestone { 0 } else { 4 + (k * 7) % 13 };
+            let mut t = Task::new(
+                TaskUid::new(uid),
+                format!("Tâche {k} : préparation, exécution et contrôle"),
+                &options,
+            );
+            t.outline_level = OutlineLevel::new(2).unwrap_or(OutlineLevel::TOP);
+            t.milestone = milestone;
+            t.duration = Duration::new(
+                Minutes::new(i64::try_from(hours * 60).unwrap_or(0)),
+                DurationUnit::Day,
+                TimeBasis::Working,
+                false,
+            )
+            .unwrap_or(t.duration);
+            t.predecessors = preds[k]
+                .iter()
+                .map(|&(pk, kind)| Link {
+                    predecessor: leaf_uid(pk),
+                    kind,
+                    lag: Lag::ZERO,
+                })
+                .collect();
+            if let Err(e) = p.tasks.push(t) {
+                panic!("tâche générée invalide : {e}");
+            }
+        }
+    }
+    p
+}
+
+/// Réseau de [`ui_network`] dont chaque feuille (hors jalons) est affectée
+/// à 100 % à la ressource de travail `k mod resources` (travail = durée) :
+/// vue d'utilisation des ressources (test `usage_scroll`).
+///
+/// # Panics
+///
+/// Si une ressource ou une affectation générée est refusée.
+#[must_use]
+pub fn ui_network_with_resources(
+    summaries: usize,
+    leaves: usize,
+    max_links: usize,
+    resources: usize,
+) -> Project {
+    let mut p = ui_network(summaries, leaves, max_links);
+    for r in 1..=resources {
+        let uid = ResourceUid::new(u32::try_from(r).unwrap_or(u32::MAX));
+        if let Err(e) = p
+            .resources
+            .push(Resource::new(uid, format!("Équipe {r} — compagnons")))
+        {
+            panic!("ressource générée invalide : {e}");
+        }
+    }
+    let leaf_uid = |k: usize| {
+        TaskUid::new(u32::try_from((k / leaves) * (leaves + 1) + (k % leaves) + 2).unwrap_or(u32::MAX))
+    };
+    let mut uid = 0u32;
+    for k in 0..summaries * leaves {
+        if k % 97 == 96 {
+            continue;
+        }
+        uid += 1;
+        let hours = 4 + (k * 7) % 13;
+        let resource = ResourceUid::new(u32::try_from(k % resources + 1).unwrap_or(u32::MAX));
+        let mut a = Assignment::new(AssignmentUid::new(uid), leaf_uid(k), Some(resource));
+        a.units = Units::FULL;
+        a.work = Work::new(Minutes::new(i64::try_from(hours * 60).unwrap_or(0))).unwrap_or(Work::ZERO);
+        if let Err(e) = p.assignments.push(a) {
+            panic!("affectation générée invalide : {e}");
+        }
+    }
+    p
+}

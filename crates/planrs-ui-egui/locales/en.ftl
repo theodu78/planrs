@@ -55,6 +55,11 @@ col-finish = Finish
 col-predecessors = Predecessors
 col-total-slack = Total Slack
 col-critical = Critical
+col-percent-complete = % Complete
+col-resource-names = Resource Names
+col-baseline-start = Baseline Start
+col-baseline-finish = Baseline Finish
+col-finish-variance = Finish Variance
 yes = Yes
 no = No
 
@@ -303,3 +308,318 @@ blank-row-label = Blank row (new task)
 cell-edit-label = Edit: { $column }
 edit-error-unknown-id = No task with ID { $id }
 edit-error-not-editable = Computed column, read-only
+
+## J7 — L0: Contract refusal codes (ADR-0015)
+
+error-calendar-name_taken = Calendar name already taken: { $detail }
+error-calendar-base_not_base = Invalid base calendar: { $detail }
+error-calendar-in_use = Calendar in use: { $detail }
+error-gesture-not_draggable = Bar cannot be dragged this way: { $detail }
+error-usage-limit = Usage report too large: { $detail }
+error-control-rejected = Rejected in the application: { $detail }
+error-control-approval_timeout = No answer in time: { $detail }
+error-control-not_relayable = Command cannot be relayed: { $detail }
+error-control-not_attached = No attached application: { $detail }
+error-control-app_gone = Application closed: { $detail }
+error-control-screenshot_unavailable = Screenshot unavailable: { $detail }
+error-control-screenshot_too_large = Screenshot too large: { $detail }
+error-control-busy = Application busy: { $detail }
+error-control-document_changed = Application document changed: { $detail }
+
+# --- J7 L1 ---
+table-label = Task table
+nav-cursor-label = Row { $id }, { $column }, { $value }
+nav-cursor-blank-label = Blank row, { $column }
+nav-cursor-empty-value = empty
+
+# --- J7 L2 ---
+
+# --- J7 L3 ---
+approval-title = The agent proposes on “{ $document }”: { $name }
+approval-changed =
+    { $count ->
+        [0] no task changed
+        [one] { $count } task changed
+       *[other] { $count } tasks changed
+    }
+approval-finish = finish { $value }
+approval-finish-same = finish unchanged
+approval-critical = critical path changed
+approval-warnings =
+    { $count ->
+        [one] { $count } warning
+       *[other] { $count } warnings
+    }
+approval-queued =
+    { $count ->
+        [one] { $count } more proposal waiting
+       *[other] { $count } more proposals waiting
+    }
+approval-accept = Accept
+approval-reject = Reject
+menu-undo-agent = Undo: agent — { $detail }
+menu-undo-agent-ops =
+    { $count ->
+        [one] { $count } operation
+       *[other] { $count } operations
+    }
+
+# --- J7 L4 ---
+
+# --- J7 L5 ---
+
+# --- J7 L6 ---
+fmt-percent-suffix = %
+column-header-label = Column { $column }
+column-resize-label = Width of the { $column } column
+column-menu-hide = Hide column
+table-scroll-label = Task table horizontal scroll
+
+# --- J7 L7 ---
+menu-gantt-standard = Gantt Chart
+menu-gantt-tracking = Tracking Gantt
+
+# --- J7 L8 ---
+gantt-reason-summary = summary task (only linking is allowed)
+gantt-reason-started = task already started
+gantt-reason-milestone = milestone
+gantt-reason-excluded = task excluded from scheduling
+gantt-reason-blank = blank row
+gantt-reason-overflow = offset outside the allowed dates
+gantt-reason-same-task = task linked to itself
+link-dialog-title = Task Dependency
+link-dialog-from = From
+link-dialog-to = To
+link-dialog-type = Type
+link-dialog-lag = Lag
+link-dialog-delete = Delete
+link-dialog-stale = The project changed: the dependency was reloaded.
+link-dialog-task = { $id } { $name }
+
+# --- J7 L9 ---
+task-info-menu = Task Information…
+task-info-title = Task Information — { $id } { $name }
+task-info-tab-general = General
+task-info-tab-predecessors = Predecessors
+task-info-tab-resources = Resources
+task-info-tab-advanced = Advanced
+task-info-tab-notes = Notes
+task-info-name = Name
+task-info-duration = Duration
+task-info-percent = % complete
+task-info-start = Start
+task-info-finish = Finish
+task-info-active = Active
+task-info-pred-id = ID
+task-info-pred-type = Type
+task-info-pred-lag = Lag
+task-info-row-field = { $column }, row { $count }
+task-info-add-predecessor = Add predecessor
+task-info-add-resource = Assign resource
+task-info-remove-row = Remove
+task-info-resource-name = Resource
+task-info-resource-units = Units
+task-info-no-resource = No resources in the project.
+task-info-constraint = Constraint type
+task-info-constraint-date = Constraint date
+task-info-deadline = Deadline
+task-info-task-type = Task type
+task-info-effort-driven = Effort driven
+task-info-notes = Task notes
+task-info-link-fs = Finish-to-Start (FS)
+task-info-link-ss = Start-to-Start (SS)
+task-info-link-ff = Finish-to-Finish (FF)
+task-info-link-sf = Start-to-Finish (SF)
+task-info-constraint-asap = As Soon As Possible
+task-info-constraint-alap = As Late As Possible
+task-info-constraint-mso = Must Start On
+task-info-constraint-mfo = Must Finish On
+task-info-constraint-snet = Start No Earlier Than
+task-info-constraint-snlt = Start No Later Than
+task-info-constraint-fnet = Finish No Earlier Than
+task-info-constraint-fnlt = Finish No Later Than
+task-info-type-fixed-units = Fixed Units
+task-info-type-fixed-duration = Fixed Duration
+task-info-type-fixed-work = Fixed Work
+task-info-ok = OK
+task-info-cancel = Cancel
+task-info-stale = The project changed since this window opened: values were reloaded, nothing was applied.
+task-info-date-required = A date is required for this constraint type
+task-info-bad-id = Unreadable ID: { $id }
+task-info-duplicate-predecessor = Duplicate predecessor: { $id }
+task-info-duplicate-resource = Resource assigned twice: { $name }
+task-info-unknown-resource = Unknown resource
+
+# --- J7 L10 ---
+menu-view-resource-sheet = Resource Sheet
+res-sheet-label = Resource sheet
+res-col-indicator = Ind.
+res-col-name = Resource Name
+res-col-kind = Type
+res-col-material-label = Material Label
+res-col-initials = Initials
+res-col-group = Group
+res-col-max-units = Max. Units
+res-col-standard-rate = Std. Rate
+res-col-overtime-rate = Ovt. Rate
+res-col-cost-per-use = Cost/Use
+res-col-calendar = Calendar
+res-kind-work = Work
+res-kind-material = Material
+res-kind-cost = Cost
+rate-minute = /min
+rate-hour = /hr
+rate-day = /day
+rate-week = /wk
+rate-month = /mon
+rate-year = /yr
+res-row-label = Resource { $id }: { $name }
+res-blank-row-label = Blank row (new resource)
+res-name-first = Enter the resource name first
+res-unknown-calendar = No calendar named "{ $name }"
+res-calendar-none = (none)
+res-delete-title = Delete an assigned resource
+res-delete-text =
+    { $count ->
+        [one] "{ $name }" is assigned to one task: the assignment will be removed with it.
+       *[other] "{ $name }" has { $count } assignments: they will be removed with it.
+    }
+
+# --- J7 L11 ---
+menu-view-resource-usage = Resource Usage
+usage-sheet-label = Resource usage
+usage-periods-label = Work per period
+usage-col-expand = +/-
+usage-col-name = Resource Name
+usage-col-work = Work
+usage-hours-suffix = h
+usage-expand = Expand { $name }
+usage-collapse = Collapse { $name }
+usage-assignment-label = Assignment: { $name } ({ $detail })
+usage-limit = Usage too large to display: collapse some resources ({ $detail }).
+
+# --- J7 L12 ---
+menu-project = Project
+menu-project-info = Project Information…
+menu-working-time = Change Working Time…
+menu-baseline = Baseline…
+menu-reschedule = Reschedule Uncompleted Work…
+scope-project = Entire project
+scope-selection = { $count ->
+        [one] Selected task (1)
+       *[other] Selected tasks ({ $count })
+    }
+wt-title = Change Working Time
+wt-calendar = For calendar
+wt-project-calendar = { $name } (Project Calendar)
+wt-resource-calendar = { $name } (resource)
+wt-new = Create New Calendar…
+wt-delete = Delete calendar
+wt-name = Calendar name
+wt-base-of = Base calendar: { $name }
+wt-new-name = New calendar name
+wt-new-base = Create new base calendar
+wt-new-copy = Make a copy of “{ $name }”
+wt-create = Create
+wt-new-cancel = Do not create
+wt-prev-month = Previous month
+wt-next-month = Next month
+wt-month-title = { $name } { $value }
+wt-month-unavailable = Calendar unavailable: { $detail }
+wt-state-working = Working: { $value }
+wt-state-non-working = Nonworking
+wt-legend-working = Working
+wt-legend-non-working = Nonworking
+wt-legend-exception = Exception
+wt-tab-exceptions = Exceptions
+wt-tab-week = Work Week
+wt-exc-name = Name
+wt-exc-from = Start
+wt-exc-to = Finish
+wt-exc-working = Working
+wt-exc-ranges = Times
+wt-exc-recurring = Recurring (read only)
+wt-exc-add = Add exception
+wt-week-inherit = Inherited from base
+wt-week-non-working = Nonworking day
+wt-week-working = Specific working times
+wt-week-setting = Setting for { $name }
+wt-week-ranges = Times for { $name }
+wt-week-inherited = Base: { $value }
+wt-bad-ranges = Times expected as 08:00-12:00, 13:00-17:00
+pi-title = Project Information
+pi-direction = Schedule from
+pi-from-start = Project Start Date
+pi-from-finish = Project Finish Date
+pi-start = Start date
+pi-finish = Finish date
+pi-status = Status date
+pi-status-hint = Empty: NA (today serves as status date)
+pi-calendar = Calendar
+bl-title = Baseline
+bl-set = Set baseline
+bl-clear = Clear baseline
+bl-number = Number
+bl-baseline-0 = Baseline
+bl-baseline-n = Baseline { $count }
+bl-rollup = Roll up baselines
+bl-rollup-none = No rollup
+bl-rollup-all = To all summary tasks
+bl-rollup-from = From subtasks into selected summary tasks
+bl-confirm = { $detail } Replace the saved baseline?
+bl-replace = Replace
+rs-title = Reschedule Uncompleted Work
+rs-after = Reschedule after
+
+# --- J7 L13 ---
+menu-assign-resources = Assign Resources…
+as-title = Assign Resources
+as-task-one = Task: { $name }
+as-task-many = { $count ->
+        [one] { $count } selected task
+       *[other] { $count } selected tasks
+    }
+as-no-task = No task selected
+as-filter = Filter by name
+as-resource = Resource Name
+as-units = Units
+as-units-of = Units of { $name }
+as-assigned = Assigned
+as-assigned-all = yes
+as-assigned-some = { $count } of { $value }
+as-assign = Assign
+as-remove = Remove
+as-update-units = Change Units
+as-close = Close
+as-no-resource = No resource
+as-hint = Click a resource to choose it (Ctrl or Cmd + click: several); units left empty: default value.
+
+# --- J7 L14 ---
+open-error-read-file = Could not read “{ $name }”: { $detail }
+open-error-mspdi-file = “{ $name }”: unreadable MSPDI file: { $detail }
+open-error-missing = “{ $name }” was not found and was removed from recent files: { $detail }
+menu-recent = Recent files
+menu-recent-empty = No recent files
+menu-recent-missing = { $name } (not found)
+
+# --- J7 L15 ---
+recovery-title = Recover “{ $name }” ({ $count ->
+        [one] { $count } change
+       *[other] { $count } changes
+    })?
+recovery-checkpointed = Changes made before the last recovery point can no longer be undone.
+recovery-restore = Restore
+recovery-discard = Discard
+recovery-later = Later
+recovery-partial = “{ $name }” partly recovered: { $count ->
+        [one] { $count } change replayed
+       *[other] { $count } changes replayed
+    }, the next one was refused: { $detail }
+recovery-failed = Cannot recover “{ $name }”: { $detail }
+recovery-discard-failed = Cannot delete the recovery journal: { $detail }
+recovery-journal-cut = Crash recovery stopped for this document: { $detail }. Editing continues; save often.
+recovery-file-changed = The file changed on disk since then: the recovered version opens without a path (Save As), so it cannot overwrite it.
+recovery-kept = Journal from another planrs version, or too large: it cannot be restored here. Discard deletes it.
+recovered-file-name = { $stem } (recovered)
+
+# --- J7 L16 ---

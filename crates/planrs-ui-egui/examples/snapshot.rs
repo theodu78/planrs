@@ -2,23 +2,34 @@
 //! « vérification visuelle par l'agent »).
 //!
 //! ```text
-//! cargo run -p planrs-ui-egui --example snapshot -- <fichier.xml> <vue> [sortie.png]
+//! cargo run -p planrs-ui-egui --example snapshot -- <fichier.xml | --generate N> <vue>
+//!     [--row N] [--zoom day|week|month|quarter] [--size LxH] [sortie.png]
 //! ```
 //!
-//! Vues : `welcome` (accueil, le fichier est ignoré), `main` (zoom ajusté),
+//! Vues : `welcome` (accueil, la source est ignorée), `main` (zoom ajusté),
 //! `main-week`, `main-day` (défilée deux jours avant la date d'état),
-//! `main-dark`, `main-en`. Français et thème clair sauf mention. Sortie par
-//! défaut : `planrs-snapshot-<vue>.png` dans le répertoire courant.
+//! `main-dark`, `main-en`, `tracking` (Gantt de suivi), `resources`
+//! (feuille des ressources), `usage` (utilisation des ressources). Français
+//! et thème clair sauf mention. `--generate N` : réseau généré sans MSPDI
+//! (`planrs_tests::generate::ui_network_with_resources`, N arrondi au
+//! multiple de 20 supérieur, deux liens par tâche, une ressource pour 25
+//! tâches), comme le test de fluidité. `--row N` : sélectionne la ligne de
+//! tâche N (depuis 0), y défile la table et le Gantt (début de la barre) ;
+//! `--zoom` : échelle imposée après la
+//! vue ; `--size` : fenêtre simulée (défaut 1280×720). Sortie par défaut :
+//! `planrs-snapshot-<vue>.png` dans le répertoire courant.
 //!
 //! Même harnais que les captures de référence (`tests/ui/common.rs`) :
-//! `egui_kittest` + wgpu, 1280×720, 1 px par point, OS fixé, « maintenant »
-//! fixe. Un adaptateur logiciel (lavapipe/llvmpipe, `DeviceType::Cpu`) est
-//! préféré pour des pixels identiques à ceux de la CI ; à défaut, le premier
+//! `egui_kittest` + wgpu, 1 px par point, OS fixé, « maintenant » fixe. Un
+//! adaptateur logiciel (lavapipe/llvmpipe, `DeviceType::Cpu`) est préféré
+//! pour des pixels identiques à ceux de la CI ; à défaut, le premier
 //! adaptateur disponible est utilisé et signalé. Toute erreur (arguments,
 //! lecture, document refusé, absence d'adaptateur, écriture) est affichée sur
 //! la sortie d'erreur avec un code de sortie non nul : jamais de panique
-//! volontaire.
+//! volontaire. Le test `snapshot_generate_and_views` (`tests/ui/desktop.rs`)
+//! inclut ce fichier et prépare chaque vue sans rendu.
 
+use std::ffi::OsString;
 use std::future::Future;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -30,21 +41,33 @@ use egui_kittest::Harness;
 use egui_kittest::wgpu::WgpuTestRenderer;
 use planrs_core::Moment;
 use planrs_ui_egui::timescale::TimeAxis;
-use planrs_ui_egui::{Action, App, DocOrigin, Env, LanguagePref, ThemePref, TimeScaleZoom, UiState};
+use planrs_ui_egui::{
+    Action, App, DocOrigin, Env, GanttStyle, LanguagePref, ThemePref, TimeScaleZoom, UiState, ViewKind,
+};
 
 /// Usage affiché en cas d'arguments invalides.
-const USAGE: &str = "usage : cargo run -p planrs-ui-egui --example snapshot -- <fichier.xml> <vue> [sortie.png]\n\
-vues : welcome | main | main-week | main-day | main-dark | main-en";
+pub const USAGE: &str = "usage : cargo run -p planrs-ui-egui --example snapshot -- \
+<fichier.xml | --generate N> <vue> [--row N] [--zoom day|week|month|quarter] [--size LxH] [sortie.png]\n\
+vues : welcome | main | main-week | main-day | main-dark | main-en | tracking | resources | usage";
 
-/// Taille de la fenêtre simulée (celle des captures de référence).
-const SIZE: (f32, f32) = (1280.0, 720.0);
+/// Taille par défaut de la fenêtre simulée (celle des captures de référence).
+pub const SIZE: (f32, f32) = (1280.0, 720.0);
+
+/// Côté de la fenêtre simulée, en points : bornes acceptées par `--size`.
+const SIDE: (u32, u32) = (320, 4096);
+
+/// Tâches générées au plus (`--generate`).
+pub const MAX_GENERATED: usize = 20_000;
+
+/// Feuilles par récapitulative du réseau généré (20 tâches par lot).
+const LEAVES: usize = 19;
 
 /// Images au plus pour que l'interface se stabilise.
 const MAX_STEPS: u64 = 16;
 
 /// Vue demandée.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum View {
+pub enum View {
     /// Écran d'accueil.
     Welcome,
     /// Vue principale, zoom ajusté.
@@ -57,11 +80,18 @@ enum View {
     MainDark,
     /// Vue principale en anglais.
     MainEn,
+    /// Gantt de suivi.
+    Tracking,
+    /// Feuille des ressources.
+    Resources,
+    /// Utilisation des ressources.
+    Usage,
 }
 
 impl View {
     /// Vue nommée sur la ligne de commande.
-    fn parse(name: &str) -> Option<Self> {
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
         match name {
             "welcome" => Some(Self::Welcome),
             "main" => Some(Self::Main),
@@ -69,6 +99,9 @@ impl View {
             "main-day" => Some(Self::MainDay),
             "main-dark" => Some(Self::MainDark),
             "main-en" => Some(Self::MainEn),
+            "tracking" => Some(Self::Tracking),
+            "resources" => Some(Self::Resources),
+            "usage" => Some(Self::Usage),
             _ => None,
         }
     }
@@ -78,46 +111,155 @@ impl View {
         match self {
             Self::MainDark => (LanguagePref::Fr, ThemePref::Dark),
             Self::MainEn => (LanguagePref::En, ThemePref::Light),
-            Self::Welcome | Self::Main | Self::MainWeek | Self::MainDay => {
-                (LanguagePref::Fr, ThemePref::Light)
-            }
+            _ => (LanguagePref::Fr, ThemePref::Light),
+        }
+    }
+
+    /// Vue principale et style du Gantt.
+    const fn kind(self) -> (ViewKind, GanttStyle) {
+        match self {
+            Self::Tracking => (ViewKind::Gantt, GanttStyle::Tracking),
+            Self::Resources => (ViewKind::ResourceSheet, GanttStyle::Standard),
+            Self::Usage => (ViewKind::ResourceUsage, GanttStyle::Standard),
+            _ => (ViewKind::Gantt, GanttStyle::Standard),
         }
     }
 }
 
-/// Arguments de la ligne de commande.
-struct Args {
+/// Projet à ouvrir.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Source {
     /// Fichier MSPDI.
-    input: PathBuf,
-    /// Vue à rendre.
-    view: View,
-    /// Nom de la vue, tel que saisi.
-    view_name: String,
-    /// PNG à écrire.
-    output: PathBuf,
+    File(PathBuf),
+    /// Réseau généré d'environ N tâches.
+    Generate(usize),
 }
 
-/// Lit les arguments : deux obligatoires, un facultatif.
-fn parse_args() -> Result<Args, String> {
-    let mut args = std::env::args_os().skip(1);
-    let input = args.next().map(PathBuf::from).ok_or("fichier MSPDI manquant")?;
-    let view_name = args
+/// Arguments de la ligne de commande.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Args {
+    /// Projet à ouvrir.
+    pub source: Source,
+    /// Vue à rendre.
+    pub view: View,
+    /// Nom de la vue, tel que saisi.
+    pub view_name: String,
+    /// Ligne à montrer et sélectionner.
+    pub row: Option<usize>,
+    /// Zoom imposé.
+    pub zoom: Option<TimeScaleZoom>,
+    /// Taille de la fenêtre simulée, en points.
+    pub size: (f32, f32),
+    /// PNG à écrire.
+    pub output: PathBuf,
+}
+
+/// Valeur UTF-8 de l'option `name`.
+fn option_value(name: &str, value: Option<OsString>) -> Result<String, String> {
+    value
+        .ok_or_else(|| format!("valeur manquante après {name}"))?
+        .into_string()
+        .map_err(|_| format!("valeur illisible après {name}"))
+}
+
+/// Entier positif d'une option.
+fn parse_count(name: &str, text: &str) -> Result<usize, String> {
+    text.parse::<usize>()
+        .map_err(|_| format!("{name} attend un entier, reçu « {text} »"))
+}
+
+/// Zoom nommé.
+fn parse_zoom(text: &str) -> Result<TimeScaleZoom, String> {
+    match text {
+        "day" => Ok(TimeScaleZoom::Day),
+        "week" => Ok(TimeScaleZoom::Week),
+        "month" => Ok(TimeScaleZoom::Month),
+        "quarter" => Ok(TimeScaleZoom::Quarter),
+        other => Err(format!("zoom inconnu : {other}")),
+    }
+}
+
+/// Taille `LxH` (ou `L×H`), chaque côté dans [`SIDE`].
+fn parse_size(text: &str) -> Result<(f32, f32), String> {
+    let invalid = || {
+        format!(
+            "--size attend LxH (côtés de {} à {}), reçu « {text} »",
+            SIDE.0, SIDE.1
+        )
+    };
+    let (w, h) = text.split_once(['x', 'X', '×']).ok_or_else(invalid)?;
+    let side = |s: &str| {
+        s.trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|v| (SIDE.0..=SIDE.1).contains(v))
+            .ok_or_else(invalid)
+    };
+    let (w, h) = (side(w)?, side(h)?);
+    // Côtés ≤ 4 096 : exacts en f32.
+    #[allow(clippy::cast_precision_loss, reason = "côtés bornés à 4 096, exacts en f32")]
+    Ok((w as f32, h as f32))
+}
+
+/// Lit les arguments (sans le nom du programme).
+///
+/// # Errors
+///
+/// Argument manquant, inconnu ou invalide : message à afficher avec
+/// [`USAGE`].
+pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
+    let mut args = args.into_iter();
+    let mut positional: Vec<OsString> = Vec::new();
+    let mut source = None;
+    let mut row = None;
+    let mut zoom = None;
+    let mut size = SIZE;
+    while let Some(arg) = args.next() {
+        match arg.to_str() {
+            Some("--generate") => {
+                let n = parse_count("--generate", &option_value("--generate", args.next())?)?;
+                if n == 0 || n > MAX_GENERATED {
+                    return Err(format!("--generate attend de 1 à {MAX_GENERATED} tâches"));
+                }
+                source = Some(Source::Generate(n));
+            }
+            Some("--row") => row = Some(parse_count("--row", &option_value("--row", args.next())?)?),
+            Some("--zoom") => zoom = Some(parse_zoom(&option_value("--zoom", args.next())?)?),
+            Some("--size") => size = parse_size(&option_value("--size", args.next())?)?,
+            Some(other) if other.starts_with("--") => return Err(format!("option inconnue : {other}")),
+            _ => positional.push(arg),
+        }
+    }
+    let mut positional = positional.into_iter();
+    let source = match source {
+        Some(source) => source,
+        None => Source::File(
+            positional
+                .next()
+                .map(PathBuf::from)
+                .ok_or("fichier MSPDI (ou --generate N) manquant")?,
+        ),
+    };
+    let view_name = positional
         .next()
         .ok_or("vue manquante")?
         .into_string()
         .map_err(|_| "nom de vue illisible".to_owned())?;
     let view = View::parse(&view_name).ok_or_else(|| format!("vue inconnue : {view_name}"))?;
-    let output = args.next().map_or_else(
+    let output = positional.next().map_or_else(
         || PathBuf::from(format!("planrs-snapshot-{view_name}.png")),
         PathBuf::from,
     );
-    if args.next().is_some() {
+    if positional.next().is_some() {
         return Err("trop d'arguments".to_owned());
     }
     Ok(Args {
-        input,
+        source,
         view,
         view_name,
+        row,
+        zoom,
+        size,
         output,
     })
 }
@@ -196,26 +338,52 @@ fn settle(harness: &mut Harness<'static, App>) -> Result<(), String> {
         .map_err(|error| format!("l'interface ne se stabilise pas : {error}"))
 }
 
-/// Prépare la vue demandée dans le harnais.
-fn prepare(harness: &mut Harness<'static, App>, args: &Args) -> Result<(), String> {
-    settle(harness)?;
-    if args.view == View::Welcome {
-        return Ok(());
-    }
-    let bytes = std::fs::read(&args.input).map_err(|error| format!("{} : {error}", args.input.display()))?;
-    let origin = DocOrigin {
-        name: args
-            .input
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-        path: args.input.to_str().map(str::to_owned),
-        demo: false,
+/// « Maintenant » fixe : date d'état de l'exemple, ou début du réseau
+/// généré (celui du test de fluidité).
+fn fixed_now(source: &Source) -> Result<Moment, String> {
+    let text = match source {
+        Source::File(_) => "2027-01-15T08:00",
+        Source::Generate(_) => "2026-01-05T08:00",
     };
-    harness.state_mut().open_bytes(&bytes, origin);
-    if harness.state().document.is_none() {
-        let detail = harness
-            .state()
+    text.parse()
+        .map_err(|error| format!("date fixe invalide : {error}"))
+}
+
+/// Ouvre la source dans l'application.
+fn open(app: &mut App, source: &Source) -> Result<(), String> {
+    match source {
+        Source::File(path) => {
+            let bytes = std::fs::read(path).map_err(|error| format!("{} : {error}", path.display()))?;
+            let origin = DocOrigin {
+                name: path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                path: path.to_str().map(str::to_owned),
+                demo: false,
+            };
+            app.open_bytes(&bytes, origin);
+        }
+        Source::Generate(n) => {
+            let summaries = n.div_ceil(LEAVES + 1).max(1);
+            let tasks = summaries.saturating_mul(LEAVES + 1);
+            let resources = (tasks / 25).max(1);
+            let project = planrs_tests::generate::ui_network_with_resources(
+                summaries,
+                LEAVES,
+                tasks.saturating_mul(2),
+                resources,
+            );
+            let origin = DocOrigin {
+                name: format!("réseau généré ({tasks} tâches)"),
+                path: None,
+                demo: false,
+            };
+            app.open_project(project, origin);
+        }
+    }
+    if app.document.is_none() {
+        let detail = app
             .messages()
             .iter()
             .map(|m| m.text.as_str())
@@ -223,6 +391,20 @@ fn prepare(harness: &mut Harness<'static, App>, args: &Args) -> Result<(), Strin
             .join(" ; ");
         return Err(format!("document refusé : {detail}"));
     }
+    Ok(())
+}
+
+/// Prépare la vue demandée dans le harnais.
+fn prepare(harness: &mut Harness<'static, App>, args: &Args) -> Result<(), String> {
+    settle(harness)?;
+    if args.view == View::Welcome {
+        return Ok(());
+    }
+    open(harness.state_mut(), &args.source)?;
+    settle(harness)?;
+    let (kind, style) = args.view.kind();
+    harness.state_mut().dispatch(Action::SetView(kind));
+    harness.state_mut().dispatch(Action::SetGanttStyle(style));
     settle(harness)?;
     match args.view {
         View::MainWeek => {
@@ -244,42 +426,83 @@ fn prepare(harness: &mut Harness<'static, App>, args: &Args) -> Result<(), Strin
                 settle(harness)?;
             }
         }
-        View::Welcome | View::Main | View::MainDark | View::MainEn => {}
+        _ => {}
+    }
+    if let Some(zoom) = args.zoom {
+        harness.state_mut().dispatch(Action::SetZoom(zoom));
+        settle(harness)?;
+    }
+    if let Some(row) = args.row {
+        let (uid, bar) = harness
+            .state()
+            .rows()
+            .and_then(|rows| rows.row(row))
+            .map(|r| (r.uid, r.bar))
+            .ok_or_else(|| format!("--row {row} : ligne absente"))?;
+        harness.state_mut().dispatch(Action::Select(Some(uid)));
+        harness.state_mut().dispatch(Action::ScrollToRow(row));
+        settle(harness)?;
+        // Gantt : défilé jusqu'au début de la barre (axe de l'interface,
+        // deux jours de marge à gauche).
+        let app = harness.state();
+        let target = bar.zip(app.document.as_ref()).map(|((start, _), doc)| {
+            let axis = TimeAxis::new(doc.range, app.state.zoom, 0.0);
+            axis.x(start) - 2.0 * axis.px_per_day()
+        });
+        if let Some(target) = target.filter(|t| t.is_finite()) {
+            let delta = target.max(0.0) - app.view().gantt_scroll_x;
+            harness.state_mut().dispatch(Action::ScrollGanttX(delta));
+            settle(harness)?;
+        }
     }
     Ok(())
 }
 
-/// Rend la vue et écrit le PNG.
-fn run(args: &Args) -> Result<(), String> {
+/// Harnais prêt à rendre la vue demandée : `renderer` absent, aucun rendu
+/// possible (préparation seule, tests).
+///
+/// # Errors
+///
+/// Document refusé, ligne absente, interface instable.
+pub fn prepared(args: &Args, renderer: Option<WgpuTestRenderer>) -> Result<Harness<'static, App>, String> {
     let (language, theme) = args.view.prefs();
-    let now: Moment = "2027-01-15T08:00"
-        .parse()
-        .map_err(|error| format!("date fixe invalide : {error}"))?;
     let app = App::new(
         UiState {
             language,
             theme,
             ..UiState::default()
         },
-        Env::fixed(now),
+        Env::fixed(fixed_now(&args.source)?),
     );
     let egui_theme = if theme == ThemePref::Dark {
         egui::Theme::Dark
     } else {
         egui::Theme::Light
     };
-    let renderer = WgpuTestRenderer::from_render_state(render_state()?);
-    let mut harness = Harness::builder()
-        .with_size(egui::vec2(SIZE.0, SIZE.1))
+    let mut builder = Harness::builder()
+        .with_size(egui::vec2(args.size.0, args.size.1))
         .with_pixels_per_point(1.0)
         .with_theme(egui_theme)
         .with_os(egui::os::OperatingSystem::Nix)
-        .with_max_steps(MAX_STEPS)
-        .renderer(renderer)
-        .build_ui_state(planrs_ui_egui::ui, app);
+        .with_max_steps(MAX_STEPS);
+    if let Some(renderer) = renderer {
+        builder = builder.renderer(renderer);
+    }
+    let mut harness = builder.build_ui_state(planrs_ui_egui::ui, app);
     prepare(&mut harness, args)?;
     harness.remove_cursor();
     settle(&mut harness)?;
+    Ok(harness)
+}
+
+/// Rend la vue et écrit le PNG.
+///
+/// # Errors
+///
+/// Toute erreur de préparation, de rendu ou d'écriture.
+pub fn run(args: &Args) -> Result<(), String> {
+    let renderer = WgpuTestRenderer::from_render_state(render_state()?);
+    let mut harness = prepared(args, Some(renderer))?;
     let image = harness.render()?;
     image
         .save(&args.output)
@@ -299,7 +522,7 @@ fn run(args: &Args) -> Result<(), String> {
 }
 
 fn main() -> ExitCode {
-    let args = match parse_args() {
+    let args = match parse_args(std::env::args_os().skip(1)) {
         Ok(args) => args,
         Err(error) => {
             eprintln!("snapshot : {error}\n{USAGE}");

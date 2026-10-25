@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use planrs_core::calendar::{Calendar, CalendarKind};
 use planrs_core::{
-    Assignment, AssignmentUid, CalendarUid, HasUid, ModelError, Resource, ResourceKind, ResourceUid, Subject,
-    Units,
+    Assignment, AssignmentUid, CalendarUid, HasUid, ModelError, Money, Rate, RateUnit, Resource,
+    ResourceKind, ResourceUid, Subject, Units,
 };
 
 use super::assignment::{invalid, unbalance};
@@ -16,8 +16,8 @@ use super::exec::Ctx;
 use super::refs::is_valid_label;
 use super::task::MAX_NAME_CHARS;
 use super::{
-    Patch, ResourceAdd, ResourceCalendarJson, ResourceDelete, ResourceKindJson, ResourceRef, ResourceUpdate,
-    UnitsJson,
+    Patch, RateJson, RateUnitJson, ResourceAdd, ResourceCalendarJson, ResourceDelete, ResourceKindJson,
+    ResourceRef, ResourceUpdate, UnitsJson,
 };
 use crate::error::{CommandError, CommandErrorKind, codes};
 use crate::outcome::SideEffect;
@@ -271,6 +271,98 @@ fn same_kind(a: &ResourceKind, b: &ResourceKind) -> bool {
     std::mem::discriminant(a) == std::mem::discriminant(b)
 }
 
+/// Taux à poser par `resource.update` (R-195 amendée) ; `None` : gardé.
+struct Rates {
+    standard: Option<Rate>,
+    overtime: Option<Rate>,
+    per_use: Option<Money>,
+}
+
+/// Montant d'un taux en centièmes, positif ou nul, dans les bornes de
+/// `Money` (sinon `param.invalid`).
+fn amount(v: i64, field: &str) -> Result<Money, CommandError> {
+    if v < 0 {
+        return Err(invalid(field, "montant négatif"));
+    }
+    Money::new(v).map_err(|_| invalid(field, "montant hors bornes"))
+}
+
+/// Unité du modèle d'une unité JSON.
+const fn rate_unit(u: RateUnitJson) -> RateUnit {
+    match u {
+        RateUnitJson::Minute => RateUnit::Minute,
+        RateUnitJson::Hour => RateUnit::Hour,
+        RateUnitJson::Day => RateUnit::Day,
+        RateUnitJson::Week => RateUnit::Week,
+        RateUnitJson::Month => RateUnit::Month,
+        RateUnitJson::Year => RateUnit::Year,
+        RateUnitJson::MaterialUnit => RateUnit::MaterialUnit,
+    }
+}
+
+/// R-195 amendée (O46, ADR-0013 D7) : taux stockés tels que saisis
+/// (montant en centièmes et unité, jamais convertis ni calculés).
+/// Ressource de travail : unité de temps (défaut heure) ; matérielle :
+/// unité de matériau seulement (défaut), pas de taux des heures
+/// supplémentaires ; coût : aucun taux. `cost_per_use` : montant seul
+/// (`per` refusé). `null` remet 0 (par heure, ou par unité de matériau).
+fn rates(op: &ResourceUpdate, kind: &ResourceKind) -> Result<Rates, CommandError> {
+    let material = matches!(kind, ResourceKind::Material { .. });
+    let cost = *kind == ResourceKind::Cost;
+    let default_unit = if material {
+        RateUnit::MaterialUnit
+    } else {
+        RateUnit::Hour
+    };
+    let rate = |p: &Patch<RateJson>, field: &str| -> Result<Option<Rate>, CommandError> {
+        let r = match p {
+            Patch::Keep => return Ok(None),
+            Patch::Clear => RateJson { amount: 0, per: None },
+            Patch::Set(r) => *r,
+        };
+        if cost {
+            return Err(invalid(field, "taux sans objet pour une ressource de coût"));
+        }
+        let per = r.per.map_or(default_unit, rate_unit);
+        if material != (per == RateUnit::MaterialUnit) {
+            return Err(invalid(
+                field,
+                "unité de matériau pour une ressource matérielle, unité de temps sinon",
+            ));
+        }
+        Ok(Some(Rate {
+            amount: amount(r.amount, field)?,
+            per,
+        }))
+    };
+    let standard = rate(&op.standard_rate, "standard_rate")?;
+    if material && !op.overtime_rate.is_keep() {
+        return Err(invalid(
+            "overtime_rate",
+            "pas de taux des heures supplémentaires pour une ressource matérielle",
+        ));
+    }
+    let overtime = rate(&op.overtime_rate, "overtime_rate")?;
+    let per_use = match &op.cost_per_use {
+        Patch::Keep => None,
+        Patch::Clear => Some(Money::ZERO),
+        Patch::Set(r) => {
+            if r.per.is_some() {
+                return Err(invalid(
+                    "cost_per_use",
+                    "« per » sans objet pour un coût par utilisation",
+                ));
+            }
+            Some(amount(r.amount, "cost_per_use")?)
+        }
+    };
+    Ok(Rates {
+        standard,
+        overtime,
+        per_use,
+    })
+}
+
 /// R-195 : `resource.update`.
 #[allow(
     clippy::too_many_lines,
@@ -353,6 +445,7 @@ pub(super) fn update(op: &ResourceUpdate, ctx: &mut Ctx<'_>) -> Result<(), Comma
     if op.inactive == Patch::Clear {
         return Err(invalid("inactive", "booléen attendu"));
     }
+    let rates = rates(op, &new_kind)?;
 
     let Some(r) = ctx.project.resources.get_mut(uid) else {
         return Err(not_found(uid, "uid"));
@@ -387,6 +480,15 @@ pub(super) fn update(op: &ResourceUpdate, ctx: &mut Ctx<'_>) -> Result<(), Comma
     patch_text(&mut r.notes, &op.notes);
     if let Patch::Set(b) = op.inactive {
         r.is_inactive = b;
+    }
+    if let Some(rate) = rates.standard {
+        r.standard_rate = rate;
+    }
+    if let Some(rate) = rates.overtime {
+        r.overtime_rate = rate;
+    }
+    if let Some(cost) = rates.per_use {
+        r.cost_per_use = cost;
     }
     if calendar_changed {
         // R-161 : le calendrier change le placement de ses affectations.

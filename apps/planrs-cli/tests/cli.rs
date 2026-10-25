@@ -206,6 +206,55 @@ fn cli_apply_writes_atomic() {
     assert_eq!(entries, ["maison.xml", "ops.json", "sortie.xml"]);
 }
 
+/// J7 (lot L5) : `planrs apply` sert les écritures de calendrier et
+/// `baseline.clear` (R-247 à R-250) ; le MSPDI écrit les garde.
+#[test]
+fn cli_apply_calendars_j7() {
+    let dir = TempDir::new("calendars");
+    let plan = house_copy(&dir);
+    let ops = dir.join("ops.json");
+    std::fs::write(
+        &ops,
+        r#"{"format_version":1,"ops":[
+            {"op":"calendar.add","name":"Équipe samedi","copy_of":1},
+            {"op":"calendar.set_week","calendar":"$NEW","days":[{"day":"saturday","setting":{"ranges":[{"from":"08:00","to":"12:00"}]}}]},
+            {"op":"calendar.set_exception","cal":"$NEW","from":"2026-11-11","to":"2026-11-11","name":"Armistice"},
+            {"op":"baseline.clear","number":5}
+        ]}"#
+        .replace("\"$NEW\"", "999"),
+    )
+    .unwrap();
+    // Calendrier 999 inconnu : refus, code de sortie 1.
+    let o = run(&["--now", NOW, "apply", s(&plan), s(&ops), "--json"]);
+    assert_eq!(code(&o), 1, "{}", String::from_utf8_lossy(&o.stderr));
+    // UID du calendrier créé : le suivant du plus grand du fichier.
+    let mut ws = workspace_with(&plan, Language::Fr);
+    let next = ws
+        .call("calendar.add", json!({ "name": "Sonde", "dry_run": true }))
+        .unwrap()["side_effects"][0]["calendar_created"]
+        .as_u64()
+        .unwrap();
+    let text = std::fs::read_to_string(&ops)
+        .unwrap()
+        .replace("999", &next.to_string());
+    std::fs::write(&ops, text).unwrap();
+    let out = dir.join("sortie.xml");
+    let o = run(&["--now", NOW, "apply", s(&plan), s(&ops), "-o", s(&out), "--json"]);
+    assert_eq!(code(&o), 0, "{}", String::from_utf8_lossy(&o.stderr));
+    let v = stdout_json(&o);
+    assert_eq!(v["side_effects"][0], json!({ "calendar_created": next }));
+    assert!(
+        v["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["code"] == json!("baseline.nothing_to_clear"))
+    );
+    let xml = std::fs::read_to_string(&out).unwrap();
+    assert!(xml.contains("<Name>Équipe samedi</Name>"));
+    assert!(xml.contains("<Name>Armistice</Name>"));
+}
+
 #[test]
 fn cli_apply_refused_exit_1() {
     let dir = TempDir::new("refused");
@@ -455,6 +504,10 @@ fn cli_usage_errors_exit_2() {
     assert_eq!(code(&run(&["inconnue"])), 2);
     assert_eq!(code(&run(&["summary"])), 2);
     assert_eq!(code(&run(&["mcp", "--http", ":8080"])), 2);
+    // `--approval-timeout` hors de 1..=3600 s (J7, relais) : usage.
+    for bad in ["0", "3601", "x"] {
+        assert_eq!(code(&run(&["mcp", "--approval-timeout", bad])), 2, "{bad}");
+    }
     // `--limit` hors de 1..500 : usage (2), même sur un plan absent (le
     // contrôle passe avant la lecture) ; bornes acceptées.
     for bad in ["0", "501"] {

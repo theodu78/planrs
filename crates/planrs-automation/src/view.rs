@@ -27,8 +27,9 @@
 
 use std::collections::BTreeMap;
 
-use planrs_core::calendar::CompiledCalendar;
-use planrs_core::resource::{UsageError, usage as core_usage};
+use planrs_core::calendar::{CalendarSet, CompiledCalendar};
+use planrs_core::resource::usage::MAX_ASSIGNMENT_ROWS;
+use planrs_core::resource::{AssignmentUsageReport, UsageError, usage_by_assignment, usage_with};
 use planrs_core::{
     Assignment, BaselineNumber, Decimal, Diagnostic, Duration, DurationUnit, HasUid, LagValue, Minutes,
     Moment, Percent, ProgressState, Project, Resource, ResourceKind, ResourceUid, Schedule, Severity,
@@ -526,6 +527,39 @@ pub struct UsageView {
     pub rows: Vec<UsageRowView>,
     /// Vrai si le rapport est coupé.
     pub truncated: bool,
+    /// Une ligne par affectation (J7, R-245), triées par (ressource, tâche,
+    /// UID) ; seulement si `assignments` est demandé, absent si vide.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub assignments: Vec<AssignmentUsageView>,
+    /// Total de chaque tâche affectée à une ressource de travail (R-245),
+    /// dans l'ordre des UID ; seulement si `assignments` est demandé,
+    /// absent si vide.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub task_totals: Vec<TaskUsageView>,
+}
+
+/// Ligne d'une affectation dans [`UsageView`] (R-245).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AssignmentUsageView {
+    /// UID de l'affectation.
+    pub uid: u32,
+    /// UID de la tâche.
+    pub task: u32,
+    /// UID de la ressource.
+    pub resource: u32,
+    /// Travail de chaque période.
+    pub work: Vec<DurationJson>,
+}
+
+/// Total d'une tâche dans [`UsageView`] (R-245).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TaskUsageView {
+    /// UID de la tâche.
+    pub uid: u32,
+    /// Nom.
+    pub name: String,
+    /// Travail de chaque période (Σ de ses affectations de travail).
+    pub work: Vec<DurationJson>,
 }
 
 /// Ligne d'une ressource dans [`UsageView`].
@@ -1496,15 +1530,17 @@ pub fn list_resources(session: &Session, p: &ResourceListParams) -> Result<Resou
 }
 
 /// Utilisation des ressources par période (`analysis.resource_usage`,
-/// R-188) : calculée par le cœur à la demande sur `[from, to)` (défaut :
-/// dates du projet), lignes dans l'ordre demandé (doublons retirés) ou,
-/// sans liste, toutes les ressources dans l'ordre des UID (UID 0 exclue).
+/// R-188, trimestre R-246) : calculée par le cœur à la demande sur `[from,
+/// to)` (défaut : dates du projet), lignes dans l'ordre demandé (doublons
+/// retirés) ou, sans liste, toutes les ressources dans l'ordre des UID
+/// (UID 0 exclue). `assignments` : lignes par affectation et totaux par
+/// tâche en plus (R-245), sur les mêmes calendriers compilés.
 ///
 /// # Errors
 ///
 /// `param.invalid` si `from` est après `to` ; `resource.not_found` (champ
 /// `resources`) ; `limit.exceeded` au-delà des bornes du cœur ou de
-/// [`MAX_USAGE_CELLS`] cellules.
+/// [`MAX_USAGE_CELLS`] cellules (lignes d'affectation et totaux compris).
 pub fn resource_usage(session: &Session, p: &UsageParams) -> Result<UsageView, CommandError> {
     let project = session.project();
     let schedule = session.schedule();
@@ -1533,7 +1569,7 @@ pub fn resource_usage(session: &Session, p: &UsageParams) -> Result<UsageView, C
         }
         out
     };
-    let report = core_usage(project, schedule, from, to, p.by.into(), &resources).map_err(|e| match e {
+    let refused = |e: UsageError| match e {
         UsageError::Limit {
             periods,
             resources: max_resources,
@@ -1544,12 +1580,30 @@ pub fn resource_usage(session: &Session, p: &UsageParams) -> Result<UsageView, C
                 limit("periods", periods, "by")
             }
         }
-    })?;
-    let cells = report.periods.len().saturating_mul(report.rows.len());
+    };
+    let (set, _) = CalendarSet::compile(project);
+    let report = usage_with(project, schedule, &set, from, to, p.by.into(), &resources).map_err(refused)?;
+    let mut lines = report.rows.len();
+    let by_assignment = if p.assignments {
+        // Périodes et ressources déjà admises par `usage_with` : seul le
+        // nombre de lignes peut encore refuser.
+        let r = usage_by_assignment(project, schedule, &set, from, to, p.by.into(), &resources)
+            .map_err(|_| limit("assignments", MAX_ASSIGNMENT_ROWS, "assignments"))?;
+        lines = lines
+            .saturating_add(r.rows.len())
+            .saturating_add(r.task_totals.len());
+        Some(r)
+    } else {
+        None
+    };
+    let cells = report.periods.len().saturating_mul(lines);
     if cells > MAX_USAGE_CELLS {
         return Err(limit("periods × resources", MAX_USAGE_CELLS, "by"));
     }
     let text = session.text_context();
+    let (assignments, task_totals) = by_assignment
+        .map(|r| assignment_views(project, &r, &text))
+        .unwrap_or_default();
     let rows = report
         .rows
         .iter()
@@ -1569,5 +1623,36 @@ pub fn resource_usage(session: &Session, p: &UsageParams) -> Result<UsageView, C
         periods: report.periods.iter().map(|m| iso(*m)).collect(),
         rows,
         truncated: report.truncated,
+        assignments,
+        task_totals,
     })
+}
+
+/// Lignes par affectation et totaux par tâche de [`UsageView`] (R-245).
+fn assignment_views(
+    project: &Project,
+    r: &AssignmentUsageReport,
+    text: &TextContext,
+) -> (Vec<AssignmentUsageView>, Vec<TaskUsageView>) {
+    let works = |w: &[Work]| -> Vec<DurationJson> { w.iter().map(|w| work_out(*w, text)).collect() };
+    let rows = r
+        .rows
+        .iter()
+        .map(|a| AssignmentUsageView {
+            uid: a.assignment.get(),
+            task: a.task.get(),
+            resource: a.resource.get(),
+            work: works(&a.work),
+        })
+        .collect();
+    let totals = r
+        .task_totals
+        .iter()
+        .map(|(t, w)| TaskUsageView {
+            uid: t.get(),
+            name: project.tasks.get(*t).map(|t| t.name.clone()).unwrap_or_default(),
+            work: works(w),
+        })
+        .collect();
+    (rows, totals)
 }

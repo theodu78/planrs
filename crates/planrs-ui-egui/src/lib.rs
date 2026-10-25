@@ -13,19 +13,26 @@
 pub mod action;
 pub mod app;
 pub mod column;
+pub mod dialog;
 pub mod document;
 pub mod edit;
 pub mod format;
 pub mod geom;
+pub mod grid;
 pub mod i18n;
 pub mod io;
 pub mod keymap;
+pub mod nav;
+pub mod query;
+pub mod relay;
+pub mod resource_rows;
 pub mod rows;
 pub mod selection;
 pub mod shell;
 pub mod state;
 pub mod structure;
 pub mod theme;
+pub mod timephased;
 pub mod timescale;
 pub mod view;
 
@@ -34,7 +41,7 @@ pub use app::{App, DocOrigin, DocumentObserver, EditOrigin, Env, OpenDocument};
 pub use i18n::Language;
 pub use io::{FileService, NoFileService, RfdFileService};
 pub use shell::PlanrsApp;
-pub use state::{LanguagePref, ThemePref, UiState};
+pub use state::{GanttStyle, LanguagePref, RecentFile, ThemePref, UiState, ViewKind};
 pub use timescale::TimeScaleZoom;
 
 /// Projet de démonstration embarqué (construction d'une maison, MSPDI écrit à

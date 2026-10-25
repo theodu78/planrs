@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use planrs_core::{Diagnostic, Project, Schedule, Severity, Subject, TaskUid};
+use planrs_core::{CalendarUid, Diagnostic, Project, Schedule, Severity, Subject, TaskUid};
 
 /// Diagnostics d'un état : `validate` ∪ diagnostics du planning, triés,
 /// dédoublonnés.
@@ -61,11 +61,40 @@ pub(crate) fn diagnostics_delta(before: &[Diagnostic], after: &[Diagnostic]) -> 
             out.warnings.push(d.clone());
         }
     }
+    tolerate_no_working_time(after, &mut out);
     out.errors.sort();
     out.errors.dedup();
     out.warnings.sort();
     out.warnings.dedup();
     out
+}
+
+/// R-160 amendée (J7, R-247, ADR-0015 D8) : un calendrier sans minute
+/// ouvrée est accepté avec un avertissement. Ses erreurs nouvelles
+/// (`calendar.no_working_time`, et `project.calendar_fallback` quand le
+/// calendrier du projet est celui-là : repli sur le Standard intégré,
+/// R-066) passent des erreurs aux nouveautés non bloquantes ; un fichier
+/// relu dans le même état n'est pas refusé non plus.
+fn tolerate_no_working_time(after: &[Diagnostic], out: &mut DiagDelta) {
+    let empty: BTreeSet<CalendarUid> = after
+        .iter()
+        .filter_map(|d| match d {
+            Diagnostic::CalendarNoWorkingTime { calendar } => Some(*calendar),
+            _ => None,
+        })
+        .collect();
+    if empty.is_empty() {
+        return;
+    }
+    let (tolerated, kept): (Vec<Diagnostic>, Vec<Diagnostic>) = std::mem::take(&mut out.errors)
+        .into_iter()
+        .partition(|d| match d {
+            Diagnostic::CalendarNoWorkingTime { .. } => true,
+            Diagnostic::ProjectCalendarFallback { calendar } => empty.contains(calendar),
+            _ => false,
+        });
+    out.errors = kept;
+    out.warnings.extend(tolerated);
 }
 
 /// Index d'opération à imputer à une erreur nouvelle (R-160) : la dernière
@@ -96,7 +125,7 @@ pub(crate) fn blame(d: &Diagnostic, touched: &BTreeMap<Subject, usize>) -> Optio
 mod tests {
     use std::collections::BTreeMap;
 
-    use planrs_core::{Diagnostic, Subject, TaskUid};
+    use planrs_core::{CalendarUid, Diagnostic, Subject, TaskUid};
 
     use super::{blame, diagnostics_delta};
 
@@ -104,6 +133,29 @@ mod tests {
         Diagnostic::LinkCycle {
             tasks: uids.iter().map(|u| TaskUid::new(*u)).collect(),
         }
+    }
+
+    #[test]
+    fn r160_no_working_time_tolerated() {
+        // R-160 amendée (J7, R-247) : calendrier sans minute ouvrée et repli
+        // du calendrier du projet sur lui : non bloquants, rendus en
+        // nouveautés ; un repli sur un autre calendrier reste bloquant.
+        let empty = Diagnostic::CalendarNoWorkingTime {
+            calendar: CalendarUid::new(1),
+        };
+        let fallback = Diagnostic::ProjectCalendarFallback {
+            calendar: CalendarUid::new(1),
+        };
+        let other = Diagnostic::ProjectCalendarFallback {
+            calendar: CalendarUid::new(2),
+        };
+        let mut after = vec![empty.clone(), fallback.clone(), other.clone()];
+        after.sort();
+        let d = diagnostics_delta(&[], &after);
+        assert_eq!(d.errors, vec![other]);
+        let mut expected = vec![empty, fallback];
+        expected.sort();
+        assert_eq!(d.warnings, expected);
     }
 
     #[test]

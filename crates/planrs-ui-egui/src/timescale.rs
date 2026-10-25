@@ -10,7 +10,7 @@ use planrs_core::{Day, Moment, Project, Schedule, Weekday};
 use serde::{Deserialize, Serialize};
 
 use crate::format::{DateOrder, FormatLabels};
-use crate::geom::{i64_to_f32, index_to_f32};
+use crate::geom::{f32_to_bounded_i64, i64_to_f32, index_to_f32};
 use crate::i18n::TextId;
 
 /// Minutes par jour civil.
@@ -347,6 +347,19 @@ impl TimeAxis {
         self.px_per_day
     }
 
+    /// Écart en jours civils entiers d'un déplacement horizontal de `dx`
+    /// pixels (gestes du Gantt, J7 lot L8, ADR-0015 D5) : arrondi au plus
+    /// proche, 0 pour un `dx` non fini, borné à ±[`MAX_RANGE_DAYS`]. Seul
+    /// sens pixel → temps permis : un **écart** entier, jamais un `Moment`
+    /// (`ui.md` § 1.8) ; la date naît dans `planrs_automation::gesture`.
+    #[must_use]
+    pub fn days_for_dx(&self, dx: f32) -> i64 {
+        if !dx.is_finite() || !self.px_per_day.is_finite() || self.px_per_day <= 0.0 {
+            return 0;
+        }
+        f32_to_bounded_i64((dx / self.px_per_day).round(), i64::from(MAX_RANGE_DAYS))
+    }
+
     /// Plus grand indice `k` de `0..n` tel que le minuit du jour
     /// `start + k` soit à gauche de `x` (ou 0) : dichotomie sur des jours
     /// entiers, abscisses calculées dans le sens direct seulement.
@@ -647,6 +660,43 @@ mod tests {
 
     fn moment(y: i32, m: u32, d: u32, h: u16) -> Moment {
         Moment::at(day(y, m, d), TimeOfDay::hm(h, 0).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn days_for_dx_non_finite_zero() {
+        let range = ViewSpan {
+            start: day(2026, 10, 19),
+            end: day(2026, 12, 31),
+        };
+        let axis = TimeAxis::new(range, TimeScaleZoom::Week, 100.0);
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(axis.days_for_dx(bad), 0, "{bad}");
+        }
+        assert_eq!(axis.days_for_dx(0.0), 0);
+        // Semaine : 12 px par jour ; arrondi au plus proche.
+        assert_eq!(axis.px_per_day(), 12.0);
+        assert_eq!(axis.days_for_dx(5.9), 0);
+        assert_eq!(axis.days_for_dx(6.1), 1);
+        assert_eq!(axis.days_for_dx(36.0), 3);
+        assert_eq!(axis.days_for_dx(-13.0), -1);
+        assert_eq!(axis.days_for_dx(-18.5), -2);
+    }
+
+    #[test]
+    fn days_for_dx_bounded() {
+        let range = ViewSpan {
+            start: day(2026, 10, 19),
+            end: day(2026, 12, 31),
+        };
+        let max = i64::from(MAX_RANGE_DAYS);
+        for zoom in TimeScaleZoom::ALL {
+            let axis = TimeAxis::new(range, zoom, 0.0);
+            assert_eq!(axis.days_for_dx(f32::MAX), max, "{zoom:?}");
+            assert_eq!(axis.days_for_dx(-f32::MAX), -max, "{zoom:?}");
+            assert_eq!(axis.days_for_dx(1.0e30), max);
+            // Un jour entier de pixels donne un jour, à tout zoom.
+            assert_eq!(axis.days_for_dx(axis.px_per_day() * 4.0), 4, "{zoom:?}");
+        }
     }
 
     fn labels_fr() -> FormatLabels {

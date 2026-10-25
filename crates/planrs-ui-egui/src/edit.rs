@@ -14,11 +14,11 @@
 use std::collections::BTreeMap;
 
 use planrs_automation::command::{
-    DurationJson, LagJson, LinkKey, LinkSpec, LinkTypeJson, TaskAdd, TaskUpdate,
+    DurationJson, LagJson, LinkKey, LinkSpec, LinkTypeJson, PercentJson, ProgressUpdate, TaskAdd, TaskUpdate,
 };
 use planrs_automation::text::{
     self, DateRole, PredecessorRef, TextContext, TextError, format_date, format_duration,
-    format_predecessors, parse_date, parse_duration, parse_predecessors,
+    format_predecessors, parse_date, parse_duration, parse_percent, parse_predecessors,
 };
 use planrs_automation::{Batch, Command, CommandError, Patch, Placement, Session, TaskRef};
 use planrs_core::{Duration, Lag, LinkType, Moment, Project, Task, TaskUid};
@@ -114,73 +114,77 @@ impl EditState {
     }
 }
 
-/// Curseur de la table et saisie en cours : état transitoire de la vue
-/// (jamais sérialisé), tenu par `ViewTransient`.
+/// Saisie en cours dans la table : état transitoire de la vue (jamais
+/// sérialisé), tenu par `ViewTransient`.
 ///
-/// La ligne courante est la tâche sélectionnée (`App::selection`) ou, sans
-/// sélection, la ligne vide de fin si [`TableEdit::blank`] est vrai ; la
-/// colonne courante est [`TableEdit::column`] (clic sur une cellule, Tab).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// La cellule courante (ligne et colonne) est le curseur
+/// `ViewTransient::cursor` (J7, lot L1, ADR-0015 D1) : la ligne courante
+/// est la tâche sélectionnée (`App::selection`) ou, sans sélection, la
+/// ligne vide de fin.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TableEdit {
-    /// Colonne courante.
-    pub column: Column,
-    /// La ligne vide de fin est la ligne courante (sans sélection).
-    pub blank: bool,
     /// Saisie ouverte, s'il y en a une.
     pub editing: Option<EditState>,
     /// Donner le focus à la zone de saisie (curseur en fin de texte) à la
     /// prochaine image.
     pub focus_pending: bool,
-}
-
-impl Default for TableEdit {
-    fn default() -> Self {
-        Self {
-            column: Column::Name,
-            blank: false,
-            editing: None,
-            focus_pending: false,
-        }
-    }
+    /// Amener la ligne éditée à l'écran (saisie ouverte par F2 ou la frappe
+    /// sur une ligne hors de la plage dessinée, relecture finale J7, F2) :
+    /// lu par la vue principale après le dessin des lignes.
+    pub reveal: bool,
 }
 
 impl TableEdit {
-    /// Ouvre une saisie et demande le focus.
+    /// Ouvre une saisie, demande le focus et la ligne à l'écran.
     pub fn start(&mut self, state: EditState) {
-        self.column = state.column;
         self.editing = Some(state);
         self.focus_pending = true;
+        self.reveal = true;
     }
 }
 
-/// Colonne éditable visible suivante (`forward`) ou précédente de `from`
-/// parmi `visible` (ordre d'affichage) ; `None` au bord.
-#[must_use]
-pub fn neighbour_column(visible: &[Column], from: Column, forward: bool) -> Option<Column> {
-    let position = visible.iter().position(|c| *c == from)?;
-    if forward {
-        visible
-            .get(position.checked_add(1)?..)?
-            .iter()
-            .copied()
-            .find(|c| editable(*c))
-    } else {
-        visible
-            .get(..position)?
-            .iter()
-            .rev()
-            .copied()
-            .find(|c| editable(*c))
-    }
-}
-
-/// Colonnes éditables : Nom, Durée, Début, Fin, Prédécesseurs.
+/// Colonnes éditables : Nom, Durée, Début, Fin, Prédécesseurs, % achevé
+/// (J7, lot L6).
 #[must_use]
 pub const fn editable(column: Column) -> bool {
     matches!(
         column,
-        Column::Name | Column::Duration | Column::Start | Column::Finish | Column::Predecessors
+        Column::Name
+            | Column::Duration
+            | Column::Start
+            | Column::Finish
+            | Column::Predecessors
+            | Column::PercentComplete
     )
+}
+
+/// `progress.update { percent_complete: { text } }` d'un % saisi (J7, lot
+/// L6) : lu par `parse_percent` pour signaler l'erreur sous la cellule,
+/// envoyé en texte avec `%` (que le registre exige ; « 50 » se lit
+/// « 50% »). Une récapitulative ou une tâche exclue est refusée par le
+/// registre (bandeau).
+fn percent_update(uid: TaskUid, buffer: &str, ctx: &TextContext) -> Result<Command, EditError> {
+    parse_percent(buffer, ctx)?;
+    let trimmed = buffer.trim();
+    let text = if trimmed.ends_with('%') {
+        trimmed.to_owned()
+    } else {
+        format!("{trimmed}%")
+    };
+    Ok(Command::ProgressUpdate(ProgressUpdate {
+        task: TaskRef::Uid(uid),
+        percent_complete: Some(PercentJson {
+            value: None,
+            text: Some(text),
+        }),
+        actual_start: None,
+        actual_finish: None,
+        actual_duration: None,
+        remaining_duration: None,
+        percent_work_complete: None,
+        actual_work: None,
+        physical_percent_complete: None,
+    }))
 }
 
 /// Langue des textes du moteur correspondant à la langue de l'interface.
@@ -318,6 +322,9 @@ fn replace_links(task: &Task, wanted: &[Resolved], project: &Project, ctx: &Text
 ///   `task.update start|finish` (R-158 appliquée par le registre) ;
 /// - Prédécesseurs → `parse_predecessors` (R-142), ID → UID (R-150), puis
 ///   `link.remove` des anciens absents, `link.update`, `link.add` ;
+/// - % achevé → `parse_percent`, puis `progress.update { percent_complete:
+///   { text } }` (J7, lot L6 ; refusé sur la ligne vide : une tâche se crée
+///   par les autres colonnes) ;
 /// - ligne vide et autre colonne que Nom : `task.add` (nom vide) portant la
 ///   valeur, ou suivi des `link.add` vers l'étiquette `$new`.
 ///
@@ -359,7 +366,17 @@ pub fn commit_edit(state: &EditState, session: &Session, lang: text::Language) -
                     batch.ops = ops;
                     return Ok(batch);
                 }
-                Column::Id | Column::TotalSlack | Column::Critical => return Err(EditError::NotEditable),
+                Column::PercentComplete => {
+                    batch.ops = vec![percent_update(uid, buffer, &ctx)?];
+                    return Ok(batch);
+                }
+                Column::Id
+                | Column::TotalSlack
+                | Column::Critical
+                | Column::ResourceNames
+                | Column::BaselineStart
+                | Column::BaselineFinish
+                | Column::FinishVariance => return Err(EditError::NotEditable),
             }
             vec![Command::TaskUpdate(op)]
         }
@@ -409,7 +426,14 @@ fn blank_row_ops(
             }));
             return Ok(ops);
         }
-        Column::Id | Column::TotalSlack | Column::Critical => return Err(EditError::NotEditable),
+        Column::Id
+        | Column::TotalSlack
+        | Column::Critical
+        | Column::PercentComplete
+        | Column::ResourceNames
+        | Column::BaselineStart
+        | Column::BaselineFinish
+        | Column::FinishVariance => return Err(EditError::NotEditable),
     }
     Ok(vec![Command::TaskAdd(add)])
 }
@@ -509,7 +533,7 @@ mod tests {
     use planrs_automation::{ApplyMode, Batch, Command, Placement, Session, TaskRef};
     use planrs_core::{LinkType, TaskUid};
 
-    use super::{EditError, EditState, commit_edit, editable, neighbour_column};
+    use super::{EditError, EditState, commit_edit, editable};
     use crate::column::Column;
 
     /// Session de l'exemple (UID n = ID n).
@@ -665,28 +689,5 @@ mod tests {
         s.apply(&batch, ApplyMode::Commit).unwrap();
         let last = s.project().tasks.iter().last().unwrap();
         assert_eq!(last.predecessors.len(), 2);
-    }
-
-    #[test]
-    fn edit_neighbour_column() {
-        let visible = [
-            Column::Id,
-            Column::Name,
-            Column::Duration,
-            Column::Start,
-            Column::Finish,
-            Column::Predecessors,
-        ];
-        assert_eq!(
-            neighbour_column(&visible, Column::Name, true),
-            Some(Column::Duration)
-        );
-        assert_eq!(neighbour_column(&visible, Column::Predecessors, true), None);
-        assert_eq!(neighbour_column(&visible, Column::Name, false), None);
-        assert_eq!(
-            neighbour_column(&visible, Column::Start, false),
-            Some(Column::Duration)
-        );
-        assert_eq!(neighbour_column(&visible, Column::TotalSlack, true), None);
     }
 }

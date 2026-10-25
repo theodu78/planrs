@@ -16,7 +16,7 @@ use std::borrow::Cow;
 use planrs_core::resource::Granularity;
 use planrs_core::{
     ConstraintKind, Decimal, Duration, DurationError, DurationUnit, Lag, LagValue, LinkType, Minutes,
-    SignedPercent, TaskType, TimeBasis, Units,
+    SignedPercent, TaskType, TimeBasis, TimeOfDay, Units,
 };
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
@@ -631,6 +631,8 @@ pub enum GranularityJson {
     Week,
     /// Mois.
     Month,
+    /// Trimestre civil (1er janvier, avril, juillet, octobre ; J7, R-246).
+    Quarter,
 }
 
 impl From<GranularityJson> for Granularity {
@@ -639,6 +641,7 @@ impl From<GranularityJson> for Granularity {
             GranularityJson::Day => Self::Day,
             GranularityJson::Week => Self::Week,
             GranularityJson::Month => Self::Month,
+            GranularityJson::Quarter => Self::Quarter,
         }
     }
 }
@@ -649,6 +652,97 @@ impl From<Granularity> for GranularityJson {
             Granularity::Day => Self::Day,
             Granularity::Week => Self::Week,
             Granularity::Month => Self::Month,
+            Granularity::Quarter => Self::Quarter,
         }
     }
+}
+
+/// Unité d'un taux en JSON (J7, R-195 amendée ; `planrs_core::RateUnit`,
+/// format d'origine `StandardRateFormat` gardé, O46).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RateUnitJson {
+    /// Par minute.
+    Minute,
+    /// Par heure.
+    Hour,
+    /// Par jour.
+    Day,
+    /// Par semaine.
+    Week,
+    /// Par mois.
+    Month,
+    /// Par an.
+    Year,
+    /// Par unité de matériau (ressource matérielle).
+    MaterialUnit,
+}
+
+/// Taux en JSON (J7, R-195 amendée) : montant en centièmes d'unité
+/// monétaire et unité, stocké tel quel, jamais converti ni calculé
+/// (ADR-0013 D7). Lecture et contrôle : lot L5.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RateJson {
+    /// Montant en centièmes (`planrs_core::Money`).
+    pub amount: i64,
+    /// Unité du taux (défaut : heure ; unité de matériau pour une ressource
+    /// matérielle).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per: Option<RateUnitJson>,
+}
+
+/// Jour de la semaine en JSON (J7, `calendar.set_week`, R-247).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WeekdayJson {
+    /// Lundi.
+    Monday,
+    /// Mardi.
+    Tuesday,
+    /// Mercredi.
+    Wednesday,
+    /// Jeudi.
+    Thursday,
+    /// Vendredi.
+    Friday,
+    /// Samedi.
+    Saturday,
+    /// Dimanche.
+    Sunday,
+}
+
+/// Plage ouvrée d'un jour (J7, R-247) : `[from, to)`, `to` peut valoir
+/// `"24:00"` (contrôle : lot L5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RangeJson {
+    /// Début (`"08:00"`).
+    #[schemars(with = "TimeOfDaySchema")]
+    pub from: TimeOfDay,
+    /// Fin (`"12:00"`, `"24:00"`).
+    #[schemars(with = "TimeOfDaySchema")]
+    pub to: TimeOfDay,
+}
+
+/// Réglage d'un jour de la semaine type (J7, R-247).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WeekSettingJson {
+    /// Hérité de la base (calendrier dérivé seulement).
+    Inherit,
+    /// Chômé.
+    NonWorking,
+    /// Ouvré sur ces plages (triées, disjointes, au plus 5).
+    Ranges(Vec<RangeJson>),
+}
+
+/// Jour de la semaine type et son réglage (J7, R-247).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DaySettingJson {
+    /// Jour.
+    pub day: WeekdayJson,
+    /// Réglage.
+    pub setting: WeekSettingJson,
 }

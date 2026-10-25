@@ -92,6 +92,20 @@ pub enum SideEffect {
         /// Ressources.
         resources: u32,
     },
+    /// Calendrier supprimé (`calendar.delete`, R-248 ; J7).
+    CalendarDeleted(CalendarUid),
+    /// Ligne de base effacée (`baseline.clear`, R-250 ; J7) : nombre de
+    /// lignes retirées par genre d'entité.
+    BaselineCleared {
+        /// Numéro de la ligne (0 à 10).
+        number: u8,
+        /// Tâches (UID 0 compris).
+        tasks: u32,
+        /// Affectations.
+        assignments: u32,
+        /// Ressources.
+        resources: u32,
+    },
     /// Tâche laissée telle quelle par `progress.reschedule` (R-217 ; J6) :
     /// `reason` en code stable (`constraint`).
     RescheduleSkipped {

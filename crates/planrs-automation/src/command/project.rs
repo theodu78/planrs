@@ -3,7 +3,7 @@
 //! Aucune n'est une règle de calcul : elles posent des entrées du moteur
 //! (sens et date pilote, date d'état), que le recalcul du lot exploite.
 
-use planrs_core::{ScheduleAnchor, Subject, TaskType};
+use planrs_core::{CalendarUid, ScheduleAnchor, Subject, TaskType};
 
 use super::exec::Ctx;
 use super::{AnchorSpec, Patch, ProjectInfoPatch, SetStatusDate};
@@ -32,6 +32,29 @@ fn invalid(field: &str, why: &str) -> CommandError {
 /// `DefaultTaskType`, `NewTasksEffortDriven`) : seules les tâches créées
 /// ensuite les prennent (R-152) ; `null` refusé.
 pub(super) fn set_info(op: &ProjectInfoPatch, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
+    // Calendrier du projet (R-249) : calendrier existant, de base ou
+    // dérivé ; `null` refusé. Le recalcul du lot fait le reste (R-113).
+    let calendar = match op.calendar {
+        Patch::Keep => None,
+        Patch::Clear => {
+            return Err(invalid(
+                "calendar",
+                "UID de calendrier attendu (il ne s'efface pas)",
+            ));
+        }
+        Patch::Set(c) => {
+            let c = CalendarUid::new(c);
+            if !ctx.project.calendars.contains(c) {
+                return Err(CommandError::new(
+                    codes::CALENDAR_NOT_FOUND,
+                    CommandErrorKind::InvalidParam(format!("aucun calendrier d'UID {c}")),
+                )
+                .with_field("calendar")
+                .with_subject(Subject::Calendar(c)));
+            }
+            Some(c)
+        }
+    };
     let default_task_type = match op.default_task_type {
         Patch::Keep => None,
         Patch::Set(t) => Some(TaskType::from(t)),
@@ -47,6 +70,16 @@ pub(super) fn set_info(op: &ProjectInfoPatch, ctx: &mut Ctx<'_>) -> Result<(), C
     }
     if let Some(e) = effort {
         ctx.project.options.new_tasks_effort_driven = e;
+    }
+    if let Some(c) = calendar
+        && c != ctx.project.calendar
+    {
+        let previous = ctx.project.calendar;
+        ctx.project.calendar = c;
+        // R-161 : les affectations planifiées par l'ancien ou le nouveau
+        // calendrier du projet perdent leur répartition.
+        ctx.drop_calendar_assignment_extras(previous);
+        ctx.drop_calendar_assignment_extras(c);
     }
     let info = &mut ctx.project.info;
     patch_string(&mut info.name, &op.name);

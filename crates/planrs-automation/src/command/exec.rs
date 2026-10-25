@@ -204,6 +204,11 @@ impl Exec for Command {
             Self::ProgressUpdate(op) => progress::update(op, ctx),
             Self::ProgressReschedule(op) => progress::reschedule(op, ctx),
             Self::BaselineSet(op) => baseline::set(op, ctx),
+            Self::CalendarAdd(op) => calendar::add(op, ctx),
+            Self::CalendarUpdate(op) => calendar::update(op, ctx),
+            Self::CalendarSetWeek(op) => calendar::set_week(op, ctx),
+            Self::CalendarDelete(op) => calendar::delete(op, ctx),
+            Self::BaselineClear(op) => baseline::clear(op, ctx),
         }
     }
 }

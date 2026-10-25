@@ -1,5 +1,6 @@
 //! Commandes de structure sur la sélection (lot L14) : insérer, supprimer,
-//! indenter, désindenter, lier, délier.
+//! indenter, désindenter, lier, délier ; monter et descendre (J7 lot L1,
+//! H-UI-29).
 //!
 //! [`plan`] traduit une [`StructureOp`] et la [`Selection`] en **un** lot de
 //! commandes du registre (une transaction, une entrée d'historique) ; il ne
@@ -15,7 +16,7 @@
 //! d'indentation et de désindentation : elle suit son bloc (comme dans MS
 //! Project, chaque ligne sélectionnée ne bouge que d'un niveau).
 
-use planrs_automation::command::{LinkKey, LinkSpec, TaskAdd, TaskDelete, TaskOne};
+use planrs_automation::command::{LinkKey, LinkSpec, TaskAdd, TaskDelete, TaskMove, TaskOne};
 use planrs_automation::{Batch, Command, Placement, TaskRef};
 use planrs_core::{Project, TaskUid};
 
@@ -42,6 +43,12 @@ pub enum StructureOp {
     Link,
     /// Ctrl+Maj+F2 : retire tous les liens entre tâches sélectionnées.
     Unlink,
+    /// Alt+Maj+↑ (J7, H-UI-29) : monte les lignes sélectionnées au-dessus
+    /// de la tâche sœur précédente (`task.move`).
+    MoveUp,
+    /// Alt+Maj+↓ (J7, H-UI-29) : descend les lignes sélectionnées sous la
+    /// tâche sœur suivante (`task.move`).
+    MoveDown,
 }
 
 /// Lot préparé par [`plan`].
@@ -158,6 +165,11 @@ pub fn plan(op: StructureOp, project: &Project, selection: &Selection) -> Option
             })]
         }
         StructureOp::Delete => return plan_delete(project, selection),
+        StructureOp::MoveUp | StructureOp::MoveDown => {
+            plan_move(project, selection, op == StructureOp::MoveUp)
+                .into_iter()
+                .collect()
+        }
         StructureOp::Indent | StructureOp::Outdent => top_level(project, selection)
             .into_iter()
             .map(|(_, uid)| {
@@ -211,6 +223,83 @@ pub fn plan(op: StructureOp, project: &Project, selection: &Selection) -> Option
         batch: batch(ops),
         confirm_cascade: None,
     })
+}
+
+/// Position de la première tâche non vide à partir de `from` (incluse).
+fn next_non_null(project: &Project, from: usize) -> Option<usize> {
+    project
+        .tasks
+        .iter()
+        .enumerate()
+        .skip(from)
+        .find(|(_, task)| !task.is_null)
+        .map(|(pos, _)| pos)
+}
+
+/// Position de la dernière tâche non vide strictement avant `before`.
+fn previous_non_null(project: &Project, before: usize) -> Option<usize> {
+    (0..before)
+        .rev()
+        .find(|pos| project.tasks.at(*pos).is_some_and(|task| !task.is_null))
+}
+
+/// Monter / descendre (H-UI-29, comme Alt+Maj+↑/↓ de MS Project, S61) :
+/// les tâches sélectionnées sans ancêtre sélectionné doivent former une
+/// suite de sœurs consécutives (même niveau, blocs contigus). Monter
+/// déplace la sœur précédente après la dernière d'entre elles ; descendre
+/// déplace la sœur suivante avant la première : **une** commande
+/// `task.move`, le bloc sélectionné garde son ordre et sa hiérarchie. Pas
+/// de sœur dans ce sens (premier ou dernier enfant, bord du projet) ou
+/// sélection non contiguë : rien (hypothèse : au bord, rien ne bouge,
+/// comme la navigation).
+fn plan_move(project: &Project, selection: &Selection, up: bool) -> Option<Command> {
+    let top = top_level(project, selection);
+    let (first, _) = *top.first()?;
+    let (last, _) = *top.last()?;
+    let level = level_at(project, first)?;
+    // Sœurs consécutives : chaque bloc commence où finit le précédent.
+    let mut expected = first;
+    for (pos, _) in &top {
+        if *pos != expected || level_at(project, *pos) != Some(level) {
+            return None;
+        }
+        expected = next_non_null(project, block_end(project, *pos)).unwrap_or(usize::MAX);
+    }
+    let first_uid = project.tasks.at(first)?.uid();
+    let last_uid = project.tasks.at(last)?.uid();
+    let (neighbour, to) = if up {
+        // Sœur précédente : la tâche de même niveau qui précède, sans
+        // passer par le parent (niveau inférieur).
+        let mut pos = first;
+        let found = loop {
+            let prev = previous_non_null(project, pos)?;
+            let prev_level = level_at(project, prev)?;
+            if prev_level < level {
+                return None;
+            }
+            if prev_level == level {
+                break prev;
+            }
+            pos = prev;
+        };
+        (
+            project.tasks.at(found)?.uid(),
+            Placement::After(TaskRef::Uid(last_uid)),
+        )
+    } else {
+        let next = next_non_null(project, block_end(project, last))?;
+        if level_at(project, next)? != level {
+            return None;
+        }
+        (
+            project.tasks.at(next)?.uid(),
+            Placement::Before(TaskRef::Uid(first_uid)),
+        )
+    };
+    Some(Command::TaskMove(TaskMove {
+        uid: TaskRef::Uid(neighbour),
+        to,
+    }))
 }
 
 /// Lot de suppression : une récapitulative part avec son bloc
@@ -512,6 +601,55 @@ mod tests {
         let plan = plan(StructureOp::Delete, &p, &Selection::single(Some(uid))).unwrap();
         assert_eq!(plan.confirm_cascade, Some(block_end(&p, s) - s));
         assert!(matches!(&plan.batch.ops[..], [Command::TaskDelete(d)] if d.cascade));
+    }
+
+    /// H-UI-29 : monter = la sœur précédente passe après le bloc ;
+    /// descendre = la sœur suivante passe avant ; une commande ; rien au
+    /// bord ni pour une sélection non contiguë.
+    #[test]
+    fn move_up_down_neighbour_sibling() {
+        let app = demo();
+        let rows = app.rows().unwrap();
+        let p = project(&app);
+        let s = first_summary(&app);
+        // Deux premières sous-tâches de la première récapitulative.
+        let (first, second) = (s + 1, s + 2);
+        assert!(!is_summary_at(p, first));
+        let one = |pos: usize| Selection::single(Some(uid_at(&app, pos)));
+        // Premier enfant : rien à monter (le parent n'est pas une sœur).
+        assert_eq!(plan(StructureOp::MoveUp, p, &one(first)), None);
+        let plan_up = plan(StructureOp::MoveUp, p, &one(second)).unwrap();
+        match &plan_up.batch.ops[..] {
+            [Command::TaskMove(m)] => {
+                assert_eq!(m.uid, TaskRef::Uid(uid_at(&app, first)));
+                assert_eq!(m.to, Placement::After(TaskRef::Uid(uid_at(&app, second))));
+            }
+            other => panic!("{other:?}"),
+        }
+        let plan_down = plan(StructureOp::MoveDown, p, &one(first)).unwrap();
+        match &plan_down.batch.ops[..] {
+            [Command::TaskMove(m)] => {
+                assert_eq!(m.uid, TaskRef::Uid(uid_at(&app, second)));
+                assert_eq!(m.to, Placement::Before(TaskRef::Uid(uid_at(&app, first))));
+            }
+            other => panic!("{other:?}"),
+        }
+        // Bloc de deux sœurs : la sœur suivante passe avant le bloc.
+        let mut pair = one(first);
+        pair.click(uid_at(&app, second), SelectMode::Range, rows);
+        if let Some(plan) = plan(StructureOp::MoveDown, p, &pair) {
+            assert!(matches!(&plan.batch.ops[..], [Command::TaskMove(m)]
+                if m.to == Placement::Before(TaskRef::Uid(uid_at(&app, first)))));
+        }
+        // Sélection non contiguë (récapitulative et une tâche hors de son
+        // bloc) : rien.
+        let mut gap = one(s);
+        gap.click(uid_at(&app, block_end(p, s) + 1), SelectMode::Toggle, rows);
+        assert_eq!(plan(StructureOp::MoveUp, p, &gap), None);
+        assert_eq!(plan(StructureOp::MoveDown, p, &Selection::default()), None);
+        // Dernière tâche du projet : rien à descendre.
+        let last = p.tasks.len() - 1;
+        assert_eq!(plan(StructureOp::MoveDown, p, &one(last)), None);
     }
 
     fn plan_unlink_count(p: &Project, sel: &Selection) -> usize {

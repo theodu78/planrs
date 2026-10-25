@@ -10,6 +10,15 @@
         "null"
       ]
     },
+    "calendar": {
+      "description": "Calendrier du projet (J7, R-249 ; UID d'un calendrier existant, de\nbase ou dérivé, `null` refusé).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "category": {
       "description": "Catégorie.",
       "type": [

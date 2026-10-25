@@ -2,19 +2,24 @@
 //!
 //! L'ordre des variantes de [`Column`] est l'ordre d'affichage : pas de tri ni
 //! de réordonnancement dans les fondations (l'ordre des lignes est celui des
-//! ID, l'ordre des colonnes celui de [`Column::ALL`]).
+//! ID, l'ordre des colonnes celui de [`Column::ALL`]). Colonnes J7 (contrat
+//! L0, ADR-0015) : % achevé, Noms ressources, Début et Fin de référence,
+//! Variation de fin, masquées par défaut, à la fin ; leurs textes sont
+//! remplis par le lot L6 (vides jusque-là).
 
 use serde::{Deserialize, Serialize};
 
 use crate::i18n::TextId;
 
 /// Colonne de la table des tâches.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Column {
     /// Identifiant de ligne (ID MS Project, position dans la liste).
     Id,
-    /// Nom de la tâche, indenté selon le niveau hiérarchique.
+    /// Nom de la tâche, indenté selon le niveau hiérarchique (colonne du
+    /// curseur par défaut).
+    #[default]
     Name,
     /// Durée au format d'affichage MS Project (« 5 jours »).
     Duration,
@@ -28,6 +33,17 @@ pub enum Column {
     TotalSlack,
     /// Tâche critique (oui / non).
     Critical,
+    /// % achevé (J7, éditable au lot L6).
+    PercentComplete,
+    /// Noms des ressources affectées (J7, lecture seule ; N11).
+    ResourceNames,
+    /// Début de la ligne de base 0 (J7).
+    BaselineStart,
+    /// Fin de la ligne de base 0 (J7).
+    BaselineFinish,
+    /// Variation de fin par rapport à la ligne de base 0, en jours ouvrés
+    /// signés (J7).
+    FinishVariance,
 }
 
 /// Alignement horizontal du texte d'une cellule.
@@ -43,7 +59,7 @@ pub enum CellAlign {
 
 impl Column {
     /// Toutes les colonnes, dans l'ordre d'affichage.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 13] = [
         Self::Id,
         Self::Name,
         Self::Duration,
@@ -52,6 +68,11 @@ impl Column {
         Self::Predecessors,
         Self::TotalSlack,
         Self::Critical,
+        Self::PercentComplete,
+        Self::ResourceNames,
+        Self::BaselineStart,
+        Self::BaselineFinish,
+        Self::FinishVariance,
     ];
 
     /// Nombre de colonnes (longueur de [`Column::ALL`]).
@@ -75,6 +96,11 @@ impl Column {
             Self::Predecessors => 5,
             Self::TotalSlack => 6,
             Self::Critical => 7,
+            Self::PercentComplete => 8,
+            Self::ResourceNames => 9,
+            Self::BaselineStart => 10,
+            Self::BaselineFinish => 11,
+            Self::FinishVariance => 12,
         }
     }
 
@@ -85,17 +111,28 @@ impl Column {
         match self {
             Self::Id => 40,
             Self::Name => 220,
-            Self::Duration | Self::TotalSlack => 80,
-            Self::Start | Self::Finish => 96,
+            Self::Duration | Self::TotalSlack | Self::FinishVariance => 80,
+            Self::Start | Self::Finish | Self::BaselineStart | Self::BaselineFinish => 96,
             Self::Predecessors => 110,
-            Self::Critical => 60,
+            Self::Critical | Self::PercentComplete => 60,
+            Self::ResourceNames => 140,
         }
     }
 
-    /// Visible par défaut : toutes sauf la marge totale et « Critique ».
+    /// Visible par défaut : toutes sauf la marge totale, « Critique » et
+    /// les colonnes J7.
     #[must_use]
     pub const fn default_visible(self) -> bool {
-        !matches!(self, Self::TotalSlack | Self::Critical)
+        !matches!(
+            self,
+            Self::TotalSlack
+                | Self::Critical
+                | Self::PercentComplete
+                | Self::ResourceNames
+                | Self::BaselineStart
+                | Self::BaselineFinish
+                | Self::FinishVariance
+        )
     }
 
     /// La colonne peut-elle être masquée ? L'ID et le Nom restent toujours
@@ -110,9 +147,17 @@ impl Column {
     #[must_use]
     pub const fn align(self) -> CellAlign {
         match self {
-            Self::Id | Self::Duration | Self::TotalSlack => CellAlign::Right,
+            Self::Id | Self::Duration | Self::TotalSlack | Self::PercentComplete | Self::FinishVariance => {
+                CellAlign::Right
+            }
             Self::Critical => CellAlign::Center,
-            Self::Name | Self::Start | Self::Finish | Self::Predecessors => CellAlign::Left,
+            Self::Name
+            | Self::Start
+            | Self::Finish
+            | Self::Predecessors
+            | Self::ResourceNames
+            | Self::BaselineStart
+            | Self::BaselineFinish => CellAlign::Left,
         }
     }
 
@@ -128,6 +173,11 @@ impl Column {
             Self::Predecessors => TextId::ColPredecessors,
             Self::TotalSlack => TextId::ColTotalSlack,
             Self::Critical => TextId::ColCritical,
+            Self::PercentComplete => TextId::ColPercentComplete,
+            Self::ResourceNames => TextId::ColResourceNames,
+            Self::BaselineStart => TextId::ColBaselineStart,
+            Self::BaselineFinish => TextId::ColBaselineFinish,
+            Self::FinishVariance => TextId::ColFinishVariance,
         }
     }
 }
@@ -172,7 +222,7 @@ mod tests {
 
     #[test]
     fn column_ordinal_matches_all() {
-        assert_eq!(Column::COUNT, 8);
+        assert_eq!(Column::COUNT, 13);
         for (index, column) in Column::ALL.iter().enumerate() {
             assert_eq!(column.ordinal(), index, "{column:?}");
         }
@@ -181,7 +231,7 @@ mod tests {
     #[test]
     fn column_default_widths() {
         let widths: Vec<u16> = Column::ALL.iter().map(|c| c.default_width()).collect();
-        assert_eq!(widths, [40, 220, 80, 96, 96, 110, 80, 60]);
+        assert_eq!(widths, [40, 220, 80, 96, 96, 110, 80, 60, 60, 140, 96, 96, 80]);
         for column in Column::ALL {
             let width = column.default_width();
             assert!((Column::MIN_WIDTH..=Column::MAX_WIDTH).contains(&width));
@@ -191,7 +241,19 @@ mod tests {
     #[test]
     fn column_default_visibility_and_hideable() {
         let hidden: Vec<Column> = Column::ALL.into_iter().filter(|c| !c.default_visible()).collect();
-        assert_eq!(hidden, [Column::TotalSlack, Column::Critical]);
+        assert_eq!(
+            hidden,
+            [
+                Column::TotalSlack,
+                Column::Critical,
+                Column::PercentComplete,
+                Column::ResourceNames,
+                Column::BaselineStart,
+                Column::BaselineFinish,
+                Column::FinishVariance,
+            ]
+        );
+        assert_eq!(Column::default(), Column::Name);
         assert!(!Column::Id.hideable());
         assert!(!Column::Name.hideable());
         assert!(Column::Duration.hideable());

@@ -191,3 +191,53 @@ fn r161_exception_drops_assignment_timephased() {
             .is_empty()
     );
 }
+
+#[test]
+fn r165_exception_name_round_trip() {
+    // R-165 amendée (J7, O44) : nom facultatif (≤ 512 caractères), gardé à
+    // un remplacement sans `name`, relu et écrit (`<Name>`).
+    let mut s = session(three_days_from_tuesday());
+    run(
+        &mut s,
+        r#"{"op":"calendar.set_exception","cal":"project","from":"2026-11-11","to":"2026-11-11","name":"Armistice"}"#,
+    )
+    .unwrap();
+    let name = |s: &Session| {
+        let p = s.project();
+        p.calendars.get(p.calendar).unwrap().exceptions()[0].name.clone()
+    };
+    assert_eq!(name(&s), "Armistice");
+    // Remplacement sans nom : gardé ; avec un nom : remplacé.
+    run(
+        &mut s,
+        r#"{"op":"calendar.set_exception","cal":"project","from":"2026-11-11","to":"2026-11-11","ranges":[["08:00","12:00"]]}"#,
+    )
+    .unwrap();
+    assert_eq!((exceptions(&s), name(&s).as_str()), (1, "Armistice"));
+    run(
+        &mut s,
+        r#"{"op":"calendar.set_exception","cal":"project","from":"2026-11-11","to":"2026-11-11","name":"11 novembre"}"#,
+    )
+    .unwrap();
+    assert_eq!(name(&s), "11 novembre");
+    // Écrit puis relu : même nom, même période.
+    let w = s.save_bytes(&planrs_mspdi::write::WriteOptions::default());
+    assert!(String::from_utf8_lossy(&w.xml).contains("<Name>11 novembre</Name>"));
+    let doc = planrs_tests::mspdi::reread(&w.xml);
+    let p = &doc.project;
+    let e = &p.calendars.get(p.calendar).unwrap().exceptions()[0];
+    assert_eq!(
+        (e.name.as_str(), e.period.first()),
+        ("11 novembre", planrs_tests::day("2026-11-11"))
+    );
+    // Trop long : refusé.
+    let long = "x".repeat(513);
+    let ops = format!(
+        r#"{{"op":"calendar.set_exception","cal":"project","from":"2026-11-18","to":"2026-11-18","name":"{long}"}}"#
+    );
+    let err = run(&mut s, &ops).unwrap_err();
+    assert_eq!(
+        (err.code, err.field.as_deref()),
+        (codes::PARAM_INVALID, Some("name"))
+    );
+}

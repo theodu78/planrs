@@ -24,6 +24,7 @@
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use planrs_automation::error::codes;
+use planrs_automation::gesture::{GestureError, NotDraggable};
 use planrs_automation::{
     AnchorSpec, ApplyMode, ApplyOutcome, Batch, CommandError, CommandErrorKind, HistoryError, NewProject,
     Session,
@@ -31,7 +32,11 @@ use planrs_automation::{
 use planrs_core::{Day, Moment, PRODUCT_NAME, Project, Schedule, Severity, TaskUid, TimeOfDay, Weekday};
 use planrs_mspdi::ImportDiagnostic;
 
-use crate::action::{Action, ConfirmChoice};
+use crate::action::{Action, ConfirmChoice, DialogKind, UiOp};
+use crate::column::Column;
+use crate::dialog::link::{self, LinkOutcome, LinkState};
+use crate::dialog::task_info::{self, FieldError, TaskInfoState};
+use crate::dialog::{DialogBody, DialogState};
 use crate::document::{self, LoadedDocument, OpenError};
 use crate::edit::TableEdit;
 use crate::geom;
@@ -39,15 +44,18 @@ use crate::i18n::{Arg, Language, TextId, Texts, error_text_id};
 use crate::io::{
     FileService, NoFileService, OpenEvent, SaveEvent, SaveRequest, SaveTarget, suggested_file_name,
 };
+use crate::keymap::KeyState;
+use crate::nav::{self, GridPos, GridShape, NavMove, RowRef};
 use crate::rows::RowModel;
-use crate::selection::Selection;
-use crate::state::{StateLoadError, TABLE_WIDTH_MAX, TABLE_WIDTH_MIN, ThemePref, UiState};
+use crate::selection::{SelectMode, Selection};
+use crate::state::{StateLoadError, TABLE_WIDTH_MAX, TABLE_WIDTH_MIN, ThemePref, UiState, ViewKind};
 use crate::structure::PendingDelete;
 use crate::theme::Palette;
 use crate::timescale::{
     MAX_RANGE_DAYS, TimeAxis, TimeScaleZoom, ViewSpan, default_range, fit_zoom, zoom_anchor,
 };
-use crate::view::{self, DiagnosticsView, FrameCtx, FrameStats, Metrics, ViewTransient};
+use crate::view::table::table_id;
+use crate::view::{self, DiagnosticsView, FrameCtx, FrameStats, Metrics, Pane, ViewTransient};
 
 /// Nombre maximal de messages conservés dans le bandeau (les plus récents).
 pub const MAX_MESSAGES: usize = 3;
@@ -92,6 +100,8 @@ pub struct OpenDocument {
     /// Numéro d'ouverture (1, 2…) : avec [`OpenDocument::generation`], clé
     /// d'invalidation des caches.
     pub opening: u64,
+    /// Calendriers compilés, une fois par génération (N3, J7 lot L7).
+    pub(crate) calendar_cache: crate::document::CalendarCache,
 }
 
 impl OpenDocument {
@@ -107,7 +117,21 @@ impl OpenDocument {
             range: loaded.range,
             origin,
             opening,
+            calendar_cache: crate::document::CalendarCache::new(),
         }
+    }
+
+    /// Calendriers compilés du document (N3, J7 lot L7), compilés à la
+    /// première demande de chaque génération.
+    #[must_use]
+    pub fn calendars(&self) -> std::sync::Arc<planrs_core::CalendarSet> {
+        self.calendar_cache.get(self.project(), self.generation())
+    }
+
+    /// Compilations des calendriers faites pour ce document (tests de N3).
+    #[must_use]
+    pub fn calendar_compiles(&self) -> u64 {
+        self.calendar_cache.compiles()
     }
 
     /// Modèle courant.
@@ -157,6 +181,9 @@ pub enum EditOrigin {
     /// Un agent (canal de contrôle, J7) : le refus est rendu à l'appelant,
     /// qui le relaie ; rien ne s'affiche.
     Agent,
+    /// « OK » d'une fenêtre (J7, lot L9) : le refus s'affiche dans la
+    /// fenêtre, pas dans le bandeau.
+    Dialog,
 }
 
 /// Observateur du document ouvert (application desktop : rendez-vous du
@@ -208,6 +235,11 @@ enum Pending {
     /// Installer un document arrivé du sélecteur alors que le document
     /// courant a été modifié depuis la demande.
     Install(Box<(LoadedDocument, DocOrigin)>),
+    /// Ouvrir un fichier par son chemin (fichier récent, J7 lot L14).
+    OpenPath(String),
+    /// Restaurer un journal orphelin (reprise après plantage, J7 lot L15).
+    #[cfg(not(target_arch = "wasm32"))]
+    Restore(String),
 }
 
 /// Enregistrement en cours.
@@ -252,15 +284,15 @@ pub struct App {
     /// Relevé de la dernière image.
     pub last_frame: FrameStats,
     /// Environnement injecté.
-    env: Env,
+    pub(crate) env: Env,
     /// Messages de la langue courante.
-    texts: Texts,
+    pub(crate) texts: Texts,
     /// Modèle de lignes du document, dans la langue courante.
-    rows: Option<RowModel>,
+    pub(crate) rows: Option<RowModel>,
     /// État transitoire de la vue.
-    view: ViewTransient,
+    pub(crate) view: ViewTransient,
     /// File des actions en attente.
-    actions: Vec<Action>,
+    pub(crate) actions: Vec<Action>,
     /// Messages affichés.
     messages: Vec<UserMessage>,
     /// Émetteur des résultats d'ouverture (cloné vers le sélecteur).
@@ -295,6 +327,23 @@ pub struct App {
     /// Clé du document au lancement du sélecteur : un document arrivé alors
     /// que le document courant a changé depuis redemande confirmation.
     open_confirmed_for: Option<(u64, u64)>,
+    /// Un menu ou une fenêtre surgissante était ouvert à la fin de l'image
+    /// précédente : la navigation au clavier est suspendue (les raccourcis
+    /// sont lus avant le dessin, quand egui ne sait pas encore si un menu
+    /// est ouvert).
+    popup_open: bool,
+    /// Relais des appels d'un agent (desktop, J7 lot L3) : branché par
+    /// [`App::control_inbox`].
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) relay: Option<crate::relay::Relay>,
+    /// Journal de reprise après plantage (desktop, J7 lot L15) : branché
+    /// par [`App::set_recovery`], suit le document à chaque changement.
+    #[cfg(not(target_arch = "wasm32"))]
+    recovery: Option<Box<dyn planrs_automation::recovery::RecoveryLog>>,
+    /// Journaux orphelins proposés par le bandeau de reprise (le premier est
+    /// affiché), posés par [`App::offer_recovery`].
+    #[cfg(not(target_arch = "wasm32"))]
+    orphans: Vec<planrs_automation::recovery::Orphan>,
 }
 
 impl App {
@@ -332,6 +381,13 @@ impl App {
             save_rx,
             quit_confirmed: false,
             open_confirmed_for: None,
+            popup_open: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            relay: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            recovery: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            orphans: Vec::new(),
         }
     }
 
@@ -343,14 +399,17 @@ impl App {
     }
 
     /// Signale le document courant à l'observateur.
-    fn notify_observer(&mut self) {
+    /// Le journal de reprise suit aussi le document (desktop).
+    pub(crate) fn notify_observer(&mut self) {
         if let Some(observer) = &mut self.observer {
             observer.document_changed(self.document.as_ref());
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.record_recovery();
     }
 
     /// Langue des textes du moteur (messages d'erreur des commandes).
-    fn text_language(&self) -> planrs_automation::text::Language {
+    pub(crate) fn text_language(&self) -> planrs_automation::text::Language {
         match self.texts.language() {
             Language::Fr => planrs_automation::text::Language::Fr,
             Language::En => planrs_automation::text::Language::En,
@@ -449,22 +508,34 @@ impl App {
     /// Reconstruit les caches d'affichage après une édition : modèle de
     /// lignes, diagnostics, plage = union de l'ancienne et de la nouvelle
     /// plage par défaut (la nouvelle seule si l'union dépasse
-    /// [`MAX_RANGE_DAYS`]). La sélection est gardée par UID (retirée si la
-    /// tâche n'existe plus) ; les défilements sont gardés (bornés).
+    /// [`MAX_RANGE_DAYS`]). La sélection est gardée par UID ; si la tâche
+    /// active n'existe plus (suppression, annulation d'une insertion,
+    /// écriture d'un agent), la tâche qui occupe maintenant sa ligne devient
+    /// active, ou la dernière en fin de liste, comme MS Project (relecture
+    /// finale J7, F4 : le curseur sautait sur la ligne vide de fin) ; les
+    /// défilements sont gardés (bornés).
     pub fn refresh(&mut self) {
         let Some(document) = &mut self.document else {
             return;
         };
+        let old_index = self
+            .selection
+            .and_then(|uid| self.rows.as_ref().and_then(|rows| rows.index_of(uid)));
         let range = default_range(document.project(), document.schedule()).span;
         document.range = union_span(document.range, range);
-        self.rows = Some(RowModel::build(document, self.texts.format_labels()));
-        self.diagnostics = DiagnosticsView::build(document);
+        let rows = RowModel::build(document, self.texts.format_labels());
         if self
             .selection
             .is_some_and(|uid| !document.project().tasks.contains(uid))
         {
-            self.selection = None;
+            self.selection = old_index.and_then(|index| {
+                rows.row(index)
+                    .or_else(|| rows.len().checked_sub(1).and_then(|last| rows.row(last)))
+                    .map(|row| row.uid)
+            });
         }
+        self.rows = Some(rows);
+        self.diagnostics = DiagnosticsView::build(document);
         self.selected.retain(|uid| document.project().tasks.contains(uid));
         self.sync_selection();
         self.clamp_gantt_scroll();
@@ -479,10 +550,15 @@ impl App {
 
     /// Ramène [`App::selected`] à la seule [`App::selection`] si la tâche
     /// active a changé par ailleurs (clic simple, tâche supprimée, nouveau
-    /// document).
+    /// document), puis pose la ligne du curseur sur la tâche active (la
+    /// ligne vide sans sélection, J7 lot L1).
     pub(crate) fn sync_selection(&mut self) {
         if self.selected.focus() != self.selection {
             self.selected = Selection::single(self.selection);
+        }
+        self.view.cursor.row = RowRef::from_selection(self.selection);
+        if self.selected.len() <= 1 {
+            self.view.cursor.anchor = None;
         }
     }
 
@@ -564,12 +640,17 @@ impl App {
             Pending::NewProject => self.new_project(),
             Pending::Quit => {
                 self.quit_confirmed = true;
+                #[cfg(not(target_arch = "wasm32"))]
+                self.recovery_closed();
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             Pending::Install(boxed) => {
                 let (loaded, origin) = *boxed;
                 self.install(loaded, origin);
             }
+            Pending::OpenPath(path) => self.open_path(&path),
+            #[cfg(not(target_arch = "wasm32"))]
+            Pending::Restore(id) => self.restore_orphan(&id),
         }
     }
 
@@ -676,6 +757,9 @@ impl App {
         if document.opening != job.key.0 {
             return;
         }
+        if let Some(path) = &path {
+            self.state.remember_recent(path, &name);
+        }
         document.set_origin(DocOrigin {
             name,
             path,
@@ -714,6 +798,10 @@ impl App {
         } else if self.document_dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirm = Some(Pending::Quit);
+        } else {
+            // Fermeture acceptée, rien à perdre : journal supprimé.
+            #[cfg(not(target_arch = "wasm32"))]
+            self.recovery_closed();
         }
     }
 
@@ -751,8 +839,62 @@ impl App {
         let now = (self.env.now)();
         match document::load(bytes, now) {
             Ok(loaded) => self.install(loaded, origin),
-            Err(error) => self.report_open_error(&error),
+            Err(error) => self.report_open_error(&error, &origin.name),
         }
+    }
+
+    /// Ouvre un projet déjà construit, sans MSPDI (N8 : réseaux générés des
+    /// tests et de l'exemple `snapshot`) : planning calculé, historique
+    /// vide, aucun diagnostic d'import.
+    pub fn open_project(&mut self, project: planrs_core::Project, origin: DocOrigin) {
+        let now = (self.env.now)();
+        self.install(document::load_project(project, now), origin);
+    }
+
+    /// Ouvre le fichier `path` (synchrone : argument de la ligne de
+    /// commande, fichier récent). Un échec devient un message nommant le
+    /// fichier ; le document précédent reste affiché. Un fichier récent
+    /// introuvable est retiré de la liste (H-UI-28).
+    pub fn open_path(&mut self, path: &str) {
+        let name = document::file_name(path);
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    self.state.forget_recent(path);
+                }
+                self.report_open_error(&OpenError::Read(error.to_string()), &name);
+                return;
+            }
+        };
+        let origin = DocOrigin {
+            name,
+            path: Some(path.to_owned()),
+            demo: false,
+        };
+        self.open_bytes(&bytes, origin);
+    }
+
+    /// Fichier récent `index` (H-UI-28) : absent ⇒ retiré de la liste et
+    /// signalé ; sinon ouvert, après confirmation si le document courant est
+    /// modifié.
+    fn open_recent(&mut self, index: usize, ctx: &egui::Context) {
+        let Some(recent) = self.state.recent.get(index).cloned() else {
+            return;
+        };
+        if !std::path::Path::new(&recent.path).exists() {
+            self.state.forget_recent(&recent.path);
+            let text = self.texts.get_args(
+                TextId::OpenErrorMissing,
+                &[
+                    ("name", Arg::Str(recent.name.into())),
+                    ("detail", Arg::Str(recent.path.into())),
+                ],
+            );
+            self.push_titled(Severity::Error, Some(TextId::OpenErrorTitle), text);
+            return;
+        }
+        self.request(Pending::OpenPath(recent.path), ctx);
     }
 
     /// Met une action en file ; elle sera appliquée par le réducteur en fin
@@ -855,6 +997,7 @@ impl App {
             last_gantt_width: self.view.last_gantt_width,
             last_gantt_left: self.view.last_gantt_left,
             edit: TableEdit::default(),
+            ..ViewTransient::default()
         }
     }
 
@@ -866,9 +1009,17 @@ impl App {
         let document = OpenDocument::new(loaded, origin, opening);
         self.rows = Some(RowModel::build(&document, self.texts.format_labels()));
         self.diagnostics = DiagnosticsView::build(&document);
+        // Curseur sur la première ligne, colonne Nom, focus à la table
+        // (J7 lot L1) ; projet sans tâche : la ligne vide.
+        self.selection = self.rows.as_ref().and_then(|rows| rows.row(0)).map(|row| row.uid);
+        self.selected = Selection::single(self.selection);
+        if let Some(path) = &document.origin.path {
+            self.state.remember_recent(path, &document.origin.name);
+        }
         self.document = Some(document);
-        self.selection = None;
         self.view = self.fresh_view(true);
+        self.view.focus_table_pending = true;
+        self.sync_selection();
         // Une ouverture réussie rend caduques les erreurs et avertissements
         // d'ouverture précédents.
         let truncated = self.texts.get(TextId::RangeTruncated);
@@ -881,13 +1032,28 @@ impl App {
     }
 
     /// Transforme une erreur d'ouverture en message traduit (le titre
-    /// `open-error-title` est ajouté par le bandeau).
-    fn report_open_error(&mut self, error: &OpenError) {
-        let (id, detail) = match error {
-            OpenError::Read(detail) => (TextId::OpenErrorRead, detail.clone()),
-            OpenError::Mspdi(error) => (TextId::OpenErrorMspdi, error.to_string()),
+    /// `open-error-title` est ajouté par le bandeau), nommant le fichier
+    /// `name` s'il est connu (N10).
+    pub(crate) fn report_open_error(&mut self, error: &OpenError, name: &str) {
+        let (id, named, detail) = match error {
+            OpenError::Read(detail) => (TextId::OpenErrorRead, TextId::OpenErrorReadFile, detail.clone()),
+            OpenError::Mspdi(error) => (
+                TextId::OpenErrorMspdi,
+                TextId::OpenErrorMspdiFile,
+                error.to_string(),
+            ),
         };
-        let text = self.texts.get_args(id, &[("detail", Arg::Str(detail.into()))]);
+        let text = if name.is_empty() {
+            self.texts.get_args(id, &[("detail", Arg::Str(detail.into()))])
+        } else {
+            self.texts.get_args(
+                named,
+                &[
+                    ("name", Arg::Str(name.into())),
+                    ("detail", Arg::Str(detail.into())),
+                ],
+            )
+        };
         self.push_titled(Severity::Error, Some(TextId::OpenErrorTitle), text);
     }
 
@@ -913,7 +1079,7 @@ impl App {
                             self.confirm = Some(Pending::Install(Box::new((loaded, origin))));
                         }
                     }
-                    Err(error) => self.report_open_error(&error),
+                    Err(error) => self.report_open_error(&error, &origin.name),
                 },
             }
         }
@@ -1030,6 +1196,7 @@ impl App {
     }
 
     /// Réducteur : applique une action.
+    #[allow(clippy::too_many_lines, reason = "réducteur : un bras court par action")]
     fn apply(&mut self, action: Action, ctx: &egui::Context) {
         match action {
             Action::OpenDemo => self.request(Pending::OpenDemo, ctx),
@@ -1104,8 +1271,234 @@ impl App {
                     self.selection = self.selected.focus();
                 }
             }
+            // Feuille des ressources (J7, lot L10) : Suppr supprime la
+            // ressource courante ; les autres commandes de structure et la
+            // fenêtre d'une tâche visent la table des tâches, absente.
+            Action::Structure(op) if self.state.view == ViewKind::ResourceSheet => {
+                if op == crate::structure::StructureOp::Delete {
+                    self.delete_resource();
+                }
+            }
+            Action::ShowTaskInformation if self.state.view == ViewKind::ResourceSheet => {}
+            // Utilisation des ressources (J7, lot L11) : lecture seule, aucune
+            // commande de structure ni fenêtre d'une tâche.
+            Action::Structure(_) | Action::ShowTaskInformation
+                if self.state.view == ViewKind::ResourceUsage => {}
             Action::Structure(op) => self.run_structure(op),
+            Action::ConfirmDelete(confirmed) if self.view.resources.pending_delete.is_some() => {
+                self.answer_resource_delete(confirmed);
+            }
             Action::ConfirmDelete(confirmed) => self.answer_delete(confirmed),
+            Action::Nav { mv, .. } if self.state.view == ViewKind::ResourceSheet => {
+                if let Some(document) = &self.document {
+                    self.view
+                        .resources
+                        .navigate(document, &self.texts, mv, view::ROW_H);
+                }
+            }
+            Action::Nav { mv, .. } if self.state.view == ViewKind::ResourceUsage => {
+                if let Some(document) = &self.document {
+                    let ViewTransient { usage, expanded, .. } = &mut self.view;
+                    usage.navigate(document, &self.texts, expanded, mv, view::ROW_H);
+                }
+            }
+            Action::Nav { mv, extend } => self.navigate(mv, extend),
+            Action::FocusPane(pane) => self.focus_pane(pane, ctx),
+            Action::TimescaleStep(n) => {
+                // Une graduation fine : un jour de l'échelle (H-UI-18).
+                self.scroll_gantt_by(self.state.zoom.px_per_day() * f32::from(n));
+            }
+            Action::TimescalePage(n) => self.scroll_gantt_by(self.current_gantt_width() * f32::from(n)),
+            Action::TimescaleToStart => self.scroll_gantt_to_project(false),
+            Action::TimescaleToEnd => self.scroll_gantt_to_project(true),
+            Action::ZoomBy(steps) => self.zoom_step(steps, self.gantt_center()),
+            Action::ShowDialog(DialogKind::TaskInformation(uid)) => self.open_task_info(uid),
+            Action::ShowDialog(DialogKind::Link {
+                predecessor,
+                successor,
+            }) => self.open_link(predecessor, successor),
+            Action::GestureRefused(error) => self.report_gesture(error),
+            Action::ShowTaskInformation => {
+                if let Some(uid) = self.selection {
+                    self.open_task_info(uid);
+                }
+            }
+            Action::ShowDialog(
+                kind @ (DialogKind::WorkingTime
+                | DialogKind::ProjectInformation
+                | DialogKind::Baseline
+                | DialogKind::Reschedule
+                | DialogKind::AssignResources),
+            ) => self.open_window(kind),
+            Action::CloseDialog => self.close_dialog(),
+            // Contrat J7 (lot L0) : actions câblées par leur lot.
+            Action::SetGanttStyle(style) => self.state.gantt_style = style,
+            Action::SetView(kind) => self.set_view(kind),
+            Action::OpenRecent(index) => self.open_recent(index, ctx),
+            #[cfg(not(target_arch = "wasm32"))]
+            Action::Recover(choice) => self.recover(choice, ctx),
+            #[cfg(target_arch = "wasm32")]
+            other @ Action::Recover(_) => log::debug!("reprise après plantage absente du web : {other:?}"),
+            Action::ToggleColumn(column) => self.toggle_column(column),
+            Action::SetColumnWidth { column, width } => {
+                self.state.set_column_width(column, width);
+            }
+            Action::ScrollTableX(delta) => {
+                if delta.is_finite() {
+                    self.view.table_scroll_x += delta;
+                }
+                self.clamp_table_scroll();
+            }
+            Action::Approve(id) => self.approve_relayed(id),
+            Action::Reject(id) => self.reject_relayed(id),
+            Action::Ui(op) => self.apply_ui(op, ctx),
+        }
+    }
+
+    /// Fenêtres de confirmation d'une suppression : tâche récapitulative
+    /// (lot L14 de J4) ou ressource affectée (J7, lot L10).
+    fn show_confirmations(&self, ctx: &egui::Context, palette: &Palette, actions: &mut Vec<Action>) {
+        if let Some(pending) = &self.pending_delete {
+            crate::structure::confirm_modal(ctx, &self.texts, pending, actions);
+        }
+        if let Some(pending) = &self.view.resources.pending_delete {
+            view::resource_sheet::confirm_delete_modal(ctx, &self.texts, palette, pending, actions);
+        }
+    }
+
+    /// Change la vue principale (J7, lots L10, L11) : une saisie ouverte
+    /// dans l'autre grille est abandonnée ; la grille affichée prend le
+    /// focus clavier.
+    fn set_view(&mut self, kind: ViewKind) {
+        if self.state.view == kind {
+            return;
+        }
+        self.state.view = kind;
+        self.view.edit.editing = None;
+        self.view.resources.edit.editing = None;
+        self.view.focus_table_pending = true;
+    }
+
+    /// Suppr dans la feuille des ressources (J7, lot L10) : `resource.delete`
+    /// de la ressource courante ; affectée (`resource.has_assignments`), une
+    /// fenêtre demande confirmation avant la suppression en cascade. Tout
+    /// autre refus s'affiche dans le bandeau.
+    fn delete_resource(&mut self) {
+        if self.view.resources.pending_delete.is_some() {
+            return;
+        }
+        let Some(document) = &self.document else {
+            return;
+        };
+        self.view.resources.ensure_rows(document, &self.texts);
+        let Some(uid) = self.view.resources.cursor.row.item() else {
+            return;
+        };
+        let rows = &self.view.resources.rows;
+        let name = rows
+            .index_of(uid)
+            .map(|i| {
+                rows.text(i, crate::resource_rows::ResourceColumn::Name)
+                    .to_owned()
+            })
+            .unwrap_or_default();
+        let cache_key = document.cache_key();
+        match self.execute(
+            &crate::resource_rows::delete_batch(uid, false),
+            EditOrigin::Dialog,
+        ) {
+            Ok(_) => {}
+            Err(error) => match error.kind {
+                CommandErrorKind::ResourceHasAssignments { count } => {
+                    self.view.resources.pending_delete = Some(view::resource_sheet::PendingResourceDelete {
+                        uid,
+                        name,
+                        count,
+                        cache_key,
+                    });
+                }
+                _ => self.report_command_error(&error),
+            },
+        }
+    }
+
+    /// Réponse à la confirmation de suppression d'une ressource affectée :
+    /// `true` supprime avec ses affectations (si la demande n'est pas
+    /// devenue caduque), `false` abandonne.
+    fn answer_resource_delete(&mut self, confirmed: bool) {
+        let Some(pending) = self.view.resources.pending_delete.take() else {
+            return;
+        };
+        let current = self.document.as_ref().map(OpenDocument::cache_key);
+        if confirmed && current == Some(pending.cache_key) {
+            // Un refus est affiché par `execute`.
+            drop(self.execute(
+                &crate::resource_rows::delete_batch(pending.uid, true),
+                EditOrigin::User,
+            ));
+        }
+    }
+
+    /// Accepte l'écriture relayée `id` (bandeau, H-UI-27) ; sans canal
+    /// (web), rien.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        allow(
+            clippy::unused_self,
+            reason = "web : aucun canal, même signature que le desktop"
+        )
+    )]
+    fn approve_relayed(&mut self, id: u64) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.approve(id);
+        #[cfg(target_arch = "wasm32")]
+        let _ = id;
+    }
+
+    /// Refuse l'écriture relayée `id` ; sans canal (web), rien.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        allow(
+            clippy::unused_self,
+            reason = "web : aucun canal, même signature que le desktop"
+        )
+    )]
+    fn reject_relayed(&mut self, id: u64) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.reject(id);
+        #[cfg(target_arch = "wasm32")]
+        let _ = id;
+    }
+
+    /// Action d'interface d'un agent (`app.ui`), sans historique ni effet
+    /// sur le projet ; les UID ont été vérifiés par le relais (une tâche
+    /// disparue entre-temps est ignorée).
+    fn apply_ui(&mut self, op: UiOp, ctx: &egui::Context) {
+        match op {
+            UiOp::Select(uid) => {
+                let uid = uid.map(TaskUid::new);
+                let known = uid.is_none_or(|uid| {
+                    self.rows
+                        .as_ref()
+                        .is_some_and(|rows| rows.index_of(uid).is_some())
+                });
+                if known {
+                    self.selection = uid;
+                }
+            }
+            UiOp::ScrollTo(uid) => {
+                if let Some(index) = self
+                    .rows
+                    .as_ref()
+                    .and_then(|rows| rows.index_of(TaskUid::new(uid)))
+                {
+                    self.apply(Action::ScrollToRow(index), ctx);
+                }
+            }
+            UiOp::Zoom(zoom) => self.apply(Action::SetZoom(zoom), ctx),
+            UiOp::View(kind) => self.set_view(kind),
+            UiOp::Theme(theme) => self.apply(Action::SetTheme(theme), ctx),
+            UiOp::Language(language) => self.apply(Action::SetLanguage(language), ctx),
         }
     }
 
@@ -1131,6 +1524,158 @@ impl App {
             .pick_and_open(ctx, now, title, filter, self.tx.clone());
     }
 
+    /// Défilement horizontal du Gantt de `delta` points (borné).
+    fn scroll_gantt_by(&mut self, delta: f32) {
+        if delta.is_finite() {
+            self.view.gantt_scroll_x += delta;
+        }
+        self.clamp_gantt_scroll();
+    }
+
+    /// Alt+Origine / Alt+Fin (H-UI-18) : début du projet au bord gauche du
+    /// Gantt, ou fin du projet au bord droit. Abscisses de l'axe (temps →
+    /// pixels) seulement.
+    fn scroll_gantt_to_project(&mut self, end: bool) {
+        let Some(document) = &self.document else {
+            return;
+        };
+        let axis = TimeAxis::new(document.range, self.state.zoom, 0.0);
+        let schedule = document.schedule();
+        let target = if end {
+            axis.x(schedule.project_finish) - self.current_gantt_width()
+        } else {
+            axis.x(schedule.project_start)
+        };
+        if target.is_finite() {
+            self.view.gantt_scroll_x = target;
+        }
+        self.clamp_gantt_scroll();
+    }
+
+    /// Donne le focus clavier à un volet (clic dans la table ou le Gantt,
+    /// fin de saisie) : la table reçoit le focus d'egui (sans le
+    /// redemander s'il l'a déjà, pour garder son verrou de focus), le Gantt
+    /// le lui retire.
+    fn focus_pane(&mut self, pane: Pane, ctx: &egui::Context) {
+        self.view.focus = pane;
+        ctx.memory_mut(|memory| match pane {
+            Pane::Table => {
+                if !memory.has_focus(table_id()) {
+                    memory.request_focus(table_id());
+                }
+            }
+            Pane::Gantt => memory.surrender_focus(table_id()),
+        });
+    }
+
+    /// Navigation au clavier (H-UI-13 à H-UI-17) : [`nav::step`] sur
+    /// (ligne, colonne visible), ligne vide comprise ; la sélection suit la
+    /// ligne du curseur (`extend` : plage depuis l'ancre, sans aller sur la
+    /// ligne vide) ; le défilement vertical suit le curseur avec une ligne
+    /// de marge ([`nav::ensure_visible`]).
+    fn navigate(&mut self, mv: NavMove, extend: bool) {
+        let Some(rows) = &self.rows else {
+            return;
+        };
+        let len = rows.len();
+        let visible: Vec<Column> = self.state.visible_columns().map(|state| state.column).collect();
+        let row = match self.selection {
+            Some(uid) => rows.index_of(uid).unwrap_or(0),
+            None => len,
+        };
+        let col = visible
+            .iter()
+            .position(|column| *column == self.view.cursor.column)
+            .unwrap_or(0);
+        let shape = GridShape {
+            rows: len.saturating_add(1),
+            cols: visible.len(),
+            page: nav::page_rows(self.view.last_body_height, view::ROW_H),
+        };
+        let mut target = nav::step(GridPos { row, col }, mv, shape);
+        let extend = extend && len > 0;
+        if extend {
+            // L'extension s'arrête à la dernière tâche.
+            target.row = target.row.min(len.saturating_sub(1));
+        }
+        if let Some(column) = visible.get(target.col) {
+            self.view.cursor.column = *column;
+        }
+        let uid = rows.row(target.row).map(|row| row.uid);
+        match uid {
+            Some(uid) if extend => {
+                let anchor = self.selected.anchor().or(self.selection).unwrap_or(uid);
+                let mut selected = Selection::single(Some(anchor));
+                selected.click(uid, SelectMode::Range, rows);
+                self.selected = selected;
+                self.selection = Some(uid);
+                self.view.cursor.anchor = Some(anchor);
+            }
+            _ => {
+                self.selection = uid;
+                self.selected = Selection::single(uid);
+            }
+        }
+        self.sync_selection();
+        if extend {
+            self.view.cursor.anchor = self.selected.anchor();
+        }
+        let view_h = self.view.last_body_height;
+        if let Some(y) = nav::ensure_visible(
+            self.view.last_scroll_y,
+            target.row,
+            view::ROW_H,
+            view_h,
+            shape.rows,
+        ) {
+            self.view.pending_scroll_y = Some(y);
+            self.view.last_scroll_y = y;
+        }
+        self.follow_cursor_x();
+    }
+
+    /// Affiche ou masque une colonne (J7, lot L6) ; masquer la colonne du
+    /// curseur le ramène sur le Nom (toujours visible).
+    fn toggle_column(&mut self, column: Column) {
+        if !self.state.toggle_column(column) {
+            return;
+        }
+        let visible = self.state.column(column).is_some_and(|state| state.visible);
+        if !visible && self.view.cursor.column == column {
+            self.view.cursor.column = Column::Name;
+        }
+        self.clamp_table_scroll();
+    }
+
+    /// Borne le défilement horizontal de la table à `[0, Σ largeurs −
+    /// largeur visible]` (largeur de l'image précédente).
+    fn clamp_table_scroll(&mut self) {
+        let total: f32 = self.state.visible_columns().map(|c| f32::from(c.width)).sum();
+        let max = total - self.view.last_table_width;
+        let max = if max.is_finite() { max.max(0.0) } else { 0.0 };
+        let x = self.view.table_scroll_x;
+        self.view.table_scroll_x = if x.is_finite() { x.clamp(0.0, max) } else { 0.0 };
+    }
+
+    /// Le défilement horizontal suit la colonne du curseur, une colonne de
+    /// marge de chaque côté quand elle tient (H-UI-17, J7 lot L6).
+    fn follow_cursor_x(&mut self) {
+        if self.view.last_table_width.is_nan() || self.view.last_table_width <= 0.0 {
+            // Aucune image encore : largeur visible inconnue.
+            return;
+        }
+        let widths: Vec<u16> = self.state.visible_columns().map(|c| c.width).collect();
+        let Some(col) = self
+            .state
+            .visible_columns()
+            .position(|c| c.column == self.view.cursor.column)
+        else {
+            return;
+        };
+        self.view.table_scroll_x =
+            view::table::scroll_to_column(&widths, col, self.view.table_scroll_x, self.view.last_table_width);
+    }
+
     /// Pas de zoom (Ctrl/Cmd + molette) ancré sous le pointeur, `anchor_x`
     /// étant relatif au bord gauche du Gantt.
     fn zoom_step(&mut self, steps: i8, anchor_x: f32) {
@@ -1143,10 +1688,331 @@ impl App {
         }
     }
 
+    /// Ouvre « Informations sur la tâche » de `uid` (H-UI-19) : une fenêtre
+    /// à la fois (la précédente est remplacée), brouillon relu sur la
+    /// session ; une saisie de cellule ouverte est abandonnée. Sans document
+    /// ou tâche absente : rien.
+    fn open_task_info(&mut self, uid: TaskUid) {
+        let lang = self.text_language();
+        let Some(document) = &self.document else {
+            return;
+        };
+        let Some(state) = TaskInfoState::open(&document.session, uid, document.cache_key(), lang) else {
+            return;
+        };
+        self.view.edit.editing = None;
+        self.view.dialog = Some(DialogState {
+            kind: DialogKind::TaskInformation(uid),
+            body: DialogBody::TaskInfo(Box::new(state)),
+        });
+    }
+
+    /// Ouvre la boîte « Dépendance » du lien `predecessor` → `successor`
+    /// (H-UI-21) : une fenêtre à la fois ; lien absent : rien.
+    fn open_link(&mut self, predecessor: TaskUid, successor: TaskUid) {
+        let lang = self.text_language();
+        let Some(document) = &self.document else {
+            return;
+        };
+        let key = document.cache_key();
+        let Some(state) = LinkState::open(&document.session, &self.texts, predecessor, successor, key, lang)
+        else {
+            return;
+        };
+        self.view.edit.editing = None;
+        self.view.drag = None;
+        self.view.dialog = Some(DialogState {
+            kind: DialogKind::Link {
+                predecessor,
+                successor,
+            },
+            body: DialogBody::Link(Box::new(state)),
+        });
+    }
+
+    /// « OK » (ou « Supprimer » si `delete`) de la boîte d'un lien :
+    /// document changé depuis l'ouverture ⇒ brouillon relu et
+    /// avertissement, rien appliqué ; décalage illisible ou refus du
+    /// registre ⇒ message dans la boîte ; rien de changé ⇒ boîte fermée
+    /// sans lot ; sinon un seul lot.
+    fn commit_link(&mut self, delete: bool) {
+        let lang = self.text_language();
+        let (
+            Some(document),
+            Some(DialogState {
+                body: DialogBody::Link(state),
+                ..
+            }),
+        ) = (&self.document, &mut self.view.dialog)
+        else {
+            self.close_dialog();
+            return;
+        };
+        let key = document.cache_key();
+        if key != state.key {
+            match LinkState::open(
+                &document.session,
+                &self.texts,
+                state.predecessor,
+                state.successor,
+                key,
+                lang,
+            ) {
+                Some(mut fresh) => {
+                    fresh.stale = true;
+                    **state = fresh;
+                }
+                None => self.close_dialog(),
+            }
+            return;
+        }
+        let batch = if delete {
+            Ok(Some(state.delete_batch()))
+        } else {
+            state.to_batch(&document.session, &self.texts, lang)
+        };
+        let batch = match batch {
+            Ok(Some(batch)) => batch,
+            Ok(None) => {
+                self.close_dialog();
+                return;
+            }
+            Err(message) => {
+                state.error = Some(message);
+                return;
+            }
+        };
+        match self.execute(&batch, EditOrigin::Dialog) {
+            Ok(_) => self.close_dialog(),
+            Err(error) => {
+                let message = task_info::command_message(&self.texts, &error, lang);
+                if let Some(DialogState {
+                    body: DialogBody::Link(state),
+                    ..
+                }) = &mut self.view.dialog
+                {
+                    state.error = Some(message);
+                }
+            }
+        }
+    }
+
+    /// Affiche le refus d'un geste du Gantt (bandeau), raison traduite.
+    fn report_gesture(&mut self, error: GestureError) {
+        let reason = match error {
+            GestureError::NotDraggable(_, NotDraggable::Summary) => TextId::GanttReasonSummary,
+            GestureError::NotDraggable(_, NotDraggable::Started) => TextId::GanttReasonStarted,
+            GestureError::NotDraggable(_, NotDraggable::Milestone) => TextId::GanttReasonMilestone,
+            GestureError::NotDraggable(_, NotDraggable::Excluded) | GestureError::UnknownTask(_) => {
+                TextId::GanttReasonExcluded
+            }
+            GestureError::NotDraggable(_, NotDraggable::Blank) => TextId::GanttReasonBlank,
+            GestureError::SameTask => TextId::GanttReasonSameTask,
+            GestureError::Overflow => TextId::GanttReasonOverflow,
+        };
+        let detail = self.texts.get(reason);
+        let text = self.texts.get_args(
+            error_text_id(error.code()),
+            &[("detail", Arg::Str(detail.into()))],
+        );
+        self.push_titled(Severity::Error, Some(TextId::CommandErrorTitle), text);
+    }
+
+    /// Ferme la fenêtre ouverte ; la table reprend le focus clavier.
+    pub(crate) fn close_dialog(&mut self) {
+        if self.view.dialog.take().is_some() && self.document.is_some() {
+            self.view.focus_table_pending = true;
+        }
+    }
+
+    /// Dessine la fenêtre ouverte, applique sa réponse, puis retire de
+    /// l'image les touches qu'elle n'a pas prises.
+    fn show_dialog(&mut self, ctx: &egui::Context) {
+        /// Réponse de la fenêtre dessinée.
+        enum Shown {
+            /// « Informations sur la tâche ».
+            TaskInfo(task_info::Outcome),
+            /// Boîte d'un lien.
+            Link(LinkOutcome),
+        }
+        if self.view.dialog.as_ref().is_some_and(|d| d.body.is_window()) {
+            // Fenêtres du lot L12 (`dialog/mod.rs`).
+            self.show_window(ctx);
+            strip_keys(ctx);
+            return;
+        }
+        let shown = match self.view.dialog.as_mut().map(|dialog| &mut dialog.body) {
+            Some(DialogBody::TaskInfo(state)) => Shown::TaskInfo(task_info::show(ctx, &self.texts, state)),
+            Some(DialogBody::Link(state)) => Shown::Link(link::show(ctx, &self.texts, state)),
+            Some(
+                DialogBody::Empty
+                | DialogBody::WorkingTime(_)
+                | DialogBody::ProjectInfo(_)
+                | DialogBody::Baseline(_)
+                | DialogBody::Reschedule(_)
+                | DialogBody::Assign(_),
+            )
+            | None => Shown::TaskInfo(task_info::Outcome::Cancel),
+        };
+        match shown {
+            Shown::TaskInfo(task_info::Outcome::Open) | Shown::Link(LinkOutcome::Open) => {}
+            Shown::TaskInfo(task_info::Outcome::Cancel) | Shown::Link(LinkOutcome::Cancel) => {
+                self.close_dialog();
+            }
+            Shown::TaskInfo(task_info::Outcome::Ok) => self.commit_task_info(),
+            Shown::Link(LinkOutcome::Ok) => self.commit_link(false),
+            Shown::Link(LinkOutcome::Delete) => self.commit_link(true),
+        }
+        strip_keys(ctx);
+    }
+
+    /// « OK » d'« Informations sur la tâche » : document changé depuis
+    /// l'ouverture ⇒ brouillon relu et avertissement, rien appliqué ;
+    /// champs illisibles ⇒ refus affichés dans leur onglet ; sinon un seul
+    /// lot, dont le refus par le registre s'affiche dans la fenêtre ; rien
+    /// de changé ⇒ fenêtre fermée sans lot.
+    fn commit_task_info(&mut self) {
+        let lang = self.text_language();
+        let (
+            Some(document),
+            Some(DialogState {
+                body: DialogBody::TaskInfo(state),
+                ..
+            }),
+        ) = (&self.document, &mut self.view.dialog)
+        else {
+            self.close_dialog();
+            return;
+        };
+        let key = document.cache_key();
+        if key != state.draft.key {
+            match TaskInfoState::open(&document.session, state.draft.uid, key, lang) {
+                Some(mut fresh) => {
+                    fresh.stale = true;
+                    fresh.tab = state.tab;
+                    **state = fresh;
+                }
+                None => self.close_dialog(),
+            }
+            return;
+        }
+        let batch = match state.draft.to_batch(&document.session, lang) {
+            Ok(Some(batch)) => batch,
+            Ok(None) => {
+                self.close_dialog();
+                return;
+            }
+            Err(errors) => {
+                show_errors(state, errors);
+                return;
+            }
+        };
+        match self.execute(&batch, EditOrigin::Dialog) {
+            Ok(_) => self.close_dialog(),
+            Err(error) => {
+                let (tab, field) = task_info::locate(&batch, &error);
+                let message = task_info::command_message(&self.texts, &error, lang);
+                if let Some(DialogState {
+                    body: DialogBody::TaskInfo(state),
+                    ..
+                }) = &mut self.view.dialog
+                {
+                    show_errors(
+                        state,
+                        vec![FieldError {
+                            tab,
+                            field,
+                            row: None,
+                            message,
+                        }],
+                    );
+                }
+            }
+        }
+    }
+
+    /// Clic relâché hors de la table et du Gantt (barre d'outils, menus,
+    /// bandeau, réponse d'une confirmation) : egui retire le focus de la
+    /// table à tout appui ailleurs et ne le donne à personne ; la table,
+    /// volet actif, le reprend à l'image suivante (relecture finale J7, F5 :
+    /// la navigation s'arrêtait en silence, cadre du curseur toujours
+    /// dessiné). Un clic dans le Gantt (`Pane::Gantt`) ou Échap (D2)
+    /// laissent la table sans focus ; un autre widget focalisé (zone de
+    /// saisie) le garde ; rien pendant une fenêtre, un menu ou une
+    /// confirmation de suppression.
+    fn refocus_table_after_click(&mut self, ctx: &egui::Context) {
+        let idle = self.document.is_some()
+            && self.view.focus == Pane::Table
+            && self.view.dialog.is_none()
+            && !self.popup_open
+            && self.pending_delete.is_none()
+            && self.view.resources.pending_delete.is_none()
+            && self.view.edit.editing.is_none()
+            && self.view.resources.edit.editing.is_none();
+        if idle
+            && ctx.input(|input| input.pointer.any_released())
+            && ctx.memory(|memory| memory.focused().is_none())
+        {
+            self.view.focus_table_pending = true;
+        }
+    }
+
+    /// Contextes actifs des raccourcis : document ouvert ; table focalisée
+    /// (focus d'egui et volet), sans saisie, menu, fenêtre ni confirmation
+    /// de suppression ouverts (ADR-0015 D2).
+    fn key_state(&self, ctx: &egui::Context) -> KeyState {
+        let document = self.document.is_some();
+        let table = document
+            && self.view.focus == Pane::Table
+            && ctx.memory(|memory| memory.has_focus(table_id()))
+            && self.view.edit.editing.is_none()
+            && !self.popup_open
+            && self.view.dialog.is_none()
+            && self.pending_delete.is_none()
+            && self.view.resources.edit.editing.is_none()
+            && self.view.resources.pending_delete.is_none();
+        KeyState { document, table }
+    }
+
+    /// Raccourcis de l'image, avant le dessin (la touche consommée
+    /// n'atteint aucun widget). Fenêtre ouverte : dessinée d'abord, ses
+    /// touches non prises retirées ; saisie de cellule ouverte : aucun.
+    fn read_keys(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        if self.view.dialog.is_some() {
+            // « Affecter des ressources » (non modale) : les raccourcis à
+            // Ctrl/Cmd qui ne touchent pas la structure (enregistrer,
+            // annuler, ouvrir, quitter…) restent actifs hors de ses champs
+            // (relecture finale J7, F9).
+            if self
+                .view
+                .dialog
+                .as_ref()
+                .is_some_and(|d| matches!(d.body, DialogBody::Assign(_)))
+                && !ctx.text_edit_focused()
+            {
+                let keys = KeyState {
+                    document: self.document.is_some(),
+                    table: false,
+                };
+                crate::keymap::dispatch_beside_window(ctx, keys, actions);
+            }
+            self.show_dialog(ctx);
+        } else if self.view.edit.editing.is_none() && self.view.resources.edit.editing.is_none() {
+            // Saisie de cellule ouverte : aucun raccourci, même si sa zone
+            // n'a pas encore le focus (relecture finale J7, F2 : Retour
+            // arrière supprimait la tâche).
+            crate::keymap::dispatch(ctx, self.key_state(ctx), actions);
+        }
+    }
+
     /// Une image complète dans `ui` (appelée par [`crate::ui`]) : relève des
     /// ouvertures, réglages, panneaux, vue centrale, puis réducteur.
     pub(crate) fn show(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        // Appels relayés d'un agent d'abord (ADR-0015 D9) : la session vue
+        // par l'image est celle qui a répondu.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.drain_relay(&ctx);
         self.poll_io();
         self.poll_save(&ctx);
         self.guard_close(&ctx);
@@ -1156,11 +2022,21 @@ impl App {
         let metrics = Metrics::default();
         self.sync_selection();
         self.drop_stale_delete();
+        let current = self.document.as_ref().map(OpenDocument::cache_key);
+        self.view.resources.drop_stale_delete(current);
+        if self.view.focus_table_pending && self.document.is_some() {
+            self.view.focus_table_pending = false;
+            self.focus_pane(Pane::Table, &ctx);
+        }
         let mut actions = std::mem::take(&mut self.actions);
         // Raccourcis avant le dessin : la touche consommée n'atteint aucun
-        // widget.
-        crate::keymap::dispatch(&ctx, self.document.is_some(), &mut actions);
+        // widget. Fenêtre ouverte (J7, lot L9) : la fenêtre est dessinée
+        // d'abord et les touches qu'elle n'a pas prises sont retirées de
+        // l'image (rien n'atteint la table ni le Gantt).
+        self.read_keys(&ctx, &mut actions);
         let mut stats = FrameStats::default();
+        #[cfg(not(target_arch = "wasm32"))]
+        let recovery_offer = self.recovery_offer();
         // Nom du document du bandeau de confirmation, s'il y en a un.
         let confirm_name = self.confirm.as_ref().map(|_| {
             self.document
@@ -1183,30 +2059,43 @@ impl App {
                 selected: &self.selected,
                 actions: &mut actions,
                 stats: &mut stats,
+                window_open: self.view.dialog.is_some(),
             };
             view::chrome::menu_bar(ui, &mut fc);
             view::chrome::toolbar(ui, &mut fc);
             view::chrome::status_bar(ui, &mut fc, &self.messages);
             view::chrome::confirm_banner(ui, &mut fc, confirm_name.as_deref());
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let document = self
+                    .document
+                    .as_ref()
+                    .map_or("", |document| document.origin.name.as_str());
+                let banner = self
+                    .relay
+                    .as_ref()
+                    .and_then(|relay| crate::relay::banner_for(relay, document));
+                view::approval::approval_banner(ui, &mut fc, banner);
+                view::recovery::recovery_banner(ui, &mut fc, recovery_offer);
+            }
             if self.state.diagnostics_open {
                 view::diagnostics::panel(ui, &mut fc);
             }
             let view_state = &mut self.view;
             if fc.doc.is_some() {
                 let frame = egui::Frame::central_panel(ui.style()).inner_margin(0.0);
-                egui::CentralPanel::default().frame(frame).show(ui, |ui| {
-                    view::main_view::show(ui, &mut fc, view_state);
-                });
+                egui::CentralPanel::default()
+                    .frame(frame)
+                    .show(ui, |ui| show_view(ui, &mut fc, view_state));
             } else {
                 egui::CentralPanel::default().show(ui, |ui| {
                     view::chrome::welcome(ui, &mut fc);
                 });
             }
-            if let Some(pending) = &self.pending_delete {
-                crate::structure::confirm_modal(&ctx, &self.texts, pending, fc.actions);
-            }
         }
+        self.show_confirmations(&ctx, &palette, &mut actions);
         self.last_frame = stats;
+        self.popup_open = ctx.any_popup_open();
         // Les actions sont appliquées après le dessin : une image de plus
         // montre leur effet (langue, zoom, document…). Les lots d'édition
         // d'abord (partition stable) : une saisie validée par la perte du
@@ -1222,6 +2111,8 @@ impl App {
         for action in edits.into_iter().chain(others) {
             self.apply(action, &ctx);
         }
+        // Après le réducteur : un clic dans le Gantt a déjà changé de volet.
+        self.refocus_table_after_click(&ctx);
         self.sync_selection();
         // Ajustement du zoom après une ouverture, dès que la largeur du
         // Gantt est connue : là aussi, une image de plus au bon zoom.
@@ -1237,6 +2128,205 @@ impl App {
             self.sent_title = title;
         }
     }
+}
+
+/// Vue centrale du document selon `UiState::view` (J7, lot L10).
+fn show_view(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view_state: &mut ViewTransient) {
+    match fc.state.view {
+        ViewKind::ResourceSheet => view::resource_sheet::show(ui, fc, &mut view_state.resources),
+        ViewKind::ResourceUsage => view::usage::show(ui, fc, view_state),
+        ViewKind::Gantt => view::main_view::show(ui, fc, view_state),
+    }
+}
+
+/// Pose les refus d'une tentative ; l'onglet affiché passe au premier
+/// onglet en refus s'il n'en a lui-même aucun.
+fn show_errors(state: &mut TaskInfoState, errors: Vec<FieldError>) {
+    if !errors.iter().any(|e| e.tab == state.tab)
+        && let Some(first) = errors.iter().map(|e| e.tab).min()
+    {
+        state.tab = first;
+    }
+    state.errors = errors;
+}
+
+/// Reprise après plantage (desktop, J7 lot L15).
+#[cfg(not(target_arch = "wasm32"))]
+impl App {
+    /// Branche le journal de reprise : il suit aussitôt le document courant,
+    /// puis chaque ouverture, changement, enregistrement et fermeture.
+    pub fn set_recovery(&mut self, log: Box<dyn planrs_automation::recovery::RecoveryLog>) {
+        self.recovery = Some(log);
+        self.record_recovery();
+    }
+
+    /// Propose les journaux orphelins qui portent des modifications, ou qui
+    /// viennent d'une autre version (bandeau de reprise, un à la fois).
+    pub fn offer_recovery(&mut self, orphans: Vec<planrs_automation::recovery::Orphan>) {
+        self.orphans = orphans
+            .into_iter()
+            .filter(planrs_automation::recovery::Orphan::worth_offering)
+            .collect();
+    }
+
+    /// Orphelin affiché par le bandeau de reprise (le premier).
+    fn recovery_offer(&self) -> Option<crate::view::recovery::RecoveryOffer<'_>> {
+        self.orphans
+            .first()
+            .map(|o| crate::view::recovery::RecoveryOffer {
+                id: &o.id,
+                name: &o.name,
+                entries: o.entries,
+                checkpointed: o.checkpointed,
+                file_changed: o.file_changed,
+                kept: o.kept,
+            })
+    }
+
+    /// Journaux orphelins encore proposés.
+    #[must_use]
+    pub fn recovery_offers(&self) -> &[planrs_automation::recovery::Orphan] {
+        &self.orphans
+    }
+
+    /// Journalise l'état du document ; une écriture impossible (disque
+    /// plein) coupe le journal et s'affiche une fois, sans jamais bloquer
+    /// l'édition.
+    fn record_recovery(&mut self) {
+        let Some(log) = &mut self.recovery else {
+            return;
+        };
+        let now = (self.env.now)();
+        log.record(
+            self.document
+                .as_ref()
+                .map(|document| (document.opening, &document.session)),
+            now,
+        );
+        if let Some(detail) = log.take_issue() {
+            let text = self
+                .texts
+                .get_args(TextId::RecoveryJournalCut, &[("detail", Arg::Str(detail.into()))]);
+            self.push_message(Severity::Warning, text);
+        }
+    }
+
+    /// Réponse au bandeau de reprise après plantage (J7, lot L15) :
+    /// Restaurer (après confirmation si le document courant est modifié),
+    /// Ignorer (journal supprimé) ou Plus tard (bandeau retiré, journaux
+    /// gardés pour le prochain démarrage).
+    fn recover(&mut self, choice: crate::action::RecoverChoice, ctx: &egui::Context) {
+        match choice {
+            crate::action::RecoverChoice::Restore(id) => self.request(Pending::Restore(id), ctx),
+            crate::action::RecoverChoice::Discard(id) => {
+                let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.orphans)
+                    .into_iter()
+                    .partition(|o| o.id == id);
+                self.orphans = kept;
+                for orphan in gone {
+                    if let Err(error) = orphan.discard() {
+                        self.report_recovery_discard(&error);
+                    }
+                }
+            }
+            crate::action::RecoverChoice::Later => self.orphans.clear(),
+        }
+    }
+
+    /// Fermeture propre de l'application : journal supprimé.
+    fn recovery_closed(&mut self) {
+        if let Some(log) = &mut self.recovery {
+            log.closed();
+        }
+    }
+
+    /// Suppression d'un journal impossible : message.
+    fn report_recovery_discard(&mut self, error: &std::io::Error) {
+        let text = self.texts.get_args(
+            TextId::RecoveryDiscardFailed,
+            &[("detail", Arg::Str(error.to_string().into()))],
+        );
+        self.push_message(Severity::Warning, text);
+    }
+
+    /// Restaure l'orphelin `id` : rejeu du journal, document installé et
+    /// marqué modifié (son contenu n'est pas sur le disque), journal
+    /// orphelin supprimé (le document a déjà le sien). Un rejeu arrêté sur
+    /// une entrée refusée restaure ce qui précède et le dit ; un journal
+    /// illisible reste proposé (Ignorer le supprime). Fichier changé sur le
+    /// disque depuis la base : document installé **sans chemin**, nommé
+    /// « plan (récupéré).xml », pour qu'Enregistrer demande un nom au lieu
+    /// d'écraser la version plus récente (relecture finale J7, F3).
+    fn restore_orphan(&mut self, id: &str) {
+        let Some(orphan) = self.orphans.iter().find(|o| o.id == id).cloned() else {
+            return;
+        };
+        let lang = self.text_language();
+        match planrs_automation::recovery::replay(&orphan, lang) {
+            Ok((mut session, report)) => {
+                self.orphans.retain(|o| o.id != id);
+                session.mark_unsaved();
+                let range = default_range(session.project(), session.schedule());
+                let loaded = LoadedDocument {
+                    session,
+                    import_diagnostics: Vec::new(),
+                    range: range.span,
+                    range_truncated: range.truncated,
+                };
+                let origin = if orphan.file_changed {
+                    DocOrigin {
+                        name: recovered_name(&self.texts, &orphan.name),
+                        path: None,
+                        demo: false,
+                    }
+                } else {
+                    DocOrigin {
+                        name: orphan.name.clone(),
+                        path: orphan.path.clone(),
+                        demo: false,
+                    }
+                };
+                self.install(loaded, origin);
+                if let Err(error) = orphan.discard() {
+                    self.report_recovery_discard(&error);
+                }
+                if report.stopped_at.is_some() {
+                    let count = i64::try_from(report.applied).unwrap_or(i64::MAX);
+                    let text = self.texts.get_args(
+                        TextId::RecoveryPartial,
+                        &[
+                            ("name", Arg::Str(orphan.name.as_str().into())),
+                            ("count", Arg::Count(count)),
+                            ("detail", Arg::Str(report.error.unwrap_or_default().into())),
+                        ],
+                    );
+                    self.push_message(Severity::Warning, text);
+                }
+            }
+            Err(error) => {
+                let text = self.texts.get_args(
+                    TextId::RecoveryFailed,
+                    &[
+                        ("name", Arg::Str(orphan.name.as_str().into())),
+                        ("detail", Arg::Str(error.to_string().into())),
+                    ],
+                );
+                self.push_titled(Severity::Error, None, text);
+            }
+        }
+    }
+}
+
+/// Nom d'un document récupéré dont le fichier a changé : « plan
+/// (récupéré).xml » (extension gardée).
+#[cfg(not(target_arch = "wasm32"))]
+fn recovered_name(texts: &Texts, name: &str) -> String {
+    let (stem, ext) = match name.rfind('.') {
+        Some(dot) if dot > 0 => name.split_at(dot),
+        _ => (name, ""),
+    };
+    let stem = texts.get_args(TextId::RecoveredFileName, &[("stem", Arg::Str(stem.into()))]);
+    format!("{stem}{ext}")
 }
 
 /// Titre de la fenêtre pour `document` (voir [`App::window_title`]). Le web
@@ -1280,6 +2370,24 @@ pub fn next_monday_morning(now: Moment) -> Moment {
         .zip(TimeOfDay::new(480).ok())
         .and_then(|(monday, morning)| Moment::at(monday, morning).ok())
         .unwrap_or(now)
+}
+
+/// Retire de l'image les touches qu'une fenêtre ouverte n'a pas prises
+/// (rien n'atteint la table ni le Gantt).
+fn strip_keys(ctx: &egui::Context) {
+    ctx.input_mut(|input| {
+        input.events.retain(|event| {
+            !matches!(
+                event,
+                egui::Event::Key { .. }
+                    | egui::Event::Text(_)
+                    | egui::Event::Paste(_)
+                    | egui::Event::Copy
+                    | egui::Event::Cut
+                    | egui::Event::Ime(_)
+            )
+        });
+    });
 }
 
 /// Nombre de jours d'une plage (0 si vide ou inversée).
@@ -1369,7 +2477,11 @@ mod tests {
         app.open_bytes(crate::DEMO_MSPDI, super::DocOrigin::default());
         assert_eq!(app.document.as_ref().unwrap().opening, 2);
         assert!(app.messages().is_empty(), "{:?}", app.messages());
-        assert!(app.selection.is_none());
+        // J7 L1 : curseur (et sélection) sur la première ligne.
+        assert_eq!(
+            app.selection,
+            app.rows().and_then(|rows| rows.row(0)).map(|row| row.uid)
+        );
         assert!(app.view().needs_fit);
         assert_eq!(app.diagnostics_view(), &crate::view::DiagnosticsView::default());
     }

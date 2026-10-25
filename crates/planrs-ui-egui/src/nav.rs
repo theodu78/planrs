@@ -1,0 +1,415 @@
+//! Navigation au clavier dans une grille (J7, ADR-0015 D1 ; H-UI-13 à
+//! H-UI-17, P45) : fonctions pures sur des indices, sans egui, partagées
+//! par la table des tâches et la feuille des ressources.
+//!
+//! Le déplacement se calcule sur (indice de ligne, indice de colonne
+//! visible) dans une [`GridShape`] ; la vue traduit ensuite l'indice en
+//! [`CellCursor`] (UID ou ligne vide). Aucune indexation directe : toute
+//! position rendue reste dans la grille (règle 10).
+//!
+//! Conventions (MS Project, S61 ; `docs/features/ui.md` § 1.11) :
+//! - ↑/↓ (Entrée, Maj+Entrée), ←/→ (Tab, Maj+Tab) : une cellule, sans
+//!   retour à la ligne ni bouclage ; au bord, rien ne bouge (H-UI-13,
+//!   H-UI-14) ;
+//! - Origine/Fin : premier / dernier champ de la ligne ; Ctrl+↑/↓ :
+//!   première / dernière ligne (colonne gardée) ; Ctrl+Origine/Fin :
+//!   premier champ de la première ligne / dernier champ de la dernière
+//!   ligne, ligne vide comprise (H-UI-15) ;
+//! - Page haut/bas : `page − 1` lignes, au moins une (hypothèse : une page
+//!   de 0 ou 1 ligne avance quand même d'une ligne, comme ↑/↓).
+
+use crate::geom::{f32_to_index, index_to_f32};
+
+/// Déplacement demandé (H-UI-13 à H-UI-15).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NavMove {
+    /// Ligne précédente (↑, Maj+Entrée).
+    Up,
+    /// Ligne suivante (↓, Entrée).
+    Down,
+    /// Colonne précédente (←, Maj+Tab).
+    Left,
+    /// Colonne suivante (→, Tab).
+    Right,
+    /// Page précédente (lignes visibles − 1).
+    PageUp,
+    /// Page suivante.
+    PageDown,
+    /// Premier champ de la ligne (Origine, Ctrl+←).
+    RowStart,
+    /// Dernier champ de la ligne (Fin, Ctrl+→).
+    RowEnd,
+    /// Première ligne (Ctrl+↑).
+    FirstRow,
+    /// Dernière ligne (Ctrl+↓).
+    LastRow,
+    /// Premier champ de la première ligne (Ctrl+Origine).
+    First,
+    /// Dernier champ de la dernière ligne (Ctrl+Fin).
+    Last,
+}
+
+impl NavMove {
+    /// Tous les déplacements (tests, propriété P45).
+    pub const ALL: [Self; 12] = [
+        Self::Up,
+        Self::Down,
+        Self::Left,
+        Self::Right,
+        Self::PageUp,
+        Self::PageDown,
+        Self::RowStart,
+        Self::RowEnd,
+        Self::FirstRow,
+        Self::LastRow,
+        Self::First,
+        Self::Last,
+    ];
+}
+
+/// Position dans la grille : indice de ligne, indice de colonne visible.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GridPos {
+    /// Ligne (ligne vide de fin comprise).
+    pub row: usize,
+    /// Colonne visible.
+    pub col: usize,
+}
+
+/// Forme de la grille.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GridShape {
+    /// Lignes, ligne vide de fin comprise.
+    pub rows: usize,
+    /// Colonnes visibles.
+    pub cols: usize,
+    /// Lignes visibles (pas d'une page).
+    pub page: usize,
+}
+
+/// Position après le déplacement `mv` dans `shape` (P45 : toujours dans la
+/// grille, idempotente au bord ; grille vide ⇒ (0, 0)). Une position de
+/// départ hors de la grille est d'abord ramenée dans la grille.
+#[must_use]
+pub fn step(pos: GridPos, mv: NavMove, shape: GridShape) -> GridPos {
+    if shape.rows == 0 || shape.cols == 0 {
+        return GridPos::default();
+    }
+    let last_row = shape.rows.saturating_sub(1);
+    let last_col = shape.cols.saturating_sub(1);
+    let row = pos.row.min(last_row);
+    let col = pos.col.min(last_col);
+    // Une page avance de `page − 1` lignes, au moins une.
+    let page = shape.page.saturating_sub(1).max(1);
+    let (row, col) = match mv {
+        NavMove::Up => (row.saturating_sub(1), col),
+        NavMove::Down => (row.saturating_add(1).min(last_row), col),
+        NavMove::Left => (row, col.saturating_sub(1)),
+        NavMove::Right => (row, col.saturating_add(1).min(last_col)),
+        NavMove::PageUp => (row.saturating_sub(page), col),
+        NavMove::PageDown => (row.saturating_add(page).min(last_row), col),
+        NavMove::RowStart => (row, 0),
+        NavMove::RowEnd => (row, last_col),
+        NavMove::FirstRow => (0, col),
+        NavMove::LastRow => (last_row, col),
+        NavMove::First => (0, 0),
+        NavMove::Last => (last_row, last_col),
+    };
+    GridPos { row, col }
+}
+
+/// Ligne désignée par le curseur (défaut : la ligne vide).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RowRef<U> {
+    /// Ligne d'un élément (UID).
+    Item(U),
+    /// Ligne vide de fin (nouvelle tâche, nouvelle ressource).
+    #[default]
+    Blank,
+}
+
+impl<U: Copy> RowRef<U> {
+    /// Ligne d'une sélection : l'élément sélectionné, ou la ligne vide
+    /// sans sélection.
+    #[must_use]
+    pub fn from_selection(selection: Option<U>) -> Self {
+        selection.map_or(Self::Blank, Self::Item)
+    }
+
+    /// UID de la ligne (aucun pour la ligne vide).
+    #[must_use]
+    pub const fn item(self) -> Option<U> {
+        match self {
+            Self::Item(uid) => Some(uid),
+            Self::Blank => None,
+        }
+    }
+}
+
+/// Cellule courante d'une grille ; défaut : ligne vide, colonne par
+/// défaut, aucune ancre.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CellCursor<U, C> {
+    /// Ligne.
+    pub row: RowRef<U>,
+    /// Colonne.
+    pub column: C,
+    /// Ancre de l'extension de la sélection (Maj+flèches, H-UI-16).
+    pub anchor: Option<U>,
+}
+
+impl<U, C: Default> Default for CellCursor<U, C> {
+    fn default() -> Self {
+        Self {
+            row: RowRef::Blank,
+            column: C::default(),
+            anchor: None,
+        }
+    }
+}
+
+/// Défilement qui rend visible l'élément `index` (étendue `extent` par
+/// élément, `len` éléments, fenêtre de `view` à partir de `offset`), avec
+/// une ligne de marge sauf aux bords (H-UI-17) ; `None` : rien à faire, ou
+/// valeur non finie. Le défilement rendu est minimal : la fenêtre ne bouge
+/// que du nécessaire, et n'est jamais négative. Une fenêtre trop petite
+/// pour la marge (moins de trois éléments) montre l'élément seul.
+#[must_use]
+pub fn ensure_visible(offset: f32, index: usize, extent: f32, view: f32, len: usize) -> Option<f32> {
+    if !offset.is_finite() || !extent.is_finite() || !view.is_finite() || extent <= 0.0 || view <= 0.0 {
+        return None;
+    }
+    if len == 0 {
+        return None;
+    }
+    let index = index.min(len.saturating_sub(1));
+    let margin = usize::from(view >= 3.0 * extent);
+    let top = index_to_f32(index.saturating_sub(margin)) * extent;
+    let bottom = index_to_f32(index.saturating_add(1).saturating_add(margin).min(len)) * extent;
+    let target = if top < offset {
+        top
+    } else if bottom > offset + view {
+        (bottom - view).max(0.0)
+    } else {
+        return None;
+    };
+    (target.is_finite() && (target - offset).abs() > f32::EPSILON).then_some(target)
+}
+
+/// Nombre de lignes entièrement visibles dans une fenêtre de `view` points
+/// (lignes de `extent` points) : pas d'une page ; 0 si une valeur n'est pas
+/// finie ou pas positive.
+#[must_use]
+pub fn page_rows(view: f32, extent: f32) -> usize {
+    if !view.is_finite() || !extent.is_finite() || view <= 0.0 || extent <= 0.0 {
+        return 0;
+    }
+    f32_to_index((view / extent).floor())
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    clippy::arithmetic_side_effects,
+    clippy::cast_precision_loss,
+    reason = "tests : un échec doit s'arrêter net et lisiblement ; valeurs exactes et petites"
+)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::{CellCursor, GridPos, GridShape, NavMove, RowRef, ensure_visible, page_rows, step};
+
+    const fn shape(rows: usize, cols: usize, page: usize) -> GridShape {
+        GridShape { rows, cols, page }
+    }
+
+    const fn pos(row: usize, col: usize) -> GridPos {
+        GridPos { row, col }
+    }
+
+    #[test]
+    fn nav_step_contract_stays_in_grid() {
+        let s = shape(3, 2, 20);
+        let far = pos(9, 9);
+        assert_eq!(step(far, NavMove::Down, s), pos(2, 1));
+        assert_eq!(step(far, NavMove::Up, GridShape::default()), GridPos::default());
+    }
+
+    #[test]
+    fn nav_step_arrows_and_edges() {
+        let s = shape(10, 6, 20);
+        assert_eq!(step(pos(3, 2), NavMove::Down, s), pos(4, 2));
+        assert_eq!(step(pos(3, 2), NavMove::Up, s), pos(2, 2));
+        assert_eq!(step(pos(3, 2), NavMove::Left, s), pos(3, 1));
+        assert_eq!(step(pos(3, 2), NavMove::Right, s), pos(3, 3));
+        // Au bord, rien ne bouge (H-UI-13, H-UI-14).
+        assert_eq!(step(pos(0, 0), NavMove::Up, s), pos(0, 0));
+        assert_eq!(step(pos(0, 0), NavMove::Left, s), pos(0, 0));
+        assert_eq!(step(pos(9, 5), NavMove::Down, s), pos(9, 5));
+        assert_eq!(step(pos(9, 5), NavMove::Right, s), pos(9, 5));
+    }
+
+    #[test]
+    fn nav_step_home_end_first_last() {
+        let s = shape(10, 6, 20);
+        assert_eq!(step(pos(4, 3), NavMove::RowStart, s), pos(4, 0));
+        assert_eq!(step(pos(4, 3), NavMove::RowEnd, s), pos(4, 5));
+        assert_eq!(step(pos(4, 3), NavMove::FirstRow, s), pos(0, 3));
+        assert_eq!(step(pos(4, 3), NavMove::LastRow, s), pos(9, 3));
+        assert_eq!(step(pos(4, 3), NavMove::First, s), pos(0, 0));
+        assert_eq!(step(pos(4, 3), NavMove::Last, s), pos(9, 5));
+    }
+
+    /// H-UI-15 : 20 lignes visibles, ligne 5, Page bas ⇒ ligne 24.
+    #[test]
+    fn nav_step_page() {
+        let s = shape(100, 6, 20);
+        assert_eq!(step(pos(5, 1), NavMove::PageDown, s), pos(24, 1));
+        assert_eq!(step(pos(24, 1), NavMove::PageUp, s), pos(5, 1));
+        assert_eq!(step(pos(3, 1), NavMove::PageUp, s), pos(0, 1));
+        assert_eq!(step(pos(90, 1), NavMove::PageDown, s), pos(99, 1));
+    }
+
+    /// Page de 0 ou 1 ligne : une ligne par appui (jamais immobile).
+    #[test]
+    fn nav_step_page_zero() {
+        for page in [0, 1, 2] {
+            let s = shape(10, 3, page);
+            assert_eq!(step(pos(4, 0), NavMove::PageDown, s), pos(5, 0), "page {page}");
+            assert_eq!(step(pos(4, 0), NavMove::PageUp, s), pos(3, 0), "page {page}");
+        }
+    }
+
+    #[test]
+    fn nav_step_empty_grid() {
+        for mv in NavMove::ALL {
+            for s in [shape(0, 0, 0), shape(0, 5, 20), shape(5, 0, 20)] {
+                assert_eq!(step(pos(3, 3), mv, s), GridPos::default(), "{mv:?} {s:?}");
+            }
+        }
+        // Une seule cellule (la ligne vide d'un projet sans tâche).
+        for mv in NavMove::ALL {
+            assert_eq!(step(pos(0, 0), mv, shape(1, 1, 20)), pos(0, 0), "{mv:?}");
+        }
+    }
+
+    #[test]
+    fn nav_row_ref_and_cursor_default() {
+        assert_eq!(RowRef::from_selection(Some(3_u32)), RowRef::Item(3));
+        assert_eq!(RowRef::<u32>::from_selection(None), RowRef::Blank);
+        assert_eq!(RowRef::Item(3_u32).item(), Some(3));
+        assert_eq!(RowRef::<u32>::Blank.item(), None);
+        let c: CellCursor<u32, u8> = CellCursor::default();
+        assert_eq!(c.row, RowRef::Blank);
+        assert_eq!(c.column, 0);
+        assert_eq!(c.anchor, None);
+    }
+
+    /// H-UI-17 : lignes visibles 0-19 (22 px), curseur 19 ⇒ première
+    /// visible 1 ; marge d'une ligne sauf aux bords.
+    #[test]
+    fn nav_ensure_visible_margin() {
+        let (h, view) = (22.0, 440.0);
+        assert_eq!(ensure_visible(0.0, 18, h, view, 100), None);
+        assert_eq!(ensure_visible(0.0, 19, h, view, 100), Some(22.0));
+        // Vers le haut : la ligne au-dessus reste visible.
+        assert_eq!(ensure_visible(220.0, 10, h, view, 100), Some(198.0));
+        assert_eq!(ensure_visible(220.0, 11, h, view, 100), None);
+        // Bords : pas de marge hors de la grille.
+        assert_eq!(ensure_visible(100.0, 0, h, view, 100), Some(0.0));
+        assert_eq!(ensure_visible(0.0, 99, h, view, 100), Some(100.0 * h - view));
+        // Grand saut : défilement minimal (cible en bas avec sa marge).
+        assert_eq!(ensure_visible(0.0, 50, h, view, 100), Some(52.0 * h - view));
+        // Indice au-delà de la fin : ramené à la dernière ligne.
+        assert_eq!(ensure_visible(0.0, 500, h, view, 100), Some(100.0 * h - view));
+    }
+
+    #[test]
+    fn nav_ensure_visible_degenerate() {
+        assert_eq!(ensure_visible(f32::NAN, 3, 22.0, 440.0, 10), None);
+        assert_eq!(ensure_visible(0.0, 3, f32::INFINITY, 440.0, 10), None);
+        assert_eq!(ensure_visible(0.0, 3, 22.0, f32::NAN, 10), None);
+        assert_eq!(ensure_visible(0.0, 3, 0.0, 440.0, 10), None);
+        assert_eq!(ensure_visible(0.0, 3, 22.0, 0.0, 10), None);
+        assert_eq!(ensure_visible(0.0, 3, 22.0, 440.0, 0), None);
+        // Fenêtre plus petite que trois lignes : l'élément seul.
+        assert_eq!(ensure_visible(0.0, 5, 22.0, 30.0, 10), Some(6.0 * 22.0 - 30.0));
+        assert_eq!(ensure_visible(200.0, 5, 22.0, 30.0, 10), Some(110.0));
+    }
+
+    #[test]
+    fn nav_page_rows() {
+        assert_eq!(page_rows(440.0, 22.0), 20);
+        assert_eq!(page_rows(450.0, 22.0), 20);
+        assert_eq!(page_rows(21.0, 22.0), 0);
+        assert_eq!(page_rows(f32::NAN, 22.0), 0);
+        assert_eq!(page_rows(440.0, 0.0), 0);
+        assert_eq!(page_rows(f32::INFINITY, 22.0), 0);
+    }
+
+    fn move_strategy() -> impl Strategy<Value = NavMove> {
+        proptest::sample::select(NavMove::ALL.to_vec())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4_096))]
+
+        /// P45 : pour toute grille et toute suite de déplacements, la
+        /// position reste dans la grille, sans panique ; un déplacement
+        /// répété au bord ne bouge plus ; `FirstRow` après `LastRow` vaut
+        /// `FirstRow`.
+        #[test]
+        fn p45_nav_step_stays_in_grid(
+            rows in 0_usize..400,
+            cols in 0_usize..16,
+            page in 0_usize..60,
+            start_row in 0_usize..500,
+            start_col in 0_usize..20,
+            moves in proptest::collection::vec(move_strategy(), 0..40),
+        ) {
+            let s = shape(rows, cols, page);
+            let mut p = pos(start_row, start_col);
+            for mv in moves {
+                let next = step(p, mv, s);
+                if rows == 0 || cols == 0 {
+                    prop_assert_eq!(next, GridPos::default());
+                } else {
+                    prop_assert!(next.row < rows && next.col < cols, "{:?} {:?} {:?}", next, mv, s);
+                }
+                // Idempotence au bord : un second appui identique ne bouge
+                // plus si le premier n'a rien changé.
+                if next == step(next, mv, s) {
+                    prop_assert_eq!(step(step(next, mv, s), mv, s), next);
+                }
+                p = next;
+            }
+            let first = step(p, NavMove::FirstRow, s);
+            prop_assert_eq!(step(step(p, NavMove::LastRow, s), NavMove::FirstRow, s), first);
+            // Les déplacements absolus sont idempotents.
+            for mv in [NavMove::RowStart, NavMove::RowEnd, NavMove::FirstRow, NavMove::LastRow, NavMove::First, NavMove::Last] {
+                let once = step(p, mv, s);
+                prop_assert_eq!(step(once, mv, s), once);
+            }
+        }
+
+        /// H-UI-17 : la cible de `ensure_visible` montre l'élément (fenêtre
+        /// d'au moins une ligne), reste finie et positive.
+        #[test]
+        fn p45_ensure_visible_shows_index(
+            offset in 0.0_f32..20_000.0,
+            index in 0_usize..1_000,
+            view_rows in 1_usize..60,
+            len in 1_usize..1_000,
+        ) {
+            let h = 22.0_f32;
+            let view = h * view_rows as f32;
+            let index = index.min(len - 1);
+            let shown = ensure_visible(offset, index, h, view, len).unwrap_or(offset);
+            prop_assert!(shown.is_finite() && shown >= 0.0);
+            let top = index as f32 * h;
+            prop_assert!(top >= shown - 0.01 && top + h <= shown + view + 0.01,
+                "{} {} {} {}", shown, top, view, offset);
+        }
+    }
+}

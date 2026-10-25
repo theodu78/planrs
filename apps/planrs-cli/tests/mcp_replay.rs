@@ -1,4 +1,4 @@
-//! Rejeu des scénarios `build_30`, `resources_j5` (J5, lot L9) et `tracking_j6` (J6, lot L10) sur le
+//! Rejeu des scénarios `build_30`, `resources_j5` (J5, lot L9), `tracking_j6` (J6, lot L10) et `calendars_j7` (J7, lot L5) sur le
 //! vrai binaire (lot L18, vérification 4) : `planrs --now 2026-10-19T08:00 --lang fr mcp
 //! --headless --journal J` (`--now 2026-11-02T08:00` pour `tracking_j6`) lancé en processus fils, client rmcp sur ses
 //! tubes (stdio). Mêmes résultats que le rejeu en mémoire
@@ -42,6 +42,13 @@ async fn replay_tracking_j6_stdio() {
     replay_stdio("tracking_j6").await;
 }
 
+/// Scénario J7 (lot L5) : calendriers, calendrier du projet, taux,
+/// effacement d'une ligne de base.
+#[tokio::test]
+async fn replay_calendars_j7_stdio() {
+    replay_stdio("calendars_j7").await;
+}
+
 /// Rejoue le scénario `name` sur le binaire, en stdio.
 async fn replay_stdio(name: &str) {
     let root = repo_root(env!("CARGO_MANIFEST_DIR"));
@@ -59,6 +66,9 @@ async fn replay_stdio(name: &str) {
             "--journal",
         ])
         .arg(&journal)
+        // `--headless` garde la garde ADR-0002 (J7) : dossier de
+        // rendez-vous vide, résultat indépendant du poste.
+        .env("PLANRS_CONTROL_DIR", tmp.path().join("control"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())

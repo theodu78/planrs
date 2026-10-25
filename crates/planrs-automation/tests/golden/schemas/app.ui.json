@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`app.ui` (J7, ADR-0015 D11, disponibilité `Attached`) : actions\nd'interface sans historique, appliquées dans cet ordre ; au moins un\nchamp (contrôle : lot L3). Aucune ne modifie le projet.",
+  "properties": {
+    "language": {
+      "anyOf": [
+        {
+          "description": "Langue d'interface demandée par `app.ui` (J7).",
+          "oneOf": [
+            {
+              "const": "system",
+              "description": "Langue du système.",
+              "type": "string"
+            },
+            {
+              "const": "fr",
+              "description": "Français.",
+              "type": "string"
+            },
+            {
+              "const": "en",
+              "description": "Anglais.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Langue."
+    },
+    "scroll_to": {
+      "description": "Fait défiler jusqu'à la tâche d'UID donné.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "select": {
+      "description": "Sélectionne la tâche d'UID donné (`null` : aucune sélection).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "theme": {
+      "anyOf": [
+        {
+          "description": "Thème demandé par `app.ui` (J7).",
+          "oneOf": [
+            {
+              "const": "system",
+              "description": "Thème du système.",
+              "type": "string"
+            },
+            {
+              "const": "light",
+              "description": "Clair.",
+              "type": "string"
+            },
+            {
+              "const": "dark",
+              "description": "Sombre.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Thème."
+    },
+    "view": {
+      "anyOf": [
+        {
+          "description": "Vue principale demandée par `app.ui` (J7, ADR-0015 D6).",
+          "oneOf": [
+            {
+              "const": "gantt",
+              "description": "Diagramme de Gantt.",
+              "type": "string"
+            },
+            {
+              "const": "resource_sheet",
+              "description": "Feuille des ressources.",
+              "type": "string"
+            },
+            {
+              "const": "resource_usage",
+              "description": "Utilisation des ressources.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Vue principale."
+    },
+    "zoom": {
+      "anyOf": [
+        {
+          "description": "Échelle de temps d'un rendu.",
+          "oneOf": [
+            {
+              "const": "auto",
+              "description": "Choisie selon l'étendue du projet.",
+              "type": "string"
+            },
+            {
+              "const": "day",
+              "description": "Jours.",
+              "type": "string"
+            },
+            {
+              "const": "week",
+              "description": "Semaines.",
+              "type": "string"
+            },
+            {
+              "const": "month",
+              "description": "Mois.",
+              "type": "string"
+            },
+            {
+              "const": "quarter",
+              "description": "Trimestres.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Zoom de l'échelle de temps (`auto` : ajusté au projet)."
+    }
+  },
+  "title": "UiActionParams",
+  "type": "object"
+}

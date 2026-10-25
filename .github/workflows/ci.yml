@@ -140,6 +140,13 @@ jobs:
       PLANRS_UI_SNAPSHOTS: "1"
       # lavapipe par Vulkan : un seul chemin de rendu, pas de repli GL.
       WGPU_BACKEND: vulkan
+      # Sonde des polices de repli du système (J7 lot L14) : une police CJK
+      # est installée, son absence fait échouer `fonts_system_fallback_probe`.
+      PLANRS_FONTS: required
+      # Relais avec le vrai binaire `planrs mcp` (J7 lot L16,
+      # `relay_app_real_mcp`) : le binaire est construit juste avant, son
+      # absence fait échouer le test au lieu de le passer.
+      PLANRS_RELAY: required
     steps:
       - uses: actions/checkout@v7
 
@@ -150,12 +157,16 @@ jobs:
       - name: Pilote Vulkan logiciel (lavapipe)
         run: |
           sudo apt-get update
-          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools libxkbcommon-x11-0
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools libxkbcommon-x11-0 fonts-noto-cjk
 
       - name: Adaptateur disponible (diagnostic)
         run: vulkaninfo --summary
 
-      - name: Tests de l'interface (captures comparées)
+      # `planrs` à côté de `deps/` : trouvé par `relay_app_real_mcp`.
+      - name: Binaire planrs (relais réel)
+        run: cargo build -p planrs-cli
+
+      - name: Tests de l'interface (captures comparées, relais réel)
         run: cargo test -p planrs-ui-egui --test ui
 
       - name: Captures en échec
@@ -193,12 +204,26 @@ jobs:
       - name: Lecture MSPDI
         run: cargo test -p planrs-mspdi --release --test perf -- --ignored --nocapture
 
-      # Fluidité de l'interface (ADR-0011, décision 12) : 5 000 tâches et
-      # 10 000 liens dessinés par `planrs_ui_egui::ui` sur un contexte egui
-      # nu, médiane < 16 ms et p95 < 32 ms par image (mesuré en local :
-      # 0,8 ms de médiane, 0,9 ms de p95).
+      # Fluidité de l'interface (ADR-0011, décision 12 ; ADR-0015 D12, J7
+      # lot L16) : 5 000 tâches et 10 000 liens dessinés par
+      # `planrs_ui_egui::ui` sur un contexte egui nu ; images statiques,
+      # navigation, glisser d'une barre, bandeau, utilisation des ressources :
+      # médiane < 16 ms et p95 < 32 ms par image ; latence d'édition
+      # (`edit_latency`) : médiane < 100 ms, p95 < 150 ms (porte). Les
+      # scénarios tournent l'un après l'autre (en parallèle, ils se
+      # perturberaient) et écrivent chacun leur rapport JSON dans
+      # `target/tmp/ui-perf/`, publié en artefact même en cas d'échec.
       - name: Fluidité de l'interface (release)
-        run: cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture
+        run: cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture --test-threads=1
+
+      - name: Rapport de fluidité
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-perf-report
+          path: target/tmp/ui-perf/*.json
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Benchmark (informatif)
         run: cargo bench -p planrs-tests --bench schedule -- --warm-up-time 1 --measurement-time 5 --noplot

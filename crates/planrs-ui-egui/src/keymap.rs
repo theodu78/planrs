@@ -12,11 +12,35 @@
 //! avant la moins précise (Ctrl+Maj+Z avant Ctrl+Z), ce qu'un test vérifie.
 //! Aucun raccourci n'est lu pendant la saisie dans un champ de texte : ses
 //! propres Ctrl+Z et Ctrl+Y lui appartiennent.
+//!
+//! Navigation (J7, lot L1, H-UI-13 à H-UI-18, H-UI-29) : contexte
+//! [`KeyContext::Table`], actif seulement si la table a le focus clavier,
+//! sans saisie, menu ni fenêtre ouverts ([`KeyState`]). Alt+échelle de
+//! temps, zoom au clavier et Alt+Maj+↑/↓ sont du contexte `Document`.
 
 use egui::{Key, KeyboardShortcut, Modifiers};
 
 use crate::action::Action;
+use crate::nav::NavMove;
 use crate::structure::StructureOp;
+
+/// Raccourci de navigation dans la table.
+const fn nav(modifiers: Modifiers, key: Key, mv: NavMove, extend: bool) -> (KeyContext, Shortcut, Binding) {
+    (
+        KeyContext::Table,
+        Shortcut::new(modifiers, key),
+        Binding::Ui(UiBinding::Nav { mv, extend }),
+    )
+}
+
+/// Raccourci propre à l'interface, contexte `Document`.
+const fn doc_ui(modifiers: Modifiers, key: Key, binding: UiBinding) -> (KeyContext, Shortcut, Binding) {
+    (
+        KeyContext::Document,
+        Shortcut::new(modifiers, key),
+        Binding::Ui(binding),
+    )
+}
 
 /// Combinaison de touches (`Modifiers::COMMAND` : Ctrl, ou Cmd sur macOS).
 pub type Shortcut = KeyboardShortcut;
@@ -28,6 +52,9 @@ pub enum KeyContext {
     Global,
     /// Un document est ouvert, hors saisie de texte.
     Document,
+    /// La table a le focus, sans saisie en cours, sans menu ni fenêtre
+    /// ouverts (J7, ADR-0015 D2 ; actif à partir du lot L1).
+    Table,
 }
 
 /// Action propre à l'interface (sans commande du registre).
@@ -42,6 +69,28 @@ pub enum UiBinding {
     /// document est modifié. Sur macOS, Cmd+Q n'arrive ici que parce que
     /// l'application retire le menu par défaut de winit (`apps/planrs`).
     Quit,
+    /// Déplacement dans la grille (J7, H-UI-13 à H-UI-16) ; `extend` :
+    /// étend la sélection de lignes.
+    Nav {
+        /// Déplacement.
+        mv: NavMove,
+        /// Extension de la sélection (Maj).
+        extend: bool,
+    },
+    /// « Informations sur la tâche » (Maj+F2, H-UI-19).
+    TaskInformation,
+    /// Une graduation fine de l'échelle de temps (Alt+←/→, H-UI-18).
+    TimescaleStep(i8),
+    /// Une largeur visible (Alt+Page haut/bas, H-UI-18).
+    TimescalePage(i8),
+    /// Début du projet (Alt+Origine, H-UI-18).
+    TimescaleToStart,
+    /// Fin du projet (Alt+Fin, H-UI-18).
+    TimescaleToEnd,
+    /// Unités de temps plus fines (Ctrl+/, Ctrl+=, H-UI-18).
+    ZoomFiner,
+    /// Unités de temps plus grossières (Ctrl+-, H-UI-18).
+    ZoomCoarser,
 }
 
 /// Liaison d'un raccourci.
@@ -65,6 +114,18 @@ const ALT_SHIFT: Modifiers = Modifiers {
     shift: true,
     ..Modifiers::NONE
 };
+
+/// Alt.
+const ALT: Modifiers = Modifiers::ALT;
+
+/// Maj.
+const SHIFT: Modifiers = Modifiers::SHIFT;
+
+/// Ctrl (Cmd sur macOS).
+const COMMAND: Modifiers = Modifiers::COMMAND;
+
+/// Aucun modificateur.
+const NONE: Modifiers = Modifiers::NONE;
 
 /// Table des raccourcis, la combinaison la plus précise d'une touche
 /// d'abord.
@@ -115,16 +176,26 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
         Shortcut::new(Modifiers::NONE, Key::Insert),
         Binding::Command("task.add"),
     ),
+    // Insérer sans touche Inser (clavier Mac, relecture finale J7, F6) :
+    // Cmd+I (Ctrl+I ailleurs), affiché dans les menus sur macOS.
+    (
+        KeyContext::Document,
+        Shortcut::new(Modifiers::COMMAND, Key::I),
+        Binding::Command("task.add"),
+    ),
     (
         KeyContext::Document,
         Shortcut::new(Modifiers::NONE, Key::Delete),
         Binding::Command("task.delete"),
     ),
-    // Touche « delete » d'un clavier Mac (Retour arrière) : pas de Suppr
-    // sans fn. Après Suppr, qui reste le raccourci affiché.
+    // Clavier Mac sans Suppr : Cmd+delete (Cmd+Retour arrière), comme
+    // « Placer dans la corbeille » du Finder. Retour arrière seul ne
+    // supprime plus la tâche (relecture finale J7, F6, contre la relecture
+    // finale J4, F5) : il ouvre la saisie vide de la cellule courante (lu
+    // par la table, comme F2).
     (
         KeyContext::Document,
-        Shortcut::new(Modifiers::NONE, Key::Backspace),
+        Shortcut::new(Modifiers::COMMAND, Key::Backspace),
         Binding::Command("task.delete"),
     ),
     (
@@ -147,11 +218,100 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
         Shortcut::new(Modifiers::COMMAND, Key::F2),
         Binding::Command("link.add"),
     ),
+    // J7 L9 : « Informations sur la tâche » de la tâche active (S61,
+    // H-UI-19), après Ctrl+Maj+F2 et Ctrl+F2 ; F2 seul reste la saisie de
+    // la cellule (lu par la table, après les raccourcis).
+    doc_ui(SHIFT, Key::F2, UiBinding::TaskInformation),
+    // --- J7 L1 : navigation (H-UI-13 à H-UI-16), échelle de temps
+    // (H-UI-18), déplacement des lignes (H-UI-29). Maj et Alt en trop étant
+    // ignorés par egui, chaque touche liste ses combinaisons de la plus
+    // précise à la moins précise.
+    (
+        KeyContext::Document,
+        Shortcut::new(ALT_SHIFT, Key::ArrowUp),
+        Binding::Command("task.move"),
+    ),
+    nav(COMMAND_SHIFT, Key::ArrowUp, NavMove::FirstRow, true),
+    nav(COMMAND, Key::ArrowUp, NavMove::FirstRow, false),
+    nav(SHIFT, Key::ArrowUp, NavMove::Up, true),
+    nav(NONE, Key::ArrowUp, NavMove::Up, false),
+    (
+        KeyContext::Document,
+        Shortcut::new(ALT_SHIFT, Key::ArrowDown),
+        Binding::Command("task.move"),
+    ),
+    nav(COMMAND_SHIFT, Key::ArrowDown, NavMove::LastRow, true),
+    nav(COMMAND, Key::ArrowDown, NavMove::LastRow, false),
+    nav(SHIFT, Key::ArrowDown, NavMove::Down, true),
+    nav(NONE, Key::ArrowDown, NavMove::Down, false),
+    doc_ui(ALT, Key::ArrowLeft, UiBinding::TimescaleStep(-1)),
+    nav(COMMAND, Key::ArrowLeft, NavMove::RowStart, false),
+    nav(NONE, Key::ArrowLeft, NavMove::Left, false),
+    doc_ui(ALT, Key::ArrowRight, UiBinding::TimescaleStep(1)),
+    nav(COMMAND, Key::ArrowRight, NavMove::RowEnd, false),
+    nav(NONE, Key::ArrowRight, NavMove::Right, false),
+    nav(SHIFT, Key::Tab, NavMove::Left, false),
+    nav(NONE, Key::Tab, NavMove::Right, false),
+    nav(SHIFT, Key::Enter, NavMove::Up, false),
+    nav(NONE, Key::Enter, NavMove::Down, false),
+    doc_ui(ALT, Key::Home, UiBinding::TimescaleToStart),
+    nav(COMMAND, Key::Home, NavMove::First, false),
+    nav(NONE, Key::Home, NavMove::RowStart, false),
+    doc_ui(ALT, Key::End, UiBinding::TimescaleToEnd),
+    nav(COMMAND, Key::End, NavMove::Last, false),
+    nav(NONE, Key::End, NavMove::RowEnd, false),
+    doc_ui(ALT, Key::PageUp, UiBinding::TimescalePage(-1)),
+    nav(SHIFT, Key::PageUp, NavMove::PageUp, true),
+    nav(NONE, Key::PageUp, NavMove::PageUp, false),
+    doc_ui(ALT, Key::PageDown, UiBinding::TimescalePage(1)),
+    nav(SHIFT, Key::PageDown, NavMove::PageDown, true),
+    nav(NONE, Key::PageDown, NavMove::PageDown, false),
+    // « Ctrl+/ » du pavé numérique (S61) ; Ctrl+= et Ctrl++ en plus (pas de
+    // « * » du pavé dans `egui::Key`) ; pris avant le zoom de l'interface
+    // d'egui (Ctrl+±, traité en fin d'image), document ouvert seulement.
+    doc_ui(COMMAND, Key::Slash, UiBinding::ZoomFiner),
+    doc_ui(COMMAND, Key::Equals, UiBinding::ZoomFiner),
+    doc_ui(COMMAND, Key::Plus, UiBinding::ZoomFiner),
+    doc_ui(COMMAND, Key::Minus, UiBinding::ZoomCoarser),
 ];
 
+/// État du clavier pour une image : contextes actifs de [`KEYMAP`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct KeyState {
+    /// Un document est ouvert.
+    pub document: bool,
+    /// La table a le focus, sans saisie, menu ni fenêtre ouverts.
+    pub table: bool,
+}
+
+impl KeyState {
+    /// Le contexte est-il actif ?
+    #[must_use]
+    pub const fn allows(self, context: KeyContext) -> bool {
+        match context {
+            KeyContext::Global => true,
+            KeyContext::Document => self.document,
+            KeyContext::Table => self.document && self.table,
+        }
+    }
+}
+
+/// Action d'une entrée de [`KEYMAP`] : celle de sa liaison
+/// ([`binding_action`]), sauf `task.move` dont le sens vient de la touche
+/// (Alt+Maj+↑ monte, Alt+Maj+↓ descend, H-UI-29).
+#[must_use]
+pub fn entry_action(shortcut: &Shortcut, binding: Binding) -> Option<Action> {
+    match (binding, shortcut.logical_key) {
+        (Binding::Command("task.move"), Key::ArrowUp) => Some(Action::Structure(StructureOp::MoveUp)),
+        (Binding::Command("task.move"), Key::ArrowDown) => Some(Action::Structure(StructureOp::MoveDown)),
+        _ => binding_action(binding),
+    }
+}
+
 /// Action de l'interface pour une liaison ; `None` pour un id du registre
-/// que l'interface ne sait pas encore exécuter seul (un test garantit
-/// qu'aucune entrée de [`KEYMAP`] n'est dans ce cas).
+/// que l'interface ne sait pas exécuter sans la touche (`task.move`, voir
+/// [`entry_action`]) ou pas encore du tout (un test garantit qu'aucune
+/// entrée de [`KEYMAP`] n'est sans action).
 #[must_use]
 pub fn binding_action(binding: Binding) -> Option<Action> {
     match binding {
@@ -166,9 +326,26 @@ pub fn binding_action(binding: Binding) -> Option<Action> {
         Binding::Command("link.add") => Some(Action::Structure(StructureOp::Link)),
         Binding::Command("link.remove") => Some(Action::Structure(StructureOp::Unlink)),
         Binding::Command(_) => None,
-        Binding::Ui(UiBinding::OpenFile) => Some(Action::OpenDialog),
-        Binding::Ui(UiBinding::SaveAs) => Some(Action::SaveAs),
-        Binding::Ui(UiBinding::Quit) => Some(Action::Quit),
+        Binding::Ui(ui) => Some(ui_action(ui)),
+    }
+}
+
+/// Action d'une liaison propre à l'interface : toute [`UiBinding`] en a
+/// une (`keymap_bindings_resolve`).
+#[must_use]
+pub const fn ui_action(binding: UiBinding) -> Action {
+    match binding {
+        UiBinding::OpenFile => Action::OpenDialog,
+        UiBinding::SaveAs => Action::SaveAs,
+        UiBinding::Quit => Action::Quit,
+        UiBinding::Nav { mv, extend } => Action::Nav { mv, extend },
+        UiBinding::TaskInformation => Action::ShowTaskInformation,
+        UiBinding::TimescaleStep(n) => Action::TimescaleStep(n),
+        UiBinding::TimescalePage(n) => Action::TimescalePage(n),
+        UiBinding::TimescaleToStart => Action::TimescaleToStart,
+        UiBinding::TimescaleToEnd => Action::TimescaleToEnd,
+        UiBinding::ZoomFiner => Action::ZoomBy(1),
+        UiBinding::ZoomCoarser => Action::ZoomBy(-1),
     }
 }
 
@@ -187,26 +364,86 @@ pub fn shortcut_for(binding: Binding) -> Option<&'static Shortcut> {
         .map(|(_, shortcut, _)| shortcut)
 }
 
+/// Raccourci affiché dans les menus pour `binding` sur le système `os` : sur
+/// macOS, le premier qui n'utilise ni Inser ni Suppr (touches absentes d'un
+/// clavier Mac : Cmd+I, Cmd+delete) ; ailleurs, le premier.
+#[must_use]
+pub fn shortcut_for_os(binding: Binding, os: egui::os::OperatingSystem) -> Option<&'static Shortcut> {
+    let mac_key = |shortcut: &Shortcut| !matches!(shortcut.logical_key, Key::Insert | Key::Delete);
+    let matching = || {
+        KEYMAP
+            .iter()
+            .filter(move |(_, _, entry)| *entry == binding)
+            .map(|(_, shortcut, _)| shortcut)
+    };
+    if os == egui::os::OperatingSystem::Mac {
+        matching()
+            .find(|shortcut| mac_key(shortcut))
+            .or_else(|| matching().next())
+    } else {
+        matching().next()
+    }
+}
+
+/// Liaisons gardées à côté d'une fenêtre non modale (« Affecter des
+/// ressources ») : à Ctrl/Cmd, sans effet sur la structure ni la sélection
+/// (la fenêtre relit la sélection ; Suppr ou Inser pendant une saisie
+/// d'unités, ADR-0015 L13, restent exclus).
+const BESIDE_WINDOW: [Binding; 7] = [
+    Binding::Command("history.undo"),
+    Binding::Command("history.redo"),
+    Binding::Command("project.save"),
+    Binding::Command("project.new"),
+    Binding::Ui(UiBinding::SaveAs),
+    Binding::Ui(UiBinding::OpenFile),
+    Binding::Ui(UiBinding::Quit),
+];
+
+/// Raccourcis de [`BESIDE_WINDOW`] seulement (fenêtre non modale ouverte,
+/// aucun de ses champs focalisé : l'appelant le vérifie), comme
+/// [`dispatch`] (relecture finale J7, F9 : Cmd+S, Cmd+Z et Cmd+Q étaient
+/// perdus tant que la fenêtre était ouverte).
+pub fn dispatch_beside_window(ctx: &egui::Context, keys: KeyState, actions: &mut Vec<Action>) {
+    for (context, shortcut, binding) in KEYMAP {
+        if !keys.allows(*context) || !BESIDE_WINDOW.contains(binding) {
+            continue;
+        }
+        if ctx.input_mut(|input| input.consume_shortcut(shortcut))
+            && let Some(action) = entry_action(shortcut, *binding)
+        {
+            actions.push(action);
+        }
+    }
+}
+
+/// Appuis d'une même touche gardés par image (répétition du clavier) :
+/// au-delà, ignorés (une image lente ne fait pas sauter la table).
+const MAX_PRESSES_PER_FRAME: usize = 8;
+
 /// Lit les raccourcis de l'image et pousse leurs actions dans `actions`
-/// (touches consommées : aucun widget ne les reçoit ensuite). Rien pendant
-/// la saisie dans un champ de texte.
-pub fn dispatch(ctx: &egui::Context, has_document: bool, actions: &mut Vec<Action>) {
+/// (touches consommées : aucun widget ne les reçoit ensuite), une par
+/// appui (répétition comprise). Rien pendant la saisie dans un champ de
+/// texte.
+pub fn dispatch(ctx: &egui::Context, keys: KeyState, actions: &mut Vec<Action>) {
     if ctx.text_edit_focused() {
         return;
     }
     for (context, shortcut, binding) in KEYMAP {
-        let active = match context {
-            KeyContext::Global => true,
-            KeyContext::Document => has_document,
-        };
-        if !active {
+        if !keys.allows(*context) {
             continue;
         }
-        if ctx.input_mut(|input| input.consume_shortcut(shortcut)) {
-            match binding_action(*binding) {
-                Some(action) => actions.push(action),
-                None => log::warn!("raccourci sans action : {binding:?}"),
+        let presses =
+            ctx.input_mut(|input| input.count_and_consume_key(shortcut.modifiers, shortcut.logical_key));
+        if presses == 0 {
+            continue;
+        }
+        match entry_action(shortcut, *binding) {
+            Some(action) => {
+                for _ in 0..presses.min(MAX_PRESSES_PER_FRAME) {
+                    actions.push(action.clone());
+                }
             }
+            None => log::warn!("raccourci sans action : {binding:?}"),
         }
     }
 }
@@ -214,10 +451,16 @@ pub fn dispatch(ctx: &egui::Context, has_document: bool, actions: &mut Vec<Actio
 #[cfg(test)]
 #[allow(
     clippy::indexing_slicing,
+    clippy::expect_used,
     reason = "tests : un échec doit s'arrêter net et lisiblement"
 )]
 mod tests {
-    use super::{Binding, KEYMAP, binding_action};
+    use egui::Key;
+
+    use super::{Binding, KEYMAP, KeyContext, KeyState, UiBinding, binding_action, entry_action, ui_action};
+    use crate::action::Action;
+    use crate::nav::NavMove;
+    use crate::structure::StructureOp;
 
     /// Modificateurs de `a` contenant ceux de `b` (au moins autant de
     /// touches enfoncées).
@@ -247,8 +490,144 @@ mod tests {
     #[test]
     fn keymap_every_binding_has_action() {
         for (_, shortcut, binding) in KEYMAP {
-            assert!(binding_action(*binding).is_some(), "{shortcut:?} → {binding:?}");
+            assert!(
+                entry_action(shortcut, *binding).is_some(),
+                "{shortcut:?} → {binding:?}"
+            );
         }
+        // `task.move` : le sens vient de la touche.
         assert!(binding_action(Binding::Command("task.move")).is_none());
+    }
+
+    /// H-UI-29 : Alt+Maj+↑/↓ (`task.move`) avant Maj+↑/↓ et ↑/↓ (egui
+    /// ignore Alt en trop : sinon Alt+Maj+↑ étendrait la sélection).
+    #[test]
+    fn keymap_alt_shift_arrows_before_shift_arrows() {
+        for (key, op) in [
+            (Key::ArrowUp, StructureOp::MoveUp),
+            (Key::ArrowDown, StructureOp::MoveDown),
+        ] {
+            let entries: Vec<usize> = KEYMAP
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, shortcut, _))| shortcut.logical_key == key)
+                .map(|(i, _)| i)
+                .collect();
+            let (_, first, binding) = KEYMAP[entries[0]];
+            assert_eq!(first.modifiers, super::ALT_SHIFT, "{key:?}");
+            assert_eq!(binding, Binding::Command("task.move"));
+            assert_eq!(
+                entry_action(&first, binding),
+                Some(crate::action::Action::Structure(op))
+            );
+            let shift = entries
+                .iter()
+                .position(|i| KEYMAP[*i].1.modifiers == super::SHIFT)
+                .expect("Maj+flèche");
+            assert!(shift > 0);
+        }
+    }
+
+    /// Contextes : la table n'est active qu'avec un document et le focus.
+    #[test]
+    fn keymap_table_context_needs_focus_and_document() {
+        let none = KeyState::default();
+        assert!(none.allows(KeyContext::Global));
+        assert!(!none.allows(KeyContext::Document));
+        assert!(!none.allows(KeyContext::Table));
+        let doc = KeyState {
+            document: true,
+            table: false,
+        };
+        assert!(doc.allows(KeyContext::Document) && !doc.allows(KeyContext::Table));
+        let table = KeyState {
+            document: true,
+            table: true,
+        };
+        assert!(table.allows(KeyContext::Table));
+        let orphan = KeyState {
+            document: false,
+            table: true,
+        };
+        assert!(!orphan.allows(KeyContext::Table));
+    }
+
+    /// Contrat J7 (lot L0) : chaque `UiBinding` a son action.
+    #[test]
+    fn keymap_bindings_resolve() {
+        let all = [
+            UiBinding::OpenFile,
+            UiBinding::SaveAs,
+            UiBinding::Quit,
+            UiBinding::Nav {
+                mv: NavMove::Down,
+                extend: true,
+            },
+            UiBinding::TaskInformation,
+            UiBinding::TimescaleStep(-1),
+            UiBinding::TimescalePage(1),
+            UiBinding::TimescaleToStart,
+            UiBinding::TimescaleToEnd,
+            UiBinding::ZoomFiner,
+            UiBinding::ZoomCoarser,
+        ];
+        for binding in all {
+            assert_eq!(binding_action(Binding::Ui(binding)), Some(ui_action(binding)));
+        }
+        assert_eq!(
+            ui_action(UiBinding::Nav {
+                mv: NavMove::PageDown,
+                extend: false
+            }),
+            Action::Nav {
+                mv: NavMove::PageDown,
+                extend: false
+            }
+        );
+        assert_eq!(ui_action(UiBinding::ZoomFiner), Action::ZoomBy(1));
+        assert_eq!(ui_action(UiBinding::ZoomCoarser), Action::ZoomBy(-1));
+    }
+
+    /// Relecture finale J7, F6 : sur macOS, les menus montrent Cmd+I et
+    /// Cmd+delete (pas Inser ni Suppr) ; ailleurs, Inser et Suppr ; Retour
+    /// arrière seul n'est plus lié à `task.delete`.
+    #[test]
+    fn keymap_mac_insert_delete_shown() {
+        use egui::os::OperatingSystem;
+
+        use super::shortcut_for_os;
+
+        let add = Binding::Command("task.add");
+        let delete = Binding::Command("task.delete");
+        assert_eq!(
+            shortcut_for_os(add, OperatingSystem::Mac)
+                .expect("raccourci affiché")
+                .logical_key,
+            Key::I
+        );
+        assert_eq!(
+            shortcut_for_os(delete, OperatingSystem::Mac)
+                .expect("raccourci affiché")
+                .logical_key,
+            Key::Backspace
+        );
+        assert_eq!(
+            shortcut_for_os(add, OperatingSystem::Nix)
+                .expect("raccourci affiché")
+                .logical_key,
+            Key::Insert
+        );
+        assert_eq!(
+            shortcut_for_os(delete, OperatingSystem::Windows)
+                .expect("raccourci affiché")
+                .logical_key,
+            Key::Delete
+        );
+        assert!(
+            !KEYMAP.iter().any(|(_, s, b)| s.logical_key == Key::Backspace
+                && s.modifiers == egui::Modifiers::NONE
+                && *b == delete),
+            "Retour arrière seul supprime encore la tâche"
+        );
     }
 }

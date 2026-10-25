@@ -50,7 +50,8 @@ fn registry_sorted_unique_ids_and_mcp_names() {
         assert!(!spec.summary_fr.is_empty() && !spec.summary_en.is_empty());
         assert_eq!(spec.summary(Language::Fr), spec.summary_fr);
         assert_eq!(spec.summary(Language::En), spec.summary_en);
-        // Seules les écritures acceptent `dry_run` et s'annulent.
+        // Seules les écritures acceptent `dry_run` et s'annulent (`app.*`,
+        // genre `Ui`, sans historique).
         let write = spec.kind == Kind::Write;
         assert_eq!(spec.dry_run, write, "{}", spec.id);
         assert_eq!(spec.undoable, write, "{}", spec.id);
@@ -117,13 +118,55 @@ fn registry_brief_tools_present() {
 
 #[test]
 fn registry_reserved_not_listed() {
-    // Contrat J6 (lot L0) : six entrées réservées, `progress.reschedule`
-    // créée ; `analysis.explain_date` activée par le lot L7, les cinq
-    // autres par le lot L8 : plus aucune entrée réservée.
-    let reserved: BTreeSet<&str> = REGISTRY.iter().filter(|s| !s.is_listed()).map(|s| s.id).collect();
-    assert!(reserved.is_empty(), "{reserved:?}");
+    // Contrat J6 : plus aucune entrée J6 réservée. Contrat J7 : les cinq
+    // écritures réservées au jalon 7 par le lot L0 sont activées par le lot
+    // L5 ; restent hors liste les trois entrées `app.*` servies par une
+    // application rattachée.
+    let reserved: BTreeSet<&str> = REGISTRY
+        .iter()
+        .filter(|s| matches!(s.available, Availability::Milestone(_)))
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(reserved, BTreeSet::new());
+    for id in [
+        "baseline.clear",
+        "calendar.add",
+        "calendar.delete",
+        "calendar.set_week",
+        "calendar.update",
+    ] {
+        let spec = lookup(id).unwrap();
+        assert_eq!(spec.available, Availability::Now, "{id}");
+        assert!(spec.is_listed(), "{id}");
+        assert_eq!(spec.kind, Kind::Write, "{id}");
+    }
     assert!(listed().all(|s| s.available == Availability::Now));
-    assert_eq!(listed().count(), REGISTRY.len());
+    assert_eq!(listed().count(), REGISTRY.len() - 3);
+}
+
+/// Contrat J7 (lot L0, ADR-0015 D11) : `app.ui_state`, `app.ui`,
+/// `app.screenshot`, genre `Ui`, sans historique ni `dry_run`, jamais
+/// listées par une surface « headless ».
+#[test]
+fn registry_attached_not_listed_headless() {
+    let attached: Vec<&str> = REGISTRY
+        .iter()
+        .filter(|s| s.available == Availability::Attached)
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(attached, ["app.screenshot", "app.ui", "app.ui_state"]);
+    for (id, name) in [
+        ("app.screenshot", "screenshot"),
+        ("app.ui", "ui_action"),
+        ("app.ui_state", "ui_state"),
+    ] {
+        let spec = lookup(id).unwrap();
+        assert_eq!(spec.mcp_name, name);
+        assert_eq!(spec.kind, Kind::Ui, "{id}");
+        assert!(!spec.dry_run && !spec.undoable, "{id}");
+        assert!(!spec.is_listed(), "{id}");
+        assert!(listed().all(|s| s.id != id));
+    }
 }
 
 /// Lot L8 J6 : les six outils J6 sont listés (44 outils en tout) ; les
@@ -146,7 +189,27 @@ fn registry_j6_tools_listed() {
         assert_eq!(spec.dry_run, kind == Kind::Write, "{name}");
         assert_eq!(spec.undoable, kind == Kind::Write, "{name}");
     }
-    assert_eq!(listed().count(), 44);
+    // 44 en J6, 49 depuis le lot L5 de J7 (`registry_j7_tools_listed`).
+    assert_eq!(listed().count(), 49);
+}
+
+/// Lot L5 J7 (ADR-0015 D8) : les cinq écritures J7 sont listées (49 outils
+/// en tout), acceptent `dry_run` et sont annulables.
+#[test]
+fn registry_j7_tools_listed() {
+    for name in [
+        "add_calendar",
+        "update_calendar",
+        "set_work_week",
+        "delete_calendar",
+        "clear_baseline",
+    ] {
+        let spec = by_mcp_name(name).unwrap();
+        assert!(spec.is_listed(), "{name}");
+        assert_eq!(spec.kind, Kind::Write, "{name}");
+        assert!(spec.dry_run && spec.undoable, "{name}");
+    }
+    assert_eq!(listed().count(), 49);
 }
 
 /// Lot L8 (ADR-0013 D9) : les huit outils J5 sont listés, 38 outils en
@@ -167,8 +230,8 @@ fn registry_j5_tools_listed() {
         assert!(spec.is_listed(), "{name}");
         assert_eq!(spec.available, Availability::Now, "{name}");
     }
-    // 38 outils en J5, 44 en J6 (`registry_j6_tools_listed`).
-    assert_eq!(listed().count(), 44);
+    // 38 outils en J5, 44 en J6, 49 en J7 (`registry_j7_tools_listed`).
+    assert_eq!(listed().count(), 49);
     assert_eq!(by_mcp_name("list_resources").unwrap().kind, Kind::Read);
     assert_eq!(by_mcp_name("resource_usage").unwrap().kind, Kind::Analysis);
 }
@@ -199,10 +262,15 @@ fn registry_write_commands_match_batch_ops() {
         {"op":"resource.delete","uid":1},
         {"op":"assignment.add","task":1,"resource":"$r"},
         {"op":"assignment.update","task":1,"resource":1},
-        {"op":"assignment.remove","task":1,"resource":1}
+        {"op":"assignment.remove","task":1,"resource":1},
+        {"op":"calendar.add","name":"B"},
+        {"op":"calendar.update","uid":4,"name":"C"},
+        {"op":"calendar.set_week","calendar":"project","days":[]},
+        {"op":"calendar.delete","uid":4},
+        {"op":"baseline.clear"}
     ]}"#;
     let batch = Batch::from_json_str(json).unwrap();
-    assert_eq!(batch.ops.len(), 22);
+    assert_eq!(batch.ops.len(), 27);
     for op in &batch.ops {
         let spec = lookup(op.id()).unwrap();
         assert!(spec.is_listed() && spec.undoable, "{}", op.id());

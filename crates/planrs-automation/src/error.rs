@@ -5,7 +5,7 @@
 //! par le MCP, la CLI et l'interface (clé de traduction `.ftl`), et un
 //! message en français ou en anglais ([`CommandError::message`]).
 
-use planrs_core::{Diagnostic, ModelError, ResourceUid, Subject, TaskUid};
+use planrs_core::{CalendarUid, Diagnostic, ModelError, ResourceUid, Subject, TaskUid};
 use planrs_mspdi::MspdiError;
 
 use crate::text::{Language, TextError};
@@ -108,6 +108,38 @@ pub mod codes {
     pub const BASELINE_ROLLUP_NEEDS_SELECTION: &str = "baseline.rollup_needs_selection";
     /// Tâche exclue du calcul : aucune date à expliquer (J6, R-230).
     pub const EXPLAIN_NOT_SCHEDULED: &str = "explain.not_scheduled";
+    /// Nom de calendrier déjà pris, sans tenir compte de la casse (J7, R-248).
+    pub const CALENDAR_NAME_TAKEN: &str = "calendar.name_taken";
+    /// Base qui n'est pas un calendrier de base, ou calendrier de base qui sert de base rendu dérivé (J7, R-248).
+    pub const CALENDAR_BASE_NOT_BASE: &str = "calendar.base_not_base";
+    /// Calendrier utilisé (projet, tâche, ressource, base) : suppression refusée (J7, R-248).
+    pub const CALENDAR_IN_USE: &str = "calendar.in_use";
+    /// Barre qui ne se déplace pas par ce geste (récapitulative, tâche commencée, jalon, exclue, ligne vide ; J7, R-240 à R-242).
+    pub const GESTURE_NOT_DRAGGABLE: &str = "gesture.not_draggable";
+    /// Rapport d'utilisation trop grand (périodes, ressources ou lignes d'affectation ; J7, R-245).
+    pub const USAGE_LIMIT: &str = "usage.limit";
+    /// Écriture relayée refusée par l'utilisateur (J7, C-CTL-03).
+    pub const CONTROL_REJECTED: &str = "control.rejected";
+    /// Écriture relayée sans réponse de l'utilisateur dans le délai (J7, C-CTL-04).
+    pub const CONTROL_APPROVAL_TIMEOUT: &str = "control.approval_timeout";
+    /// Commande non relayable vers l'application (`project.open`, `project.new`, `project.import_csv` ; J7, C-CTL-05).
+    pub const CONTROL_NOT_RELAYABLE: &str = "control.not_relayable";
+    /// Commande d'interface (`app.*`) sans application rattachée (J7, C-CTL-10).
+    pub const CONTROL_NOT_ATTACHED: &str = "control.not_attached";
+    /// Application rattachée fermée pendant un appel (J7, C-CTL-06).
+    pub const CONTROL_APP_GONE: &str = "control.app_gone";
+    /// Aucune capture d'écran dans le délai (J7, C-CTL-08).
+    pub const CONTROL_SCREENSHOT_UNAVAILABLE: &str = "control.screenshot_unavailable";
+    /// Capture d'écran trop grande, même réduite (J7, C-CTL-08).
+    pub const CONTROL_SCREENSHOT_TOO_LARGE: &str = "control.screenshot_too_large";
+    /// Application rattachée occupée (connexions ou file pleines) : appel à
+    /// refaire, le rattachement reste (relecture finale J7, relais F4).
+    pub const CONTROL_BUSY: &str = "control.busy";
+    /// L'application a changé de document depuis le rattachement (jeton du
+    /// document précédent refusé) : rien n'est fait, le serveur MCP se
+    /// détache ; `open_project` du fichier voulu rattache de nouveau
+    /// (relecture finale J7, relais F2).
+    pub const CONTROL_DOCUMENT_CHANGED: &str = "control.document_changed";
 }
 
 /// Commande refusée. L'état de la session est intact (atomicité du lot).
@@ -229,7 +261,42 @@ pub enum CommandErrorKind {
     BaselineRollupNeedsSelection,
     /// Tâche non planifiée (J6).
     ExplainNotScheduled(TaskUid),
+    /// Nom de calendrier déjà pris, sans tenir compte de la casse (J7,
+    /// R-248) : le calendrier qui le porte.
+    CalendarNameTaken {
+        /// Nom demandé.
+        name: String,
+        /// Calendrier qui porte déjà ce nom.
+        existing: CalendarUid,
+    },
+    /// Base désignée qui n'est pas un calendrier de base (J7, R-248).
+    CalendarBaseNotBase {
+        /// Base désignée.
+        base: CalendarUid,
+    },
+    /// Calendrier de base qui sert de base à d'autres : il ne peut pas
+    /// devenir dérivé (J7, R-248).
+    CalendarServesAsBase {
+        /// Calendrier.
+        calendar: CalendarUid,
+        /// Calendriers qui en dérivent.
+        count: usize,
+    },
+    /// Calendrier utilisé : suppression refusée (J7, R-248).
+    CalendarInUse {
+        /// Calendrier.
+        calendar: CalendarUid,
+        /// Utilisateurs (projet, tâches, ressources, calendriers dérivés),
+        /// au plus [`MAX_LISTED_CALENDAR_USERS`], dans cet ordre.
+        users: Vec<Subject>,
+        /// Nombre d'utilisateurs en tout.
+        total: usize,
+    },
 }
+
+/// Utilisateurs d'un calendrier listés au plus par `calendar.in_use` (J7,
+/// R-248).
+pub const MAX_LISTED_CALENDAR_USERS: usize = 20;
 
 impl CommandError {
     /// Erreur sans index, champ ni sujet.
@@ -590,7 +657,72 @@ fn kind_message(kind: &CommandErrorKind, lang: Language) -> String {
                 format!("task {uid} is not scheduled: there is no date to explain")
             }
         }
+        K::CalendarNameTaken { name, existing } => {
+            if fr {
+                format!("le nom « {name} » est déjà celui du calendrier {existing} (casse ignorée)")
+            } else {
+                format!(
+                    "the name \u{201c}{name}\u{201d} is already used by calendar {existing} (case ignored)"
+                )
+            }
+        }
+        K::CalendarBaseNotBase { base } => {
+            if fr {
+                format!(
+                    "le calendrier {base} n'est pas un calendrier de base : il ne peut pas servir de base"
+                )
+            } else {
+                format!("calendar {base} is not a base calendar: it cannot be used as a base")
+            }
+        }
+        K::CalendarServesAsBase { calendar, count } => {
+            if fr {
+                format!(
+                    "le calendrier {calendar} sert de base à {count} calendrier(s) : il ne peut pas devenir dérivé"
+                )
+            } else {
+                format!("calendar {calendar} is the base of {count} calendar(s): it cannot become derived")
+            }
+        }
+        K::CalendarInUse {
+            calendar,
+            users,
+            total,
+        } => calendar_in_use_message(*calendar, users, *total, fr),
     }
+}
+
+/// Message de `calendar.in_use` : utilisateurs listés (R-248).
+fn calendar_in_use_message(calendar: CalendarUid, users: &[Subject], total: usize, fr: bool) -> String {
+    let listed: Vec<String> = users
+        .iter()
+        .map(|u| match (u, fr) {
+            (Subject::Project, true) => "projet".to_owned(),
+            (Subject::Project, false) => "project".to_owned(),
+            (Subject::Task(t), true) => format!("tâche {t}"),
+            (Subject::Task(t), false) => format!("task {t}"),
+            (Subject::Resource(r), true) => format!("ressource {r}"),
+            (Subject::Resource(r), false) => format!("resource {r}"),
+            (Subject::Calendar(c), true) => format!("calendrier {c}"),
+            (Subject::Calendar(c), false) => format!("calendar {c}"),
+            (other, _) => other.to_string(),
+        })
+        .collect();
+    let mut s = if fr {
+        format!(
+            "le calendrier {calendar} est utilisé ({total} utilisateur(s)) : {}",
+            listed.join(", ")
+        )
+    } else {
+        format!(
+            "calendar {calendar} is in use ({total} user(s)): {}",
+            listed.join(", ")
+        )
+    };
+    if total > users.len() {
+        s.push_str(", …");
+    }
+    s
 }
 
 /// Message d'un texte illisible (le message français vient de

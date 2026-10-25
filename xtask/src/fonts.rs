@@ -2,7 +2,8 @@
 //! (H-R11, ADR-0016 D9).
 //!
 //! Lit `assets/fonts/Inter-Regular.ttf` et `Inter-SemiBold.ttf` avec
-//! `ttf-parser` et écrit `crates/planrs-render/src/metrics_inter.rs` :
+//! `skrifa` (0.44, déjà au lock ; `ttf-parser` n'est plus maintenu,
+//! RUSTSEC-2026-0192) et écrit `crates/planrs-render/src/metrics_inter.rs` :
 //! cadratin (`units_per_em`) et, pour chaque graisse, la table triée
 //! `(caractère, avance)` de tous les caractères de la table `cmap` (glyphe 0
 //! exclu), avances en unités de police. Le rendu calcule ensuite les
@@ -74,30 +75,47 @@ struct Advances {
 }
 
 fn read_font(path: &Path) -> Result<Advances, String> {
+    use skrifa::MetadataProvider as _;
+    use skrifa::instance::{LocationRef, Size};
+    use skrifa::raw::TableProvider as _;
+
     let data = std::fs::read(path).map_err(|e| format!("{} illisible : {e}", path.display()))?;
-    let face = ttf_parser::Face::parse(&data, 0)
-        .map_err(|e| format!("{} : police invalide : {e}", path.display()))?;
+    let face =
+        skrifa::FontRef::new(&data).map_err(|e| format!("{} : police invalide : {e}", path.display()))?;
+    let units_per_em = face
+        .head()
+        .map_err(|e| format!("{} : table head illisible : {e}", path.display()))?
+        .units_per_em();
+    let metrics = face.glyph_metrics(Size::unscaled(), LocationRef::default());
     let mut table = Vec::new();
-    // Plan multilingue de base : le sous-ensemble d'Inter n'en sort pas.
-    for code in 0_u32..=0xFFFF {
-        let Some(ch) = char::from_u32(code) else {
+    for (code, gid) in face.charmap().mappings() {
+        // Plan multilingue de base : le sous-ensemble d'Inter n'en sort pas.
+        let Some(ch) = char::from_u32(code).filter(|c| u32::from(*c) <= 0xFFFF) else {
             continue;
         };
-        let Some(gid) = face.glyph_index(ch) else {
-            continue;
-        };
-        if gid.0 == 0 {
+        if gid.to_u32() == 0 {
             continue;
         }
-        let advance = face
-            .glyph_hor_advance(gid)
+        let advance = metrics
+            .advance_width(gid)
             .ok_or_else(|| format!("{} : avance absente pour U+{code:04X}", path.display()))?;
-        table.push((ch, advance));
+        // Taille « unscaled » : unités de police entières.
+        if !(0.0..=f32::from(u16::MAX)).contains(&advance) || advance.fract() != 0.0 {
+            return Err(format!(
+                "{} : avance non entière pour U+{code:04X}",
+                path.display()
+            ));
+        }
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "entier vérifié dans 0..=65 535 juste au-dessus"
+        )]
+        table.push((ch, advance as u16));
     }
-    Ok(Advances {
-        units_per_em: face.units_per_em(),
-        table,
-    })
+    table.sort_unstable();
+    table.dedup_by_key(|(c, _)| *c);
+    Ok(Advances { units_per_em, table })
 }
 
 /// Texte de `metrics_inter.rs` pour les polices du dépôt.

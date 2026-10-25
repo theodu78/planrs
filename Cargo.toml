@@ -131,9 +131,6 @@ criterion = { version = "0.8.2", default-features = false, features = ["cargo_be
 # consigné dans ADR-0016). skrifa à la version tirée par krilla (cmap).
 krilla = { version = "=0.8.2", default-features = false }
 skrifa = { version = "0.42.1", default-features = false, features = ["std"] }
-# `cargo xtask fonts` (H-R11) : lecture des avances d'Inter. Déjà au lock
-# (tiré par epaint) ; sans fonctions par défaut, aucune crate nouvelle.
-ttf-parser = { version = "0.25.1", default-features = false, features = ["std"] }
 # Validation XSD des documents écrits (P26, ADR-0010 D17) : dépendance de
 # développement de planrs-tests, Rust pur, BSD-2-Clause.
 uppsala = "0.12.0"

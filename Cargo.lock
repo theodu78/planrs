@@ -3511,6 +3511,8 @@ dependencies = [
  "planrs-mspdi",
  "proptest",
  "quick-xml 0.42.0",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3548,6 +3550,7 @@ dependencies = [
  "planrs-automation",
  "planrs-core",
  "planrs-mspdi",
+ "planrs-render",
  "planrs-tests",
  "pollster 1.0.1",
  "proptest",

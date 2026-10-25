@@ -1,0 +1,289 @@
+{
+  "v": 1,
+  "name": "Présentation client",
+  "base": "presentation",
+  "colors": {
+    "light": {
+      "bg": "#FFFFFF",
+      "text": "#243B53",
+      "text_strong": "#102A43",
+      "text_muted": "#52667A",
+      "header_bg": "#F0F4F8",
+      "grid": "#E1E7EE",
+      "grid_major": "#BCCCDC",
+      "band": [
+        "#FFFFFF",
+        "#F0F4FA"
+      ],
+      "non_working": "#F2F5F8",
+      "status_line": "#6B3FA0",
+      "today_line": "#0B7A55",
+      "link": "#627D98",
+      "link_critical": "#C23B4E",
+      "selection": "#DCE6FA",
+      "cursor": "#2F4FB5",
+      "message_error_bg": "#FDECEA",
+      "message_warning_bg": "#FFF4D6",
+      "bars": {
+        "task": {
+          "fill": "#3A5FCD"
+        },
+        "critical": {
+          "fill": "#C23B4E",
+          "outline": "#7A1B29"
+        },
+        "summary": {
+          "fill": "#102A43"
+        },
+        "summary_critical": {
+          "fill": "#8F2333"
+        },
+        "milestone": {
+          "fill": "#A86A12"
+        },
+        "milestone_critical": {
+          "fill": "#C23B4E",
+          "outline": "#7A1B29"
+        },
+        "progress": {
+          "fill": "#0A1230"
+        },
+        "baseline": {
+          "fill": "#7B8794"
+        },
+        "inactive": {
+          "fill": "#FFFFFF",
+          "outline": "#7B8794"
+        },
+        "manual": {
+          "fill": "#FFFFFF",
+          "outline": "#3A5FCD"
+        },
+        "slack": {
+          "fill": "#7B8794"
+        },
+        "deadline": {
+          "fill": "#C23B4E"
+        }
+      }
+    },
+    "dark": {
+      "bg": "#151A23",
+      "text": "#E6ECF2",
+      "text_strong": "#FFFFFF",
+      "text_muted": "#A7B6C6",
+      "header_bg": "#1C2330",
+      "grid": "#283141",
+      "grid_major": "#3B4759",
+      "band": [
+        "#151A23",
+        "#1B2230"
+      ],
+      "non_working": "#1E2531",
+      "status_line": "#B794F6",
+      "today_line": "#4FD1A5",
+      "link": "#9FB3C8",
+      "link_critical": "#FF7A8C",
+      "selection": "#26385C",
+      "cursor": "#8FA8F5",
+      "message_error_bg": "#3A1414",
+      "message_warning_bg": "#3A3012",
+      "bars": {
+        "task": {
+          "fill": "#6F8EF0"
+        },
+        "critical": {
+          "fill": "#FF7A8C",
+          "outline": "#FFC7CF"
+        },
+        "summary": {
+          "fill": "#D9E2EC"
+        },
+        "summary_critical": {
+          "fill": "#FF9AA8"
+        },
+        "milestone": {
+          "fill": "#F0B44C"
+        },
+        "milestone_critical": {
+          "fill": "#FF7A8C",
+          "outline": "#FFC7CF"
+        },
+        "progress": {
+          "fill": "#0B1430"
+        },
+        "baseline": {
+          "fill": "#8D99A6"
+        },
+        "inactive": {
+          "fill": "#151A23",
+          "outline": "#8D99A6"
+        },
+        "manual": {
+          "fill": "#151A23",
+          "outline": "#6F8EF0"
+        },
+        "slack": {
+          "fill": "#8D99A6"
+        },
+        "deadline": {
+          "fill": "#FF7A8C"
+        }
+      }
+    },
+    "print": null
+  },
+  "bars": {
+    "task": {
+      "outline16": 0,
+      "shape": "bar",
+      "height_pct": 55,
+      "radius16": 48,
+      "pattern": "solid"
+    },
+    "critical": {
+      "outline16": 32,
+      "shape": "bar",
+      "height_pct": 55,
+      "radius16": 48,
+      "pattern": "solid"
+    },
+    "summary": {
+      "outline16": 0,
+      "shape": "bracket",
+      "height_pct": 30,
+      "radius16": 0,
+      "pattern": "solid"
+    },
+    "summary_critical": {
+      "outline16": 32,
+      "shape": "bracket",
+      "height_pct": 30,
+      "radius16": 0,
+      "pattern": "solid"
+    },
+    "milestone": {
+      "outline16": 0,
+      "shape": "diamond",
+      "height_pct": 55,
+      "radius16": 0,
+      "pattern": "solid"
+    },
+    "milestone_critical": {
+      "outline16": 32,
+      "shape": "diamond",
+      "height_pct": 55,
+      "radius16": 0,
+      "pattern": "solid"
+    },
+    "progress": {
+      "outline16": 0,
+      "shape": "bar",
+      "height_pct": 35,
+      "radius16": 0,
+      "pattern": "solid"
+    },
+    "baseline": {
+      "outline16": 0,
+      "shape": "bar",
+      "height_pct": 20,
+      "radius16": 0,
+      "pattern": "solid"
+    },
+    "inactive": {
+      "outline16": 16,
+      "shape": "bar",
+      "height_pct": 55,
+      "radius16": 48,
+      "pattern": "outline"
+    },
+    "manual": {
+      "outline16": 16,
+      "shape": "bar",
+      "height_pct": 55,
+      "radius16": 48,
+      "pattern": "outline"
+    },
+    "slack": {
+      "outline16": 0,
+      "shape": "line",
+      "height_pct": 10,
+      "radius16": 0,
+      "pattern": "solid"
+    },
+    "deadline": {
+      "outline16": 0,
+      "shape": "line",
+      "height_pct": 100,
+      "radius16": 0,
+      "pattern": "solid"
+    }
+  },
+  "texts": {
+    "task": {
+      "right": "name"
+    },
+    "critical": {
+      "right": "name"
+    },
+    "milestone": {
+      "right": "finish"
+    },
+    "milestone_critical": {
+      "right": "finish"
+    },
+    "summary": {
+      "inside": "name"
+    },
+    "summary_critical": {
+      "inside": "name"
+    }
+  },
+  "scale": {
+    "tiers": "auto",
+    "week_numbers": false,
+    "shade_non_working": true,
+    "status_label": false,
+    "today_mark": true
+  },
+  "grid": {
+    "rows": "phase",
+    "major_v": true,
+    "minor_v": false,
+    "row_lines": false
+  },
+  "density": "airy",
+  "font": {
+    "family": "inter",
+    "size16": 208
+  },
+  "legend": {
+    "show": true,
+    "every_page": false
+  },
+  "page": {
+    "paper": "a4",
+    "landscape": true,
+    "margins_mm": [
+      10,
+      10,
+      10,
+      10
+    ],
+    "fit": {
+      "pages_wide": 1
+    },
+    "repeat_table": true,
+    "header": [
+      "{projet}",
+      "",
+      "{date_etat}"
+    ],
+    "footer": [
+      "{fichier}",
+      "",
+      "Page {page}/{pages}"
+    ],
+    "logo": null
+  }
+}

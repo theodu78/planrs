@@ -9,6 +9,9 @@ repository.workspace = true
 
 [dependencies]
 planrs-core.workspace = true
+# Style du planning (ADR-0016 D6, D7) : JSON des modèles et du document.
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 # Golden de la maison de démonstration (lecteur MSPDI), relecture XML des noms

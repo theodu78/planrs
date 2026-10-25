@@ -12,8 +12,10 @@ mod metrics;
 mod metrics_inter;
 mod request;
 mod scene;
+pub mod style;
 mod svg;
 
 pub use metrics::{FontRef, FontWeight, InterMetrics, TextMeasure};
 pub use request::{GanttRequest, Lang, RangeSpec, RenderLimits, RenderReport, RowFilter, Theme, Zoom};
+pub use style::{PlanStyle, Rgb, TemplateId, contrast_ratio, parse_doc_style, resolve, template};
 pub use svg::svg;

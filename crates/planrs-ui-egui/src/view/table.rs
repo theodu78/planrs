@@ -694,9 +694,10 @@ pub(crate) fn take_typed(ctx: &egui::Context) -> String {
     })
 }
 
-/// F2 ou frappe d'un caractère (hors champ de texte ou autre widget
-/// focalisé, menu ouvert ou modificateur Ctrl/Cmd) : ouvre la saisie de la
-/// cellule courante. Le caractère frappé remplace la valeur.
+/// F2, Retour arrière ou frappe d'un caractère (hors champ de texte ou
+/// autre widget focalisé, menu ouvert ou modificateur Ctrl/Cmd) : ouvre la
+/// saisie de la cellule courante. Le caractère frappé remplace la valeur ;
+/// Retour arrière l'efface (saisie vide).
 fn open_from_keys(
     ui: &egui::Ui,
     fc: &FrameCtx<'_>,
@@ -717,6 +718,13 @@ fn open_from_keys(
     }
     if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::F2)) {
         open_editor(fc, sheet.rows, edit, column, uid, i);
+        return;
+    }
+    // Retour arrière (« delete » d'un Mac) : saisie vide de la cellule, à
+    // valider comme une frappe (relecture finale J7, F6 ; Cmd+delete
+    // supprime la tâche).
+    if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Backspace)) {
+        edit.start(EditState::typed(uid, column, ""));
         return;
     }
     let typed = take_typed(ctx);

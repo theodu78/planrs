@@ -12,7 +12,7 @@ use crate::action::{ConfirmChoice, DialogKind};
 use crate::app::{MAX_MESSAGES, UserMessage};
 use crate::format::format_date;
 use crate::i18n::{Arg, Language, TextId};
-use crate::keymap::{Binding, UiBinding, shortcut_for, shortcut_text};
+use crate::keymap::{Binding, UiBinding, shortcut_for_os, shortcut_text};
 use crate::state::{GanttStyle, LanguagePref, ThemePref, ViewKind};
 use crate::theme::Palette;
 use crate::timescale::TimeScaleZoom;
@@ -168,7 +168,7 @@ fn menu_item(
     action: Action,
 ) {
     let mut button = egui::Button::new(fc.texts.get(label));
-    if let Some(shortcut) = binding.and_then(shortcut_for) {
+    if let Some(shortcut) = binding.and_then(|binding| shortcut_for_os(binding, ui.ctx().os())) {
         button = button.shortcut_text(shortcut_text(ui.ctx(), shortcut));
     }
     if ui.add_enabled(enabled, button).clicked() {
@@ -210,7 +210,7 @@ fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
             _ => texts.get(label),
         };
         let mut button = egui::Button::new(text);
-        if let Some(shortcut) = shortcut_for(Binding::Command(id)) {
+        if let Some(shortcut) = shortcut_for_os(Binding::Command(id), ui.ctx().os()) {
             button = button.shortcut_text(shortcut_text(ui.ctx(), shortcut));
         }
         if ui.add_enabled(enabled, button).clicked() {
@@ -222,7 +222,7 @@ fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let has_selection = fc.selection.is_some();
     for (op, label, id, needs_selection) in super::main_view::CONTEXT_ENTRIES {
         let mut button = egui::Button::new(texts.get(label));
-        if let Some(shortcut) = shortcut_for(Binding::Command(id)) {
+        if let Some(shortcut) = shortcut_for_os(Binding::Command(id), ui.ctx().os()) {
             button = button.shortcut_text(shortcut_text(ui.ctx(), shortcut));
         }
         let enabled = has_doc && (has_selection || !needs_selection);

@@ -639,7 +639,7 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
     .show(|ui| {
         for (op, text, command, needs_selection) in CONTEXT_ENTRIES {
             let mut button = egui::Button::new(texts.get(text));
-            if let Some(shortcut) = keymap::shortcut_for(Binding::Command(command)) {
+            if let Some(shortcut) = keymap::shortcut_for_os(Binding::Command(command), ctx.os()) {
                 button = button.shortcut_text(keymap::shortcut_text(&ctx, shortcut));
             }
             if ui
@@ -652,7 +652,7 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
         // « Informations sur la tâche » (H-UI-19, J7 lot L9).
         ui.separator();
         let mut button = egui::Button::new(texts.get(TextId::TaskInfoMenu));
-        if let Some(shortcut) = keymap::shortcut_for(Binding::Ui(UiBinding::TaskInformation)) {
+        if let Some(shortcut) = keymap::shortcut_for_os(Binding::Ui(UiBinding::TaskInformation), ctx.os()) {
             button = button.shortcut_text(keymap::shortcut_text(&ctx, shortcut));
         }
         if ui.add_enabled(has_selection, button).clicked() {

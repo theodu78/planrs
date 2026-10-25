@@ -325,6 +325,7 @@ keymap_entry_tests! {
     ui_keymap_each_shortcut_dispatches_49 => 49,
     ui_keymap_each_shortcut_dispatches_50 => 50,
     ui_keymap_each_shortcut_dispatches_51 => 51,
+    ui_keymap_each_shortcut_dispatches_52 => 52,
 }
 
 /// Lot refusé : UID absent.

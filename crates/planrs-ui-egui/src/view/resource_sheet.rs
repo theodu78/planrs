@@ -452,6 +452,12 @@ fn open_from_keys(
     if cursor.column == ResourceColumn::Calendar {
         return;
     }
+    // Retour arrière : saisie vide (comme la table des tâches ; Cmd+delete
+    // supprime la ressource, relecture finale J7, F6).
+    if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Backspace)) {
+        edit.start(CellEdit::typed(cursor.row, cursor.column, ""));
+        return;
+    }
     let typed = take_typed(ctx);
     if !typed.is_empty() {
         edit.start(CellEdit::typed(cursor.row, cursor.column, &typed));

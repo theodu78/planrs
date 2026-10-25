@@ -489,6 +489,30 @@ fn ui_edit_offscreen_row_is_revealed_and_keeps_typing() {
     assert_eq!(task_name(harness.state(), uid).as_deref(), Some("Z"));
 }
 
+/// Relecture finale J7, F6 : Retour arrière (« delete » d'un Mac) sur la
+/// cellule Durée ouvre sa saisie vide ; la tâche n'est pas supprimée, Échap
+/// abandonne sans rien changer.
+#[test]
+fn ui_backspace_clears_cell_not_task() {
+    let (mut harness, _index, uid) = demo_cell(Column::Duration);
+    let tasks = harness.state().document.as_ref().unwrap().project().tasks.len();
+    press(&mut harness, Key::Backspace);
+    let app = harness.state();
+    assert_eq!(
+        app.document.as_ref().unwrap().project().tasks.len(),
+        tasks,
+        "tâche supprimée"
+    );
+    let editing = app.view().edit.editing.clone().expect("saisie ouverte");
+    assert_eq!(
+        (editing.uid, editing.column, editing.buffer.as_str()),
+        (Some(uid), Column::Duration, "")
+    );
+    press(&mut harness, Key::Escape);
+    assert!(harness.state().view().edit.editing.is_none());
+    assert_eq!(harness.state().document.as_ref().unwrap().generation(), 0);
+}
+
 fn history_entries(app: &App) -> usize {
     app.document.as_ref().unwrap().session.history().entries.len()
 }

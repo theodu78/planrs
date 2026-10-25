@@ -176,16 +176,26 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
         Shortcut::new(Modifiers::NONE, Key::Insert),
         Binding::Command("task.add"),
     ),
+    // Insérer sans touche Inser (clavier Mac, relecture finale J7, F6) :
+    // Cmd+I (Ctrl+I ailleurs), affiché dans les menus sur macOS.
+    (
+        KeyContext::Document,
+        Shortcut::new(Modifiers::COMMAND, Key::I),
+        Binding::Command("task.add"),
+    ),
     (
         KeyContext::Document,
         Shortcut::new(Modifiers::NONE, Key::Delete),
         Binding::Command("task.delete"),
     ),
-    // Touche « delete » d'un clavier Mac (Retour arrière) : pas de Suppr
-    // sans fn. Après Suppr, qui reste le raccourci affiché.
+    // Clavier Mac sans Suppr : Cmd+delete (Cmd+Retour arrière), comme
+    // « Placer dans la corbeille » du Finder. Retour arrière seul ne
+    // supprime plus la tâche (relecture finale J7, F6, contre la relecture
+    // finale J4, F5) : il ouvre la saisie vide de la cellule courante (lu
+    // par la table, comme F2).
     (
         KeyContext::Document,
-        Shortcut::new(Modifiers::NONE, Key::Backspace),
+        Shortcut::new(Modifiers::COMMAND, Key::Backspace),
         Binding::Command("task.delete"),
     ),
     (
@@ -352,6 +362,27 @@ pub fn shortcut_for(binding: Binding) -> Option<&'static Shortcut> {
         .iter()
         .find(|(_, _, entry)| *entry == binding)
         .map(|(_, shortcut, _)| shortcut)
+}
+
+/// Raccourci affiché dans les menus pour `binding` sur le système `os` : sur
+/// macOS, le premier qui n'utilise ni Inser ni Suppr (touches absentes d'un
+/// clavier Mac : Cmd+I, Cmd+delete) ; ailleurs, le premier.
+#[must_use]
+pub fn shortcut_for_os(binding: Binding, os: egui::os::OperatingSystem) -> Option<&'static Shortcut> {
+    let mac_key = |shortcut: &Shortcut| !matches!(shortcut.logical_key, Key::Insert | Key::Delete);
+    let matching = || {
+        KEYMAP
+            .iter()
+            .filter(move |(_, _, entry)| *entry == binding)
+            .map(|(_, shortcut, _)| shortcut)
+    };
+    if os == egui::os::OperatingSystem::Mac {
+        matching()
+            .find(|shortcut| mac_key(shortcut))
+            .or_else(|| matching().next())
+    } else {
+        matching().next()
+    }
 }
 
 /// Appuis d'une même touche gardés par image (répétition du clavier) :
@@ -524,5 +555,48 @@ mod tests {
         );
         assert_eq!(ui_action(UiBinding::ZoomFiner), Action::ZoomBy(1));
         assert_eq!(ui_action(UiBinding::ZoomCoarser), Action::ZoomBy(-1));
+    }
+
+    /// Relecture finale J7, F6 : sur macOS, les menus montrent Cmd+I et
+    /// Cmd+delete (pas Inser ni Suppr) ; ailleurs, Inser et Suppr ; Retour
+    /// arrière seul n'est plus lié à `task.delete`.
+    #[test]
+    fn keymap_mac_insert_delete_shown() {
+        use egui::os::OperatingSystem;
+
+        use super::shortcut_for_os;
+
+        let add = Binding::Command("task.add");
+        let delete = Binding::Command("task.delete");
+        assert_eq!(
+            shortcut_for_os(add, OperatingSystem::Mac)
+                .expect("raccourci affiché")
+                .logical_key,
+            Key::I
+        );
+        assert_eq!(
+            shortcut_for_os(delete, OperatingSystem::Mac)
+                .expect("raccourci affiché")
+                .logical_key,
+            Key::Backspace
+        );
+        assert_eq!(
+            shortcut_for_os(add, OperatingSystem::Nix)
+                .expect("raccourci affiché")
+                .logical_key,
+            Key::Insert
+        );
+        assert_eq!(
+            shortcut_for_os(delete, OperatingSystem::Windows)
+                .expect("raccourci affiché")
+                .logical_key,
+            Key::Delete
+        );
+        assert!(
+            !KEYMAP.iter().any(|(_, s, b)| s.logical_key == Key::Backspace
+                && s.modifiers == egui::Modifiers::NONE
+                && *b == delete),
+            "Retour arrière seul supprime encore la tâche"
+        );
     }
 }

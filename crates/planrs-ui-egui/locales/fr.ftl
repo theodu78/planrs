@@ -332,7 +332,7 @@ nav-cursor-empty-value = vide
 # --- J7 L2 ---
 
 # --- J7 L3 ---
-approval-title = L'agent propose : { $name }
+approval-title = L'agent propose sur « { $document } » : { $name }
 approval-changed =
     { $count ->
         [0] aucune tâche modifiée

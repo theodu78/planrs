@@ -300,29 +300,43 @@ fn c_ctl_09_read_same_as_local() {
     assert_eq!(generation(harness.state()), 0, "le dry_run ne change rien");
 }
 
-/// H-UI-27 : bandeau avec le focus clavier ; Entrée accepte, Échap
-/// refuse ; un seul à la fois, les autres en file.
+/// H-UI-27 : le bandeau ne prend pas le focus ; Ctrl/Cmd+Entrée accepte,
+/// Échap refuse quand un bouton du bandeau a le focus ; un seul à la fois,
+/// les autres en file.
 #[test]
 fn h_ui_27_banner_keyboard() {
     let (mut harness, tx) = relay_harness();
-    let first = execute(&tx, "task.update", rename(3, "Par Entrée"));
+    let first = execute(&tx, "task.update", rename(3, "Par Ctrl+Entrée"));
     let second = execute(&tx, "task.update", rename(4, "Par Échap"));
     harness.run();
     let texts = harness.state().texts();
     let accept = texts.get(TextId::ApprovalAccept);
     let reject = texts.get(TextId::ApprovalReject);
     let queued = texts.get_args(TextId::ApprovalQueued, &[("count", Arg::Count(1))]);
-    let title = texts.get_args(TextId::ApprovalTitle, &[("name", Arg::Str("task.update".into()))]);
+    // Le bandeau nomme le document visé (relecture finale J7, relais F2).
+    let document = harness.state().document.as_ref().unwrap().origin.name.clone();
+    assert_ne!(document, "");
+    let title = texts.get_args(
+        TextId::ApprovalTitle,
+        &[
+            ("name", Arg::Str("task.update".into())),
+            ("document", Arg::Str(document.into())),
+        ],
+    );
     harness.get_by_label(&queued);
     assert!(harness.query_by_label_contains(&title).is_some());
-    assert!(harness.get_by_label(&accept).is_focused());
-    harness.key_press_modifiers(Modifiers::NONE, Key::Enter);
+    assert!(!harness.get_by_label(&accept).is_focused(), "aucun vol du focus");
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
     harness.run();
     assert_eq!(first.drain().len(), 2, "pending puis ok");
     assert_eq!(generation(harness.state()), 1);
-    // Bandeau suivant, focus redonné à Accepter ; Échap refuse.
+    // Bandeau suivant : Échap sans focus sur le bandeau ne refuse rien.
     assert!(harness.query_by_label(&queued).is_none());
-    assert!(harness.get_by_label(&accept).is_focused());
+    harness.key_press_modifiers(Modifiers::NONE, Key::Escape);
+    harness.run();
+    assert_eq!(pending_ids(harness.state()), [second.id]);
+    harness.get_by_label(&reject).focus();
+    harness.run();
     harness.key_press_modifiers(Modifiers::NONE, Key::Escape);
     harness.run();
     let replies = second.drain();
@@ -330,6 +344,39 @@ fn h_ui_27_banner_keyboard() {
     assert_eq!(generation(harness.state()), 1);
     assert!(harness.query_by_label(&reject).is_none(), "bandeau retiré");
     assert_eq!(pending_ids(harness.state()).len(), 0);
+}
+
+/// Relecture finale J7, interface F1 : un bandeau qui paraît pendant la
+/// navigation (Entrée) ou la saisie d'un nom (Espace) ne prend pas le
+/// focus ; ni Entrée ni Espace n'acceptent l'écriture de l'agent.
+#[test]
+fn h_ui_27_banner_enter_or_space_never_accepts() {
+    let (mut harness, tx) = relay_harness();
+    let start = harness.state().selection;
+    let sent = execute(&tx, "task.update", rename(3, "Jamais lu"));
+    harness.run();
+    assert_eq!(pending_ids(harness.state()), [sent.id]);
+    // Entrée de navigation : le curseur descend, rien n'est accepté.
+    harness.key_press(Key::Enter);
+    harness.run();
+    assert_eq!(generation(harness.state()), 0, "Entrée a accepté l'écriture");
+    assert_ne!(harness.state().selection, start, "Entrée navigue toujours");
+    // Saisie d'un nom avec un espace : la saisie le reçoit, rien n'est
+    // accepté.
+    harness.event(egui::Event::Text("Revue".to_owned()));
+    harness.run();
+    harness.key_press(Key::Space);
+    harness.event(egui::Event::Text(" ".to_owned()));
+    harness.run();
+    assert_eq!(generation(harness.state()), 0, "Espace a accepté l'écriture");
+    assert_eq!(pending_ids(harness.state()), [sent.id]);
+    let editing = harness.state().view().edit.editing.clone().unwrap();
+    assert_eq!(editing.buffer, "Revue ");
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(harness.state().view().edit.editing.is_none());
+    assert_eq!(pending_ids(harness.state()), [sent.id], "Échap reste à la saisie");
+    assert_eq!(sent.drain(), [Reply::PendingApproval { id: sent.id }]);
 }
 
 /// Un lot accepté de l'agent = une seule entrée d'annulation, marquée

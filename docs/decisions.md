@@ -749,5 +749,6 @@ Derniers numéros pris : R-236, O43, S59, P44, H-UI-12. Cahier d'implémentation
 
 **Relecture finale J7 (2026-10-25, branche `j7-review`).** Constats d'une relecture vérifiée par un adversaire, corrigés avec un test qui échoue sans le correctif :
 - *P49 en CI* : `PROPTEST_CASES=10000` (CI) l'emporte sur `with_cases(1 024)` et les `prop_assume` (cibles un week-end) dépassaient le plafond de rejets de proptest : écart recalé vers l'avant jusqu'à un jour ouvré, aucun rejet.
+- *Bandeau de validation* (H-UI-27, D10) : il ne prend plus le focus clavier (un Entrée de navigation ou un Espace de saisie au moment où il paraissait validait l'écriture sans lecture) ; Ctrl/Cmd+Entrée accepte, Échap refuse si un bouton du bandeau a le focus ; le bandeau nomme le document.
 - *Saisie hors de l'écran* : F2 ou une frappe sur une ligne courante défilée hors de l'écran amène la ligne à l'écran (`TableEdit::reveal`) ; la frappe reçue avant que la zone ait le focus va au tampon ; aucun raccourci tant qu'une saisie est ouverte (Retour arrière supprimait la tâche hors de l'écran).
 - *Sélection après une suppression* : la tâche qui prend la ligne de la tâche active disparue devient active (la dernière en fin de liste), comme MS Project, au lieu de la ligne vide de fin ; remplace « la sélection supprimée reste vide » du lot L1.

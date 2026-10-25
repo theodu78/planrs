@@ -1,13 +1,16 @@
 //! Bandeau de validation d'une écriture d'un agent (H-UI-27, ADR-0015 D10,
-//! lot L3) : « L'agent propose : 3 tâches modifiées, fin +2j, chemin
-//! critique modifié », Accepter / Refuser.
+//! lot L3) : « L'agent propose sur « plan.xml » : task.update — 3 tâches
+//! modifiées, fin +2j, chemin critique modifié », Accepter / Refuser.
 //!
 //! Le bandeau ne calcule rien (règle 3) : les compteurs et l'écart de fin
 //! (texte du moteur) viennent du `dry_run` de la commande ([`ApprovalSummary`],
 //! construit par `crate::relay`). Un seul bandeau à la fois, les suivants
-//! attendent (compteur « +N en attente »). Le focus clavier va au bouton
-//! Accepter quand un bandeau paraît : Entrée accepte (bouton focalisé
-//! d'egui), Échap refuse ; Tab passe à Refuser.
+//! attendent (compteur « +N en attente »). Le bandeau ne prend **jamais**
+//! le focus clavier (relecture finale J7, interface F1) : un Entrée ou un
+//! Espace de navigation ou de saisie au moment où il paraît validerait
+//! l'écriture sans qu'elle soit lue. Accepter au clavier : Ctrl/Cmd+Entrée
+//! (geste délibéré, hors champ de texte) ; Échap refuse seulement si un
+//! bouton du bandeau a le focus (atteint par Tab, hors table).
 
 use egui::{Key, Modifiers};
 
@@ -39,6 +42,9 @@ pub struct ApprovalBanner<'a> {
     pub id: u64,
     /// Outil demandé (`task.update`, `project.save`…).
     pub tool: &'a str,
+    /// Nom du document visé (relecture finale J7, relais F2 : l'utilisateur
+    /// voit sur quel document l'écriture porte).
+    pub document: &'a str,
     /// Résumé du `dry_run` ; `None` pour un appel sans aperçu
     /// (enregistrer, exporter, annuler, rétablir).
     pub summary: Option<&'a ApprovalSummary>,
@@ -46,8 +52,6 @@ pub struct ApprovalBanner<'a> {
     pub path: Option<&'a str>,
     /// Appels en attente derrière celui-ci.
     pub queued: usize,
-    /// Donner le focus clavier au bouton Accepter (bandeau neuf).
-    pub take_focus: bool,
 }
 
 /// Phrase du bandeau : outil et effets du `dry_run`.
@@ -88,7 +92,13 @@ pub fn banner_text(fc: &FrameCtx<'_>, banner: &ApprovalBanner<'_>) -> String {
             }
         }
     }
-    let head = texts.get_args(TextId::ApprovalTitle, &[("name", Arg::Str(banner.tool.into()))]);
+    let head = texts.get_args(
+        TextId::ApprovalTitle,
+        &[
+            ("name", Arg::Str(banner.tool.into())),
+            ("document", Arg::Str(banner.document.into())),
+        ],
+    );
     if parts.is_empty() {
         head
     } else {
@@ -122,15 +132,16 @@ pub fn approval_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, banner: Option<
                     ui.button(texts.get(TextId::ApprovalReject))
                 });
                 let (accept, reject) = (accept.inner, reject.inner);
-                if banner.take_focus {
-                    accept.request_focus();
-                }
                 // egui retire le focus sur Échap en début d'image : le bouton
                 // qui vient de le perdre compte aussi.
                 let focused =
                     accept.has_focus() || reject.has_focus() || accept.lost_focus() || reject.lost_focus();
                 let escape = focused && ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
-                if accept.clicked() {
+                // Ctrl/Cmd+Entrée : jamais pendant la saisie d'un champ (la
+                // touche reste à la zone de saisie).
+                let shortcut = !ui.ctx().text_edit_focused()
+                    && ui.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::Enter));
+                if accept.clicked() || shortcut {
                     fc.actions.push(Action::Approve(banner.id));
                 } else if reject.clicked() || escape {
                     fc.actions.push(Action::Reject(banner.id));

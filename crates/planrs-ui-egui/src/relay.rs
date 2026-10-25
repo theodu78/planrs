@@ -136,8 +136,6 @@ pub struct Relay {
     inbox: Receiver<RelayCall>,
     /// Écritures en attente, la première au bandeau.
     pending: VecDeque<PendingApproval>,
-    /// Bandeau qui a déjà reçu le focus clavier.
-    focused: Option<u64>,
     /// Dossier des rendez-vous (garde ADR-0002 d'un enregistrement relayé) ;
     /// `None` : celui de la plateforme.
     control_dir: Option<PathBuf>,
@@ -284,7 +282,6 @@ impl App {
         self.relay = Some(Relay {
             inbox,
             pending: VecDeque::new(),
-            focused: None,
             control_dir: None,
             screenshots: None,
         });
@@ -662,7 +659,6 @@ impl App {
             pending.generation = document.generation();
             if let Some(relay) = &mut self.relay {
                 relay.pending.push_front(pending);
-                relay.focused = None;
             }
             return;
         }
@@ -727,16 +723,6 @@ impl App {
         if empty && self.document.is_some() {
             self.view.focus_table_pending = true;
         }
-    }
-
-    /// Bandeau à dessiner pour cette image (le focus est demandé une fois
-    /// par bandeau).
-    pub(crate) fn approval_banner(&mut self) -> Option<(u64, bool)> {
-        let relay = self.relay.as_mut()?;
-        let id = relay.pending.front()?.id;
-        let take_focus = relay.focused != Some(id);
-        relay.focused = Some(id);
-        Some((id, take_focus))
     }
 }
 
@@ -875,16 +861,17 @@ pub fn encode_screenshot(
     }
 }
 
-/// Bandeau de l'écriture `id` en tête de `relay`.
+/// Bandeau de l'écriture en tête de `relay`, sur le document `document`
+/// (il ne prend jamais le focus clavier, voir `view::approval`).
 #[must_use]
-pub fn banner_for(relay: &Relay, take_focus: bool) -> Option<ApprovalBanner<'_>> {
+pub fn banner_for<'a>(relay: &'a Relay, document: &'a str) -> Option<ApprovalBanner<'a>> {
     let front = relay.pending.front()?;
     Some(ApprovalBanner {
         id: front.id,
         tool: &front.tool,
+        document,
         summary: front.preview.as_ref(),
         path: front.path(),
         queued: relay.pending.len().saturating_sub(1),
-        take_focus,
     })
 }

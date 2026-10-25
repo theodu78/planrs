@@ -1986,8 +1986,6 @@ impl App {
         }
         let mut stats = FrameStats::default();
         #[cfg(not(target_arch = "wasm32"))]
-        let approval = self.approval_banner();
-        #[cfg(not(target_arch = "wasm32"))]
         let recovery_offer = self.recovery_offer();
         // Nom du document du bandeau de confirmation, s'il y en a un.
         let confirm_name = self.confirm.as_ref().map(|_| {
@@ -2018,11 +2016,14 @@ impl App {
             view::chrome::confirm_banner(ui, &mut fc, confirm_name.as_deref());
             #[cfg(not(target_arch = "wasm32"))]
             {
-                let banner = approval.and_then(|(_, take_focus)| {
-                    self.relay
-                        .as_ref()
-                        .and_then(|relay| crate::relay::banner_for(relay, take_focus))
-                });
+                let document = self
+                    .document
+                    .as_ref()
+                    .map_or("", |document| document.origin.name.as_str());
+                let banner = self
+                    .relay
+                    .as_ref()
+                    .and_then(|relay| crate::relay::banner_for(relay, document));
                 view::approval::approval_banner(ui, &mut fc, banner);
                 view::recovery::recovery_banner(ui, &mut fc, recovery_offer);
             }

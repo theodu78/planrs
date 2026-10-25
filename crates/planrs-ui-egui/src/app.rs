@@ -1931,6 +1931,32 @@ impl App {
         }
     }
 
+    /// Clic relâché hors de la table et du Gantt (barre d'outils, menus,
+    /// bandeau, réponse d'une confirmation) : egui retire le focus de la
+    /// table à tout appui ailleurs et ne le donne à personne ; la table,
+    /// volet actif, le reprend à l'image suivante (relecture finale J7, F5 :
+    /// la navigation s'arrêtait en silence, cadre du curseur toujours
+    /// dessiné). Un clic dans le Gantt (`Pane::Gantt`) ou Échap (D2)
+    /// laissent la table sans focus ; un autre widget focalisé (zone de
+    /// saisie) le garde ; rien pendant une fenêtre, un menu ou une
+    /// confirmation de suppression.
+    fn refocus_table_after_click(&mut self, ctx: &egui::Context) {
+        let idle = self.document.is_some()
+            && self.view.focus == Pane::Table
+            && self.view.dialog.is_none()
+            && !self.popup_open
+            && self.pending_delete.is_none()
+            && self.view.resources.pending_delete.is_none()
+            && self.view.edit.editing.is_none()
+            && self.view.resources.edit.editing.is_none();
+        if idle
+            && ctx.input(|input| input.pointer.any_released())
+            && ctx.memory(|memory| memory.focused().is_none())
+        {
+            self.view.focus_table_pending = true;
+        }
+    }
+
     /// Contextes actifs des raccourcis : document ouvert ; table focalisée
     /// (focus d'egui et volet), sans saisie, menu, fenêtre ni confirmation
     /// de suppression ouverts (ADR-0015 D2).
@@ -2060,6 +2086,8 @@ impl App {
         for action in edits.into_iter().chain(others) {
             self.apply(action, &ctx);
         }
+        // Après le réducteur : un clic dans le Gantt a déjà changé de volet.
+        self.refocus_table_after_click(&ctx);
         self.sync_selection();
         // Ajustement du zoom après une ouverture, dès que la largeur du
         // Gantt est connue : là aussi, une image de plus au bon zoom.

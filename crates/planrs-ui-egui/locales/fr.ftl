@@ -617,5 +617,8 @@ recovery-partial = Récupération partielle de « { $name } » : { $count ->
 recovery-failed = Récupération de « { $name } » impossible : { $detail }
 recovery-discard-failed = Suppression du journal de reprise impossible : { $detail }
 recovery-journal-cut = Reprise après plantage interrompue pour ce document : { $detail }. L'édition continue ; enregistrez régulièrement.
+recovery-file-changed = Le fichier a changé sur le disque depuis : la version récupérée s'ouvrira sans chemin (Enregistrer sous), pour ne pas l'écraser.
+recovery-kept = Journal d'une autre version de planrs, ou trop grand : il ne se restaure pas ici. Ignorer le supprime.
+recovered-file-name = { $stem } (récupéré)
 
 # --- J7 L16 ---

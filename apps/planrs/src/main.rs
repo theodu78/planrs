@@ -212,11 +212,13 @@ fn event_loop_hook() -> Option<eframe::EventLoopBuilderHook> {
 }
 
 /// Reprise après plantage : orphelins de `root` proposés (ceux sans
-/// modification supprimés), puis journal de chaque document dans `root`.
+/// modification supprimés ; ceux d'une autre version ou trop grands gardés
+/// et proposés, jamais supprimés sans l'accord de l'utilisateur), puis
+/// journal de chaque document dans `root`.
 fn start_recovery(app: &mut App, root: PathBuf) {
     let (offered, stale): (Vec<_>, Vec<_>) = orphans(&root)
         .into_iter()
-        .partition(planrs_automation::recovery::Orphan::worth_restoring);
+        .partition(planrs_automation::recovery::Orphan::worth_offering);
     for orphan in stale {
         if let Err(error) = orphan.discard() {
             eprintln!("{PRODUCT_NAME} : journal de reprise non supprimé ({error})");
@@ -500,6 +502,30 @@ mod tests {
             1,
             "journal supprimé à la fermeture"
         );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Relecture finale J7, relais F5 : un journal d'une autre version de
+    /// format n'est jamais supprimé au démarrage ; il est proposé (Ignorer
+    /// le supprime).
+    #[test]
+    fn desktop_start_recovery_keeps_foreign_journal() {
+        use planrs_ui_egui::{App, Env, UiState};
+
+        let root = std::env::temp_dir().join(format!("planrs-foreign-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("9-0");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("base.json"), br#"{"v":2}"#).unwrap();
+        let now = "2027-01-15T08:00".parse().unwrap();
+        let mut app = App::new(UiState::default(), Env::fixed(now));
+        super::start_recovery(&mut app, root.clone());
+        assert!(
+            dir.join("base.json").exists(),
+            "journal d'une autre version supprimé"
+        );
+        assert_eq!(app.recovery_offers().len(), 1);
+        assert!(app.recovery_offers().iter().all(|o| o.kept));
         std::fs::remove_dir_all(&root).unwrap();
     }
 

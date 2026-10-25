@@ -97,6 +97,42 @@ struct LineEpoch {
     epoch: u64,
 }
 
+/// Empreinte du fichier du document au moment de la base : taille et date
+/// de modification (relecture finale J7, interface F3). À la restauration,
+/// un fichier qui ne lui correspond plus a été écrit entre-temps (autre
+/// instance, `planrs mcp --headless`…) : le document restauré ne doit pas
+/// l'écraser par un simple Enregistrer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileStamp {
+    /// Taille en octets.
+    pub len: u64,
+    /// Date de modification, en nanosecondes depuis l'époque Unix (0 si
+    /// le système ne la donne pas).
+    pub modified_ns: u64,
+}
+
+impl FileStamp {
+    /// Empreinte du fichier `path` ; `None` s'il n'existe pas ou ne se lit
+    /// pas.
+    #[must_use]
+    pub fn of(path: &Path) -> Option<Self> {
+        let meta = fs::metadata(path).ok()?;
+        if !meta.is_file() {
+            return None;
+        }
+        let modified_ns = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
+        Some(Self {
+            len: meta.len(),
+            modified_ns,
+        })
+    }
+}
+
 /// `base.json` (écriture, sans copie du projet).
 #[derive(Serialize)]
 struct BaseRef<'a> {
@@ -109,6 +145,10 @@ struct BaseRef<'a> {
     saved: bool,
     checkpoints: u32,
     uids: [u32; 4],
+    /// Empreinte du fichier `path` à la base (absente : pas de chemin, ou
+    /// fichier introuvable).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: Option<FileStamp>,
     project: &'a Project,
 }
 
@@ -125,6 +165,9 @@ struct BaseFile {
     saved: bool,
     checkpoints: u32,
     uids: [u32; 4],
+    #[serde(default)]
+    #[allow(dead_code, reason = "lu par `BaseMeta` ; gardé pour `deny_unknown_fields`")]
+    file: Option<FileStamp>,
     project: Project,
 }
 
@@ -137,6 +180,14 @@ struct BaseMeta {
     path: Option<String>,
     saved: bool,
     checkpoints: u32,
+    #[serde(default)]
+    file: Option<FileStamp>,
+}
+
+/// Version seule d'un `base.json` (autre format reconnu à son en-tête).
+#[derive(Deserialize)]
+struct BaseVersion {
+    v: u32,
 }
 
 /// Erreur de lecture ou de rejeu d'un journal.
@@ -446,6 +497,7 @@ fn base_bytes(session: &Session, epoch: u64, checkpoints: u32) -> io::Result<Vec
         saved: !session.is_dirty(),
         checkpoints,
         uids: session.uid_counters(),
+        file: origin.path.as_deref().and_then(|p| FileStamp::of(Path::new(p))),
         project: session.project(),
     };
     serde_json::to_vec(&base).map_err(io::Error::other)
@@ -577,6 +629,10 @@ impl Journal {
 
 /// Journal d'un processus mort (verrou libre).
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "constats indépendants lus sur le disque, pas un état à plusieurs valeurs"
+)]
 pub struct Orphan {
     /// Identifiant : nom du dossier (`<pid>-<n>`).
     pub id: String,
@@ -592,8 +648,17 @@ pub struct Orphan {
     pub saved: bool,
     /// Un point de reprise a eu lieu : l'historique antérieur est perdu.
     pub checkpointed: bool,
-    /// Base illisible : rien n'est récupérable.
+    /// Base illisible : rien n'est récupérable par cette version.
     pub unreadable: bool,
+    /// Journal d'une **autre version** de format, ou base plus grande que
+    /// [`MAX_FILE_BYTES`] : illisible ici mais peut-être pas ailleurs, il
+    /// n'est **jamais supprimé automatiquement** (proposé, Ignorer le
+    /// supprime ; relecture finale J7, relais F5).
+    pub kept: bool,
+    /// Le fichier du document a changé depuis la base (empreinte
+    /// différente) : la restauration ne doit pas reprendre son chemin
+    /// (relecture finale J7, interface F3).
+    pub file_changed: bool,
 }
 
 impl Orphan {
@@ -601,6 +666,13 @@ impl Orphan {
     #[must_use]
     pub const fn worth_restoring(&self) -> bool {
         !self.unreadable && (self.entries > 0 || !self.saved)
+    }
+
+    /// Le journal est à proposer au démarrage : modifications à restaurer,
+    /// ou journal gardé ([`Orphan::kept`]) ; les autres sont supprimés.
+    #[must_use]
+    pub const fn worth_offering(&self) -> bool {
+        self.worth_restoring() || self.kept
     }
 
     /// Supprime le journal.
@@ -680,33 +752,51 @@ pub fn orphans(root: &Path) -> Vec<Orphan> {
     found
 }
 
-/// Description de l'orphelin du dossier `dir`.
+/// Description de l'orphelin du dossier `dir`. Base d'une autre version
+/// ou trop grande : gardée (`kept`), jamais supprimée sans l'accord de
+/// l'utilisateur ; base absente ou JSON invalide : illisible.
 fn orphan_at(id: String, dir: PathBuf) -> Orphan {
-    let meta = read_bounded(&dir.join(BASE_FILE))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<BaseMeta>(&bytes).ok())
-        .filter(|meta| meta.v == FORMAT_VERSION);
-    match meta {
-        Some(meta) => Orphan {
-            entries: count_entries(&dir, meta.epoch),
-            id,
-            dir,
-            name: meta.name,
-            path: meta.path,
-            saved: meta.saved,
-            checkpointed: meta.checkpoints > 0,
-            unreadable: false,
-        },
-        None => Orphan {
-            name: id.clone(),
-            id,
-            dir,
-            path: None,
-            entries: 0,
-            saved: true,
-            checkpointed: false,
-            unreadable: true,
-        },
+    let unreadable = |id: String, dir: PathBuf, name: Option<String>, kept: bool| Orphan {
+        name: name.unwrap_or_else(|| id.clone()),
+        id,
+        dir,
+        path: None,
+        entries: 0,
+        saved: true,
+        checkpointed: false,
+        unreadable: true,
+        kept,
+        file_changed: false,
+    };
+    let bytes = match read_bounded(&dir.join(BASE_FILE)) {
+        Ok(bytes) => bytes,
+        Err(RecoveryError::TooLarge(_)) => return unreadable(id, dir, None, true),
+        Err(_) => return unreadable(id, dir, None, false),
+    };
+    let meta = match serde_json::from_slice::<BaseMeta>(&bytes) {
+        Ok(meta) if meta.v == FORMAT_VERSION => meta,
+        Ok(meta) => return unreadable(id, dir, Some(meta.name), true),
+        Err(_) => {
+            let foreign = serde_json::from_slice::<BaseVersion>(&bytes).is_ok_and(|b| b.v != FORMAT_VERSION);
+            return unreadable(id, dir, None, foreign);
+        }
+    };
+    let file_changed = meta
+        .path
+        .as_deref()
+        .and_then(|p| FileStamp::of(Path::new(p)))
+        .is_some_and(|now| Some(now) != meta.file);
+    Orphan {
+        entries: count_entries(&dir, meta.epoch),
+        id,
+        dir,
+        name: meta.name,
+        path: meta.path,
+        saved: meta.saved,
+        checkpointed: meta.checkpoints > 0,
+        unreadable: false,
+        kept: false,
+        file_changed,
     }
 }
 

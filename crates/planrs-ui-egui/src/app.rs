@@ -2107,12 +2107,12 @@ impl App {
         self.record_recovery();
     }
 
-    /// Propose les journaux orphelins qui portent des modifications (bandeau
-    /// de reprise, un à la fois).
+    /// Propose les journaux orphelins qui portent des modifications, ou qui
+    /// viennent d'une autre version (bandeau de reprise, un à la fois).
     pub fn offer_recovery(&mut self, orphans: Vec<planrs_automation::recovery::Orphan>) {
         self.orphans = orphans
             .into_iter()
-            .filter(planrs_automation::recovery::Orphan::worth_restoring)
+            .filter(planrs_automation::recovery::Orphan::worth_offering)
             .collect();
     }
 
@@ -2125,6 +2125,8 @@ impl App {
                 name: &o.name,
                 entries: o.entries,
                 checkpointed: o.checkpointed,
+                file_changed: o.file_changed,
+                kept: o.kept,
             })
     }
 
@@ -2198,7 +2200,10 @@ impl App {
     /// marqué modifié (son contenu n'est pas sur le disque), journal
     /// orphelin supprimé (le document a déjà le sien). Un rejeu arrêté sur
     /// une entrée refusée restaure ce qui précède et le dit ; un journal
-    /// illisible reste proposé (Ignorer le supprime).
+    /// illisible reste proposé (Ignorer le supprime). Fichier changé sur le
+    /// disque depuis la base : document installé **sans chemin**, nommé
+    /// « plan (récupéré).xml », pour qu'Enregistrer demande un nom au lieu
+    /// d'écraser la version plus récente (relecture finale J7, F3).
     fn restore_orphan(&mut self, id: &str) {
         let Some(orphan) = self.orphans.iter().find(|o| o.id == id).cloned() else {
             return;
@@ -2215,10 +2220,18 @@ impl App {
                     range: range.span,
                     range_truncated: range.truncated,
                 };
-                let origin = DocOrigin {
-                    name: orphan.name.clone(),
-                    path: orphan.path.clone(),
-                    demo: false,
+                let origin = if orphan.file_changed {
+                    DocOrigin {
+                        name: recovered_name(&self.texts, &orphan.name),
+                        path: None,
+                        demo: false,
+                    }
+                } else {
+                    DocOrigin {
+                        name: orphan.name.clone(),
+                        path: orphan.path.clone(),
+                        demo: false,
+                    }
                 };
                 self.install(loaded, origin);
                 if let Err(error) = orphan.discard() {
@@ -2249,6 +2262,18 @@ impl App {
             }
         }
     }
+}
+
+/// Nom d'un document récupéré dont le fichier a changé : « plan
+/// (récupéré).xml » (extension gardée).
+#[cfg(not(target_arch = "wasm32"))]
+fn recovered_name(texts: &Texts, name: &str) -> String {
+    let (stem, ext) = match name.rfind('.') {
+        Some(dot) if dot > 0 => name.split_at(dot),
+        _ => (name, ""),
+    };
+    let stem = texts.get_args(TextId::RecoveredFileName, &[("stem", Arg::Str(stem.into()))]);
+    format!("{stem}{ext}")
 }
 
 /// Titre de la fenêtre pour `document` (voir [`App::window_title`]). Le web

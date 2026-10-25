@@ -137,6 +137,46 @@ fn recovery_banner_restore_marks_dirty() {
     assert_eq!(name, "Avant");
 }
 
+/// Relecture finale J7, F3 : le fichier du document a été réécrit après
+/// le plantage ; le bandeau le dit, et Restaurer installe le document
+/// **sans chemin** (« maison (récupéré).xml ») : Enregistrer ne peut pas
+/// écraser la version plus récente.
+#[test]
+fn recovery_restore_changed_file_drops_path() {
+    let tmp = TempDir::new("changed");
+    let root = tmp.path().join("journaux");
+    let file = tmp.path().join("maison.xml");
+    std::fs::write(&file, planrs_ui_egui::DEMO_MSPDI).unwrap();
+    let (mut session, uid) = demo_session();
+    session.set_origin(planrs_automation::DocOrigin {
+        name: "maison.xml".to_owned(),
+        path: Some(file.to_str().unwrap().to_owned()),
+    });
+    let mut journal = Journal::create(&root, &session).unwrap();
+    session.apply(&rename(uid, "Repris"), ApplyMode::Commit).unwrap();
+    journal.record(&session, now()).unwrap();
+    drop(journal);
+    // Version plus récente écrite ailleurs entre-temps.
+    std::fs::write(&file, b"<Project><Name>plus recent</Name></Project>").unwrap();
+    let mut harness = recovering_app(&root);
+    harness.get_by_label(&fr(TextId::RecoveryFileChanged));
+    harness.get_by_label(&fr(TextId::RecoveryRestore)).click();
+    harness.run();
+    let doc = harness.state().document.as_ref().expect("document restauré");
+    assert_eq!(
+        doc.origin.path, None,
+        "chemin repris : Enregistrer écraserait le fichier"
+    );
+    let expected =
+        Texts::new(Language::Fr).get_args(TextId::RecoveredFileName, &[("stem", Arg::Str("maison".into()))]);
+    assert_eq!(doc.origin.name, format!("{expected}.xml"));
+    assert!(doc.is_dirty());
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        b"<Project><Name>plus recent</Name></Project>"
+    );
+}
+
 /// Restaurer alors que le document courant est modifié : bandeau de
 /// confirmation d'abord.
 #[test]

@@ -619,6 +619,9 @@ text_ids! {
     RecoveryFailed => "recovery-failed",
     RecoveryDiscardFailed => "recovery-discard-failed",
     RecoveryJournalCut => "recovery-journal-cut",
+    RecoveryFileChanged => "recovery-file-changed",
+    RecoveryKept => "recovery-kept",
+    RecoveredFileName => "recovered-file-name",
     // --- J7 L16 ---
 }
 

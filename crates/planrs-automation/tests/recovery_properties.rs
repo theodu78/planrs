@@ -362,6 +362,65 @@ fn recovery_orphan_detected_after_lock_released() {
     assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
 }
 
+/// Relecture finale J7, interface F3 : la base garde l'empreinte du fichier
+/// du document ; un fichier réécrit depuis (autre instance, MCP headless)
+/// marque l'orphelin `file_changed`.
+#[test]
+fn recovery_file_changed_since_base_detected() {
+    let tmp = TempDir::new("stamp");
+    let root = tmp.path().join("journaux");
+    let file = tmp.path().join("plan.xml");
+    std::fs::write(&file, b"<Project/>").unwrap();
+    let mut live = session(chain(2));
+    live.set_origin(DocOrigin {
+        name: "plan.xml".to_owned(),
+        path: Some(file.to_str().unwrap().to_owned()),
+    });
+    let mut journal = Journal::create(&root, &live).unwrap();
+    let b = batch(json!([{ "op": "task.update", "uid": 1, "name": "A" }]));
+    live.apply(&b, ApplyMode::Commit).unwrap();
+    journal.record(&live, now()).unwrap();
+    drop(journal);
+    let found = orphans(&root);
+    assert_eq!(found.len(), 1);
+    assert!(!found[0].file_changed, "fichier inchangé");
+    // Le fichier est réécrit pendant que l'application est fermée.
+    std::fs::write(&file, b"<Project><Name>plus recent</Name></Project>").unwrap();
+    let found = orphans(&root);
+    assert!(found[0].file_changed, "fichier réécrit non vu");
+    assert!(found[0].worth_restoring());
+}
+
+/// Relecture finale J7, relais F5 : base d'une autre version de format ou
+/// plus grande que `MAX_FILE_BYTES` ⇒ orphelin gardé (`kept`, proposé,
+/// jamais supprimé d'office) ; JSON invalide ⇒ illisible, sans valeur.
+#[test]
+fn recovery_foreign_or_large_base_kept() {
+    use planrs_automation::recovery::MAX_FILE_BYTES;
+
+    let tmp = TempDir::new("foreign");
+    let base = |name: &str| {
+        let dir = tmp.path().join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("base.json")
+    };
+    std::fs::write(base("1-0"), br#"{"v":2,"format":"futur"}"#).unwrap();
+    let large = std::fs::File::create(base("1-1")).unwrap();
+    large.set_len(MAX_FILE_BYTES + 1).unwrap();
+    drop(large);
+    std::fs::write(base("1-2"), b"{ pas du json").unwrap();
+    let found = orphans(tmp.path());
+    let kept: Vec<(&str, bool, bool)> = found
+        .iter()
+        .map(|o| (o.id.as_str(), o.kept, o.worth_offering()))
+        .collect();
+    assert_eq!(
+        kept,
+        [("1-0", true, true), ("1-1", true, true), ("1-2", false, false)]
+    );
+    assert!(found.iter().all(|o| o.unreadable && !o.worth_restoring()));
+}
+
 /// Orphelin sans modification ni base modifiée : sans valeur.
 #[test]
 fn recovery_clean_orphan_not_worth_restoring() {

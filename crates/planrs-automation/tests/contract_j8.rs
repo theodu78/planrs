@@ -3,8 +3,8 @@
 //! jalon 8 et refusées `command.not_yet_available` ; les champs nouveaux
 //! (`render.gantt.style`) se lisent mais sont refusés de même, sans rien
 //! changer, jusqu'à leur lot (L4) ; les critères J8 de `task.list` et
-//! `task.update.mode` sont exécutés depuis L2 (R-251, R-253) ; les
-//! squelettes répondent sans paniquer.
+//! `task.update.mode` sont exécutés depuis L2 (R-251, R-253), l'aperçu
+//! CSV depuis L3 ; les squelettes répondent sans paniquer.
 
 #![allow(
     clippy::unwrap_used,
@@ -117,8 +117,7 @@ fn contract_j8_skeletons_answer_without_panic() {
 
     let opts =
         planrs_automation::csv::CsvImportOptions::new(planrs_core::ScheduleAnchor::FromStart(now()), now());
-    assert_eq!(
-        planrs_automation::csv::preview(b"Nom;Duree\nA;1j\n", &opts),
-        Err(planrs_automation::csv::CsvError::NotYetAvailable)
-    );
+    // Aperçu CSV (L3).
+    let p = planrs_automation::csv::preview(b"Nom;Duree\nA;1j\n", &opts).unwrap();
+    assert_eq!(p.rows, vec![vec!["A".to_owned(), "1j".to_owned()]]);
 }

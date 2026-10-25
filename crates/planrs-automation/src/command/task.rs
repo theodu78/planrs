@@ -10,11 +10,13 @@
 
 use std::collections::BTreeSet;
 
+use planrs_core::calendar::{CompiledCalendar, TimeScale, builtin};
 use planrs_core::resource::Edit;
 use planrs_core::resource::edit::effective_effort_driven;
+use planrs_core::schedule::{TaskOutcome, TaskRole, measure_calendar_in};
 use planrs_core::{
-    Assignment, Constraint, ModelError, Moment, OutlineLevel, ScheduleAnchor, SchedulingMode, Subject, Task,
-    TaskType, TaskUid, TimeBasis, Work,
+    Arena, Assignment, CalendarError, Constraint, Duration, Minutes, ModelError, Moment, OutlineLevel,
+    ScheduleAnchor, SchedulingMode, Subject, Task, TaskType, TaskUid, TimeBasis, Work,
 };
 
 use super::assignment::{Balance, balance_of};
@@ -23,7 +25,7 @@ use super::extras_invalidation::TaskChange;
 use super::outline::{
     MAX_LEVEL, block_end, level_at, level_limit, order, prev_non_null, renumbered, summaries,
 };
-use super::{Patch, Placement, TaskAdd, TaskDelete, TaskMove, TaskOne, TaskRef, TaskUpdate};
+use super::{ModeJson, Patch, Placement, TaskAdd, TaskDelete, TaskMove, TaskOne, TaskRef, TaskUpdate};
 use crate::error::{CommandError, CommandErrorKind, codes};
 use crate::outcome::SideEffect;
 
@@ -274,27 +276,17 @@ pub(super) fn add(op: &TaskAdd, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
     Ok(())
 }
 
-/// R-157 : refus d'une date ou d'une durée sur une tâche dont le moteur ne
-/// la recalcule pas, ou la calcule.
-fn check_computed(op: &TaskUpdate, uid: TaskUid, summary: bool, manual: bool) -> Result<(), CommandError> {
+/// R-157 : refus d'une date ou d'une durée sur une récapitulative, dont le
+/// moteur les calcule. Depuis J8 (R-254), une feuille manuelle accepte ces
+/// trois champs (valeurs manuelles, [`manual_entry`]).
+fn check_computed(op: &TaskUpdate, uid: TaskUid, summary: bool) -> Result<(), CommandError> {
     let fields = [
         ("duration", !op.duration.is_keep()),
         ("start", !op.start.is_keep()),
         ("finish", !op.finish.is_keep()),
     ];
     for (field, present) in fields {
-        if !present {
-            continue;
-        }
-        if manual {
-            return Err(CommandError::new(
-                codes::TASK_MANUAL_UNSUPPORTED,
-                CommandErrorKind::ManualTaskUnsupported,
-            )
-            .with_field(field)
-            .with_subject(Subject::Task(uid)));
-        }
-        if summary {
+        if present && summary {
             return Err(
                 CommandError::new(codes::TASK_COMPUTED_FIELD, CommandErrorKind::ComputedField)
                     .with_field(field)
@@ -305,10 +297,8 @@ fn check_computed(op: &TaskUpdate, uid: TaskUid, summary: bool, manual: bool) ->
     Ok(())
 }
 
-/// Durée saisie par `task.update` (R-157) ; R-213 (arbitrage du
-/// 2026-10-20) : une durée sous la durée réelle stockée de `uid`
-/// laisserait un avancement incohérent (réel > D) : refusée,
-/// `progress.duration_below_actual`.
+/// Durée saisie par `task.update` (R-157), contrôlée par
+/// [`check_not_below_actual`].
 fn entered_duration(
     op: &TaskUpdate,
     ctx: &Ctx<'_>,
@@ -319,6 +309,19 @@ fn entered_duration(
         Patch::Set(d) => ctx.duration(d, "duration")?,
         Patch::Clear => return Err(invalid("duration", "durée attendue (la durée ne s'efface pas)")),
     };
+    check_not_below_actual(ctx, uid, d, "duration")?;
+    Ok(Some(d))
+}
+
+/// R-213 (arbitrage du 2026-10-20) : une durée sous la durée réelle
+/// stockée de `uid` laisserait un avancement incohérent (réel > D) :
+/// refusée, `progress.duration_below_actual` sur `field`.
+fn check_not_below_actual(
+    ctx: &Ctx<'_>,
+    uid: TaskUid,
+    d: planrs_core::Duration,
+    field: &str,
+) -> Result<(), CommandError> {
     let actual = ctx
         .project
         .tasks
@@ -332,13 +335,267 @@ fn entered_duration(
                 entered: d.minutes().get(),
             },
         )
-        .with_field("duration")
+        .with_field(field)
         .with_subject(Subject::Task(uid)));
     }
-    Ok(Some(d))
+    Ok(())
 }
 
-/// R-157, R-158, R-161 : `task.update`.
+/// Calcule sur l'échelle de mesure de `uid` (R-113 : calendrier propre
+/// utilisable, sinon celui du projet ou sa base, sinon le Standard intégré
+/// de R-066 ; temps civil pour une durée écoulée, R-067) ; `elapsed` : la
+/// durée en jeu est écoulée.
+fn on_task_scale<R>(
+    ctx: &mut Ctx<'_>,
+    uid: TaskUid,
+    elapsed: bool,
+    field: &str,
+    f: impl FnOnce(TimeScale<'_>) -> Result<R, CalendarError>,
+) -> Result<R, CommandError> {
+    let out_of_domain = |_: CalendarError| invalid(field, "date hors du domaine du calendrier de la tâche");
+    if elapsed {
+        return f(TimeScale::Elapsed).map_err(out_of_domain);
+    }
+    let (project, set) = ctx.calendar_set();
+    let own = project
+        .tasks
+        .get(uid)
+        .and_then(|t| measure_calendar_in(project, set, t))
+        .and_then(|c| set.get(c).ok());
+    if let Some(c) = own {
+        return f(TimeScale::Working(c)).map_err(out_of_domain);
+    }
+    let standard = builtin::standard(project.calendar, "Standard".to_owned());
+    let arena = Arena::try_from(vec![standard]).map_err(|e| model(&e))?;
+    let c = CompiledCalendar::compile(&arena, project.calendar).map_err(out_of_domain)?;
+    f(TimeScale::Working(&c)).map_err(out_of_domain)
+}
+
+/// R-253 : valeurs manuelles d'une tâche qui passe en manuel : ses dates
+/// planifiées courantes (planning du clone, O49 : `ManualStart` = `Start`,
+/// `ManualFinish` = `Finish`) et sa durée ; tâche exclue : son placement
+/// d'affichage (R-062) s'il existe, sinon aucune date (le moteur la signale
+/// `task.manual_undated`).
+fn frozen_manual(ctx: &mut Ctx<'_>, uid: TaskUid) -> Result<SchedulingMode, CommandError> {
+    ctx.ensure_schedule()?;
+    let Some(task) = ctx.project.tasks.get(uid) else {
+        return Err(CommandError::new(
+            codes::TASK_NOT_FOUND,
+            CommandErrorKind::UnknownTask(uid),
+        ));
+    };
+    let d = task.duration;
+    Ok(match ctx.schedule().get(uid) {
+        Some(TaskOutcome::Scheduled(s)) => {
+            // Récapitulative : durée calculée, ouvrée (R-054).
+            let duration = if s.role == TaskRole::Summary {
+                Duration::new(s.duration, d.unit(), TimeBasis::Working, false).unwrap_or(d)
+            } else {
+                d
+            };
+            SchedulingMode::Manual {
+                start: Some(s.start),
+                finish: Some(s.finish),
+                duration: Some(duration),
+            }
+        }
+        Some(TaskOutcome::Excluded {
+            display: Some(span), ..
+        }) => SchedulingMode::Manual {
+            start: Some(span.start),
+            finish: Some(span.finish),
+            duration: Some(d),
+        },
+        _ => SchedulingMode::Manual {
+            start: None,
+            finish: None,
+            duration: Some(d),
+        },
+    })
+}
+
+/// Début planifié de `uid` dans le planning du clone, s'il est planifié.
+fn planned_start(ctx: &mut Ctx<'_>, uid: TaskUid) -> Result<Option<Moment>, CommandError> {
+    ctx.ensure_schedule()?;
+    Ok(ctx.schedule().scheduled(uid).map(|s| s.start))
+}
+
+/// R-254 : début, fin ou durée saisis sur une feuille manuelle (`base` :
+/// ses valeurs manuelles, figées par R-253 si elle vient d'y passer) ;
+/// valeurs manuelles nouvelles et durée qui en résulte, aucune contrainte
+/// posée. Début ⇒ fin = début + durée sur l'échelle de la tâche ; fin ⇒
+/// durée = temps du début à la fin (fin avant début :
+/// `task.manual_finish_before_start`) ; durée ⇒ fin = début + durée. Sans
+/// début saisi, le début planifié sert ; sans aucun début connu, seules la
+/// durée et la fin saisies sont écrites. `None` si aucun des trois champs.
+fn manual_entry(
+    op: &TaskUpdate,
+    ctx: &mut Ctx<'_>,
+    uid: TaskUid,
+    base: SchedulingMode,
+) -> Result<Option<(SchedulingMode, Duration)>, CommandError> {
+    let entered = entered_date(&op.start, &op.finish)?;
+    if entered.is_none() && op.duration.is_keep() {
+        return Ok(None);
+    }
+    if !op.duration.is_keep() && matches!(entered, Some((Side::Finish, _))) {
+        return Err(conflict("duration", "finish"));
+    }
+    let Some(task) = ctx.project.tasks.get(uid) else {
+        return Err(CommandError::new(
+            codes::TASK_NOT_FOUND,
+            CommandErrorKind::UnknownTask(uid),
+        ));
+    };
+    let task_duration = task.duration;
+    let SchedulingMode::Manual {
+        start: base_start,
+        finish: base_finish,
+        duration: base_duration,
+    } = base
+    else {
+        return Ok(None);
+    };
+    let duration = match entered_duration(op, ctx, uid)? {
+        Some(d) => d,
+        None => base_duration.unwrap_or(task_duration),
+    };
+    let elapsed = duration.basis() == TimeBasis::Elapsed;
+    let manual = |start, finish, duration| SchedulingMode::Manual {
+        start,
+        finish,
+        duration: Some(duration),
+    };
+    match entered {
+        Some((side, None)) => {
+            let field = if side == Side::Start { "start" } else { "finish" };
+            Err(invalid(
+                field,
+                "date attendue : une tâche manuelle garde ses dates (repasser en automatique pour les libérer)",
+            ))
+        }
+        Some((Side::Start, Some(start))) => {
+            let finish = on_task_scale(ctx, uid, elapsed, "start", |sc| sc.add(start, duration.minutes()))?;
+            Ok(Some((manual(Some(start), Some(finish), duration), duration)))
+        }
+        Some((Side::Finish, Some(finish))) => {
+            let Some(start) = base_start.map_or_else(|| planned_start(ctx, uid), |s| Ok(Some(s)))? else {
+                return Ok(Some((manual(None, Some(finish), duration), duration)));
+            };
+            if finish < start {
+                return Err(CommandError::new(
+                    codes::TASK_MANUAL_FINISH_BEFORE_START,
+                    CommandErrorKind::ManualFinishBeforeStart { start, finish },
+                )
+                .with_field("finish")
+                .with_subject(Subject::Task(uid)));
+            }
+            let minutes = on_task_scale(ctx, uid, elapsed, "finish", |sc| sc.between(start, finish))?;
+            let measured = Duration::new(
+                minutes.max(Minutes::ZERO),
+                duration.unit(),
+                duration.basis(),
+                false,
+            )
+            .map_err(|_| invalid("finish", "durée hors des bornes"))?;
+            check_not_below_actual(ctx, uid, measured, "finish")?;
+            Ok(Some((manual(Some(start), Some(finish), measured), measured)))
+        }
+        None => {
+            let Some(start) = base_start.map_or_else(|| planned_start(ctx, uid), |s| Ok(Some(s)))? else {
+                return Ok(Some((manual(None, base_finish, duration), duration)));
+            };
+            let finish = on_task_scale(ctx, uid, elapsed, "duration", |sc| {
+                sc.add(start, duration.minutes())
+            })?;
+            Ok(Some((manual(Some(start), Some(finish), duration), duration)))
+        }
+    }
+}
+
+/// Contrôles du nom et du drapeau actif d'un `task.update`.
+fn check_name_active(op: &TaskUpdate) -> Result<(), CommandError> {
+    match &op.name {
+        Patch::Clear => return Err(invalid("name", "le nom ne s'efface pas (chaîne vide acceptée)")),
+        Patch::Set(n) => check_name(n)?,
+        Patch::Keep => {}
+    }
+    if op.active == Patch::Clear {
+        return Err(invalid("active", "booléen attendu"));
+    }
+    Ok(())
+}
+
+/// Mode, durée et date saisie d'un `task.update` (R-157, R-158, R-253,
+/// R-254), contrôlés avant toute modification.
+struct Planned {
+    /// Mode nouveau (R-253) ou valeurs manuelles nouvelles (R-254).
+    mode: Option<SchedulingMode>,
+    /// Durée à poser sur la tâche.
+    duration: Option<Duration>,
+    /// Date saisie d'une tâche automatique (contrainte, R-158).
+    entered: Option<(Side, Option<Moment>)>,
+}
+
+/// Prépare un `task.update` : mode (R-253), puis dates et durée, valeurs
+/// manuelles d'une feuille manuelle (R-254) ou contrainte d'une tâche
+/// automatique (R-158) ; `manual` : la tâche est manuelle avant
+/// l'opération.
+fn plan_dates(
+    op: &TaskUpdate,
+    ctx: &mut Ctx<'_>,
+    uid: TaskUid,
+    summary: bool,
+    manual: bool,
+) -> Result<Planned, CommandError> {
+    let target = match op.mode {
+        Patch::Keep => None,
+        Patch::Set(m) => Some(m),
+        Patch::Clear => {
+            return Err(invalid(
+                "mode",
+                "mode attendu (« auto » ou « manual » ; il ne s'efface pas)",
+            ));
+        }
+    };
+    check_computed(op, uid, summary)?;
+    // R-253 : passage en manuel ⇒ dates planifiées courantes figées ;
+    // retour en automatique ⇒ valeurs manuelles retirées (contrainte et
+    // échéance gardées, recalcul par le moteur).
+    let new_mode = match target {
+        Some(ModeJson::Manual) if !manual => Some(frozen_manual(ctx, uid)?),
+        Some(ModeJson::Auto) if manual => Some(SchedulingMode::Auto),
+        _ => None,
+    };
+    let manual_after = target.map_or(manual, |m| m == ModeJson::Manual);
+    // R-254 : dates et durée d'une feuille manuelle, sans contrainte.
+    let current_mode = ctx.project.tasks.get(uid).map(|t| t.mode);
+    let manual_values = if manual_after && !summary {
+        let base = new_mode.or(current_mode).unwrap_or_default();
+        manual_entry(op, ctx, uid, base)?
+    } else {
+        None
+    };
+    let (duration, entered) = match &manual_values {
+        Some((_, d)) => {
+            let current = ctx.project.tasks.get(uid).map(|t| t.duration);
+            (Some(*d).filter(|d| Some(*d) != current), None)
+        }
+        None if manual_after && !summary => (None, None),
+        None => (
+            entered_duration(op, ctx, uid)?,
+            entered_date(&op.start, &op.finish)?,
+        ),
+    };
+    let mode = manual_values.as_ref().map(|(m, _)| *m).or(new_mode);
+    Ok(Planned {
+        mode,
+        duration,
+        entered,
+    })
+}
+
+/// R-157, R-158, R-161, R-253, R-254 : `task.update`.
 pub(super) fn update(op: &TaskUpdate, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
     let uid = ctx.task(&op.uid, "uid")?;
     let pos = position(ctx, uid, "uid")?;
@@ -349,21 +606,12 @@ pub(super) fn update(op: &TaskUpdate, ctx: &mut Ctx<'_>) -> Result<(), CommandEr
         .get(uid)
         .is_some_and(|t| matches!(t.mode, SchedulingMode::Manual { .. }));
     // Contrôles, avant toute modification.
-    match &op.name {
-        Patch::Clear => return Err(invalid("name", "le nom ne s'efface pas (chaîne vide acceptée)")),
-        Patch::Set(n) => check_name(n)?,
-        Patch::Keep => {}
-    }
-    if op.active == Patch::Clear {
-        return Err(invalid("active", "booléen attendu"));
-    }
-    // J8 (contrat L0) : `mode` exécuté par le lot L2 (R-253).
-    if !op.mode.is_keep() {
-        return Err(CommandError::not_yet(8).with_field("mode"));
-    }
-    check_computed(op, uid, summary, manual)?;
-    let duration = entered_duration(op, ctx, uid)?;
-    let entered = entered_date(&op.start, &op.finish)?;
+    check_name_active(op)?;
+    let Planned {
+        mode: new_mode,
+        duration,
+        entered,
+    } = plan_dates(op, ctx, uid, summary, manual)?;
     let balance = j5_balance(
         op,
         ctx,
@@ -423,6 +671,12 @@ pub(super) fn update(op: &TaskUpdate, ctx: &mut Ctx<'_>) -> Result<(), CommandEr
     {
         t.active = a;
         changes.push(TaskChange::Active);
+    }
+    if let Some(m) = new_mode
+        && t.mode != m
+    {
+        t.mode = m;
+        changes.push(TaskChange::Mode);
     }
     if let Some(b) = &balance {
         set_scheduling(t, b, !op.work.is_keep(), &mut changes);

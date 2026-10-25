@@ -468,8 +468,10 @@ pub struct TaskUpdate {
     /// refusé jusqu'au lot L7).
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
     pub work: Patch<DurationJson>,
-    /// Mode de planification (J8, R-253 ; refusé
-    /// `command.not_yet_available` jusqu'au lot L2).
+    /// Mode de planification (J8, R-253) : vers manuel, dates planifiées
+    /// courantes figées ; vers automatique, valeurs manuelles retirées.
+    /// Sur une feuille manuelle, `start`, `finish` et `duration` écrivent
+    /// les valeurs manuelles, sans contrainte (R-254).
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
     pub mode: Patch<ModeJson>,
 }

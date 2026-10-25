@@ -5,7 +5,7 @@
 //! par le MCP, la CLI et l'interface (clé de traduction `.ftl`), et un
 //! message en français ou en anglais ([`CommandError::message`]).
 
-use planrs_core::{CalendarUid, Diagnostic, ModelError, ResourceUid, Subject, TaskUid};
+use planrs_core::{CalendarUid, Diagnostic, ModelError, Moment, ResourceUid, Subject, TaskUid};
 use planrs_mspdi::MspdiError;
 
 use crate::text::{Language, TextError};
@@ -228,6 +228,13 @@ pub enum CommandErrorKind {
     },
     /// Tâche manuelle.
     ManualTaskUnsupported,
+    /// Fin saisie d'une tâche manuelle avant son début (J8, R-254).
+    ManualFinishBeforeStart {
+        /// Début de la tâche manuelle.
+        start: Moment,
+        /// Fin saisie.
+        finish: Moment,
+    },
     /// Paramètres contradictoires.
     ParamMismatch,
     /// Ressource inconnue (J5).
@@ -546,6 +553,13 @@ fn kind_message(kind: &CommandErrorKind, lang: Language) -> String {
                 format!("commande pas encore disponible (jalon J{milestone})")
             } else {
                 format!("command not available yet (milestone J{milestone})")
+            }
+        }
+        K::ManualFinishBeforeStart { start, finish } => {
+            if fr {
+                format!("la fin saisie ({finish}) précède le début de la tâche manuelle ({start})")
+            } else {
+                format!("the entered finish ({finish}) is before the start of the manual task ({start})")
             }
         }
         K::ManualTaskUnsupported => {

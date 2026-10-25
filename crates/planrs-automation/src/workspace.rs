@@ -234,10 +234,6 @@ fn read(session: Option<&Session>, lang: Language, id: &str, params: Value) -> R
         }
         "render.gantt" => {
             let p = parse_params::<RenderGanttParams>(params).map_err(cmd)?;
-            // J8 (contrat L0) : style exécuté par le lot L4.
-            if p.style.is_some() {
-                return Err(cmd(CommandError::not_yet(8).with_field("style")));
-            }
             render(need(session, lang)?, lang, &p)
         }
         _ => Err(unknown_command(id, lang)),
@@ -352,7 +348,14 @@ fn render(s: &Session, lang: Language, p: &RenderGanttParams) -> Result<Value, T
             ..planrs_render::RenderLimits::default()
         },
     };
-    let (svg, report) = planrs_render::svg(s.project(), sched, &req);
+    // Style : modèle demandé, sinon Classique (modèle par défaut de J8
+    // jusqu'au lot visible) ; textes autour des barres formatés ici (règle 3).
+    let template = p
+        .style
+        .map_or(planrs_render::style::TemplateId::Classique, Into::into);
+    let style = planrs_render::style::template(template);
+    let texts = crate::render_text::SessionTexts { session: s, lang };
+    let (svg, report) = planrs_render::svg_styled(s.project(), sched, &req, &style, &texts);
     to_value(&RenderView {
         svg,
         shown: report.shown,

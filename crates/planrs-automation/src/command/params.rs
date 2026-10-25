@@ -253,8 +253,7 @@ pub struct RenderGanttParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1, max = 200))]
     pub max_rows: Option<u32>,
-    /// Modèle de mise en forme (J8 ; refusé `command.not_yet_available`
-    /// jusqu'au lot L4).
+    /// Modèle de mise en forme (défaut : Classique, apparence J7).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<super::style::TemplateJson>,
 }

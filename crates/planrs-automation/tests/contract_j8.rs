@@ -1,8 +1,7 @@
 //! Contrat J8 (lot L0, ADR-0016) : types, squelettes et registre. Les
 //! entrées nouvelles (`style.*`, `project.export_pdf`) sont réservées au
-//! jalon 8 et refusées `command.not_yet_available` ; les champs nouveaux
-//! (`render.gantt.style`) se lisent mais sont refusés de même, sans rien
-//! changer, jusqu'à leur lot (L4) ; les critères J8 de `task.list` et
+//! jalon 8 et refusées `command.not_yet_available` ; `render.gantt.style`
+//! est exécuté depuis L4 ; les critères J8 de `task.list` et
 //! `task.update.mode` sont exécutés depuis L2 (R-251, R-253) ; les
 //! squelettes répondent sans paniquer.
 
@@ -57,7 +56,6 @@ fn contract_j8_reserved_and_new_fields_refused() {
         ("style.get", json!({})),
         ("style.apply", json!({ "template": "sobre" })),
         ("project.export_pdf", json!({ "path": "p.pdf" })),
-        ("render.gantt", json!({ "style": "sobre" })),
     ] {
         let err = call_with(&mut s, &env, id, params).unwrap_err();
         assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{id}");
@@ -74,6 +72,16 @@ fn contract_j8_reserved_and_new_fields_refused() {
     // Lectures J7 inchangées.
     assert!(call_with(&mut s, &env, "task.list", json!({ "critical": true })).is_ok());
     assert!(call_with(&mut s, &env, "render.gantt", json!({})).is_ok());
+    // Style du rendu (L4) : modèle nommé, textes formatés par la session.
+    let sobre = call_with(&mut s, &env, "render.gantt", json!({ "style": "sobre" })).unwrap();
+    let svg = sobre["svg"].as_str().unwrap();
+    assert!(svg.contains("Inter,sans-serif"), "police d'Inter");
+    // Table et texte à droite de la barre (Sobre) ; table seule (Classique).
+    assert_eq!(svg.matches(">Murs</text>").count(), 2);
+    let classique = call_with(&mut s, &env, "render.gantt", json!({})).unwrap();
+    let classique = classique["svg"].as_str().unwrap();
+    assert!(classique.contains("font-family:sans-serif"));
+    assert_eq!(classique.matches(">Murs</text>").count(), 1);
     assert_eq!(s.project(), &before);
     assert_eq!(s.generation(), generation);
 }

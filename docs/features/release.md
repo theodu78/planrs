@@ -32,3 +32,34 @@ Tags `v*-test.*` ⇒ brouillon (non public) ; autres pré-versions ⇒ pré-vers
 ## 3. Budget du web
 
 Mesure du lot L0 (sonde `cdylib` wasm32, `opt-level = "s"`, LTO) : krilla seule 509 Kio gzip -9, `raster-images` + 73 Kio ; polices Inter du dépôt 2 × 87 Kio (non compressées). Le budget de C-REL-05 décide du logo du PDF (L7).
+
+## 4. Pipeline (lot L1)
+
+`.github/workflows/release.yml`, sur tag `v*` ou lancement manuel :
+
+| Job | Rôle | Contrats |
+|---|---|---|
+| `check` | `cargo xtask release-check <tag>` puis `cargo xtask release-notes <tag>` (tag seulement) | C-REL-01 |
+| `build` | appelle `desktop-build.yml` (`workflow_call`) : `build-macos` (deux cibles, `lipo`, `planrs.app` avec `packaging/macos/Info.plist`, `.icns` par `iconutil` depuis `assets/icon`, `codesign --force --deep -s -`, DMG UDZO avec `planrs.app`, `cli/planrs`, `LISEZ-MOI.txt`), `build-windows` (`x86_64-pc-windows-msvc`, zip), `build-linux` (conteneur `debian:bookworm`, rustup installé dans le job), `build-web` (trunk 0.21.14) | — |
+| `verify-macos` | `hdiutil verify`, `codesign --verify --deep --strict`, `lipo -archs`, `--version` des deux binaires (tranche x86_64 aussi si Rosetta est présent) | C-REL-02, C-REL-03 |
+| `verify-windows` | contenu du zip, `--version` des deux `.exe` (sortie redirigée) | C-REL-03 |
+| `verify-linux` | dans `debian:bookworm` : `objdump -T` (plus haute `GLIBC_` ≤ 2.36), `--version`, `desktop-file-validate` | C-REL-03, C-REL-04 |
+| `verify-web` | taille du `.wasm` gzip -9 publiée dans le résumé du run (avertissement au-delà de 3 Mio, porte en L13) ; `dist` servi en HTTP, Chromium headless, `data-planrs-started="1"` cherché dans le DOM | C-REL-05 (mesure), C-REL-06 |
+| `publish` | tag `v*` seulement : `SHA256SUMS`, `actions/attest-build-provenance`, `gh release create --verify-tag --notes-file` (`--draft` si `-test.`, `--prerelease` si `-`), puis contrôle de la release publiée : téléchargement, `sha256sum -c`, liste exacte des cinq fichiers, `gh attestation verify` | C-REL-07, C-REL-08 |
+
+Le contrôle après publication est fait dans le job `publish` et non dans un job séparé : un brouillon n'est visible que d'un jeton en écriture, et ce job est le seul à en avoir un. Aucun secret n'est ajouté (seul `github.token`).
+
+`desktop-build.yml` est la seule définition des builds : appelé par `release.yml`, ou lancé seul (tag `ui-*`, lancement manuel) pour une préversion, sans vérification ni publication (artefacts d'Actions).
+
+Marqueur du web : `apps/planrs-web` pose `data-planrs-started="1"` sur `<html>` dès que le wasm s'exécute, **avant** l'initialisation graphique (le runner n'a pas de GPU) : C-REL-06 prouve que le wasm a tourné, pas que l'interface s'affiche (message « GPU indisponible » : H-UI-57, lot L13).
+
+Icône : `cargo xtask icon` (PNG 16 à 1 024 px dans `assets/icon/`, dessin déterministe, test de fraîcheur `icon_files_fresh`) ; à valider par le propriétaire. Le `.exe` Windows ne porte pas d'icône (ressource Windows non embarquée).
+
+## 5. Publier une version
+
+1. Version : `[workspace.package] version` du `Cargo.toml` racine **et** les exigences `version = "…"` des crates internes de `[workspace.dependencies]` (Cargo refuse une exigence `0.1.0` face à une pré-version `0.1.0-test.1`) ; `Cargo.lock` régénéré.
+2. `CHANGELOG.md` : contenu de « Non publié » déplacé sous `## [X.Y.Z[-pré]] - AAAA-MM-JJ`, « Non publié » laissé vide en tête.
+3. `cargo xtask release-check vX.Y.Z[-pré]` vert en local, commit, puis tag `vX.Y.Z[-pré]` poussé sur ce commit.
+4. Tag de test `vX.Y.Z-test.N` : brouillon non public, vérifié de bout en bout, puis supprimé (`gh release delete <tag> --cleanup-tag`).
+
+Limite : sous Windows, `planrs-desktop.exe --version` n'imprime que si sa sortie est redirigée (sous-système fenêtré ; attacher la console du parent demanderait du code `unsafe`, interdit par la règle 10).

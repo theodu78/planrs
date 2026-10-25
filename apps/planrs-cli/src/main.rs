@@ -15,11 +15,14 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use planrs_automation::text::Language;
-use planrs_core::PRODUCT_NAME;
+use planrs_core::{PRODUCT_NAME, PRODUCT_VERSION};
 
 /// Planification de projet compatible MS Project, pilotable par IA.
+///
+/// `--version` imprime `planrs <version>` (version du workspace,
+/// `PRODUCT_VERSION` : C-REL-03).
 #[derive(Debug, Parser)]
-#[command(name = PRODUCT_NAME, version, arg_required_else_help = true)]
+#[command(name = PRODUCT_NAME, version = PRODUCT_VERSION, arg_required_else_help = true)]
 struct Cli {
     /// « Maintenant » (`AAAA-MM-JJTHH:MM`) ; défaut : `PLANRS_NOW`, sinon
     /// l'horloge locale.

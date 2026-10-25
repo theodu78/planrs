@@ -5908,6 +5908,7 @@ version = "0.1.0"
 dependencies = [
  "cab",
  "cargo_metadata",
+ "image",
  "msi",
  "proc-macro2",
  "serde",

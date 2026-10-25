@@ -11,6 +11,9 @@ publish = false
 [dependencies]
 cab.workspace = true
 cargo_metadata.workspace = true
+# `cargo xtask icon` : icône de l'application en PNG (format PNG seul, déjà
+# au lock, tiré par l'interface).
+image.workspace = true
 msi.workspace = true
 proc-macro2.workspace = true
 serde.workspace = true

@@ -94,3 +94,11 @@ pub use time::{Day, DayRange, Moment, Month, TimeOfDay, Week, Weekday};
 /// endroits où il apparaît (noms de crates, binaires, fichiers) sont listés
 /// dans `docs/rename.md`.
 pub const PRODUCT_NAME: &str = "planrs";
+
+/// Version du produit : celle du workspace (`[workspace.package] version`).
+///
+/// Une seule version pour tout le dépôt : `planrs --version` et
+/// `planrs-desktop --version` l'impriment (`planrs <version>`, C-REL-03) et
+/// `cargo xtask release-check` exige qu'elle égale le tag publié et la
+/// première section de `CHANGELOG.md` (C-REL-01, `docs/features/release.md`).
+pub const PRODUCT_VERSION: &str = env!("CARGO_PKG_VERSION");

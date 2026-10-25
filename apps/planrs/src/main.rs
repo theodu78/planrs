@@ -42,6 +42,16 @@
 //! arrive comme une touche et passe par le `KEYMAP` (confirmation). « Quitter »
 //! du Dock et la fermeture de session appellent toujours `terminate:` : non
 //! interceptables sans délégué Objective-C (limite, docs/features/ui.md § 5).
+//!
+//! Version (J8, lot L1, C-REL-03) : `planrs-desktop --version` (ou `-V`)
+//! imprime `planrs <version>` et sort avant toute fenêtre
+//! ([`version_requested`]). Sous Windows, le binaire est du sous-système
+//! fenêtré (aucune console ne s'ouvre au double-clic) : la ligne n'est
+//! visible que si la sortie est redirigée (`planrs-desktop --version | more`,
+//! ce que fait la CI) ; la CLI `planrs.exe`, binaire console, l'imprime
+//! toujours.
+
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -53,7 +63,7 @@ use planrs_automation::control::{
     canonical_project, new_token, publish_in, spawn_listener_in, state_dir,
 };
 use planrs_automation::recovery::{Recorder, orphans, recovery_dir};
-use planrs_core::{Moment, PRODUCT_NAME};
+use planrs_core::{Moment, PRODUCT_NAME, PRODUCT_VERSION};
 use planrs_ui_egui::relay::ScreenshotConfig;
 use planrs_ui_egui::{App, DocumentObserver, Env, Language, OpenDocument, PlanrsApp, RfdFileService};
 
@@ -229,7 +239,13 @@ fn start_recovery(app: &mut App, root: PathBuf) {
 }
 
 /// Usage affiché pour un argument refusé.
-const USAGE: &str = "usage : planrs-desktop [fichier.xml]";
+const USAGE: &str = "usage : planrs-desktop [fichier.xml | --version]";
+
+/// Le seul argument est `--version` ou `-V` : la version est imprimée et
+/// l'application sort sans ouvrir de fenêtre (C-REL-03).
+fn version_requested(args: &[std::ffi::OsString]) -> bool {
+    matches!(args, [only] if only.to_str().is_some_and(|arg| arg == "--version" || arg == "-V"))
+}
 
 /// Fichier à ouvrir au démarrage : premier argument, rendu absolu (les
 /// fichiers récents restent valables quel que soit le dossier de
@@ -272,7 +288,17 @@ fn native_options() -> eframe::NativeOptions {
 }
 
 fn main() -> ExitCode {
-    let startup = startup_path(std::env::args_os().skip(1)).unwrap_or_else(|error| {
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if version_requested(&args) {
+        // Sortie fermée ou absente : code d'échec, jamais de panique (la
+        // macro `println!` paniquerait).
+        use std::io::Write as _;
+        return match writeln!(std::io::stdout(), "{PRODUCT_NAME} {PRODUCT_VERSION}") {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(_) => ExitCode::FAILURE,
+        };
+    }
+    let startup = startup_path(args.into_iter()).unwrap_or_else(|error| {
         eprintln!("{PRODUCT_NAME} : {error}");
         None
     });
@@ -326,7 +352,23 @@ mod tests {
     use planrs_ui_egui::document;
     use planrs_ui_egui::{DocOrigin, DocumentObserver, OpenDocument};
 
-    use super::{ControlRendezvous, startup_path};
+    use super::{ControlRendezvous, startup_path, version_requested};
+
+    /// `--version` et `-V`, seuls, demandent la version ; tout autre
+    /// argument suit le chemin d'ouverture (C-REL-03).
+    #[test]
+    fn desktop_version_requested_only_alone() {
+        use std::ffi::OsString;
+
+        assert!(version_requested(&[OsString::from("--version")]));
+        assert!(version_requested(&[OsString::from("-V")]));
+        assert!(!version_requested(&[]));
+        assert!(!version_requested(&[OsString::from("plan.xml")]));
+        assert!(!version_requested(&[
+            OsString::from("--version"),
+            OsString::from("a.xml")
+        ]));
+    }
 
     /// macOS : le menu par défaut de winit (« Quitter » = `terminate:`, sans
     /// `CloseRequested`) est retiré ; ailleurs, aucun réglage.

@@ -1,0 +1,18 @@
+planrs pour macOS (Apple Silicon et Intel)
+
+- planrs.app : l'application. La glisser dans le dossier Applications.
+- cli/planrs : la ligne de commande et le serveur MCP (planrs mcp). La copier
+  où l'on veut, par exemple /usr/local/bin.
+
+L'application est signée « ad hoc » mais pas notarisée par Apple. Au premier
+lancement, macOS refuse de l'ouvrir :
+1. ouvrir planrs.app une première fois (refus affiché) ;
+2. Réglages Système > Confidentialité et sécurité, en bas : « Ouvrir quand
+   même » à côté du message sur planrs ;
+3. confirmer. Les lancements suivants sont normaux.
+
+Pour la ligne de commande copiée hors du DMG :
+  xattr -d com.apple.quarantine /chemin/vers/planrs
+
+Guide complet (empreintes SHA256SUMS comprises) : docs/user/install.md du
+dépôt, https://github.com/theodu78/planrs

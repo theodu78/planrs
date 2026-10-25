@@ -15,6 +15,10 @@
 //! qu'il est levé, l'écouteur `beforeunload` demande confirmation avant de
 //! fermer ou de recharger l'onglet (relecture finale J4, F3).
 //!
+//! Au démarrage, `<html>` reçoit `data-planrs-started="1"` : la
+//! vérification de la release y lit la preuve que le wasm a tourné
+//! (C-REL-06, `docs/features/release.md`).
+//!
 //! Compilée pour une cible native (ce que fait `cargo check --workspace`), le
 //! binaire se contente d'indiquer qu'il faut passer par trunk.
 
@@ -62,6 +66,9 @@ mod web {
 
     /// Identifiant du canevas déclaré dans `index.html`.
     const CANVAS_ID: &str = "planrs_canvas";
+
+    /// Attribut posé sur `<html>` au démarrage du wasm (C-REL-06).
+    const STARTED_ATTR: &str = "data-planrs-started";
 
     /// Observateur du document : titre de l'onglet et drapeau « modifié »
     /// tenus à jour (ouverture, édition, enregistrement, fermeture).
@@ -139,6 +146,12 @@ mod web {
             .document()
             .ok_or_else(|| JsValue::from_str("document introuvable"))?;
         document.set_title(planrs_core::PRODUCT_NAME);
+        // C-REL-06 (J8, lot L1) : preuve que le wasm a tourné, lue dans le
+        // DOM par la vérification de la release (`chromium --headless`),
+        // posée avant l'initialisation graphique (absente en CI).
+        if let Some(root) = document.document_element() {
+            root.set_attribute(STARTED_ATTR, "1")?;
+        }
         let unsaved = UnsavedFlag::default();
         guard_unload(&window, unsaved.clone())?;
         let tab = TabObserver {

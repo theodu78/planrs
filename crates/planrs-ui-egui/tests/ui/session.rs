@@ -135,7 +135,9 @@ fn ui_refresh_keeps_selection_by_uid() {
     assert_eq!(app.rows().unwrap().index_of(uid), Some(row + 1));
     assert!((app.view().gantt_scroll_x - scroll).abs() < f32::EPSILON);
 
-    // La tâche sélectionnée supprimée : plus de sélection.
+    // La tâche sélectionnée supprimée : la tâche qui prend sa ligne devient
+    // active (relecture finale J7, F4).
+    let next = harness.state().rows().unwrap().row(row + 2).unwrap().uid;
     harness.state_mut().dispatch(Action::Exec(batch(&format!(
         r#"{{"format_version":1,"ops":[{{"op":"task.delete","uid":{}}}]}}"#,
         uid.get()
@@ -146,7 +148,8 @@ fn ui_refresh_keeps_selection_by_uid() {
         "{:?}",
         harness.state().messages()
     );
-    assert_eq!(harness.state().selection, None);
+    assert_eq!(harness.state().selection, Some(next));
+    assert_eq!(harness.state().rows().unwrap().index_of(next), Some(row + 1));
     assert_eq!(harness.state().rows().unwrap().index_of(uid), None);
 }
 
@@ -322,6 +325,7 @@ keymap_entry_tests! {
     ui_keymap_each_shortcut_dispatches_49 => 49,
     ui_keymap_each_shortcut_dispatches_50 => 50,
     ui_keymap_each_shortcut_dispatches_51 => 51,
+    ui_keymap_each_shortcut_dispatches_52 => 52,
 }
 
 /// Lot refusé : UID absent.

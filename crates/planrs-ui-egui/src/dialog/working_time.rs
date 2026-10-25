@@ -902,6 +902,7 @@ pub fn show(
     state: &mut WorkingTimeState,
 ) -> WtOutcome {
     let mut outcome = WtOutcome::Open;
+    let armed = super::enter_armed(ctx, None);
     let response = egui::Modal::new(modal_id()).show(ctx, |ui| {
         ui.set_width(660.0);
         ui.heading(texts.get(TextId::WtTitle));
@@ -964,6 +965,12 @@ pub fn show(
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
     if escape {
         outcome = WtOutcome::Cancel;
+    }
+    if outcome == WtOutcome::Open
+        && state.new_form.is_none()
+        && super::enter_pressed(ctx, armed, response.is_top_modal, response.any_popup_open)
+    {
+        outcome = WtOutcome::Ok;
     }
     outcome
 }

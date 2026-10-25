@@ -322,6 +322,8 @@ error-control-not_attached = Aucune application rattachée : { $detail }
 error-control-app_gone = Application fermée : { $detail }
 error-control-screenshot_unavailable = Capture indisponible : { $detail }
 error-control-screenshot_too_large = Capture trop grande : { $detail }
+error-control-busy = Application occupée : { $detail }
+error-control-document_changed = Document de l'application changé : { $detail }
 
 # --- J7 L1 ---
 table-label = Table des tâches
@@ -332,7 +334,7 @@ nav-cursor-empty-value = vide
 # --- J7 L2 ---
 
 # --- J7 L3 ---
-approval-title = L'agent propose : { $name }
+approval-title = L'agent propose sur « { $document } » : { $name }
 approval-changed =
     { $count ->
         [0] aucune tâche modifiée
@@ -615,5 +617,8 @@ recovery-partial = Récupération partielle de « { $name } » : { $count ->
 recovery-failed = Récupération de « { $name } » impossible : { $detail }
 recovery-discard-failed = Suppression du journal de reprise impossible : { $detail }
 recovery-journal-cut = Reprise après plantage interrompue pour ce document : { $detail }. L'édition continue ; enregistrez régulièrement.
+recovery-file-changed = Le fichier a changé sur le disque depuis : la version récupérée s'ouvrira sans chemin (Enregistrer sous), pour ne pas l'écraser.
+recovery-kept = Journal d'une autre version de planrs, ou trop grand : il ne se restaure pas ici. Ignorer le supprime.
+recovered-file-name = { $stem } (récupéré)
 
 # --- J7 L16 ---

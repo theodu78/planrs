@@ -14,8 +14,8 @@
 //!    l'origine `Agent` et le « maintenant » de la demande, puis `ok` ;
 //! 3. Refuser ⇒ `control.rejected` ; projet, historique, génération et
 //!    drapeau modifié intacts ;
-//! 4. délai de l'écouteur ⇒ `Cancel(id)` (ou appel vu expiré) : bandeau
-//!    retiré.
+//! 4. délai de l'écouteur, ou client parti ⇒ `Cancel(id)` portant l'état
+//!    de l'appel abandonné (ou appel vu expiré) : ce bandeau-là retiré.
 //!
 //! Lectures (genres `Read`, `Analysis`, `history.list`) servies aussitôt,
 //! même JSON que `Workspace::call` (C-CTL-09). `project.open`,
@@ -136,8 +136,6 @@ pub struct Relay {
     inbox: Receiver<RelayCall>,
     /// Écritures en attente, la première au bandeau.
     pending: VecDeque<PendingApproval>,
-    /// Bandeau qui a déjà reçu le focus clavier.
-    focused: Option<u64>,
     /// Dossier des rendez-vous (garde ADR-0002 d'un enregistrement relayé) ;
     /// `None` : celui de la plateforme.
     control_dir: Option<PathBuf>,
@@ -152,9 +150,26 @@ impl Relay {
         &self.pending
     }
 
-    /// Retire l'écriture `id` de la file.
-    fn take(&mut self, id: u64) -> Option<PendingApproval> {
-        let pos = self.pending.iter().position(|p| p.id == id)?;
+    /// Retire l'écriture affichée au bandeau (tête de file) si c'est
+    /// l'appel `id` : Accepter et Refuser ne visent que ce qui est affiché
+    /// (deux agents peuvent avoir des appels de même `id`, relecture finale
+    /// J7, relais F3).
+    fn take_front(&mut self, id: u64) -> Option<PendingApproval> {
+        if self.pending.front().is_some_and(|p| p.id == id) {
+            self.pending.pop_front()
+        } else {
+            None
+        }
+    }
+
+    /// Retire l'appel abandonné par l'écouteur : même `id` **et** même
+    /// état partagé (celui que porte le `Cancel`), jamais l'appel d'un
+    /// autre agent au même `id`.
+    fn take_cancelled(&mut self, id: u64, state: &Arc<CallState>) -> Option<PendingApproval> {
+        let pos = self
+            .pending
+            .iter()
+            .position(|p| p.id == id && Arc::ptr_eq(&p.state, state))?;
         self.pending.remove(pos)
     }
 }
@@ -284,7 +299,6 @@ impl App {
         self.relay = Some(Relay {
             inbox,
             pending: VecDeque::new(),
-            focused: None,
             control_dir: None,
             screenshots: None,
         });
@@ -363,7 +377,7 @@ impl App {
         } = call;
         if let RelayKind::Cancel(target) = kind {
             if let Some(relay) = &mut self.relay {
-                drop(relay.take(target));
+                drop(relay.take_cancelled(target, &state));
             }
             return;
         }
@@ -599,15 +613,21 @@ impl App {
     }
 
     /// `app.ui_state` : préférences, sélection, vue, lignes visibles,
-    /// document modifié, génération, numéro d'ouverture.
+    /// document modifié, génération, numéro d'ouverture. Les fichiers récents
+    /// (`recent`) ne sont **pas** rendus : chemins et noms d'autres projets
+    /// de l'utilisateur, sans rapport avec la session de l'agent (relecture
+    /// finale J7, relais F7).
     #[must_use]
     pub fn ui_state_json(&self) -> Value {
-        let ui_state = self
+        let mut ui_state = self
             .state
             .to_json()
             .ok()
             .and_then(|s| serde_json::from_str::<Value>(&s).ok())
             .unwrap_or(Value::Null);
+        if let Value::Object(map) = &mut ui_state {
+            map.remove("recent");
+        }
         let mut selection: Vec<u32> = self.selected.click_order().iter().map(|uid| uid.get()).collect();
         selection.sort_unstable();
         let visible = self.rows.as_ref().map(|rows| {
@@ -632,7 +652,7 @@ impl App {
         let Some(relay) = &mut self.relay else {
             return;
         };
-        let Some(mut pending) = relay.take(id) else {
+        let Some(mut pending) = relay.take_front(id) else {
             return;
         };
         if !pending.state.is_pending() {
@@ -662,7 +682,6 @@ impl App {
             pending.generation = document.generation();
             if let Some(relay) = &mut self.relay {
                 relay.pending.push_front(pending);
-                relay.focused = None;
             }
             return;
         }
@@ -704,7 +723,7 @@ impl App {
         let Some(relay) = &mut self.relay else {
             return;
         };
-        let Some(pending) = relay.take(id) else {
+        let Some(pending) = relay.take_front(id) else {
             return;
         };
         self.reject_pending(&pending, "refusé par l'utilisateur : rien n'a été appliqué");
@@ -727,16 +746,6 @@ impl App {
         if empty && self.document.is_some() {
             self.view.focus_table_pending = true;
         }
-    }
-
-    /// Bandeau à dessiner pour cette image (le focus est demandé une fois
-    /// par bandeau).
-    pub(crate) fn approval_banner(&mut self) -> Option<(u64, bool)> {
-        let relay = self.relay.as_mut()?;
-        let id = relay.pending.front()?.id;
-        let take_focus = relay.focused != Some(id);
-        relay.focused = Some(id);
-        Some((id, take_focus))
     }
 }
 
@@ -875,16 +884,17 @@ pub fn encode_screenshot(
     }
 }
 
-/// Bandeau de l'écriture `id` en tête de `relay`.
+/// Bandeau de l'écriture en tête de `relay`, sur le document `document`
+/// (il ne prend jamais le focus clavier, voir `view::approval`).
 #[must_use]
-pub fn banner_for(relay: &Relay, take_focus: bool) -> Option<ApprovalBanner<'_>> {
+pub fn banner_for<'a>(relay: &'a Relay, document: &'a str) -> Option<ApprovalBanner<'a>> {
     let front = relay.pending.front()?;
     Some(ApprovalBanner {
         id: front.id,
         tool: &front.tool,
+        document,
         summary: front.preview.as_ref(),
         path: front.path(),
         queued: relay.pending.len().saturating_sub(1),
-        take_focus,
     })
 }

@@ -599,6 +599,33 @@ fn nav_after_open_focuses_table() {
     assert_eq!(at(harness.state()), (3, Column::Duration));
 }
 
+/// Relecture finale J7, F5 : un clic sur la barre d'outils (ou un menu, ou
+/// la réponse d'une confirmation) retirait le focus de la table sans le
+/// rendre : ↓ ne faisait plus rien. La table le reprend ; un clic dans le
+/// Gantt, lui, le laisse.
+#[test]
+fn nav_focus_back_after_toolbar_click() {
+    let mut harness = harness();
+    open_demo(&mut harness);
+    assert!(table_focused(&harness));
+    harness.get_by_label(&crate::fr(TextId::ToolbarFit)).click();
+    harness.run();
+    assert!(table_focused(&harness), "focus perdu après la barre d'outils");
+    let before = at(harness.state());
+    press(&mut harness, Modifiers::NONE, Key::ArrowDown);
+    assert_eq!(at(harness.state()).0, before.0 + 1);
+    // Menu Édition, puis Échap qui le ferme : la navigation reprend.
+    harness.get_by_label(&crate::fr(TextId::MenuEdit)).click();
+    harness.run();
+    harness.key_press(Key::Escape);
+    harness.run();
+    harness.get_by_label(&crate::fr(TextId::ToolbarFit)).click();
+    harness.run();
+    let before = at(harness.state());
+    press(&mut harness, Modifiers::NONE, Key::ArrowDown);
+    assert_eq!(at(harness.state()).0, before.0 + 1);
+}
+
 /// Cadre du curseur dessiné (une forme de plus) et cellule courante
 /// accessible : « Ligne 3, Durée, 5 jours ».
 #[test]

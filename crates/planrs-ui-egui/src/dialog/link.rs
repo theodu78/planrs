@@ -191,6 +191,7 @@ fn read_only(ui: &mut egui::Ui, label: &str, value: &str) {
 /// Dessine la boîte ; rend la réponse de l'image.
 pub fn show(ctx: &egui::Context, texts: &Texts, state: &mut LinkState) -> LinkOutcome {
     let mut outcome = LinkOutcome::Open;
+    let armed = super::enter_armed(ctx, None);
     let response = egui::Modal::new(modal_id()).show(ctx, |ui| {
         ui.set_width(380.0);
         ui.heading(texts.get(TextId::LinkDialogTitle));
@@ -250,6 +251,11 @@ pub fn show(ctx: &egui::Context, texts: &Texts, state: &mut LinkState) -> LinkOu
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
     if escape {
         outcome = LinkOutcome::Cancel;
+    }
+    if outcome == LinkOutcome::Open
+        && super::enter_pressed(ctx, armed, response.is_top_modal, response.any_popup_open)
+    {
+        outcome = LinkOutcome::Ok;
     }
     outcome
 }

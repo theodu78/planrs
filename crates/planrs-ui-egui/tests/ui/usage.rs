@@ -180,6 +180,27 @@ fn usage_values_from_engine() {
     assert_eq!(generation(app), 0, "lecture seule");
 }
 
+/// Relecture finale J7 (performances, F2) : une fenêtre de lignes qui
+/// commence au milieu des affectations d'une ressource dépliée (sans la
+/// ligne de la ressource) la compte dépliée : ses cellules d'affectation
+/// sont demandées au moteur au lieu de rester vides.
+#[test]
+fn usage_window_inside_assignments_counts_expanded() {
+    let mut harness = usage_harness();
+    toggle_mason(&mut harness, true);
+    let rows = &harness.state().view().usage.rows;
+    let mason = rows.index_of(resource(MASON)).unwrap();
+    let (resources, expanded) = rows.resources_in(mason + 1..mason + 4);
+    assert_eq!(resources, [ResourceUid::new(MASON)]);
+    assert_eq!(
+        expanded,
+        [ResourceUid::new(MASON)],
+        "affectations vues sans leur ressource"
+    );
+    let (_, whole) = rows.resources_in(0..rows.len());
+    assert!(whole.contains(&ResourceUid::new(MASON)));
+}
+
 /// Génération du document.
 fn generation(app: &App) -> u64 {
     app.document.as_ref().unwrap().generation()

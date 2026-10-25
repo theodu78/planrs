@@ -86,6 +86,7 @@ pub fn modal_id() -> egui::Id {
 /// Dessine la fenêtre (une image) ; rend la réponse de l'utilisateur.
 pub fn show(ctx: &egui::Context, texts: &Texts, state: &mut RescheduleState) -> Outcome {
     let mut outcome = Outcome::Open;
+    let armed = super::enter_armed(ctx, None);
     let response = egui::Modal::new(modal_id()).show(ctx, |ui| {
         ui.set_width(420.0);
         ui.heading(texts.get(TextId::RsTitle));
@@ -122,6 +123,11 @@ pub fn show(ctx: &egui::Context, texts: &Texts, state: &mut RescheduleState) -> 
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
     if escape {
         outcome = Outcome::Cancel;
+    }
+    if outcome == Outcome::Open
+        && super::enter_pressed(ctx, armed, response.is_top_modal, response.any_popup_open)
+    {
+        outcome = Outcome::Ok;
     }
     outcome
 }

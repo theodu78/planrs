@@ -78,8 +78,11 @@ pub enum RelayKind {
         /// Réductions de moitié demandées.
         scale_down: u8,
     },
-    /// L'écouteur abandonne l'appel `id` (délai expiré) : l'application
-    /// retire son bandeau.
+    /// L'écouteur abandonne l'appel `id` (délai expiré, client parti) :
+    /// l'application retire son bandeau. Le `state` du [`RelayCall`] qui
+    /// porte ce `Cancel` est celui de l'appel abandonné : seul l'appel de
+    /// même `id` **et** de même état est retiré (deux agents numérotent
+    /// leurs appels de la même façon).
     Cancel(u64),
 }
 

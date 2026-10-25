@@ -637,7 +637,7 @@ fn row_clicked(
     // Double-clic (ou triple : deux clics suivant de près un premier) :
     // sur l'ID, « Informations sur la tâche » (H-UI-19, J7 lot L9) ;
     // ailleurs, la saisie de la cellule.
-    if (response.double_clicked() || response.triple_clicked()) && edit.editing.is_none() {
+    if (response.double_clicked() || response.triple_clicked()) && edit.editing.is_none() && !fc.window_open {
         match uid {
             Some(uid) if cursor.column == Column::Id => {
                 fc.actions
@@ -694,9 +694,10 @@ pub(crate) fn take_typed(ctx: &egui::Context) -> String {
     })
 }
 
-/// F2 ou frappe d'un caractère (hors champ de texte ou autre widget
-/// focalisé, menu ouvert ou modificateur Ctrl/Cmd) : ouvre la saisie de la
-/// cellule courante. Le caractère frappé remplace la valeur.
+/// F2, Retour arrière ou frappe d'un caractère (hors champ de texte ou
+/// autre widget focalisé, menu ouvert ou modificateur Ctrl/Cmd) : ouvre la
+/// saisie de la cellule courante. Le caractère frappé remplace la valeur ;
+/// Retour arrière l'efface (saisie vide).
 fn open_from_keys(
     ui: &egui::Ui,
     fc: &FrameCtx<'_>,
@@ -705,7 +706,7 @@ fn open_from_keys(
     cursor: &TableCursor,
 ) {
     let ctx = ui.ctx();
-    if edit.editing.is_some() || focus_elsewhere(ctx) || ctx.any_popup_open() {
+    if edit.editing.is_some() || fc.window_open || focus_elsewhere(ctx) || ctx.any_popup_open() {
         return;
     }
     let Some((uid, i)) = current_row(fc, sheet.rows) else {
@@ -717,6 +718,13 @@ fn open_from_keys(
     }
     if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::F2)) {
         open_editor(fc, sheet.rows, edit, column, uid, i);
+        return;
+    }
+    // Retour arrière (« delete » d'un Mac) : saisie vide de la cellule, à
+    // valider comme une frappe (relecture finale J7, F6 ; Cmd+delete
+    // supprime la tâche).
+    if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Backspace)) {
+        edit.start(EditState::typed(uid, column, ""));
         return;
     }
     let typed = take_typed(ctx);
@@ -751,6 +759,12 @@ fn edit_cells(
         close_editor(ui, edit);
         return;
     };
+    // Zone de saisie sans le focus (pas encore dessinée : ligne hors de la
+    // plage, ou focus demandé pour cette image) : la frappe va au tampon,
+    // rien n'est perdu (relecture finale J7, F2).
+    if !ui.memory(|memory| memory.has_focus(grid::editor_id())) {
+        absorb_keys(ui, edit);
+    }
     let mut finish = finish_keys(ui);
     if finish.is_none() && grid::scrolled(ui) {
         finish = Some(Finish::Commit(Move::Stay));
@@ -772,6 +786,24 @@ fn edit_cells(
         }
         Some(Finish::Commit(motion)) => commit(ui, fc, edit, cursor, motion),
     }
+}
+
+/// Frappe reçue alors que la zone de saisie n'a pas encore le focus :
+/// caractères ajoutés au tampon, Retour arrière en retire un par appui.
+fn absorb_keys(ui: &egui::Ui, edit: &mut TableEdit) {
+    let Some(state) = edit.editing.as_mut() else {
+        return;
+    };
+    let typed = take_typed(ui.ctx());
+    let erased = ui.input_mut(|input| input.count_and_consume_key(Modifiers::NONE, Key::Backspace));
+    if typed.is_empty() && erased == 0 {
+        return;
+    }
+    state.buffer.push_str(&typed);
+    for _ in 0..erased {
+        state.buffer.pop();
+    }
+    state.error = None;
 }
 
 /// Dessine la zone de saisie dans `rect` (et l'erreur dessous) ; rend vrai

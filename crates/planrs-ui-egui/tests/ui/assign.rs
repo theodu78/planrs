@@ -445,3 +445,60 @@ fn assign_menu_close_and_no_shortcut() {
         "aucun raccourci d'affectation"
     );
 }
+
+/// Relecture finale J7, F9 : fenêtre ouverte, Ctrl/Cmd+Z (et les autres
+/// raccourcis à Ctrl/Cmd sans effet de structure) agit hors de ses champs ;
+/// Suppr reste retenu ; un double-clic sur une cellule de la table n'ouvre
+/// pas une saisie qui ne recevrait aucune touche.
+#[test]
+fn assign_window_keeps_command_shortcuts_and_no_dead_editor() {
+    let mut harness = setup();
+    select(&mut harness, &[9]);
+    open_assign(&mut harness);
+    let entries = history_entries(harness.state());
+    assert!(entries > 0, "lot de `setup` à annuler");
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    harness.run();
+    assert!(is_open(harness.state()), "fenêtre fermée");
+    assert_eq!(history_entries(harness.state()), entries - 1, "Ctrl/Cmd+Z perdu");
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Y);
+    harness.run();
+    assert_eq!(history_entries(harness.state()), entries);
+    let tasks = project(harness.state()).tasks.len();
+    harness.key_press(Key::Delete);
+    harness.run();
+    assert_eq!(
+        project(harness.state()).tasks.len(),
+        tasks,
+        "Suppr appliqué fenêtre ouverte"
+    );
+    // Double-clic sur une ligne de la table : sélection, aucune saisie.
+    let app = harness.state();
+    let rows = app.rows().unwrap();
+    let i = rows.index_of(uid(10)).unwrap();
+    let label = Texts::new(Language::Fr).get_args(
+        TextId::RowLabel,
+        &[
+            ("id", Arg::Count(i64::from(rows.row(i).unwrap().id))),
+            ("name", Arg::Str(rows.text(i, Column::Name).to_owned().into())),
+        ],
+    );
+    let p = harness.get_by_label(&label).rect().center();
+    harness.event(egui::Event::PointerMoved(p));
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            harness.event(egui::Event::PointerButton {
+                pos: p,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            });
+        }
+    }
+    harness.run();
+    assert_eq!(harness.state().selection, Some(uid(10)));
+    assert!(
+        harness.state().view().edit.editing.is_none(),
+        "saisie morte ouverte"
+    );
+}

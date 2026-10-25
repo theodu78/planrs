@@ -181,6 +181,7 @@ pub fn modal_id() -> egui::Id {
 pub fn show(ctx: &egui::Context, texts: &Texts, state: &mut ProjectInfoState) -> super::task_info::Outcome {
     use super::task_info::Outcome;
     let mut outcome = Outcome::Open;
+    let armed = super::enter_armed(ctx, None);
     let response = egui::Modal::new(modal_id()).show(ctx, |ui| {
         ui.set_width(460.0);
         ui.heading(texts.get(TextId::PiTitle));
@@ -268,6 +269,11 @@ pub fn show(ctx: &egui::Context, texts: &Texts, state: &mut ProjectInfoState) ->
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
     if escape {
         outcome = Outcome::Cancel;
+    }
+    if outcome == Outcome::Open
+        && super::enter_pressed(ctx, armed, response.is_top_modal, response.any_popup_open)
+    {
+        outcome = Outcome::Ok;
     }
     outcome
 }

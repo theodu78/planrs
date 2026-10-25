@@ -213,6 +213,42 @@ fn c_ctl_04_listener_expires_and_cancels() {
     unix::relay_expires_and_cancels();
 }
 
+/// Relecture finale J7, relais F1 : le délai demandé par le client
+/// (`approval_timeout_ms`), plus court que celui de l'écouteur, l'emporte ;
+/// l'agent reçoit `control.approval_timeout` et le `Cancel` porte l'état de
+/// l'appel abandonné.
+#[cfg(unix)]
+#[test]
+fn relay_asked_timeout_shorter_wins() {
+    unix::relay_asked_timeout_shorter_wins();
+}
+
+/// Relecture finale J7, relais F1 : un client parti pendant l'attente
+/// (processus mort, délai du client écoulé) fait expirer l'appel, bandeau
+/// retiré (`Cancel`) : plus rien ne peut être accepté.
+#[cfg(unix)]
+#[test]
+fn relay_client_hangup_expires_call() {
+    unix::relay_client_hangup_expires_call();
+}
+
+/// Relecture finale J7, relais F4 : connexions pleines ⇒ `control.busy`
+/// dit au client, qui ne se détache pas (pas `control.app_gone`).
+#[cfg(unix)]
+#[test]
+fn relay_connections_full_busy() {
+    unix::relay_connections_full_busy();
+}
+
+/// Relecture finale J7, relais F2 : jeton remplacé (document neuf) ⇒ un
+/// client du jeton précédent reçoit `control.document_changed` (et se
+/// détache) ; le nouveau rendez-vous sert normalement.
+#[cfg(unix)]
+#[test]
+fn relay_rotated_token_refuses_previous_document() {
+    unix::relay_rotated_token_refuses_previous_document();
+}
+
 /// `query` relaie les seules lectures du registre (`project.summary` par
 /// défaut) ; `execute`, `ui_state`, `screenshot` donnent leur appel ;
 /// paramètres mal formés refusés sans fermer.
@@ -525,17 +561,19 @@ mod unix {
     }
 
     pub(super) fn busy_app_kept_live() {
-        // Application vivante qui sert déjà ses 8 connexions : la sonde est
-        // fermée sans réponse, mais le rendez-vous reste et l'application
-        // est tenue pour vivante (la garde ADR-0002 tient).
+        // Application vivante qui sert déjà ses 8 connexions : la sonde
+        // reçoit `control.busy` puis est fermée, le rendez-vous reste et
+        // l'application est tenue pour vivante (la garde ADR-0002 tient).
         let tmp = TempDir::new("busy");
         let dir = tmp.path().join("control");
         let file = project_file(tmp.path(), "plan.xml");
         let (handle, _token) = listener(&dir);
         let _guard = publish_in(&dir, &handle.rendezvous(canonical_project(&file))).unwrap();
         let idle: Vec<Client> = (0..8).map(|_| Client::connect(handle.endpoint())).collect();
-        // La neuvième est fermée sans réponse : le plafond est atteint.
+        // La neuvième reçoit `control.busy` puis est fermée : le plafond
+        // est atteint (relecture finale J7, relais F4).
         let mut ninth = Client::connect(handle.endpoint());
+        assert_eq!(err_code(&ninth.reply()), codes::BUSY);
         assert!(ninth.is_closed());
         assert!(probe(&handle.rendezvous(None)).is_err());
         assert!(find_live_for_in(&dir, &file).is_some());
@@ -834,6 +872,114 @@ mod unix {
                 result: json!({})
             }
         );
+    }
+
+    pub(super) fn relay_asked_timeout_shorter_wins() {
+        let tmp = TempDir::new("rask");
+        let (handle, token, rx, _) = relay_listener(tmp.path(), 4, Duration::from_secs(30));
+        let mut client = Client::connect(handle.endpoint());
+        client.hello(&token);
+        let frame = Frame {
+            v: 1,
+            id: 9,
+            method: Method::Execute,
+            params: json!({ "tool": "task.add", "params": {}, "approval_timeout_ms": 300 }),
+        };
+        let start = std::time::Instant::now();
+        client.send_raw(&to_line(&frame).unwrap());
+        let call = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        call.reply.send(Reply::PendingApproval { id: 9 }).unwrap();
+        assert_eq!(client.reply(), Reply::PendingApproval { id: 9 });
+        let reply = client.reply();
+        assert_eq!(err_code(&reply), tool_codes::CONTROL_APPROVAL_TIMEOUT);
+        assert!(start.elapsed() < Duration::from_secs(10), "{:?}", start.elapsed());
+        assert!(!call.state.claim(), "expiré : plus rien ne peut être accepté");
+        let cancel = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(cancel.kind, RelayKind::Cancel(9));
+        assert!(Arc::ptr_eq(&cancel.state, &call.state), "Cancel de cet appel-là");
+        // Délai mal formé : refusé sans fermer.
+        let frame = Frame {
+            v: 1,
+            id: 10,
+            method: Method::Execute,
+            params: json!({ "tool": "task.add", "approval_timeout_ms": "vite" }),
+        };
+        client.send_raw(&to_line(&frame).unwrap());
+        assert_eq!(err_code(&client.reply()), codes::INVALID_FRAME);
+    }
+
+    pub(super) fn relay_client_hangup_expires_call() {
+        let tmp = TempDir::new("rhup");
+        let (handle, token, rx, _) = relay_listener(tmp.path(), 4, Duration::from_secs(30));
+        let mut client = Client::connect(handle.endpoint());
+        client.hello(&token);
+        let frame = Frame {
+            v: 1,
+            id: 9,
+            method: Method::Execute,
+            params: execute("task.add"),
+        };
+        client.send_raw(&to_line(&frame).unwrap());
+        let call = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        call.reply.send(Reply::PendingApproval { id: 9 }).unwrap();
+        assert_eq!(client.reply(), Reply::PendingApproval { id: 9 });
+        drop(client);
+        let cancel = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(cancel.kind, RelayKind::Cancel(9));
+        assert!(Arc::ptr_eq(&cancel.state, &call.state));
+        assert!(
+            !call.state.claim(),
+            "appelant parti : plus rien ne peut être accepté"
+        );
+    }
+
+    pub(super) fn relay_connections_full_busy() {
+        use planrs_automation::control::RelayClient;
+
+        let tmp = TempDir::new("rconn");
+        let (handle, token, _rx, _) = relay_listener(tmp.path(), 4, Duration::from_secs(5));
+        let rendezvous = handle.rendezvous(None);
+        let mut agent = RelayClient::connect(&rendezvous, Duration::from_secs(2)).unwrap();
+        // Huit connexions muettes (sans hello) occupent toutes les places.
+        let mut held = Vec::new();
+        for _ in 0..8 {
+            held.push(Client::connect(handle.endpoint()));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        let mut ninth = Client::connect(handle.endpoint());
+        let reply = ninth.reply();
+        assert_eq!(err_code(&reply), codes::BUSY);
+        assert_eq!(reply.id(), 0);
+        let err = agent
+            .call("project.summary", json!({}), Duration::from_secs(2))
+            .unwrap_err();
+        assert_eq!(err.code(), tool_codes::CONTROL_BUSY);
+        assert!(!err.detaches(), "application vivante : rattachement gardé");
+        drop(held);
+        let _ = token;
+    }
+
+    pub(super) fn relay_rotated_token_refuses_previous_document() {
+        use planrs_automation::control::RelayClient;
+
+        let tmp = TempDir::new("rrot");
+        let (mut handle, token, rx, _) = relay_listener(tmp.path(), 4, Duration::from_secs(5));
+        let old = handle.rendezvous(None);
+        assert_eq!(old.token, token);
+        let mut agent = RelayClient::connect(&old, Duration::from_secs(2)).unwrap();
+        handle.rotate_token().unwrap();
+        let new = handle.rendezvous(None);
+        assert_ne!(new.token, old.token);
+        let err = agent
+            .call("project.summary", json!({}), Duration::from_secs(2))
+            .unwrap_err();
+        assert_eq!(err.code(), tool_codes::CONTROL_DOCUMENT_CHANGED);
+        assert!(err.detaches());
+        assert!(rx.try_recv().is_err(), "rien n'atteint l'application");
+        let mut client = Client::connect(handle.endpoint());
+        assert!(matches!(client.hello(&new.token), Reply::Ok { .. }));
+        let mut stale = Client::connect(handle.endpoint());
+        assert_eq!(err_code(&stale.hello(&old.token)), codes::BAD_TOKEN);
     }
 
     pub(super) fn relay_methods_become_calls() {

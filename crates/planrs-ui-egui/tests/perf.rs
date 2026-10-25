@@ -24,7 +24,9 @@
 //!   validation, qui recalcule et reconstruit le `RowModel`, plus l'image
 //!   suivante), mesure publiée avec sa décomposition (recalcul,
 //!   `RowModel::build`, reste) ; **porte** depuis le lot L16 : médiane
-//!   < 100 ms, p95 < 150 ms.
+//!   < 100 ms, p95 < 150 ms. `edit_latency_baseline` (relecture finale J7) :
+//!   même mesure, ligne de base 0 posée sur tout le réseau (écarts du Gantt
+//!   de suivi recalculés à chaque reconstruction des lignes), même porte.
 //! - J7 L3 (ignoré, release) : `approval_banner` (bandeau de validation
 //!   d'une écriture d'un agent affiché, défilement à chaque image), mêmes
 //!   seuils.
@@ -561,7 +563,44 @@ const EDIT_SPIKE: Duration = Duration::from_millis(150);
 #[test]
 #[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
 fn edit_latency() {
+    measure_edit_latency("edit_latency", false);
+}
+
+/// Relecture finale J7 (performances, F5) : même latence d'édition avec une
+/// ligne de base 0 posée sur tout le réseau (écarts du Gantt de suivi
+/// recalculés par `RowModel::build` à chaque édition) ; même porte.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn edit_latency_baseline() {
+    measure_edit_latency("edit_latency_baseline", true);
+}
+
+/// Pose la ligne de base 0 sur tout le projet (`baseline.set`).
+fn set_baseline(app: &mut App, bench: &mut Bench) {
+    let batch = planrs_automation::Batch::from_json(serde_json::json!({
+        "format_version": 1,
+        "ops": [{ "op": "baseline.set" }]
+    }))
+    .unwrap();
+    app.execute(&batch, planrs_ui_egui::app::EditOrigin::User)
+        .unwrap();
+    bench.settle(app);
+    let doc = app.document.as_ref().unwrap();
+    assert!(
+        doc.project()
+            .tasks
+            .iter()
+            .all(|t| t.baselines.contains_key(&planrs_core::BaselineNumber::PRIMARY))
+    );
+}
+
+/// Latence d'édition (voir [`edit_latency`]), ligne de base posée d'abord
+/// si `baseline`.
+fn measure_edit_latency(name: &str, baseline: bool) {
     let (mut app, mut bench) = nav_bench();
+    if baseline {
+        set_baseline(&mut app, &mut bench);
+    }
     let labels = planrs_ui_egui::i18n::Texts::new(planrs_ui_egui::Language::Fr)
         .format_labels()
         .clone();
@@ -622,7 +661,7 @@ fn edit_latency() {
     let (build_median, _, _) = stats(build);
     let rest = (ms(median) - ms(apply_median) - ms(build_median)).max(0.0);
     eprintln!(
-        "perf UI edit_latency (20 validations) : médiane {:.1} ms, p95 {:.1} ms, max {:.1} ms ; \
+        "perf UI {name} (20 validations) : médiane {:.1} ms, p95 {:.1} ms, max {:.1} ms ; \
          décomposition (médianes) : recalcul (Session::apply) {:.1} ms, RowModel::build {:.1} ms, \
          reste (image, tessellation) {:.1} ms ; porte : médiane < {} ms, p95 < {} ms",
         ms(median),
@@ -635,7 +674,7 @@ fn edit_latency() {
         EDIT_SPIKE.as_millis(),
     );
     report(
-        "edit_latency",
+        name,
         &total,
         bench.last,
         serde_json::json!({
@@ -648,9 +687,9 @@ fn edit_latency() {
     );
     assert!(
         median < EDIT_BUDGET,
-        "edit_latency : médiane {median:?} ≥ {EDIT_BUDGET:?}"
+        "{name} : médiane {median:?} ≥ {EDIT_BUDGET:?}"
     );
-    assert!(p95 < EDIT_SPIKE, "edit_latency : p95 {p95:?} ≥ {EDIT_SPIKE:?}");
+    assert!(p95 < EDIT_SPIKE, "{name} : p95 {p95:?} ≥ {EDIT_SPIKE:?}");
 }
 
 /// Relevé stabilisé après `events` (une image par lot d'événements).

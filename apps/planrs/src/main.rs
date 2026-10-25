@@ -91,6 +91,9 @@ struct ControlRendezvous {
     listener_failed: bool,
     /// Chemin (tel qu'ouvert) du document dont le rendez-vous est publié.
     path: Option<String>,
+    /// Numéro d'ouverture du dernier document vu : un document neuf change
+    /// le jeton de l'écouteur (relecture finale J7, relais F2).
+    opening: Option<u64>,
 }
 
 impl ControlRendezvous {
@@ -105,6 +108,7 @@ impl ControlRendezvous {
             listener: None,
             listener_failed: false,
             path: None,
+            opening: None,
         };
         (control, rx)
     }
@@ -157,9 +161,28 @@ impl ControlRendezvous {
 }
 
 impl DocumentObserver for ControlRendezvous {
+    /// Rendez-vous du chemin du document. Un document **neuf** (autre
+    /// numéro d'ouverture : autre fichier, même fichier rouvert, « Nouveau »)
+    /// change le jeton de l'écouteur avant la publication : un agent
+    /// rattaché au document précédent est refusé
+    /// (`control.document_changed`) au lieu d'agir sur celui-ci par les
+    /// mêmes UID ; « Enregistrer sous » (même ouverture) garde le jeton.
     fn document_changed(&mut self, document: Option<&OpenDocument>) {
         let path = document.and_then(|document| document.origin.path.as_deref());
-        if path != self.path.as_deref() {
+        let opening = document.map(|document| document.opening);
+        let mut rotated = false;
+        if opening.is_some() && opening != self.opening {
+            if self.opening.is_some()
+                && let Some(listener) = &mut self.listener
+            {
+                match listener.rotate_token() {
+                    Ok(()) => rotated = true,
+                    Err(error) => eprintln!("{PRODUCT_NAME} : jeton du canal non renouvelé ({error})"),
+                }
+            }
+            self.opening = opening;
+        }
+        if rotated || path != self.path.as_deref() {
             self.publish_for(path);
         }
     }
@@ -189,11 +212,13 @@ fn event_loop_hook() -> Option<eframe::EventLoopBuilderHook> {
 }
 
 /// Reprise après plantage : orphelins de `root` proposés (ceux sans
-/// modification supprimés), puis journal de chaque document dans `root`.
+/// modification supprimés ; ceux d'une autre version ou trop grands gardés
+/// et proposés, jamais supprimés sans l'accord de l'utilisateur), puis
+/// journal de chaque document dans `root`.
 fn start_recovery(app: &mut App, root: PathBuf) {
     let (offered, stale): (Vec<_>, Vec<_>) = orphans(&root)
         .into_iter()
-        .partition(planrs_automation::recovery::Orphan::worth_restoring);
+        .partition(planrs_automation::recovery::Orphan::worth_offering);
     for orphan in stale {
         if let Err(error) = orphan.discard() {
             eprintln!("{PRODUCT_NAME} : journal de reprise non supprimé ({error})");
@@ -321,6 +346,45 @@ mod tests {
         OpenDocument::new(loaded, origin, 1)
     }
 
+    /// Relecture finale J7, relais F2 : un document neuf (autre ouverture)
+    /// change le jeton publié ; « Enregistrer sous » (même ouverture, autre
+    /// chemin) le garde.
+    #[cfg(unix)]
+    #[test]
+    fn desktop_new_document_rotates_token() {
+        let root = std::env::temp_dir().join(format!("planrs-rot-{}", std::process::id()));
+        let dir = root.join("control");
+        std::fs::create_dir_all(&root).unwrap();
+        let first = root.join("a.xml");
+        let second = root.join("b.xml");
+        for file in [&first, &second] {
+            std::fs::write(file, planrs_ui_egui::DEMO_MSPDI).unwrap();
+        }
+        let (mut observer, _inbox) = ControlRendezvous::new(std::sync::Arc::new(|| {}));
+        observer.dir = Some(dir.clone());
+        let doc = demo_at(&first);
+        observer.document_changed(Some(&doc));
+        let token = find_live_for_in(&dir, &first).unwrap().token;
+        // Même fichier, autre ouverture : nouveau jeton.
+        let mut reopened = demo_at(&first);
+        reopened.opening = 2;
+        observer.document_changed(Some(&reopened));
+        let rotated = find_live_for_in(&dir, &first).unwrap().token;
+        assert_ne!(rotated, token);
+        // « Enregistrer sous » : même ouverture, autre chemin, même jeton.
+        let mut saved_as = reopened.clone();
+        saved_as.set_origin(planrs_ui_egui::DocOrigin {
+            name: "b.xml".to_owned(),
+            path: Some(second.to_str().unwrap().to_owned()),
+            demo: false,
+        });
+        observer.document_changed(Some(&saved_as));
+        assert_eq!(find_live_for_in(&dir, &second).unwrap().token, rotated);
+        assert!(find_live_for_in(&dir, &first).is_none());
+        drop(observer);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     /// Le rendez-vous suit le chemin du document : publié à l'ouverture
     /// (résumé tenu), déplacé avec le chemin, retiré à la fermeture.
     #[cfg(unix)]
@@ -438,6 +502,30 @@ mod tests {
             1,
             "journal supprimé à la fermeture"
         );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Relecture finale J7, relais F5 : un journal d'une autre version de
+    /// format n'est jamais supprimé au démarrage ; il est proposé (Ignorer
+    /// le supprime).
+    #[test]
+    fn desktop_start_recovery_keeps_foreign_journal() {
+        use planrs_ui_egui::{App, Env, UiState};
+
+        let root = std::env::temp_dir().join(format!("planrs-foreign-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("9-0");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("base.json"), br#"{"v":2}"#).unwrap();
+        let now = "2027-01-15T08:00".parse().unwrap();
+        let mut app = App::new(UiState::default(), Env::fixed(now));
+        super::start_recovery(&mut app, root.clone());
+        assert!(
+            dir.join("base.json").exists(),
+            "journal d'une autre version supprimé"
+        );
+        assert_eq!(app.recovery_offers().len(), 1);
+        assert!(app.recovery_offers().iter().all(|o| o.kept));
         std::fs::remove_dir_all(&root).unwrap();
     }
 

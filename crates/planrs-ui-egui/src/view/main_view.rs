@@ -129,6 +129,9 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
     } = paint_rows(ui, fc, view, &layout, &axis);
     view.last_scroll_y = scroll_y;
     view.last_body_height = view_h;
+    if std::mem::take(&mut view.edit.reveal) {
+        reveal_edited_row(fc, view);
+    }
     context_menu(ui, fc, context_click);
 
     // Molette horizontale (ou Maj + molette) au-dessus du Gantt : la
@@ -172,6 +175,33 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
         fc.actions.push(Action::ScrollGanttX(dx));
     }
     ui.advance_cursor_after_rect(avail);
+}
+
+/// Saisie ouverte (F2, frappe, double-clic) : sa ligne, si elle n'est pas
+/// entièrement à l'écran, y est amenée avec une ligne de marge (H-UI-17) ;
+/// la zone de saisie est dessinée dès l'image suivante (relecture finale J7,
+/// F2 : une saisie ouverte hors de l'écran ne recevait pas la frappe).
+fn reveal_edited_row(fc: &FrameCtx<'_>, view: &mut ViewTransient) {
+    let (Some(rows), Some(state)) = (fc.rows, view.edit.editing.as_ref()) else {
+        return;
+    };
+    let index = match state.uid {
+        Some(uid) => match rows.index_of(uid) {
+            Some(index) => index,
+            None => return,
+        },
+        None => rows.len(),
+    };
+    let row_h = fc.metrics.row_h;
+    let top = geom::index_to_f32(index) * row_h;
+    let (offset, height) = (view.last_scroll_y, view.last_body_height);
+    if top >= offset && top + row_h <= offset + height {
+        return;
+    }
+    if let Some(y) = crate::nav::ensure_visible(offset, index, row_h, height, rows.len().saturating_add(1)) {
+        view.pending_scroll_y = Some(y);
+        view.last_scroll_y = y;
+    }
 }
 
 /// Résultat du corps : défilement horizontal demandé et clic droit.
@@ -411,7 +441,7 @@ fn bar_gesture(
                 kind,
                 origin_x: p.x - left,
                 days: 0,
-                over_row: geom::row_at(p.y - origin.y, row_h, rows.len()),
+                over_row: link_target(rows, axis, origin, row_h, tracking, p, uid),
                 preview: None,
             };
             d.days = gesture_days(&d, rows, axis, left, p.x);
@@ -440,7 +470,7 @@ fn bar_gesture(
             current.days = days;
             current.preview = gesture_preview(doc, current);
         }
-        current.over_row = geom::row_at(p.y - origin.y, row_h, rows.len());
+        current.over_row = link_target(rows, axis, origin, row_h, tracking, p, current.uid);
     }
     let released = background.drag_stopped() || !ui.input(|i| i.pointer.primary_down());
     if released {
@@ -458,6 +488,27 @@ fn bar_gesture(
     true
 }
 
+/// Ligne de la barre d'une **autre** tâche sous le pointeur `p` (corps,
+/// bords compris), cible d'un lien (R-243 : lâcher sur la barre de B ;
+/// relecture finale J7, F7 : lâcher n'importe où sur une autre ligne,
+/// même dans le vide, liait au lieu de déplacer).
+fn link_target(
+    rows: &RowModel,
+    axis: &TimeAxis,
+    origin: Pos2,
+    row_h: f32,
+    tracking: bool,
+    p: Pos2,
+    from: TaskUid,
+) -> Option<usize> {
+    match gantt::hit_test(rows, axis, origin, row_h, tracking, p) {
+        GanttHit::Bar(uid) | GanttHit::BarStart(uid) | GanttHit::BarEnd(uid) if uid != from => {
+            rows.index_of(uid)
+        }
+        _ => None,
+    }
+}
+
 /// Curseur au survol d'une barre : bords redimensionnables, intérieur
 /// saisissable.
 fn hover_cursor(ui: &egui::Ui, hit: GanttHit) {
@@ -470,8 +521,8 @@ fn hover_cursor(ui: &egui::Ui, hit: GanttHit) {
 }
 
 /// Lâcher du glisser `d` : un seul lot (`ExecOn`), ou le refus du geste au
-/// bandeau ; lien vers une autre ligne (R-243 : ligne vide, tâche exclue ou
-/// la même tâche ⇒ rien), déplacement (R-240 ; récapitulative : rien),
+/// bandeau ; lien vers la barre d'une autre tâche sous le pointeur (R-243 ;
+/// ailleurs, même sur une autre ligne, le geste reste un déplacement), déplacement (R-240 ; récapitulative : rien),
 /// redimensionnement (R-241), avancement (R-242, seulement si le pointeur
 /// a bougé d'au moins un demi-jour).
 fn drop_gesture(fc: &mut FrameCtx<'_>, doc: &OpenDocument, rows: &RowModel, d: &BarDrag, moved: bool) {
@@ -609,7 +660,7 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
     .show(|ui| {
         for (op, text, command, needs_selection) in CONTEXT_ENTRIES {
             let mut button = egui::Button::new(texts.get(text));
-            if let Some(shortcut) = keymap::shortcut_for(Binding::Command(command)) {
+            if let Some(shortcut) = keymap::shortcut_for_os(Binding::Command(command), ctx.os()) {
                 button = button.shortcut_text(keymap::shortcut_text(&ctx, shortcut));
             }
             if ui
@@ -622,7 +673,7 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
         // « Informations sur la tâche » (H-UI-19, J7 lot L9).
         ui.separator();
         let mut button = egui::Button::new(texts.get(TextId::TaskInfoMenu));
-        if let Some(shortcut) = keymap::shortcut_for(Binding::Ui(UiBinding::TaskInformation)) {
+        if let Some(shortcut) = keymap::shortcut_for_os(Binding::Ui(UiBinding::TaskInformation), ctx.os()) {
             button = button.shortcut_text(keymap::shortcut_text(&ctx, shortcut));
         }
         if ui.add_enabled(has_selection, button).clicked() {
@@ -910,6 +961,7 @@ mod tests {
                 selected: &crate::selection::Selection::default(),
                 actions: &mut actions,
                 stats: &mut stats,
+                window_open: false,
             };
             super::show(ui, &mut fc, view);
         });

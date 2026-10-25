@@ -301,8 +301,33 @@ fn progress_leaf(s: &Session, uid: TaskUid) -> Result<(&Task, &TaskSchedule), Ge
     Ok((task, t))
 }
 
+/// % que R-201 stockerait après la saisie de `p` sur `task` (durée D) :
+/// réel = `percent_of(D, p)` borné à D − 1, puis % dérivé du réel arrondi
+/// (R-200) ; 0 ⇒ 0 ; D = 0 ou 100 % ⇒ 100 %. Un geste dont ce % égale le %
+/// courant ne change rien : aucun lot (relecture finale J7 : T 3 j, 33 %
+/// envoyé, 32,99 % stocké ; refaire le même geste ajoutait une entrée
+/// d'annulation sans effet).
+fn stored_percent(task: &Task, p: Percent) -> Percent {
+    if p == Percent::ZERO {
+        return p;
+    }
+    let d = task.duration.minutes().get();
+    if d <= 0 || p == Percent::FULL {
+        return Percent::FULL;
+    }
+    let share = i128::from(d).saturating_mul(i128::from(p.get()));
+    let actual = planrs_core::round_div(share, 10_000)
+        .unwrap_or(0)
+        .min(d.saturating_sub(1))
+        .max(0);
+    planrs_core::round_div(i128::from(actual).saturating_mul(10_000), i128::from(d))
+        .map(|v| v.clamp(0, Percent::FULL.get().saturating_sub(1)))
+        .and_then(|v| Percent::new(v).ok())
+        .unwrap_or(p)
+}
+
 /// Pose l'avancement de `uid` au point `days_from_start` jours après son
-/// début (R-242) ; même % que l'actuel : aucun lot.
+/// début (R-242) ; % que R-201 stockerait égal au % courant : aucun lot.
 ///
 /// # Errors
 ///
@@ -317,7 +342,9 @@ pub fn progress_drag(
     let (task, t) = progress_leaf(s, uid)?;
     let cal = measure(s, set, task)?;
     let percent = dragged_percent(cal.scale(task), t, days_from_start)?;
-    if percent == task.progress.percent_complete {
+    if percent == task.progress.percent_complete
+        || stored_percent(task, percent) == task.progress.percent_complete
+    {
         return Ok(None);
     }
     Ok(Some(one(Command::ProgressUpdate(ProgressUpdate {

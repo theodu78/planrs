@@ -323,6 +323,8 @@ error-control-not_attached = No attached application: { $detail }
 error-control-app_gone = Application closed: { $detail }
 error-control-screenshot_unavailable = Screenshot unavailable: { $detail }
 error-control-screenshot_too_large = Screenshot too large: { $detail }
+error-control-busy = Application busy: { $detail }
+error-control-document_changed = Application document changed: { $detail }
 
 # --- J7 L1 ---
 table-label = Task table
@@ -333,7 +335,7 @@ nav-cursor-empty-value = empty
 # --- J7 L2 ---
 
 # --- J7 L3 ---
-approval-title = The agent proposes: { $name }
+approval-title = The agent proposes on “{ $document }”: { $name }
 approval-changed =
     { $count ->
         [0] no task changed
@@ -616,5 +618,8 @@ recovery-partial = “{ $name }” partly recovered: { $count ->
 recovery-failed = Cannot recover “{ $name }”: { $detail }
 recovery-discard-failed = Cannot delete the recovery journal: { $detail }
 recovery-journal-cut = Crash recovery stopped for this document: { $detail }. Editing continues; save often.
+recovery-file-changed = The file changed on disk since then: the recovered version opens without a path (Save As), so it cannot overwrite it.
+recovery-kept = Journal from another planrs version, or too large: it cannot be restored here. Discard deletes it.
+recovered-file-name = { $stem } (recovered)
 
 # --- J7 L16 ---

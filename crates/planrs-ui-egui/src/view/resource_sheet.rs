@@ -397,7 +397,7 @@ fn row_clicked(
         cursor.column = column;
     }
     fc.actions.push(Action::FocusPane(Pane::Table));
-    if (response.double_clicked() || response.triple_clicked()) && edit.editing.is_none() {
+    if (response.double_clicked() || response.triple_clicked()) && edit.editing.is_none() && !fc.window_open {
         open_editor(sheet, edit, cursor, list_index, fc.doc);
     }
 }
@@ -439,7 +439,12 @@ fn open_from_keys(
     list_index: &mut usize,
 ) {
     let ctx = ui.ctx();
-    if edit.editing.is_some() || focus_elsewhere(ctx) || ctx.any_popup_open() || fc.doc.is_none() {
+    if edit.editing.is_some()
+        || fc.window_open
+        || focus_elsewhere(ctx)
+        || ctx.any_popup_open()
+        || fc.doc.is_none()
+    {
         return;
     }
     if !sheet.editable(cursor.column) {
@@ -450,6 +455,12 @@ fn open_from_keys(
         return;
     }
     if cursor.column == ResourceColumn::Calendar {
+        return;
+    }
+    // Retour arrière : saisie vide (comme la table des tâches ; Cmd+delete
+    // supprime la ressource, relecture finale J7, F6).
+    if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Backspace)) {
+        edit.start(CellEdit::typed(cursor.row, cursor.column, ""));
         return;
     }
     let typed = take_typed(ctx);

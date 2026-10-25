@@ -78,3 +78,19 @@ fn r242_beyond_finish_complete() {
     assert_eq!(drag(&mut s, 30), Percent::FULL.get());
     assert!(s.schedule().scheduled(T).unwrap().progress.is_some());
 }
+
+/// Relecture finale J7 : T 3 j, glisser d'un jour envoie 3 300 et R-201
+/// stocke 3 299 ; refaire le même geste ne change rien : aucun lot, aucune
+/// entrée d'annulation.
+#[test]
+fn r242_same_point_twice_no_batch() {
+    let mut s = with_tasks(&[("T", "3j")]);
+    assert_eq!(drag(&mut s, 1), 3_300);
+    assert_eq!(get(&s, 1).progress.percent_complete.get(), 3_299);
+    let entries = s.history().entries.len();
+    let set = CalendarSet::compile(s.project()).0;
+    assert_eq!(gesture::progress_drag(&s, &set, T, 1).unwrap(), None);
+    assert_eq!(s.history().entries.len(), entries);
+    // Un autre point fait toujours un lot.
+    assert!(gesture::progress_drag(&s, &set, T, 2).unwrap().is_some());
+}

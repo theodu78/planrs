@@ -372,6 +372,8 @@ text_ids! {
     ErrorControlAppGone => "error-control-app_gone",
     ErrorControlScreenshotUnavailable => "error-control-screenshot_unavailable",
     ErrorControlScreenshotTooLarge => "error-control-screenshot_too_large",
+    ErrorControlBusy => "error-control-busy",
+    ErrorControlDocumentChanged => "error-control-document_changed",
     // --- J7 L1 ---
     TableLabel => "table-label",
     NavCursorLabel => "nav-cursor-label",
@@ -617,6 +619,9 @@ text_ids! {
     RecoveryFailed => "recovery-failed",
     RecoveryDiscardFailed => "recovery-discard-failed",
     RecoveryJournalCut => "recovery-journal-cut",
+    RecoveryFileChanged => "recovery-file-changed",
+    RecoveryKept => "recovery-kept",
+    RecoveredFileName => "recovered-file-name",
     // --- J7 L16 ---
 }
 
@@ -950,6 +955,8 @@ mod tests {
             ("name", Arg::Str("Plans".into())),
             ("column", Arg::Str("Durée".into())),
             ("value", Arg::Str("5 jours".into())),
+            ("document", Arg::Str("maison.xml".into())),
+            ("stem", Arg::Str("maison".into())),
         ]
     }
 

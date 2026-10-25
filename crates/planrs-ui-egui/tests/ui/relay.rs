@@ -186,10 +186,74 @@ fn c_ctl_04_timeout_then_accept_does_nothing() {
     let second = execute(&tx, "task.update", rename(3, "Annulé"));
     harness.run();
     assert_eq!(pending_ids(harness.state()), [second.id]);
-    let _cancel = push(&tx, RelayKind::Cancel(second.id));
+    cancel(&tx, &second);
     harness.run();
     assert_eq!(pending_ids(harness.state()).len(), 0);
     assert_eq!(generation(harness.state()), 0);
+}
+
+/// `Cancel` de l'écouteur pour l'appel `sent` : même id, même état.
+fn cancel(tx: &SyncSender<RelayCall>, sent: &Sent) {
+    let (reply, _) = sync_channel(1);
+    tx.send(RelayCall {
+        id: sent.id,
+        kind: RelayKind::Cancel(sent.id),
+        state: Arc::clone(&sent.state),
+        reply,
+    })
+    .unwrap();
+}
+
+/// Appel en file d'un autre agent qui réutilise l'id `id` (chaque
+/// `planrs mcp` numérote ses appels depuis 1).
+fn execute_as(tx: &SyncSender<RelayCall>, id: u64, tool: &str, params: Value) -> Sent {
+    let (reply, replies) = sync_channel(4);
+    let state = Arc::new(CallState::new());
+    tx.send(RelayCall {
+        id,
+        kind: RelayKind::Execute {
+            tool: tool.to_owned(),
+            params,
+        },
+        state: Arc::clone(&state),
+        reply,
+    })
+    .unwrap();
+    Sent { id, state, replies }
+}
+
+/// Relecture finale J7, relais F3 : deux agents en attente avec le même
+/// id ; le `Cancel` de l'un ne retire que son appel (même état), jamais
+/// celui de l'autre ; Accepter ne vise que le bandeau affiché.
+#[test]
+fn relay_cancel_same_id_other_agent_kept() {
+    let (mut harness, tx) = relay_harness();
+    let id = next_id();
+    let first = execute_as(&tx, id, "task.update", rename(3, "Agent A"));
+    let second = execute_as(&tx, id, "task.update", rename(4, "Agent B"));
+    harness.run();
+    assert_eq!(pending_ids(harness.state()), [id, id]);
+    // L'appel de B expire : seul celui de B est retiré, A reste au bandeau.
+    assert!(second.state.expire());
+    cancel(&tx, &second);
+    harness.run();
+    let relay = harness.state().relay().unwrap();
+    assert_eq!(relay.pending().len(), 1);
+    assert_eq!(first.drain(), [Reply::PendingApproval { id }]);
+    harness.state_mut().dispatch(Action::Approve(id));
+    harness.run();
+    assert_eq!(ok_value(first.drain().remove(0))["committed"], true);
+    let app = harness.state();
+    let name = &app
+        .document
+        .as_ref()
+        .unwrap()
+        .project()
+        .tasks
+        .get(planrs_core::TaskUid::new(3))
+        .unwrap()
+        .name;
+    assert_eq!(name, "Agent A");
 }
 
 /// C-CTL-05 : ouvertures relayées refusées `control.not_relayable`, avec
@@ -300,29 +364,43 @@ fn c_ctl_09_read_same_as_local() {
     assert_eq!(generation(harness.state()), 0, "le dry_run ne change rien");
 }
 
-/// H-UI-27 : bandeau avec le focus clavier ; Entrée accepte, Échap
-/// refuse ; un seul à la fois, les autres en file.
+/// H-UI-27 : le bandeau ne prend pas le focus ; Ctrl/Cmd+Entrée accepte,
+/// Échap refuse quand un bouton du bandeau a le focus ; un seul à la fois,
+/// les autres en file.
 #[test]
 fn h_ui_27_banner_keyboard() {
     let (mut harness, tx) = relay_harness();
-    let first = execute(&tx, "task.update", rename(3, "Par Entrée"));
+    let first = execute(&tx, "task.update", rename(3, "Par Ctrl+Entrée"));
     let second = execute(&tx, "task.update", rename(4, "Par Échap"));
     harness.run();
     let texts = harness.state().texts();
     let accept = texts.get(TextId::ApprovalAccept);
     let reject = texts.get(TextId::ApprovalReject);
     let queued = texts.get_args(TextId::ApprovalQueued, &[("count", Arg::Count(1))]);
-    let title = texts.get_args(TextId::ApprovalTitle, &[("name", Arg::Str("task.update".into()))]);
+    // Le bandeau nomme le document visé (relecture finale J7, relais F2).
+    let document = harness.state().document.as_ref().unwrap().origin.name.clone();
+    assert_ne!(document, "");
+    let title = texts.get_args(
+        TextId::ApprovalTitle,
+        &[
+            ("name", Arg::Str("task.update".into())),
+            ("document", Arg::Str(document.into())),
+        ],
+    );
     harness.get_by_label(&queued);
     assert!(harness.query_by_label_contains(&title).is_some());
-    assert!(harness.get_by_label(&accept).is_focused());
-    harness.key_press_modifiers(Modifiers::NONE, Key::Enter);
+    assert!(!harness.get_by_label(&accept).is_focused(), "aucun vol du focus");
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
     harness.run();
     assert_eq!(first.drain().len(), 2, "pending puis ok");
     assert_eq!(generation(harness.state()), 1);
-    // Bandeau suivant, focus redonné à Accepter ; Échap refuse.
+    // Bandeau suivant : Échap sans focus sur le bandeau ne refuse rien.
     assert!(harness.query_by_label(&queued).is_none());
-    assert!(harness.get_by_label(&accept).is_focused());
+    harness.key_press_modifiers(Modifiers::NONE, Key::Escape);
+    harness.run();
+    assert_eq!(pending_ids(harness.state()), [second.id]);
+    harness.get_by_label(&reject).focus();
+    harness.run();
     harness.key_press_modifiers(Modifiers::NONE, Key::Escape);
     harness.run();
     let replies = second.drain();
@@ -330,6 +408,39 @@ fn h_ui_27_banner_keyboard() {
     assert_eq!(generation(harness.state()), 1);
     assert!(harness.query_by_label(&reject).is_none(), "bandeau retiré");
     assert_eq!(pending_ids(harness.state()).len(), 0);
+}
+
+/// Relecture finale J7, interface F1 : un bandeau qui paraît pendant la
+/// navigation (Entrée) ou la saisie d'un nom (Espace) ne prend pas le
+/// focus ; ni Entrée ni Espace n'acceptent l'écriture de l'agent.
+#[test]
+fn h_ui_27_banner_enter_or_space_never_accepts() {
+    let (mut harness, tx) = relay_harness();
+    let start = harness.state().selection;
+    let sent = execute(&tx, "task.update", rename(3, "Jamais lu"));
+    harness.run();
+    assert_eq!(pending_ids(harness.state()), [sent.id]);
+    // Entrée de navigation : le curseur descend, rien n'est accepté.
+    harness.key_press(Key::Enter);
+    harness.run();
+    assert_eq!(generation(harness.state()), 0, "Entrée a accepté l'écriture");
+    assert_ne!(harness.state().selection, start, "Entrée navigue toujours");
+    // Saisie d'un nom avec un espace : la saisie le reçoit, rien n'est
+    // accepté.
+    harness.event(egui::Event::Text("Revue".to_owned()));
+    harness.run();
+    harness.key_press(Key::Space);
+    harness.event(egui::Event::Text(" ".to_owned()));
+    harness.run();
+    assert_eq!(generation(harness.state()), 0, "Espace a accepté l'écriture");
+    assert_eq!(pending_ids(harness.state()), [sent.id]);
+    let editing = harness.state().view().edit.editing.clone().unwrap();
+    assert_eq!(editing.buffer, "Revue ");
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(harness.state().view().edit.editing.is_none());
+    assert_eq!(pending_ids(harness.state()), [sent.id], "Échap reste à la saisie");
+    assert_eq!(sent.drain(), [Reply::PendingApproval { id: sent.id }]);
 }
 
 /// Un lot accepté de l'agent = une seule entrée d'annulation, marquée
@@ -368,8 +479,15 @@ fn relay_agent_entry_single_undo() {
 #[test]
 fn relay_ui_state_and_ui_actions() {
     let (mut harness, tx) = relay_harness();
+    harness
+        .state_mut()
+        .state
+        .remember_recent("/home/u/clients/autre-client.xml", "autre-client.xml");
     let sent = push(&tx, RelayKind::UiState);
     let state = ok_value(finish(&mut harness, &sent, true));
+    // Relecture finale J7, relais F7 : aucun chemin d'un autre projet.
+    assert!(state["ui_state"].get("recent").is_none(), "{}", state["ui_state"]);
+    assert!(!state.to_string().contains("autre-client"));
     assert_eq!(state["view"], "gantt");
     assert_eq!(state["dirty"], false);
     assert_eq!(state["generation"], 0);
@@ -571,6 +689,42 @@ mod socket {
         assert_eq!(write.unwrap()["committed"], true);
         assert_eq!(read.unwrap()["entries"][0]["source"], "agent");
         assert_eq!(generation(harness.state()), 1);
+    }
+
+    /// Relecture finale J7, relais F1 : `--approval-timeout` plus court que
+    /// le délai de l'écouteur (ici 1 s contre 120 s) : l'application expire
+    /// l'appel à 1 s, l'agent reçoit `control.approval_timeout` de
+    /// l'application, le bandeau est retiré et un Accepter tardif n'applique
+    /// rien (aucun doublon à la relance).
+    #[test]
+    fn c_ctl_04_client_timeout_shorter_than_listener() {
+        let (mut harness, handle, _tmp) = wired("short", Duration::from_secs(120));
+        let rendezvous = handle.rendezvous(None);
+        let agent = thread::spawn(move || {
+            let mut client = RelayClient::connect(&rendezvous, Duration::from_secs(5))
+                .unwrap()
+                .with_margin(Duration::from_secs(5));
+            client.call("task.update", rename(3, "Trop tard"), Duration::from_secs(1))
+        });
+        pump(&mut harness, |app| {
+            app.relay().is_some_and(|relay| !relay.pending().is_empty())
+        });
+        let id = pending_ids(harness.state())[0];
+        pump(&mut harness, |_| agent.is_finished());
+        match agent.join().unwrap() {
+            Err(RelayError::App(error)) => assert_eq!(error["code"], codes::CONTROL_APPROVAL_TIMEOUT),
+            other => panic!("délai de l'application attendu : {other:?}"),
+        }
+        pump(&mut harness, |app| {
+            app.relay().is_some_and(|relay| relay.pending().is_empty())
+        });
+        harness.state_mut().dispatch(Action::Approve(id));
+        harness.run();
+        assert_eq!(
+            generation(harness.state()),
+            0,
+            "rien d'appliqué après « rien n'a été appliqué »"
+        );
     }
 
     #[test]

@@ -11,8 +11,8 @@ use std::ops::Range;
 use planrs_automation::text::format_resource_names;
 use planrs_core::baseline::{TaskVariance, variance};
 use planrs_core::{
-    Assignment, BaselineNumber, CalendarSet, LinkType, Minutes, Moment, Percent, Project, Task, TaskOutcome,
-    TaskRole, TaskSchedule, TaskUid, TimeBasis,
+    Assignment, BaselineNumber, LinkType, Minutes, Moment, Percent, Project, Task, TaskOutcome, TaskRole,
+    TaskSchedule, TaskUid, TimeBasis,
 };
 
 use crate::app::OpenDocument;
@@ -294,8 +294,11 @@ impl<'a> Extras<'a> {
             .tasks
             .iter()
             .any(|t| t.baselines.contains_key(&BaselineNumber::PRIMARY));
+        // Calendriers du cache du document (N3), compilés une fois par
+        // génération : pas de seconde compilation à chaque reconstruction
+        // des lignes (relecture finale J7, performances F5).
         let variances = if any_baseline {
-            let (set, _) = CalendarSet::compile(project);
+            let set = doc.calendars();
             variance(project, doc.schedule(), &set, BaselineNumber::PRIMARY).tasks
         } else {
             Vec::new()

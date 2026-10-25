@@ -195,9 +195,10 @@ pub fn find_live_for(path: &Path) -> Option<Rendezvous> {
 /// Les fichiers sont lus dans l'ordre de leur nom. Un rendez-vous qui
 /// désigne `path` (comparé par chemin canonique) est sondé par un `hello`
 /// avec son jeton. Il n'est supprimé que sur une preuve de mort (jeton
-/// refusé, socket absente ou sans écouteur) ; un délai ou une connexion
-/// fermée sans réponse (application au maximum de ses connexions) le
-/// laissent en place et l'application est tenue pour vivante. Sont aussi supprimés : un fichier de version 1 illisible, et
+/// refusé, socket absente ou sans écouteur) ; un délai, une connexion
+/// fermée sans réponse ou `control.busy` (application au maximum de ses
+/// connexions) le laissent en place et l'application est tenue pour
+/// vivante. Sont aussi supprimés : un fichier de version 1 illisible, et
 /// sous Unix un rendez-vous dont la socket n'existe plus.
 ///
 /// Windows (J4, hypothèse) : pas d'écouteur ; un rendez-vous est tenu pour
@@ -266,16 +267,30 @@ fn endpoint_gone(_r: &Rendezvous) -> bool {
 }
 
 /// Vivant sauf preuve de mort : un `hello` réussi, ou un échec qui ne
-/// prouve rien (délai, connexion fermée sans réponse parce que
-/// l'application sert déjà son maximum de connexions, réponse illisible).
-/// Mort : jeton refusé (rendez-vous périmé : l'écouteur n'est plus celui
-/// qui l'a publié), socket absente ou sans écouteur (`ECONNREFUSED`).
+/// prouve rien (délai, `control.busy` ou connexion fermée sans réponse
+/// parce que l'application sert déjà son maximum de connexions, réponse
+/// illisible). Mort : jeton refusé (rendez-vous périmé : l'écouteur n'est
+/// plus celui qui l'a publié), socket absente ou sans écouteur
+/// (`ECONNREFUSED`).
 #[cfg(unix)]
 fn is_live(r: &Rendezvous, _file: &Path) -> bool {
     match probe(r) {
         Ok(_) => true,
+        Err(ControlError::Refused(w)) if w.code == super::codes::BUSY => true,
         Err(ControlError::Refused(_)) => false,
         Err(_) => !endpoint_dead(r),
+    }
+}
+
+/// Vrai si l'application du rendez-vous répond, même occupée
+/// (`control.busy`) : rattachement au démarrage (une application occupée
+/// compte, pour ne jamais se rattacher à l'autre en la croyant seule).
+#[must_use]
+pub(super) fn answers(r: &Rendezvous) -> bool {
+    match probe(r) {
+        Ok(_) => true,
+        Err(ControlError::Refused(w)) => w.code == super::codes::BUSY,
+        Err(_) => false,
     }
 }
 

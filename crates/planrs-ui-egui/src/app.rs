@@ -508,22 +508,34 @@ impl App {
     /// Reconstruit les caches d'affichage après une édition : modèle de
     /// lignes, diagnostics, plage = union de l'ancienne et de la nouvelle
     /// plage par défaut (la nouvelle seule si l'union dépasse
-    /// [`MAX_RANGE_DAYS`]). La sélection est gardée par UID (retirée si la
-    /// tâche n'existe plus) ; les défilements sont gardés (bornés).
+    /// [`MAX_RANGE_DAYS`]). La sélection est gardée par UID ; si la tâche
+    /// active n'existe plus (suppression, annulation d'une insertion,
+    /// écriture d'un agent), la tâche qui occupe maintenant sa ligne devient
+    /// active, ou la dernière en fin de liste, comme MS Project (relecture
+    /// finale J7, F4 : le curseur sautait sur la ligne vide de fin) ; les
+    /// défilements sont gardés (bornés).
     pub fn refresh(&mut self) {
         let Some(document) = &mut self.document else {
             return;
         };
+        let old_index = self
+            .selection
+            .and_then(|uid| self.rows.as_ref().and_then(|rows| rows.index_of(uid)));
         let range = default_range(document.project(), document.schedule()).span;
         document.range = union_span(document.range, range);
-        self.rows = Some(RowModel::build(document, self.texts.format_labels()));
-        self.diagnostics = DiagnosticsView::build(document);
+        let rows = RowModel::build(document, self.texts.format_labels());
         if self
             .selection
             .is_some_and(|uid| !document.project().tasks.contains(uid))
         {
-            self.selection = None;
+            self.selection = old_index.and_then(|index| {
+                rows.row(index)
+                    .or_else(|| rows.len().checked_sub(1).and_then(|last| rows.row(last)))
+                    .map(|row| row.uid)
+            });
         }
+        self.rows = Some(rows);
+        self.diagnostics = DiagnosticsView::build(document);
         self.selected.retain(|uid| document.project().tasks.contains(uid));
         self.sync_selection();
         self.clamp_gantt_scroll();
@@ -1919,6 +1931,32 @@ impl App {
         }
     }
 
+    /// Clic relâché hors de la table et du Gantt (barre d'outils, menus,
+    /// bandeau, réponse d'une confirmation) : egui retire le focus de la
+    /// table à tout appui ailleurs et ne le donne à personne ; la table,
+    /// volet actif, le reprend à l'image suivante (relecture finale J7, F5 :
+    /// la navigation s'arrêtait en silence, cadre du curseur toujours
+    /// dessiné). Un clic dans le Gantt (`Pane::Gantt`) ou Échap (D2)
+    /// laissent la table sans focus ; un autre widget focalisé (zone de
+    /// saisie) le garde ; rien pendant une fenêtre, un menu ou une
+    /// confirmation de suppression.
+    fn refocus_table_after_click(&mut self, ctx: &egui::Context) {
+        let idle = self.document.is_some()
+            && self.view.focus == Pane::Table
+            && self.view.dialog.is_none()
+            && !self.popup_open
+            && self.pending_delete.is_none()
+            && self.view.resources.pending_delete.is_none()
+            && self.view.edit.editing.is_none()
+            && self.view.resources.edit.editing.is_none();
+        if idle
+            && ctx.input(|input| input.pointer.any_released())
+            && ctx.memory(|memory| memory.focused().is_none())
+        {
+            self.view.focus_table_pending = true;
+        }
+    }
+
     /// Contextes actifs des raccourcis : document ouvert ; table focalisée
     /// (focus d'egui et volet), sans saisie, menu, fenêtre ni confirmation
     /// de suppression ouverts (ADR-0015 D2).
@@ -1934,6 +1972,37 @@ impl App {
             && self.view.resources.edit.editing.is_none()
             && self.view.resources.pending_delete.is_none();
         KeyState { document, table }
+    }
+
+    /// Raccourcis de l'image, avant le dessin (la touche consommée
+    /// n'atteint aucun widget). Fenêtre ouverte : dessinée d'abord, ses
+    /// touches non prises retirées ; saisie de cellule ouverte : aucun.
+    fn read_keys(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        if self.view.dialog.is_some() {
+            // « Affecter des ressources » (non modale) : les raccourcis à
+            // Ctrl/Cmd qui ne touchent pas la structure (enregistrer,
+            // annuler, ouvrir, quitter…) restent actifs hors de ses champs
+            // (relecture finale J7, F9).
+            if self
+                .view
+                .dialog
+                .as_ref()
+                .is_some_and(|d| matches!(d.body, DialogBody::Assign(_)))
+                && !ctx.text_edit_focused()
+            {
+                let keys = KeyState {
+                    document: self.document.is_some(),
+                    table: false,
+                };
+                crate::keymap::dispatch_beside_window(ctx, keys, actions);
+            }
+            self.show_dialog(ctx);
+        } else if self.view.edit.editing.is_none() && self.view.resources.edit.editing.is_none() {
+            // Saisie de cellule ouverte : aucun raccourci, même si sa zone
+            // n'a pas encore le focus (relecture finale J7, F2 : Retour
+            // arrière supprimait la tâche).
+            crate::keymap::dispatch(ctx, self.key_state(ctx), actions);
+        }
     }
 
     /// Une image complète dans `ui` (appelée par [`crate::ui`]) : relève des
@@ -1961,17 +2030,11 @@ impl App {
         }
         let mut actions = std::mem::take(&mut self.actions);
         // Raccourcis avant le dessin : la touche consommée n'atteint aucun
-        // widget. Fenêtre ouverte (J7, lot L9) : aucun raccourci, la fenêtre
-        // est dessinée d'abord et les touches qu'elle n'a pas prises sont
-        // retirées de l'image (rien n'atteint la table ni le Gantt).
-        if self.view.dialog.is_some() {
-            self.show_dialog(&ctx);
-        } else {
-            crate::keymap::dispatch(&ctx, self.key_state(&ctx), &mut actions);
-        }
+        // widget. Fenêtre ouverte (J7, lot L9) : la fenêtre est dessinée
+        // d'abord et les touches qu'elle n'a pas prises sont retirées de
+        // l'image (rien n'atteint la table ni le Gantt).
+        self.read_keys(&ctx, &mut actions);
         let mut stats = FrameStats::default();
-        #[cfg(not(target_arch = "wasm32"))]
-        let approval = self.approval_banner();
         #[cfg(not(target_arch = "wasm32"))]
         let recovery_offer = self.recovery_offer();
         // Nom du document du bandeau de confirmation, s'il y en a un.
@@ -1996,6 +2059,7 @@ impl App {
                 selected: &self.selected,
                 actions: &mut actions,
                 stats: &mut stats,
+                window_open: self.view.dialog.is_some(),
             };
             view::chrome::menu_bar(ui, &mut fc);
             view::chrome::toolbar(ui, &mut fc);
@@ -2003,11 +2067,14 @@ impl App {
             view::chrome::confirm_banner(ui, &mut fc, confirm_name.as_deref());
             #[cfg(not(target_arch = "wasm32"))]
             {
-                let banner = approval.and_then(|(_, take_focus)| {
-                    self.relay
-                        .as_ref()
-                        .and_then(|relay| crate::relay::banner_for(relay, take_focus))
-                });
+                let document = self
+                    .document
+                    .as_ref()
+                    .map_or("", |document| document.origin.name.as_str());
+                let banner = self
+                    .relay
+                    .as_ref()
+                    .and_then(|relay| crate::relay::banner_for(relay, document));
                 view::approval::approval_banner(ui, &mut fc, banner);
                 view::recovery::recovery_banner(ui, &mut fc, recovery_offer);
             }
@@ -2044,6 +2111,8 @@ impl App {
         for action in edits.into_iter().chain(others) {
             self.apply(action, &ctx);
         }
+        // Après le réducteur : un clic dans le Gantt a déjà changé de volet.
+        self.refocus_table_after_click(&ctx);
         self.sync_selection();
         // Ajustement du zoom après une ouverture, dès que la largeur du
         // Gantt est connue : là aussi, une image de plus au bon zoom.
@@ -2091,12 +2160,12 @@ impl App {
         self.record_recovery();
     }
 
-    /// Propose les journaux orphelins qui portent des modifications (bandeau
-    /// de reprise, un à la fois).
+    /// Propose les journaux orphelins qui portent des modifications, ou qui
+    /// viennent d'une autre version (bandeau de reprise, un à la fois).
     pub fn offer_recovery(&mut self, orphans: Vec<planrs_automation::recovery::Orphan>) {
         self.orphans = orphans
             .into_iter()
-            .filter(planrs_automation::recovery::Orphan::worth_restoring)
+            .filter(planrs_automation::recovery::Orphan::worth_offering)
             .collect();
     }
 
@@ -2109,6 +2178,8 @@ impl App {
                 name: &o.name,
                 entries: o.entries,
                 checkpointed: o.checkpointed,
+                file_changed: o.file_changed,
+                kept: o.kept,
             })
     }
 
@@ -2182,7 +2253,10 @@ impl App {
     /// marqué modifié (son contenu n'est pas sur le disque), journal
     /// orphelin supprimé (le document a déjà le sien). Un rejeu arrêté sur
     /// une entrée refusée restaure ce qui précède et le dit ; un journal
-    /// illisible reste proposé (Ignorer le supprime).
+    /// illisible reste proposé (Ignorer le supprime). Fichier changé sur le
+    /// disque depuis la base : document installé **sans chemin**, nommé
+    /// « plan (récupéré).xml », pour qu'Enregistrer demande un nom au lieu
+    /// d'écraser la version plus récente (relecture finale J7, F3).
     fn restore_orphan(&mut self, id: &str) {
         let Some(orphan) = self.orphans.iter().find(|o| o.id == id).cloned() else {
             return;
@@ -2199,10 +2273,18 @@ impl App {
                     range: range.span,
                     range_truncated: range.truncated,
                 };
-                let origin = DocOrigin {
-                    name: orphan.name.clone(),
-                    path: orphan.path.clone(),
-                    demo: false,
+                let origin = if orphan.file_changed {
+                    DocOrigin {
+                        name: recovered_name(&self.texts, &orphan.name),
+                        path: None,
+                        demo: false,
+                    }
+                } else {
+                    DocOrigin {
+                        name: orphan.name.clone(),
+                        path: orphan.path.clone(),
+                        demo: false,
+                    }
                 };
                 self.install(loaded, origin);
                 if let Err(error) = orphan.discard() {
@@ -2233,6 +2315,18 @@ impl App {
             }
         }
     }
+}
+
+/// Nom d'un document récupéré dont le fichier a changé : « plan
+/// (récupéré).xml » (extension gardée).
+#[cfg(not(target_arch = "wasm32"))]
+fn recovered_name(texts: &Texts, name: &str) -> String {
+    let (stem, ext) = match name.rfind('.') {
+        Some(dot) if dot > 0 => name.split_at(dot),
+        _ => (name, ""),
+    };
+    let stem = texts.get_args(TextId::RecoveredFileName, &[("stem", Arg::Str(stem.into()))]);
+    format!("{stem}{ext}")
 }
 
 /// Titre de la fenêtre pour `document` (voir [`App::window_title`]). Le web

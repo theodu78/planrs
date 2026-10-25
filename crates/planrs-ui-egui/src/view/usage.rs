@@ -352,18 +352,23 @@ impl UsageRows {
     }
 
     /// Ressources des lignes `range`, sans doublon, dans l'ordre des lignes ;
-    /// et, parmi elles, les dépliées.
+    /// et, parmi elles, les dépliées : ligne de la ressource dépliée, **ou**
+    /// ligne d'une de ses affectations (une fenêtre qui commence au milieu
+    /// des affectations ne voit pas la ligne de la ressource : relecture
+    /// finale J7, F2 de la relecture des performances, cellules vides).
     #[must_use]
     pub fn resources_in(&self, range: std::ops::Range<usize>) -> (Vec<ResourceUid>, Vec<ResourceUid>) {
         let mut seen = BTreeSet::new();
+        let mut open = BTreeSet::new();
         let mut resources = Vec::new();
         let mut expanded = Vec::new();
         for line in self.lines.get(range).unwrap_or_default() {
             if seen.insert(line.resource) {
                 resources.push(line.resource);
-                if line.expanded {
-                    expanded.push(line.resource);
-                }
+            }
+            let unfolded = line.expanded || matches!(line.key, UsageKey::Assignment(_));
+            if unfolded && open.insert(line.resource) {
+                expanded.push(line.resource);
             }
         }
         (resources, expanded)

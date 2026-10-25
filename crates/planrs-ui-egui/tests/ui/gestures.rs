@@ -286,7 +286,9 @@ fn gesture_link_by_drag_and_escape() {
         .unwrap();
     let target_uid = harness.state().rows().unwrap().row(target).unwrap().uid;
     let ty = row_y(&harness, target);
-    drag(&mut harness, from, pos2(from.x, ty));
+    // Lâcher sur la barre de la cible (R-243).
+    let (tx0, tx1) = bar_x(&harness, target);
+    drag(&mut harness, from, pos2(f32::midpoint(tx0, tx1), ty));
     let links = &task(harness.state(), target_uid).predecessors;
     assert!(
         links
@@ -294,6 +296,51 @@ fn gesture_link_by_drag_and_escape() {
             .any(|l| l.predecessor == uid && l.kind == planrs_core::LinkType::FinishToStart),
         "{links:?} ; {:?}",
         harness.state().messages()
+    );
+}
+
+/// Relecture finale J7, F7 (R-243) : un déplacement qui dérive sur une
+/// autre ligne mais lâché hors de toute barre reste un déplacement (SNET),
+/// sans lien.
+#[test]
+fn gesture_drop_off_bar_moves_not_links() {
+    let mut harness = harness();
+    open_demo(&mut harness);
+    let (i, uid) = unstarted_leaf(harness.state());
+    show_row(&mut harness, i);
+    let day = px_per_day(&harness);
+    let y = row_y(&harness, i);
+    let (x0, x1) = bar_x(&harness, i);
+    let start = scheduled_start(harness.state(), uid);
+    let from = pos2(f32::midpoint(x0, x1), y);
+    let x = from.x + 3.0 * day;
+    // Une ligne voisine dont la barre ne passe pas sous le point de lâcher.
+    let off = (i + 1..i + 8)
+        .find(|&j| {
+            let app = harness.state();
+            app.rows().unwrap().row(j).is_some_and(|row| {
+                row.bar.is_some() && {
+                    let (tx0, tx1) = bar_x(&harness, j);
+                    x < tx0 - 6.0 || x > tx1 + 6.0
+                }
+            })
+        })
+        .expect("ligne voisine sans barre sous le point");
+    let target_uid = harness.state().rows().unwrap().row(off).unwrap().uid;
+    let links_before = task(harness.state(), target_uid).predecessors.len();
+    let to = pos2(x, row_y(&harness, off));
+    drag(&mut harness, from, to);
+    let expected = start.checked_add(Minutes::new(3 * 1_440)).unwrap();
+    assert_eq!(
+        task(harness.state(), uid).constraint,
+        Constraint::StartNoEarlierThan { date: expected },
+        "{:?}",
+        harness.state().messages()
+    );
+    assert_eq!(
+        task(harness.state(), target_uid).predecessors.len(),
+        links_before,
+        "lien créé"
     );
 }
 

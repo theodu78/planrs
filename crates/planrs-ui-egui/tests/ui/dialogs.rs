@@ -603,7 +603,8 @@ fn reschedule_default_status_date() {
 }
 
 /// Chaque fenêtre ouverte : ni la navigation, ni les commandes du
-/// document, ni la frappe directe n'atteignent la table ; Échap ferme.
+/// document, ni la frappe directe n'atteignent la table ; Échap ferme
+/// (Entrée valide la fenêtre : `dialogs_enter_validates`).
 #[test]
 fn dialogs_keys_do_not_leak() {
     for kind in [
@@ -618,7 +619,7 @@ fn dialogs_keys_do_not_leak() {
         harness.run();
         open(&mut harness, kind);
         assert_eq!(harness.state().view().dialog.as_ref().map(|d| d.kind), Some(kind));
-        for key in [Key::ArrowDown, Key::Enter, Key::Delete, Key::F2, Key::Insert] {
+        for key in [Key::ArrowDown, Key::Delete, Key::F2, Key::Insert] {
             harness.key_press(key);
             harness.run();
         }
@@ -645,6 +646,36 @@ fn dialogs_keys_do_not_leak() {
         let app = harness.state();
         assert!(app.view().dialog.is_none(), "{kind:?} : Échap ne ferme pas");
         assert_eq!(generation(app), 0);
+    }
+}
+
+/// Relecture finale J7, F8 : Entrée (sans liste ouverte ni widget autre
+/// qu'un champ d'une ligne focalisé) valide la fenêtre comme « OK » :
+/// informations du projet et temps de travail sans changement ⇒ fermées
+/// sans lot ; ligne de base ⇒ posée (un lot), fenêtre fermée. Rien n'atteint
+/// la table.
+#[test]
+fn dialogs_enter_validates() {
+    for (kind, lots) in [
+        (DialogKind::ProjectInformation, 0),
+        (DialogKind::WorkingTime, 0),
+        (DialogKind::Baseline, 1),
+    ] {
+        let mut harness = harness();
+        open_demo(&mut harness);
+        harness.state_mut().dispatch(Action::Select(Some(uid(3))));
+        harness.run();
+        open(&mut harness, kind);
+        harness.key_press(Key::Enter);
+        harness.run();
+        let app = harness.state();
+        assert!(app.view().dialog.is_none(), "{kind:?} : Entrée ne valide pas");
+        assert_eq!(generation(app), lots, "{kind:?}");
+        assert_eq!(
+            app.selection,
+            Some(uid(3)),
+            "{kind:?} : Entrée a atteint la table"
+        );
     }
 }
 

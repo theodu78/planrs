@@ -6,9 +6,11 @@
 //! entrées J6 (contrat du lot L0, activées par les lots L7 et L8 de J6) et
 //! les cinq écritures J7 (`calendar.add`, `calendar.update`,
 //! `calendar.set_week`, `calendar.delete`, `baseline.clear`, contrat J7 L0,
-//! activées par le lot L5), puis les quatre entrées J8 réservées au jalon 8
-//! par le contrat L0 (`project.export_pdf`, `style.apply`, `style.get`,
-//! `style.list`, activées par les lots L6 et L7). Une entrée réservée à un jalon futur
+//! activées par le lot L5), puis les entrées J8 : `project.export_pdf`,
+//! réservée au jalon 8 par le contrat L0 (activée par le lot L7), et les six
+//! entrées `style.*` du lot L6 (`style.apply`, `style.get`, `style.list`,
+//! posées par L0, plus `style.set_bar_role`, `style.reset_to_template`,
+//! `style.save_as_template`). Une entrée réservée à un jalon futur
 //! (`Availability::Milestone`) n'est pas listée et est refusée
 //! `command.not_yet_available`. Les trois entrées `app.*` (genre [`Kind::Ui`]) ne sont servies que
 //! par une application rattachée (`Availability::Attached`, ADR-0015 D11) :
@@ -26,7 +28,7 @@ use crate::command::params::{
     NoParams, OpenProjectParams, RenderGanttParams, ResourceListParams, SaveProjectParams, ScreenshotParams,
     TaskGetParams, TaskListParams, UiActionParams, UsageParams, VarianceParams, WhatIfParams,
 };
-use crate::command::style::StyleApply;
+use crate::command::style::{StyleApply, StyleResetToTemplate, StyleSaveAsTemplate, StyleSetBarRole};
 use crate::command::{
     AnchorSpec, AssignmentAdd, AssignmentKey, AssignmentUpdate, BaselineClear, BaselineSet, CalendarAdd,
     CalendarDelete, CalendarException, CalendarExceptionKey, CalendarSetWeek, CalendarUpdate, LinkKey,
@@ -519,8 +521,7 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Modifie une ressource (nom, capacité, calendrier, initiales, groupe…).",
         "Update a resource (name, capacity, calendar, initials, group…).",
     ),
-    reserved(
-        8,
+    now(
         "style.apply",
         "apply_style",
         Kind::Write,
@@ -528,23 +529,45 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Applique un modèle de mise en forme ou une surcharge au document, ou revient au modèle par défaut.",
         "Apply a formatting template or an override to the document, or reset to the default template.",
     ),
-    reserved(
-        8,
+    now(
         "style.get",
         "get_style",
         Kind::Read,
         schema_of::<NoParams>,
-        "Style du document : modèle de base, surcharges et style résolu.",
-        "Document style: base template, overrides and resolved style.",
+        "Style du document : modèle de base, surcharges, style résolu et contrastes insuffisants.",
+        "Document style: base template, overrides, resolved style and insufficient contrasts.",
     ),
-    reserved(
-        8,
+    now(
         "style.list",
         "list_styles",
         Kind::Read,
         schema_of::<NoParams>,
-        "Modèles de mise en forme intégrés et personnels.",
-        "Built-in and personal formatting templates.",
+        "Modèles de mise en forme intégrés et style du document.",
+        "Built-in formatting templates and the document style.",
+    ),
+    now(
+        "style.reset_to_template",
+        "reset_style",
+        Kind::Write,
+        schema_of::<StyleResetToTemplate>,
+        "Revient au modèle : retire les surcharges du style du document, ou celles d'un type de barre.",
+        "Revert to the template: remove the document style overrides, or those of one bar type.",
+    ),
+    now(
+        "style.save_as_template",
+        "save_style_as_template",
+        Kind::Read,
+        schema_of::<StyleSaveAsTemplate>,
+        "Style du document nommé, à garder comme modèle personnel (rien n'est modifié).",
+        "The document style under a name, to keep as a personal template (nothing is changed).",
+    ),
+    now(
+        "style.set_bar_role",
+        "set_bar_style",
+        Kind::Write,
+        schema_of::<StyleSetBarRole>,
+        "Met en forme un type de barre : couleur, épaisseur, extrémités, textes à gauche, à droite, dedans.",
+        "Format a bar type: color, thickness, ends, texts on the left, right, inside.",
     ),
     now(
         "task.add",

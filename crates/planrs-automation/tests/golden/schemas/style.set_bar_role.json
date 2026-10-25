@@ -1,0 +1,348 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`style.set_bar_role` : mise en forme directe d'un type de barre\n(H-UI-59, H-UI-60) ; une entrée d'annulation par appel (un geste).",
+  "properties": {
+    "base": {
+      "anyOf": [
+        {
+          "description": "Modèle de mise en forme intégré, en JSON.",
+          "oneOf": [
+            {
+              "const": "classique",
+              "description": "Apparence de J7.",
+              "type": "string"
+            },
+            {
+              "const": "sobre",
+              "description": "Sobre.",
+              "type": "string"
+            },
+            {
+              "const": "contraste_eleve",
+              "description": "Contraste élevé.",
+              "type": "string"
+            },
+            {
+              "const": "presentation",
+              "description": "Présentation client.",
+              "type": "string"
+            },
+            {
+              "const": "chantier",
+              "description": "Chantier.",
+              "type": "string"
+            },
+            {
+              "const": "impression_nb",
+              "description": "Impression noir et blanc.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Modèle de départ si le document n'a pas encore de style (défaut :\nClassique) ; ignoré sinon."
+    },
+    "color": {
+      "description": "Couleur de remplissage `#RRGGBB`.",
+      "pattern": "^#[0-9A-Fa-f]{6}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ends": {
+      "anyOf": [
+        {
+          "description": "Forme des extrémités d'une barre (H-UI-60).",
+          "oneOf": [
+            {
+              "const": "square",
+              "description": "Coins droits (rayon 0).",
+              "type": "string"
+            },
+            {
+              "const": "rounded",
+              "description": "Coins arrondis (rayon [`ROUNDED_RADIUS16`]).",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Extrémités."
+    },
+    "role": {
+      "description": "Type de barre.",
+      "oneOf": [
+        {
+          "const": "task",
+          "description": "Tâche non critique.",
+          "type": "string"
+        },
+        {
+          "const": "critical",
+          "description": "Tâche critique.",
+          "type": "string"
+        },
+        {
+          "const": "summary",
+          "description": "Récapitulative.",
+          "type": "string"
+        },
+        {
+          "const": "summary_critical",
+          "description": "Récapitulative critique.",
+          "type": "string"
+        },
+        {
+          "const": "milestone",
+          "description": "Jalon.",
+          "type": "string"
+        },
+        {
+          "const": "milestone_critical",
+          "description": "Jalon critique.",
+          "type": "string"
+        },
+        {
+          "const": "progress",
+          "description": "Bande d'avancement.",
+          "type": "string"
+        },
+        {
+          "const": "baseline",
+          "description": "Ligne de base.",
+          "type": "string"
+        },
+        {
+          "const": "inactive",
+          "description": "Tâche inactive.",
+          "type": "string"
+        },
+        {
+          "const": "manual",
+          "description": "Tâche manuelle.",
+          "type": "string"
+        },
+        {
+          "const": "slack",
+          "description": "Marge totale.",
+          "type": "string"
+        },
+        {
+          "const": "deadline",
+          "description": "Échéance.",
+          "type": "string"
+        }
+      ]
+    },
+    "text_inside": {
+      "anyOf": [
+        {
+          "description": "Champ affiché autour d'une barre, en JSON.",
+          "oneOf": [
+            {
+              "const": "name",
+              "description": "Nom.",
+              "type": "string"
+            },
+            {
+              "const": "resources",
+              "description": "Ressources affectées.",
+              "type": "string"
+            },
+            {
+              "const": "start",
+              "description": "Début.",
+              "type": "string"
+            },
+            {
+              "const": "finish",
+              "description": "Fin.",
+              "type": "string"
+            },
+            {
+              "const": "duration",
+              "description": "Durée.",
+              "type": "string"
+            },
+            {
+              "const": "percent",
+              "description": "% achevé.",
+              "type": "string"
+            },
+            {
+              "const": "total_slack",
+              "description": "Marge totale.",
+              "type": "string"
+            },
+            {
+              "const": "start_finish",
+              "description": "Début – fin.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Texte dans la barre (`null` : aucun)."
+    },
+    "text_left": {
+      "anyOf": [
+        {
+          "description": "Champ affiché autour d'une barre, en JSON.",
+          "oneOf": [
+            {
+              "const": "name",
+              "description": "Nom.",
+              "type": "string"
+            },
+            {
+              "const": "resources",
+              "description": "Ressources affectées.",
+              "type": "string"
+            },
+            {
+              "const": "start",
+              "description": "Début.",
+              "type": "string"
+            },
+            {
+              "const": "finish",
+              "description": "Fin.",
+              "type": "string"
+            },
+            {
+              "const": "duration",
+              "description": "Durée.",
+              "type": "string"
+            },
+            {
+              "const": "percent",
+              "description": "% achevé.",
+              "type": "string"
+            },
+            {
+              "const": "total_slack",
+              "description": "Marge totale.",
+              "type": "string"
+            },
+            {
+              "const": "start_finish",
+              "description": "Début – fin.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Texte à gauche (`null` : aucun)."
+    },
+    "text_right": {
+      "anyOf": [
+        {
+          "description": "Champ affiché autour d'une barre, en JSON.",
+          "oneOf": [
+            {
+              "const": "name",
+              "description": "Nom.",
+              "type": "string"
+            },
+            {
+              "const": "resources",
+              "description": "Ressources affectées.",
+              "type": "string"
+            },
+            {
+              "const": "start",
+              "description": "Début.",
+              "type": "string"
+            },
+            {
+              "const": "finish",
+              "description": "Fin.",
+              "type": "string"
+            },
+            {
+              "const": "duration",
+              "description": "Durée.",
+              "type": "string"
+            },
+            {
+              "const": "percent",
+              "description": "% achevé.",
+              "type": "string"
+            },
+            {
+              "const": "total_slack",
+              "description": "Marge totale.",
+              "type": "string"
+            },
+            {
+              "const": "start_finish",
+              "description": "Début – fin.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Texte à droite (`null` : aucun)."
+    },
+    "thickness": {
+      "description": "Épaisseur, en % de la hauteur de ligne (10 à 100).",
+      "format": "uint8",
+      "maximum": 100,
+      "minimum": 10,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "variant": {
+      "anyOf": [
+        {
+          "description": "Variante d'un style en JSON.",
+          "oneOf": [
+            {
+              "const": "light",
+              "description": "Écran, thème clair (défaut).",
+              "type": "string"
+            },
+            {
+              "const": "dark",
+              "description": "Écran, thème sombre.",
+              "type": "string"
+            },
+            {
+              "const": "print",
+              "description": "Impression et PDF.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Variante dont la couleur change (défaut : clair) ; la forme et les\ntextes valent pour toutes."
+    }
+  },
+  "required": [
+    "role"
+  ],
+  "title": "StyleSetBarRole",
+  "type": "object"
+}

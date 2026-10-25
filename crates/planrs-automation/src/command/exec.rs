@@ -9,7 +9,9 @@ use std::collections::BTreeMap;
 use planrs_core::calendar::{Calendar, CalendarSet};
 use planrs_core::{Arena, CalendarUid, Diagnostic, Project, ResourceUid, Schedule, Subject, TaskUid};
 
-use super::{Command, assignment, baseline, calendar, constraint, link, progress, project, resource, task};
+use super::{
+    Command, assignment, baseline, calendar, constraint, link, progress, project, resource, style, task,
+};
 use crate::error::{CommandError, CommandErrorKind, codes};
 use crate::outcome::SideEffect;
 use crate::text::TextContext;
@@ -209,6 +211,9 @@ impl Exec for Command {
             Self::CalendarSetWeek(op) => calendar::set_week(op, ctx),
             Self::CalendarDelete(op) => calendar::delete(op, ctx),
             Self::BaselineClear(op) => baseline::clear(op, ctx),
+            Self::StyleApply(op) => style::apply(op, ctx),
+            Self::StyleSetBarRole(op) => style::set_bar_role(op, ctx),
+            Self::StyleResetToTemplate(op) => style::reset_to_template(op, ctx),
         }
     }
 }

@@ -1,6 +1,7 @@
-//! Contrat J8 (lot L0, ADR-0016) : types, squelettes et registre. Les
-//! entrées nouvelles (`style.*`, `project.export_pdf`) sont réservées au
-//! jalon 8 et refusées `command.not_yet_available` ; `render.gantt.style`
+//! Contrat J8 (lot L0, ADR-0016) : types, squelettes et registre.
+//! `project.export_pdf` est réservée au jalon 8 et refusée
+//! `command.not_yet_available` (les `style.*` sont exécutées depuis L6) ;
+//! `render.gantt.style`
 //! est exécuté depuis L4 ; les critères J8 de `task.list` et
 //! `task.update.mode` sont exécutés depuis L2 (R-251, R-253), le
 //! presse-papiers et l'aperçu CSV depuis L3 (R-244, R-256) ; les
@@ -52,15 +53,9 @@ fn contract_j8_reserved_and_new_fields_refused() {
     let before = s.project().clone();
     let generation = s.generation();
     let env = CallEnv::new(now(), Language::Fr);
-    for (id, params) in [
-        ("style.list", json!({})),
-        ("style.get", json!({})),
-        ("style.apply", json!({ "template": "sobre" })),
-        ("project.export_pdf", json!({ "path": "p.pdf" })),
-    ] {
-        let err = call_with(&mut s, &env, id, params).unwrap_err();
-        assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE, "{id}");
-    }
+    // `style.*` exécutées depuis L6 (`tests/style_j8.rs`).
+    let err = call_with(&mut s, &env, "project.export_pdf", json!({ "path": "p.pdf" })).unwrap_err();
+    assert_eq!(err.code, codes::COMMAND_NOT_YET_AVAILABLE);
     // Paramètres mal formés : refusés comme avant.
     let err = call_with(
         &mut s,

@@ -2,7 +2,7 @@
 //!
 //! Il expose les mêmes opérations que le serveur MCP (`summary`, `tasks`,
 //! `resources`, `usage`, `apply`, `render`, `import-csv`, `mcp`,
-//! `explain`), toutes via le
+//! `explain`, `style`), toutes via le
 //! `Workspace` de `planrs-automation` : mêmes JSON que le MCP (ADR-0012 D1).
 //! Codes de sortie (C-MCP-08) dans [`exit`] ; « maintenant » et langue dans
 //! [`now`] (seule lecture de l'horloge). Détail : `docs/features/cli.md`.
@@ -65,6 +65,8 @@ enum Command {
     Mcp(cmd::mcp::McpArgs),
     /// Explication d'une date : pilote, calendrier, avancement, chaîne.
     Explain(cmd::explain::ExplainArgs),
+    /// Style du document : modèles, style effectif, application (J8).
+    Style(cmd::style::StyleArgs),
 }
 
 fn main() -> ExitCode {
@@ -97,5 +99,6 @@ fn main() -> ExitCode {
         Command::ImportCsv(a) => cmd::import_csv::run(&ctx, &a),
         Command::Mcp(a) => cmd::mcp::run(&ctx, a),
         Command::Explain(a) => cmd::explain::run(&ctx, &a),
+        Command::Style(a) => cmd::style::run(&ctx, &a),
     }
 }

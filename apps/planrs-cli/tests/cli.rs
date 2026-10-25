@@ -744,3 +744,74 @@ fn cli_tasks_late_help_follows_r236() {
         assert!(text.contains(part), "« {part} » absent de : {text}");
     }
 }
+
+/// J8 (lot L6) : `planrs style list|get|apply` ; `apply` écrit le style dans
+/// le fichier (`<?planrs-style?>`), `--dry-run` ne touche rien, `--reset`
+/// redonne le fichier sans style ; les JSON sont ceux du MCP.
+#[test]
+fn cli_style_list_get_apply() {
+    let dir = TempDir::new("style");
+    let house = house_copy(&dir);
+    let original = std::fs::read(&house).unwrap();
+    let o = run(&["--now", NOW, "style", "list", s(&house), "--json"]);
+    assert_eq!(code(&o), 0, "{}", String::from_utf8_lossy(&o.stderr));
+    let mut ws = workspace_with(&house, Language::Fr);
+    assert_eq!(stdout_json(&o), ws.call("style.list", json!({})).unwrap());
+    let o = run(&[
+        "--now",
+        NOW,
+        "style",
+        "apply",
+        s(&house),
+        "--template",
+        "sobre",
+        "--dry-run",
+    ]);
+    assert_eq!(code(&o), 0, "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(std::fs::read(&house).unwrap(), original);
+    let patch = dir.join("patch.json");
+    std::fs::write(&patch, r#"{"density":"airy"}"#).unwrap();
+    let o = run(&[
+        "--now",
+        NOW,
+        "style",
+        "apply",
+        s(&house),
+        "--template",
+        "presentation",
+        "--patch",
+        s(&patch),
+    ]);
+    assert_eq!(code(&o), 0, "{}", String::from_utf8_lossy(&o.stderr));
+    let text = std::fs::read_to_string(&house).unwrap();
+    assert!(
+        text.contains(r#"<?planrs-style {"base":"presentation","over":{"density":"airy"},"v":1}?>"#),
+        "{}",
+        text.lines().take(3).collect::<Vec<_>>().join("\n")
+    );
+    let o = run(&["--now", NOW, "style", "get", s(&house), "--json"]);
+    assert_eq!(code(&o), 0);
+    let v = stdout_json(&o);
+    assert_eq!(
+        (v["source"].as_str(), v["base"].as_str()),
+        (Some("document"), Some("presentation"))
+    );
+    let o = run(&["--now", NOW, "--lang", "en", "style", "get", s(&house)]);
+    assert!(String::from_utf8_lossy(&o.stdout).starts_with("Template : presentation (document)"));
+    // Refus : rien à appliquer (code 1), `--reset` avec `--template` (usage).
+    assert_eq!(code(&run(&["--now", NOW, "style", "apply", s(&house)])), 1);
+    assert_eq!(
+        code(&run(&[
+            "style",
+            "apply",
+            s(&house),
+            "--reset",
+            "--template",
+            "sobre"
+        ])),
+        2
+    );
+    let o = run(&["--now", NOW, "style", "apply", s(&house), "--reset"]);
+    assert_eq!(code(&o), 0, "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(!std::fs::read_to_string(&house).unwrap().contains("planrs-style"));
+}

@@ -412,6 +412,14 @@ fn snapshot_generate_and_views() {
     assert_eq!(args.zoom, Some(planrs_ui_egui::TimeScaleZoom::Quarter));
     assert_eq!(args.size, (1024.0, 600.0));
     assert_eq!(args.output, std::path::PathBuf::from("u.png"));
+    assert_eq!(args.style, None);
+    // Modèle par défaut (J8, lot L11).
+    let styled = snapshot_args(&["plan.xml", "main", "--style", "contraste-eleve"]).unwrap();
+    assert_eq!(
+        styled.style,
+        Some(planrs_render::style::TemplateId::ContrasteEleve)
+    );
+    assert!(snapshot_args(&["plan.xml", "main", "--style", "rose"]).is_err());
     let file = snapshot_args(&["plan.xml", "main"]).unwrap();
     assert_eq!(file.source, Source::File("plan.xml".into()));
     assert_eq!(file.output, std::path::PathBuf::from("planrs-snapshot-main.png"));

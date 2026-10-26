@@ -16,7 +16,10 @@
 //! tâches), comme le test de fluidité. `--row N` : sélectionne la ligne de
 //! tâche N (depuis 0), y défile la table et le Gantt (début de la barre) ;
 //! `--zoom` : échelle imposée après la
-//! vue ; `--size` : fenêtre simulée (défaut 1280×720). Sortie par défaut :
+//! vue ; `--size` : fenêtre simulée (défaut 1280×720) ; `--style` : modèle
+//! par défaut des préférences (`classique`, `sobre`, `contraste_eleve`,
+//! `presentation`, `chantier`, `impression_nb` ; J8 lot L11), appliqué à un
+//! document sans style. Sortie par défaut :
 //! `planrs-snapshot-<vue>.png` dans le répertoire courant.
 //!
 //! Même harnais que les captures de référence (`tests/ui/common.rs`) :
@@ -40,6 +43,7 @@ use eframe::egui_wgpu::{self, RenderState, WgpuConfiguration, WgpuSetup, WgpuSet
 use egui_kittest::Harness;
 use egui_kittest::wgpu::WgpuTestRenderer;
 use planrs_core::Moment;
+use planrs_render::style::TemplateId;
 use planrs_ui_egui::timescale::TimeAxis;
 use planrs_ui_egui::{
     Action, App, DocOrigin, Env, GanttStyle, LanguagePref, ThemePref, TimeScaleZoom, UiState, ViewKind,
@@ -47,8 +51,9 @@ use planrs_ui_egui::{
 
 /// Usage affiché en cas d'arguments invalides.
 pub const USAGE: &str = "usage : cargo run -p planrs-ui-egui --example snapshot -- \
-<fichier.xml | --generate N> <vue> [--row N] [--zoom day|week|month|quarter] [--size LxH] [sortie.png]\n\
-vues : welcome | main | main-week | main-day | main-dark | main-en | tracking | resources | usage";
+<fichier.xml | --generate N> <vue> [--row N] [--zoom day|week|month|quarter] [--size LxH] [--style <modèle>] [sortie.png]\n\
+vues : welcome | main | main-week | main-day | main-dark | main-en | tracking | resources | usage\n\
+modèles : classique | sobre | contraste_eleve | presentation | chantier | impression_nb";
 
 /// Taille par défaut de la fenêtre simulée (celle des captures de référence).
 pub const SIZE: (f32, f32) = (1280.0, 720.0);
@@ -150,6 +155,8 @@ pub struct Args {
     pub zoom: Option<TimeScaleZoom>,
     /// Taille de la fenêtre simulée, en points.
     pub size: (f32, f32),
+    /// Modèle par défaut des préférences (`None` : Classique).
+    pub style: Option<TemplateId>,
     /// PNG à écrire.
     pub output: PathBuf,
 }
@@ -177,6 +184,15 @@ fn parse_zoom(text: &str) -> Result<TimeScaleZoom, String> {
         "quarter" => Ok(TimeScaleZoom::Quarter),
         other => Err(format!("zoom inconnu : {other}")),
     }
+}
+
+/// Modèle nommé (`contraste_eleve` ou `contraste-eleve`).
+fn parse_style(text: &str) -> Result<TemplateId, String> {
+    let key = text.replace('-', "_");
+    TemplateId::ALL
+        .into_iter()
+        .find(|id| id.key() == key)
+        .ok_or_else(|| format!("modèle inconnu : {text}"))
 }
 
 /// Taille `LxH` (ou `L×H`), chaque côté dans [`SIDE`].
@@ -214,6 +230,7 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Stri
     let mut row = None;
     let mut zoom = None;
     let mut size = SIZE;
+    let mut style = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--generate") => {
@@ -226,6 +243,7 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Stri
             Some("--row") => row = Some(parse_count("--row", &option_value("--row", args.next())?)?),
             Some("--zoom") => zoom = Some(parse_zoom(&option_value("--zoom", args.next())?)?),
             Some("--size") => size = parse_size(&option_value("--size", args.next())?)?,
+            Some("--style") => style = Some(parse_style(&option_value("--style", args.next())?)?),
             Some(other) if other.starts_with("--") => return Err(format!("option inconnue : {other}")),
             _ => positional.push(arg),
         }
@@ -260,6 +278,7 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Stri
         row,
         zoom,
         size,
+        style,
         output,
     })
 }
@@ -470,6 +489,7 @@ pub fn prepared(args: &Args, renderer: Option<WgpuTestRenderer>) -> Result<Harne
         UiState {
             language,
             theme,
+            default_template: args.style.unwrap_or(TemplateId::Classique),
             ..UiState::default()
         },
         Env::fixed(fixed_now(&args.source)?),

@@ -474,6 +474,8 @@ Décomposition de `edit_latency` (médianes) : recalcul (`Session::apply` en mod
 
 Décomposition de `edit_latency` (médianes) : recalcul (`Session::apply`) 18,4 ms, `RowModel::build` 11,3 ms, reste (image, tessellation) 2,3 ms. `edit_latency_baseline` (relecture finale J7) : même porte, ligne de base 0 posée sur les 5 000 tâches ; mesure release du 2026-10-25 sur serveurdvp : médiane 40,0 ms, p95 43,6 ms, max 44,5 ms (recalcul 20,7 ms, `RowModel::build` 17,9 ms), contre 30,4 / 31,6 ms pour `edit_latency` le même jour ; `RowModel::build` prend les calendriers du cache du document (`OpenDocument::calendars`, N3) au lieu de les recompiler à chaque reconstruction. Ouverture du réseau (lecture, calcul, `RowModel`) : 26,0 ms. Toutes les portes tiennent avec une marge d'un ordre de grandeur, sauf `edit_latency` (un tiers du budget).
 
+**Écran stylé (J8 lot L11).** `static_styled` (ignoré, release ; 5 000 tâches, 10 000 liens, Sobre, Présentation Aérée, Chantier Compacte, clair et sombre, molette au milieu du réseau, zoom Semaine) : médianes de 1,04 à 1,50 ms, pire p95 1,70 ms (serveurdvp, 2026-10-26) ; statique J7 (Classique) rejoué : pire médiane 1,25 ms. Garde toujours exécutée : `styled_counts_equal_at_1000_and_5000_tasks` (formes, sommets et galleys à ± 5 % pour chaque modèle).
+
 **Utilisation des ressources (J7 lot L11).** `usage_scroll` (ignoré, release ; 1 200 ressources, 5 000 tâches affectées, 1920×1080) : molette verticale 120 images, médiane 1,03 ms, p95 1,55 ms ; défilement horizontal au zoom Jour 120 images (9 blocs neufs du moteur), médiane 1,18 ms, p95 1,77 ms, pire image 2,64 ms (serveurdvp, 2026-10-21). `usage_counts_equal_at_1000_and_5000_tasks` (toujours exécuté) : formes, sommets et galleys de la vue identiques à 1 000 et 5 000 tâches (60 ressources).
 
 ## 4. Livraison
@@ -533,8 +535,10 @@ cargo run --release -p planrs -- chemin/vers/plan.xml
 cargo run -p planrs-ui-egui --example snapshot -- crates/planrs-ui-egui/assets/demo/house.xml main sortie.png
 cargo run -p planrs-ui-egui --example snapshot -- --generate 5000 usage --zoom week --size 1920x1080 usage.png
 cargo run -p planrs-ui-egui --example snapshot -- --generate 5000 tracking --row 2500 --zoom week
-#   snapshot <fichier.xml | --generate N> <vue> [--row N] [--zoom day|week|month|quarter] [--size LxH] [sortie.png]
+cargo run -p planrs-ui-egui --example snapshot -- tests/mcp/expected/tracking_j6.xml main-dark --zoom week --style sobre sobre.png
+#   snapshot <fichier.xml | --generate N> <vue> [--row N] [--zoom day|week|month|quarter] [--size LxH] [--style <modèle>] [sortie.png]
 #   vues : welcome | main | main-week | main-day | main-dark | main-en | tracking | resources | usage
+#   modèles (--style, modèle par défaut des préférences, J8 lot L11) : classique | sobre | contraste_eleve | presentation | chantier | impression_nb
 #   sortie par défaut : planrs-snapshot-<vue>.png ; erreurs : message et code de sortie non nul
 
 # Tests de l'interface (sans GPU)

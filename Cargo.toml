@@ -18,7 +18,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0-rc.1"
 edition = "2024"
 # eframe/egui 0.37 exigent Rust 1.95.
 rust-version = "1.95"
@@ -28,13 +28,13 @@ repository = "https://github.com/theodu78/planrs"
 
 [workspace.dependencies]
 # Crates internes (version explicite : pas de dépendance « wildcard » pour cargo-deny).
-planrs-core = { path = "crates/planrs-core", version = "0.1.0" }
-planrs-mspdi = { path = "crates/planrs-mspdi", version = "0.1.0" }
-planrs-render = { path = "crates/planrs-render", version = "0.1.0" }
-planrs-pdf = { path = "crates/planrs-pdf", version = "0.1.0" }
-planrs-automation = { path = "crates/planrs-automation", version = "0.1.0" }
-planrs-mcp = { path = "crates/planrs-mcp", version = "0.1.0" }
-planrs-ui-egui = { path = "crates/planrs-ui-egui", version = "0.1.0" }
+planrs-core = { path = "crates/planrs-core", version = "1.0.0-rc.1" }
+planrs-mspdi = { path = "crates/planrs-mspdi", version = "1.0.0-rc.1" }
+planrs-render = { path = "crates/planrs-render", version = "1.0.0-rc.1" }
+planrs-pdf = { path = "crates/planrs-pdf", version = "1.0.0-rc.1" }
+planrs-automation = { path = "crates/planrs-automation", version = "1.0.0-rc.1" }
+planrs-mcp = { path = "crates/planrs-mcp", version = "1.0.0-rc.1" }
+planrs-ui-egui = { path = "crates/planrs-ui-egui", version = "1.0.0-rc.1" }
 
 # Dates en heure locale du projet, sans fuseau. On ne demande pas `clock`, mais
 # cela ne garantit rien : les features s'unifient sur le workspace et rmcp

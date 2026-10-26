@@ -14,7 +14,7 @@ Une release `vX.Y.Z[-pre]` porte exactement cinq fichiers (C-REL-08) :
 | `planrs-<v>-web.tar.gz` | `dist` de trunk (`index.html`, `.wasm`, JS de colle généré par wasm-bindgen) |
 | `SHA256SUMS` | Empreintes SHA-256 des quatre fichiers ci-dessus |
 
-Tags `v*-test.*` ⇒ brouillon (non public) ; autres pré-versions ⇒ pré-version ; jetons `contents: write`, `id-token: write`, `attestations: write` au seul job `publish`.
+Tags `v*-test.*` ⇒ brouillon (non public) ; un tag d'essai `vX.Y.Z-test.N` éprouve la version du workspace qu'il prépare (même noyau `X.Y.Z`, par exemple `v1.0.0-test.1` pour `1.0.0-rc.1` : C-REL-01, notes et noms des artefacts sont ceux de cette version, lot L16) ; autres pré-versions ⇒ pré-version ; jetons `contents: write`, `id-token: write`, `attestations: write` au seul job `publish`.
 
 ## 2. Contrats (C-REL)
 
@@ -60,6 +60,6 @@ Icône : `cargo xtask icon` (PNG 16 à 1 024 px dans `assets/icon/`, dessin dét
 1. Version : `[workspace.package] version` du `Cargo.toml` racine **et** les exigences `version = "…"` des crates internes de `[workspace.dependencies]` (Cargo refuse une exigence `0.1.0` face à une pré-version `0.1.0-test.1`) ; `Cargo.lock` régénéré.
 2. `CHANGELOG.md` : contenu de « Non publié » déplacé sous `## [X.Y.Z[-pré]] - AAAA-MM-JJ`, « Non publié » laissé vide en tête.
 3. `cargo xtask release-check vX.Y.Z[-pré]` vert en local, commit, puis tag `vX.Y.Z[-pré]` poussé sur ce commit.
-4. Tag de test `vX.Y.Z-test.N` : brouillon non public, vérifié de bout en bout, puis supprimé (`gh release delete <tag> --cleanup-tag`).
+4. Tag de test `vX.Y.Z-test.N` sur le commit de la version (aucun changement de version : `release-check` le rapporte à la version du workspace de même noyau) : brouillon non public, vérifié de bout en bout, puis supprimé (`gh release delete <tag> --cleanup-tag`).
 
 Limite : sous Windows, `planrs-desktop.exe --version` n'imprime que si sa sortie est redirigée (sous-système fenêtré ; attacher la console du parent demanderait du code `unsafe`, interdit par la règle 10).

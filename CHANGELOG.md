@@ -6,16 +6,34 @@ Une version publiée a une section `## [X.Y.Z] - AAAA-MM-JJ` en tête (sous une 
 
 ## [Non publié]
 
-Jalon J8 (ADR-0016, cahier `docs/plans/j8.md`), en cours.
+## [1.0.0-rc.1] - 2026-10-26
+
+Jalon J8 (ADR-0016, cahier `docs/plans/j8.md`) : usage quotidien, mise en page et modèles, export PDF, panneau d'opérations IA, traductions, version web, releases multiplateformes. Première pré-version publique prévue ; aucune règle J8 n'est « vérifiée contre MS Project » (`docs/scorecard.md`).
 
 ### Ajouté
+- **Usage quotidien** : filtres (Toutes, Critiques, En retard, Inachevées, Jalons, Récapitulatives, Utilisant la ressource, Plage de dates, filtre personnalisé), récapitulatives liées affichées, F3 ; tri avec « conserver la structure », Maj+F3 ; repli par triangles, « Afficher jusqu'au niveau n », Alt+Maj+− et + ; recherche Ctrl/Cmd+F (suivant, précédent, correspondances repliées dépliées). Un filtre, un tri ou un repli n'écrit rien dans le document.
+- Couper, copier, coller des lignes (UID neufs, liens internes recréés, affectations par nom de ressource, compte rendu des liens non recopiés) ; collage depuis un tableur (en-tête reconnu ou colonne de noms) ; Fichier → Importer CSV… avec aperçu (séparateur, encodage, langue).
+- Menu Tâche et barre d'outils : marquer 0, 25, 50, 75, 100 % (une récapitulative vaut ses feuilles), bascule manuel ↔ automatique (dates figées, saisie des dates d'une tâche manuelle), bascule actif ↔ inactif ; colonne « Mode » ; surbrillance du chemin critique en option. Menu Projet dans la barre.
+- **Mise en page** : six modèles (Classique, Sobre — défaut —, Contraste élevé, Présentation, Planning travaux, Impression N&B) en clair, sombre et impression, contrastes WCAG 2.2 vérifiés ; galerie avec aperçu réel, une annulation par application ; modèles personnels. Mise en forme directe : clic droit sur une barre ⇒ volet du type de barre (couleur, épaisseur, extrémités, textes), aperçu en direct, avertissement de contraste.
+- Retours sur trois plannings DCE réels : fond clair et quadrillage vertical seul, durée après le nom en option (« Pose (4 sem.) »), durée des récapitulatives et date des jalons, étiquettes au-dessus des liens, mode « graphique seul », couleurs de phase, cartouche d'impression, mois relatifs M1…Mn.
+- Style du document écrit dans le MSPDI (`<?planrs-style?>`) seulement s'il a été choisi ; fichier sans style relu et écrit octet pour octet comme avant.
+- **Export PDF** (A4, A3, Letter, Tabloid ; échelle ou N pages en largeur et en hauteur ; en-tête et pied par zones avec jetons ; légende ; aucune ligne coupée ; PDF déterministe), mode impression en un clic (colonnes d'impression propres, aperçu page par page) ; `export_pdf` dans la CLI et le serveur MCP.
+- **Panneau d'opérations IA** : volet latéral, table avant/après de chaque écriture proposée par un agent, Accepter / Refuser, historique de session ; onglet « Pourquoi cette date ? » (pilotes cliquables).
+- Relais entre `planrs mcp` et l'application sous Windows (TCP en boucle locale seulement).
+- MCP et CLI : `list_tasks` (nouveaux critères : inachevée, jalon, active, ressource, nom), `update_task { mode }`, `list_styles`, `get_style`, `apply_style`, `set_bar_style`, `reset_style`, `render_gantt { style }`.
+- Traductions FR et EN de toute l'interface (contrôle `cargo xtask text-ids`, pseudo-langue pour les débordements).
+- **Version web** (même code compilé en WebAssembly, trunk) : ouverture, enregistrement et exports par le navigateur, fichiers déposés, raccourcis retenus quand le navigateur le permet.
 - `planrs --version` et `planrs-desktop --version` impriment `planrs <version>` sans ouvrir de fenêtre.
-- Pipeline de release (`.github/workflows/release.yml`) : DMG macOS universel signé ad hoc (CLI dans `cli/planrs`), zip Windows, archive Linux construite pour glibc ≥ 2.36, paquet web ; empreintes `SHA256SUMS` et attestations de provenance ; contrôles avant et après publication.
-- `cargo xtask release-check`, `cargo xtask release-notes`, `cargo xtask icon` (icône de l'application, à valider).
-- Guide d'installation `docs/user/install.md`.
+- Pipeline de release (`.github/workflows/release.yml`) : DMG macOS universel signé ad hoc (CLI dans `cli/planrs`), zip Windows, archive Linux construite pour glibc ≥ 2.36, paquet web ; empreintes `SHA256SUMS` et attestations de provenance ; contrôles avant et après publication ; tag d'essai `vX.Y.Z-test.N` en brouillon.
+- `cargo xtask release-check`, `cargo xtask release-notes`, `cargo xtask icon` (icône de l'application, à valider), `cargo xtask fonts`, `cargo xtask text-ids`.
+- Guide d'installation `docs/user/install.md`, guide de traduction `docs/user/translating.md`.
 
 ### Modifié
+- Modèle par défaut des documents sans style : Sobre (Classique reste choisissable et identique à J7). La CLI et le serveur MCP gardent Classique pour un document sans style.
 - `desktop-build.yml` réduit aux préversions (tags `ui-*`, lancement manuel) : il construit les mêmes artefacts que la release, sans vérification ni publication.
+
+### Limites connues
+- Binaires non notarisés (macOS) et non signés (Windows) ; pas de logo dans le PDF ; noms en écriture CJK affichés en boîtes vides sur le web.
 
 ## [0.1.0] - jalons J1 à J7 (version interne, jamais publiée)
 

@@ -49,6 +49,13 @@ async fn replay_calendars_j7_stdio() {
     replay_stdio("calendars_j7").await;
 }
 
+/// Scénario J8 (lot L16) : usage quotidien par un agent (filtres de
+/// `list_tasks`, mode manuel, dates manuelles, inactivation, export PDF).
+#[tokio::test]
+async fn replay_daily_j8_stdio() {
+    replay_stdio("daily_j8").await;
+}
+
 /// Rejoue le scénario `name` sur le binaire, en stdio.
 async fn replay_stdio(name: &str) {
     let root = repo_root(env!("CARGO_MANIFEST_DIR"));

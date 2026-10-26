@@ -195,6 +195,60 @@ async fn replay_style_j8_memory() {
     assert_eq!(ok(13)["source"], json!("default"));
 }
 
+/// Scénario J8 (lot L16, `docs/plans/j8.md`) : usage quotidien par un
+/// agent sur le projet « P » du cahier — filtres de `list_tasks`
+/// (inachevées, nom sans casse ni accents, jalons, inactives ; R-251),
+/// bascule manuelle (R-253 : 6 ne bouge plus quand 3 s'allonge), dates
+/// d'une tâche manuelle (R-254), retour en automatique, inactivation
+/// (R-255), export PDF A3 paysage sur 2 pages en largeur, enregistrement.
+#[tokio::test]
+async fn replay_daily_j8_memory() {
+    let s = replay_memory("daily_j8", Some("daily_j8.xml")).await;
+    if replay::blessing() {
+        return;
+    }
+    let ok = |i: usize| ok_at(&s, i);
+    let uids = |i: usize| -> Vec<u64> {
+        ok(i)["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["uid"].as_u64().unwrap())
+            .collect()
+    };
+    // R-251 : feuilles < 100 % (jalon compris), sans récapitulatives liées.
+    assert_eq!(uids(3), [3, 4, 6, 7]);
+    assert_eq!(uids(4), [7], "« PEINT » ⇒ Peinture");
+    assert_eq!(uids(5), [4]);
+    let task_after = |i: usize| {
+        ok(i)["diff"]["changed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["uid"] == json!(6))
+            .cloned()
+            .unwrap_or_else(|| panic!("appel {} : 6 inchangée", i + 1))
+    };
+    // R-253 : bascule en manuel sans effet sur les dates ; 3 allongée de
+    // 2 j ⇒ 6 manuelle garde son début (S73).
+    assert_eq!(ok(6)["diff"]["changed_total"], json!(0));
+    assert_eq!(ok(8)["start"], json!("2026-11-09T08:00"));
+    // R-254 : début saisi ⇒ fin = début + 4 j ; fin avant le début refusée.
+    assert_eq!(task_after(9)["start_after"], json!("2026-11-16T08:00"));
+    assert_eq!(task_after(9)["finish_after"], json!("2026-11-19T17:00"));
+    assert_eq!(
+        error_code(s.calls[10].expected.as_ref().unwrap()),
+        Some("task.manual_finish_before_start")
+    );
+    // Retour en automatique : 6 après la fin de 3 (mar 10/11).
+    assert_eq!(task_after(11)["start_after"], json!("2026-11-11T08:00"));
+    // R-255 et filtre « inactive ».
+    assert_eq!(uids(13), [2]);
+    // Export PDF : A3 paysage, 2 pages en largeur remplies, à 100 %.
+    assert_eq!(ok(14)["pages"], json!(2));
+    assert_eq!(ok(14)["scale_pct"], json!(100));
+}
+
 /// Vérifications 1 et 5, plus le journal produit égal au scénario.
 #[tokio::test]
 async fn replay_build_30_memory() {

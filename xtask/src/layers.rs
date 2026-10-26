@@ -18,6 +18,14 @@ const GUI_PACKAGES: &[&str] = &["egui", "eframe", "winit", "rfd"];
 /// Préfixes de la famille egui (`egui-winit`, `egui_kittest`…), interdits aussi.
 const GUI_PREFIXES: &[&str] = &["egui-", "egui_"];
 
+/// Couche du rendu (J8, ADR-0016 : `planrs-render`, `planrs-pdf`) : en plus
+/// des paquets d'interface, elle ne dépend pas de `planrs-automation` (les
+/// textes viennent de `BarTextSource`, implémenté au-dessus).
+const RENDER_LAYER: &[&str] = &["planrs-render", "planrs-pdf"];
+
+/// Paquets interdits à la couche du rendu, en plus des paquets d'interface.
+const RENDER_FORBIDDEN: &[&str] = &["planrs-automation"];
+
 pub fn run() -> ExitCode {
     // Toutes les features : une dépendance optionnelle (`dep:egui` derrière une
     // feature) doit être vue même si aucune feature par défaut ne l'active.
@@ -128,12 +136,14 @@ impl Graph {
 
     /// Parcours en largeur depuis `member` ; un chemin par paquet interdit atteint.
     fn forbidden_paths_from(&self, member: &str) -> Vec<Violation> {
+        let render = RENDER_LAYER.contains(&self.name(member));
+        let forbidden = |name: &str| is_gui_package(name) || (render && RENDER_FORBIDDEN.contains(&name));
         let mut parent: BTreeMap<&str, &str> = BTreeMap::new();
         let mut seen: BTreeSet<&str> = BTreeSet::from([member]);
         let mut queue: VecDeque<&str> = VecDeque::from([member]);
         let mut found = Vec::new();
         while let Some(current) = queue.pop_front() {
-            if current != member && is_gui_package(self.name(current)) {
+            if current != member && forbidden(self.name(current)) {
                 found.push(Violation {
                     member: self.name(member).to_owned(),
                     forbidden: self.name(current).to_owned(),
@@ -253,6 +263,23 @@ mod tests {
     /// Deux versions de `helper` : seule la 2 mène à winit. Le membre qui
     /// dépend de la 2 est signalé, quel que soit l'ordre de lecture des nœuds
     /// (un index par nom gardait les arêtes de la dernière version lue).
+    #[test]
+    fn render_layer_must_not_reach_automation() {
+        let graph = graph(
+            &["planrs-pdf", "planrs-render", "planrs-automation", "planrs-mcp"],
+            &[
+                ("planrs-pdf", &["planrs-render", "planrs-automation"]),
+                ("planrs-render", &["planrs-core"]),
+                ("planrs-automation", &["planrs-render", "planrs-pdf"]),
+                ("planrs-mcp", &["planrs-automation"]),
+            ],
+        );
+        let violations = graph.violations();
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert_eq!(violations[0].member, "planrs-pdf");
+        assert_eq!(violations[0].forbidden, "planrs-automation");
+    }
+
     #[test]
     fn duplicate_versions_keep_their_own_edges() {
         let graph = graph(

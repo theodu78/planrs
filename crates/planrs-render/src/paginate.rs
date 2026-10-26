@@ -199,8 +199,11 @@ fn printable_pt(page: &PageStyle) -> (u32, u32) {
 }
 
 /// Échelle de temps qui fait tenir le Gantt dans `PagesWide(n)` (ou
-/// `PagesWideTall(n, _)`) à 100 % : `Zoom::Auto` sur la largeur de `n`
-/// pages, table répétée déduite (H-UI-50, étiquettes par H-R4 et H-R5).
+/// `PagesWideTall(n, _)`) à 100 % : `Zoom::Fill` sur la largeur de `n`
+/// pages, table répétée déduite (H-UI-50, étiquettes par H-R4 et H-R5) ;
+/// le Gantt remplit la largeur (J8 lot L16 : `Zoom::Auto` s'arrêtait à
+/// l'échelle discrète inférieure et laissait jusqu'à deux tiers de la page
+/// vides).
 /// `None` pour une échelle en % (le zoom de l'appelant est gardé).
 #[must_use]
 pub fn fit_zoom(page: &PageStyle) -> Option<Zoom> {
@@ -217,7 +220,7 @@ pub fn fit_zoom(page: &PageStyle) -> Option<Zoom> {
         content16.saturating_mul(n).saturating_sub(table16)
     };
     let width_px = u32::try_from((gantt16 / SUB).max(1)).unwrap_or(u32::MAX);
-    Some(Zoom::Auto { width_px })
+    Some(Zoom::Fill { width_px })
 }
 
 /// Hauteur et rangs utiles de la scène.

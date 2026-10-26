@@ -1040,6 +1040,7 @@ text_ids! {
     // --- J8 relecture finale ---
     PasteReportTracking => "paste-report-tracking",
     TokenScheduleTitle => "token-schedule-title",
+    MenuRelativeMonths => "menu-relative-months",
 }
 
 /// Clé fluent du refus de code `code` : `error-<code>`, points changés en

@@ -426,6 +426,17 @@ fn format_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
         task: fc.selection,
     });
     menu_item(ui, fc, TextId::MenuFormatBars, None, has_doc, bars);
+    // H-UI-67 : mois relatifs en option, quel que soit le modèle (relecture
+    // finale de J8 ; seul « Planning travaux » les avait).
+    if let Some(doc) = fc.doc {
+        let mut on = fc.state.effective_style(doc.project()).scale.relative_months;
+        if ui
+            .checkbox(&mut on, fc.texts.get(TextId::MenuRelativeMonths))
+            .changed()
+        {
+            fc.actions.push(Action::Format(FormatOp::SetRelativeMonths(on)));
+        }
+    }
     ui.separator();
     let setup = Action::ShowDialog(DialogKind::PageSetup { print_mode: false });
     menu_item(ui, fc, TextId::MenuPageSetup, None, has_doc, setup);

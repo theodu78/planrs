@@ -728,6 +728,31 @@ fn h_ui_67_relative_months_tier() {
     assert!(has_m1(&harness), "{:?}", texts(&harness));
 }
 
+/// H-UI-67 « en option », relecture finale de J8 : Format → « Mois
+/// relatifs » les affiche sous Sobre (une entrée d'annulation), puis les
+/// retire.
+#[test]
+fn h_ui_67_relative_months_menu_toggle() {
+    let (mut harness, _) = sobre_p();
+    let has_m1 = |h: &Harness<'static, App>| texts(h).iter().any(|(_, t)| t == "M1");
+    assert!(!has_m1(&harness));
+    let before = history(harness.state());
+    click(&mut harness, &fr(TextId::MenuFormat));
+    click(&mut harness, &fr(TextId::MenuRelativeMonths));
+    harness.key_press(egui::Key::Escape);
+    harness.run();
+    assert!(has_m1(&harness), "{:?}", texts(&harness));
+    assert_eq!(history(harness.state()), before + 1);
+    let style = doc(harness.state()).expect("style écrit");
+    assert_eq!(style.base, TemplateId::Sobre);
+    assert!(style.resolve().scale.relative_months);
+    click(&mut harness, &fr(TextId::MenuFormat));
+    click(&mut harness, &fr(TextId::MenuRelativeMonths));
+    harness.key_press(egui::Key::Escape);
+    harness.run();
+    assert!(!has_m1(&harness));
+}
+
 /// État de la fenêtre « Mise en page » ouverte.
 fn page_state(app: &App) -> planrs_ui_egui::dialog::page_setup::PageSetupState {
     match app.view().dialog.as_ref().map(|d| &d.body) {

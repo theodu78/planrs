@@ -627,7 +627,40 @@ impl crate::app::App {
                 }
             }
             FormatOp::SetDefaultTemplate(id) => self.state.default_template = id,
+            FormatOp::SetRelativeMonths(on) => self.set_relative_months(on),
         }
+    }
+
+    /// H-UI-67 : mois relatifs de l'échelle, en surcharge du style du
+    /// document (`style.apply { patch: { scale } }`, échelle résolue avec
+    /// le seul drapeau changé ; document sans style : modèle par défaut).
+    fn set_relative_months(&mut self, on: bool) {
+        use planrs_automation::command::Command;
+        use planrs_automation::command::style::{StyleApply, TemplateJson, doc_style};
+        let lang = self.text_language();
+        let Some(document) = &self.document else {
+            return;
+        };
+        let mut scale = self.state.effective_style(document.project()).scale;
+        if scale.relative_months == on {
+            return;
+        }
+        scale.relative_months = on;
+        let template = doc_style(document.project())
+            .is_none()
+            .then(|| TemplateJson::from(self.state.default_template));
+        let patch = serde_json::to_value(scale)
+            .ok()
+            .map(|scale| serde_json::json!({ "scale": scale }));
+        let batch = crate::dialog::batch_of(
+            vec![Command::StyleApply(StyleApply {
+                template,
+                patch,
+                reset: false,
+            })],
+            lang,
+        );
+        drop(self.execute(&batch, crate::app::EditOrigin::User));
     }
 
     /// Dessine le volet de mise en forme s'il est ouvert ; ses lots passent

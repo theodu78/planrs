@@ -1107,3 +1107,4 @@ paste-report-tracking = { $count ->
        *[other] { $count } tâches collées sans leur avancement, leur ligne de base ni leur calendrier
     }
 token-schedule-title = Titre « Planning prévisionnel »
+menu-relative-months = Mois relatifs (M1, M2…)

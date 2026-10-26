@@ -1108,3 +1108,4 @@ paste-report-tracking = { $count ->
        *[other] { $count } tasks pasted without their progress, baseline or calendar
     }
 token-schedule-title = Title “Provisional schedule”
+menu-relative-months = Relative months (M1, M2…)

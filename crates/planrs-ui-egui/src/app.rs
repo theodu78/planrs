@@ -1130,6 +1130,15 @@ impl App {
             path: None,
             demo: false,
         };
+        // Taille contrôlée avant la lecture (relecture finale de J8) : un
+        // fichier de plusieurs Go ferait tomber le module wasm.
+        if let Some(web) = file.web_file()
+            && let Err(error) = document::check_blob_size(web.size())
+        {
+            self.opening = false;
+            self.report_open_error(&error, &origin.name);
+            return;
+        }
         let file = std::sync::Arc::clone(file);
         wasm_bindgen_futures::spawn_local(async move {
             let result = match file.bytes_async().await {
@@ -1276,13 +1285,15 @@ impl App {
     /// introuvable est retiré de la liste (H-UI-28).
     pub fn open_path(&mut self, path: &str) {
         let name = document::file_name(path);
-        let bytes = match std::fs::read(path) {
+        // Lecture bornée (relecture finale de J8) : un fichier de plus de
+        // 256 Mio est refusé avant d'être lu.
+        let bytes = match document::read_path(std::path::Path::new(path)) {
             Ok(bytes) => bytes,
             Err(error) => {
-                if error.kind() == std::io::ErrorKind::NotFound {
+                if !std::path::Path::new(path).exists() {
                     self.state.forget_recent(path);
                 }
-                self.report_open_error(&OpenError::Read(error.to_string()), &name);
+                self.report_open_error(&error, &name);
                 return;
             }
         };

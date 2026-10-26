@@ -352,6 +352,49 @@ fn h_ui_52_gallery_apply_undo() {
     assert!(doc(harness.state()).is_none(), "style d'avant");
 }
 
+/// Relecture finale de J8 (F5) : appliquer un modèle depuis la galerie
+/// garde les couleurs de phase et la mise en page enregistrées du
+/// document (cartouche saisi, colonnes d'impression) ; le reste suit le
+/// modèle ; une seule entrée d'annulation.
+#[test]
+fn h_ui_52_gallery_apply_keeps_phases_and_page() {
+    let (mut harness, _) = sobre_p();
+    let batch = planrs_automation::Batch::from_json_str(
+        r##"{"format_version":1,"ops":[{"op":"style.apply","template":"sobre","patch":{
+            "phases":{"5":{"fill":"#D55E00","children":true}},
+            "bars":{"task":{"shape":"bar","height_pct":80,"radius16":0,"outline16":0,"pattern":"solid"}}}},
+          {"op":"style.apply","patch":{"page":{"paper":"a3","landscape":true,"margins_mm":[10,10,10,10],
+            "fit":{"pages_wide":1},"repeat_table":true,"header":["","Chantier Beaujeu",""],
+            "footer":["","",""],"logo":null,"columns":["id","name"],"title_block":true}}}]}"##,
+    )
+    .unwrap();
+    harness
+        .state_mut()
+        .execute(&batch, planrs_ui_egui::EditOrigin::User)
+        .unwrap();
+    harness.run();
+    let before = doc(harness.state()).unwrap();
+    assert!(before.over.phases.is_some() && before.over.page.is_some());
+    click(&mut harness, &fr(TextId::MenuFormat));
+    click(&mut harness, &fr(TextId::MenuGallery));
+    let apply = format!(
+        "{} {}",
+        fr(TextId::GalleryApply),
+        fr(planrs_ui_egui::i18n::template_name(TemplateId::Presentation))
+    );
+    let undo_before = history(harness.state());
+    click(&mut harness, &apply);
+    let after = doc(harness.state()).unwrap();
+    assert_eq!(after.base, TemplateId::Presentation);
+    assert_eq!(after.over.phases, before.over.phases, "couleurs de phase gardées");
+    assert_eq!(after.over.page, before.over.page, "mise en page gardée");
+    assert!(
+        after.over.bars.is_empty(),
+        "les autres surcharges suivent le modèle"
+    );
+    assert_eq!(history(harness.state()), undo_before + 1);
+}
+
 /// H-UI-52 : « Enregistrer comme modèle personnel » garde le style du
 /// document sous son nom ; le modèle se réapplique.
 #[test]

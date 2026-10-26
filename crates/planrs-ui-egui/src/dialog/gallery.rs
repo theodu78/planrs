@@ -6,8 +6,9 @@
 //! Format → Modèles de mise en forme… : une carte par modèle intégré
 //! (vignette des 12 premières lignes du projet ouvert, dessinée depuis la
 //! scène du rendu, même géométrie que l'écran, H-UI-42), le modèle actuel
-//! marqué, « Appliquer » (`style.apply { template }`, une entrée
-//! d'annulation), « Définir par défaut » (modèle des documents sans
+//! marqué, « Appliquer » (`style.apply { template, patch }`, une entrée
+//! d'annulation ; le patch garde les couleurs de phase et la mise en page
+//! enregistrées du document, relecture finale de J8, F5), « Définir par défaut » (modèle des documents sans
 //! style, H-UI-43) ; modèles personnels (préférences) applicables de même ;
 //! « Enregistrer comme modèle personnel » (nom, 64 caractères au plus,
 //! 32 modèles au plus). Écart au cahier : la vignette vient de la scène
@@ -322,6 +323,19 @@ impl crate::app::App {
             default: self.state.default_template,
             user: &self.state.user_templates,
         };
+        // Relecture finale de J8 (F5) : changer de modèle garde ce qui
+        // appartient au projet et non au modèle, couleurs de phase (H-UI-65)
+        // et mise en page enregistrée (colonnes d'impression, en-tête et
+        // pied, cartouche) ; le reste des surcharges suit le modèle.
+        let kept = input
+            .current
+            .as_ref()
+            .map(|d| planrs_render::style::StylePatch {
+                phases: d.over.phases.clone(),
+                page: d.over.page.clone(),
+                ..planrs_render::style::StylePatch::default()
+            })
+            .unwrap_or_default();
         let outcome = show(ctx, &self.texts, state, &input);
         let apply = |template: TemplateId, patch: Option<serde_json::Value>| {
             super::batch_of(
@@ -337,13 +351,20 @@ impl crate::app::App {
             GalleryOutcome::Open => {}
             GalleryOutcome::Close => self.close_dialog(),
             GalleryOutcome::Apply(id) => {
-                let batch = apply(id, None);
+                let patch = (!kept.is_empty())
+                    .then(|| serde_json::to_value(&kept).ok())
+                    .flatten();
+                let batch = apply(id, patch);
                 drop(self.execute(&batch, crate::app::EditOrigin::User));
             }
             GalleryOutcome::ApplyUser(i) => {
                 if let Some(t) = self.state.user_templates.get(i) {
-                    let patch = (!t.style.over.is_empty())
-                        .then(|| serde_json::to_value(&t.style.over).ok())
+                    // Surcharges du modèle personnel par-dessus celles que
+                    // garde le projet (les siennes l'emportent).
+                    let over = planrs_automation::command::style::merge_patch(&kept, &t.style.over)
+                        .unwrap_or_else(|| t.style.over.clone());
+                    let patch = (!over.is_empty())
+                        .then(|| serde_json::to_value(&over).ok())
                         .flatten();
                     let batch = apply(t.style.base, patch);
                     drop(self.execute(&batch, crate::app::EditOrigin::User));

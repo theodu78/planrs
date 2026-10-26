@@ -27,8 +27,9 @@ chrono.workspace = true
 js-sys.workspace = true
 wasm-bindgen-futures.workspace = true
 # `BeforeUnloadEvent` : garde de fermeture de l'onglet (relecture finale J4,
-# F3).
-web-sys = { workspace = true, features = ["BeforeUnloadEvent", "Event", "EventTarget"] }
+# F3). `KeyboardEvent` : garde des raccourcis (H-UI-55) ; `Node` : bloc
+# « Chargement… » remplacé ou retiré (H-UI-57).
+web-sys = { workspace = true, features = ["BeforeUnloadEvent", "Event", "EventTarget", "KeyboardEvent", "Node"] }
 
 [lints]
 workspace = true

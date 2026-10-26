@@ -2271,6 +2271,36 @@ impl App {
         KeyState { document, table }
     }
 
+    /// Raccourcis que l'image lirait maintenant, pour la garde du web
+    /// (H-UI-55, J8 lot L13) : mêmes cas que [`Self::read_keys`] (fenêtre
+    /// non modale : raccourcis gardés à côté d'elle ; fenêtre modale ou
+    /// cellule en saisie : aucun ; saisie de texte focalisée : aucun).
+    /// Appelée par l'enveloppe web après chaque image.
+    #[must_use]
+    pub fn key_scope(&self, ctx: &egui::Context) -> crate::keymap::KeyScope {
+        use crate::keymap::KeyScope;
+        if ctx.text_edit_focused() {
+            return KeyScope::Nothing;
+        }
+        if let Some(dialog) = &self.view.dialog {
+            return if matches!(dialog.body, DialogBody::Assign(_)) {
+                KeyScope::BesideWindow(KeyState {
+                    document: self.document.is_some(),
+                    table: false,
+                })
+            } else {
+                KeyScope::Nothing
+            };
+        }
+        if self.view_dialog_open()
+            || self.view.edit.editing.is_some()
+            || self.view.resources.edit.editing.is_some()
+        {
+            return KeyScope::Nothing;
+        }
+        KeyScope::All(self.key_state(ctx))
+    }
+
     /// Raccourcis de l'image, avant le dessin (la touche consommée
     /// n'atteint aucun widget). Fenêtre ouverte : dessinée d'abord, ses
     /// touches non prises retirées ; saisie de cellule ouverte : aucun.

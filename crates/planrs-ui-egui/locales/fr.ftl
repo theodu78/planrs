@@ -829,6 +829,7 @@ why-drivers = Pilotes (cliquer pour sélectionner)
 why-unavailable = Explication indisponible : { $detail }
 
 # --- J8 L13 ---
+web-start-failed = { $product } ne peut pas démarrer dans ce navigateur (WebGL2 ou WebGPU indisponible ?). Essayez un navigateur récent ou la version de bureau. Détail : { $detail }
 
 # --- J8 L14 ---
 

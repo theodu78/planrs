@@ -784,6 +784,7 @@ text_ids! {
     WhyDrivers => "why-drivers",
     WhyUnavailable => "why-unavailable",
     // --- J8 L13 ---
+    WebStartFailed => "web-start-failed",
     // --- J8 L14 ---
     // --- J8 L15 ---
     // --- J8 L16 ---

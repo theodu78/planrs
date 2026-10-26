@@ -309,15 +309,70 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
 pub const WEB_NEVER: &[Key] = &[Key::N, Key::W, Key::T, Key::Tab];
 
 /// Vrai si l'entrée de [`KEYMAP`] doit être retenue au navigateur sur le
-/// web (H-UI-55 : Ctrl/Cmd+F, G, K, F3…), pour que planrs la reçoive.
+/// web (H-UI-55 : Ctrl/Cmd+F, G, F3, Alt+←/→, Ctrl/Cmd+=…), pour que
+/// planrs la reçoive au lieu de l'action du navigateur (recherche dans la
+/// page, page précédente, zoom de la page…).
+///
 /// Écart au contrat écrit (« `Binding` gagne `web_interceptable` ») :
 /// `Binding` est une énumération et [`KEYMAP`] une table de triplets lus
-/// par les tests ; le drapeau est cette fonction. Squelette L0 : aucune
-/// entrée (lot L13).
+/// par les tests ; le drapeau est cette fonction (lot L13). Toute entrée
+/// l'est, sauf :
+/// - les touches de [`WEB_NEVER`] (Ctrl/Cmd+N, W, T, Tab) : le navigateur
+///   les garde de toute façon (nouvelle fenêtre, onglet), Tab reste à
+///   eframe ;
+/// - « Quitter » : une page ne ferme pas son onglet, et Ctrl/Cmd+Q doit
+///   rester au navigateur.
 #[must_use]
-pub const fn web_interceptable(shortcut: &Shortcut, binding: Binding) -> bool {
-    let _ = (shortcut, binding);
-    false
+pub fn web_interceptable(shortcut: &Shortcut, binding: Binding) -> bool {
+    !WEB_NEVER.contains(&shortcut.logical_key) && binding != Binding::Ui(UiBinding::Quit)
+}
+
+/// Raccourcis lus par l'image courante, vus du navigateur (H-UI-55) :
+/// photographie de [`crate::App::key_scope`] après chaque image, lue par
+/// la garde `keydown` de la version web.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KeyScope {
+    /// Aucun raccourci lu (saisie de texte, fenêtre modale, cellule en
+    /// cours d'édition) : tout reste au navigateur.
+    #[default]
+    Nothing,
+    /// Fenêtre non modale ouverte : seuls les raccourcis gardés à côté
+    /// d'elle (enregistrer, annuler, ouvrir…).
+    BesideWindow(KeyState),
+    /// Tous les raccourcis des contextes actifs.
+    All(KeyState),
+}
+
+impl KeyScope {
+    /// L'entrée est-elle lue par l'image dans ce périmètre ?
+    #[must_use]
+    pub fn reads(self, context: KeyContext, binding: Binding) -> bool {
+        match self {
+            Self::Nothing => false,
+            Self::BesideWindow(keys) => keys.allows(context) && BESIDE_WINDOW.contains(&binding),
+            Self::All(keys) => keys.allows(context),
+        }
+    }
+}
+
+/// Garde des raccourcis du web (H-UI-55) : vrai si l'appui `key` avec
+/// `modifiers` (tels qu'eframe les lit dans l'évènement `keydown`) doit
+/// être retenu au navigateur (`preventDefault`). La première entrée de
+/// [`KEYMAP`] lue dans `scope` qui correspond décide, comme
+/// [`dispatch`] (comparaison « logique » d'egui : Maj et Alt en trop
+/// ignorés) ; aucune entrée ⇒ faux, le navigateur garde la touche
+/// (Ctrl/Cmd+C, V, X compris : le presse-papiers passe par ses
+/// évènements).
+#[must_use]
+pub fn web_intercepts(scope: KeyScope, modifiers: Modifiers, key: Key) -> bool {
+    KEYMAP
+        .iter()
+        .find(|(context, shortcut, binding)| {
+            scope.reads(*context, *binding)
+                && shortcut.logical_key == key
+                && modifiers.matches_logically(shortcut.modifiers)
+        })
+        .is_some_and(|(_, shortcut, binding)| web_interceptable(shortcut, *binding))
 }
 
 /// État du clavier pour une image : contextes actifs de [`KEYMAP`].

@@ -830,6 +830,7 @@ why-drivers = Drivers (click to select)
 why-unavailable = No explanation: { $detail }
 
 # --- J8 L13 ---
+web-start-failed = { $product } cannot start in this browser (WebGL2 or WebGPU unavailable?). Try a recent browser or the desktop version. Detail: { $detail }
 
 # --- J8 L14 ---
 

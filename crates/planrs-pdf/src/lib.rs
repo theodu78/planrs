@@ -3,14 +3,30 @@
 //! Couche du rendu : ne dépend ni d'egui ni de `planrs-automation` (règle 9).
 //! Écrit avec krilla 0.8.2 sans façonnage : chaque glyphe est placé à
 //! l'avance de la table de largeurs d'Inter (H-R11), pour que coupures et
-//! points de suspension soient identiques au SVG. Sortie déterministe (H-R13).
+//! points de suspension soient identiques au SVG. Sortie déterministe (H-R13) :
+//! date de création et langue injectées, identifiant du document tiré d'un
+//! hachage stable des pages, aucune horloge ni aléa.
+//!
+//! [`pdf`] lit les [`Pages`] de `planrs_render::paginate` : sur chaque page,
+//! l'échelle et les titres de colonnes (H-UI-49), le parent rappelé
+//! « (suite) » (H-UI-48), les lignes de la bande, la ligne de troncature, la
+//! légende (H-UI-47), l'en-tête et le pied de page (H-UI-51). Les motifs
+//! (hachures, points) sont des chemins. Logo : non dessiné (première coupe
+//! du lot L7, `render.md` § 5.4).
 #![forbid(unsafe_code)]
 
+mod draw;
+mod fonts;
 mod smoke;
 
+use krilla::Document;
+use krilla::metadata::{DateTime, Metadata};
+use krilla::page::PageSettings;
 use planrs_core::Moment;
-use planrs_render::paginate::Pages;
-use planrs_render::{Lang, RenderReport};
+use planrs_render::Lang;
+use planrs_render::paginate::{MAX_PAGES, Pages};
+
+pub use fonts::MAX_MISSING_LISTED;
 
 pub use smoke::smoke_page;
 
@@ -56,15 +72,127 @@ impl FontSet {
     }
 }
 
-/// Écrit le PDF des pages. Squelette L0 (export en L7) :
-/// [`PdfError::NotYetAvailable`].
+/// Rapport d'un export PDF.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PdfReport {
+    /// Pages écrites.
+    pub pages: usize,
+    /// Lignes de la scène exportées.
+    pub rows: usize,
+    /// Taille du document.
+    pub bytes: usize,
+    /// Caractères absents des polices (`pdf.glyph_missing`), dans l'ordre
+    /// des points de code, au plus [`MAX_MISSING_LISTED`] ; dessinés par le
+    /// glyphe 0 (boîte vide), texte extractible gardé.
+    pub missing_glyphs: Vec<char>,
+    /// Caractères absents en tout.
+    pub missing_total: usize,
+}
+
+/// Écrit le PDF des pages (H-R13, H-UI-47 à H-UI-51).
 ///
 /// # Errors
 ///
-/// [`PdfError`].
-pub fn pdf(pages: &Pages, fonts: &FontSet, meta: &PdfMeta) -> Result<(Vec<u8>, RenderReport), PdfError> {
-    let _ = (pages, fonts, meta);
-    Err(PdfError::NotYetAvailable)
+/// [`PdfError::TooManyPages`] au-delà de [`MAX_PAGES`] pages ;
+/// [`PdfError::Geometry`] sans page ou papier nul ; [`PdfError::FontInvalid`]
+/// pour une police illisible ; [`PdfError::Write`] si krilla refuse le
+/// document.
+pub fn pdf(pages: &Pages, fonts: &FontSet, meta: &PdfMeta) -> Result<(Vec<u8>, PdfReport), PdfError> {
+    if pages.pages.len() > MAX_PAGES {
+        return Err(PdfError::TooManyPages(pages.pages.len()));
+    }
+    if pages.pages.is_empty() {
+        return Err(PdfError::Geometry);
+    }
+    let mut loaded = fonts::Fonts::load(fonts)?;
+    let mut document = Document::new();
+    document.set_metadata(metadata(pages, meta));
+    let (w, h) = pages.paper_pt;
+    let settings = PageSettings::from_wh(fonts::to_f32(i64::from(w)), fonts::to_f32(i64::from(h)))
+        .ok_or(PdfError::Geometry)?;
+    let mut ctx = draw::PageCtx {
+        pages,
+        fonts: &mut loaded,
+        lang: meta.lang,
+    };
+    for page in &pages.pages {
+        let mut p = document.start_page_with(settings.clone());
+        let mut surface = p.surface();
+        draw::draw_page(&mut surface, &mut ctx, page);
+        surface.finish();
+        p.finish();
+    }
+    let bytes = document.finish().map_err(|e| PdfError::Write(format!("{e:?}")))?;
+    let missing_total = loaded.missing.len();
+    let report = PdfReport {
+        pages: pages.pages.len(),
+        rows: pages.scene.rows.len(),
+        bytes: bytes.len(),
+        missing_glyphs: loaded.missing.into_iter().take(MAX_MISSING_LISTED).collect(),
+        missing_total,
+    };
+    Ok((bytes, report))
+}
+
+/// Métadonnées : titre, langue, date de création injectée, producteur,
+/// identifiant du document (16 octets d'un hachage stable des pages, en
+/// hexadécimal).
+fn metadata(pages: &Pages, meta: &PdfMeta) -> Metadata {
+    let mut m = Metadata::new()
+        .title(meta.title.clone())
+        .language(
+            match meta.lang {
+                Lang::Fr => "fr",
+                Lang::En => "en",
+            }
+            .to_owned(),
+        )
+        .producer(format!("planrs {}", planrs_core::PRODUCT_VERSION))
+        .document_id(document_id(pages));
+    if let Some(dt) = datetime(meta.created) {
+        m = m.creation_date(dt);
+    }
+    m
+}
+
+/// Date krilla d'un instant (`AAAA-MM-JJTHH:MM`, heure locale du projet).
+fn datetime(m: Moment) -> Option<DateTime> {
+    let s = m.to_string();
+    let num = |a: usize, b: usize| s.get(a..b).and_then(|v| v.parse::<u16>().ok());
+    let year = num(0, 4)?;
+    let byte = |a: usize, b: usize| num(a, b).and_then(|v| u8::try_from(v).ok());
+    Some(
+        DateTime::new(year)
+            .month(byte(5, 7)?)
+            .day(byte(8, 10)?)
+            .hour(byte(11, 13)?)
+            .minute(byte(14, 16)?),
+    )
+}
+
+/// Hachage FNV-1a 64 bits alimenté par l'écriture `Debug` des pages, sans
+/// chaîne intermédiaire.
+struct Fnv(u64);
+
+impl std::fmt::Write for Fnv {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        for b in s.bytes() {
+            self.0 ^= u64::from(b);
+            self.0 = self.0.wrapping_mul(0x0000_0100_0000_01B3);
+        }
+        Ok(())
+    }
+}
+
+/// Identifiant du document : deux FNV-1a 64 bits (bases différentes) sur
+/// le contenu des pages, soit 16 octets en hexadécimal (H-R13).
+fn document_id(pages: &Pages) -> String {
+    use std::fmt::Write as _;
+    let mut a = Fnv(0xCBF2_9CE4_8422_2325);
+    let mut b = Fnv(0x6C62_272E_07BB_0142);
+    let _ = write!(a, "{pages:?}");
+    let _ = write!(b, "{pages:?}");
+    format!("{:016x}{:016x}", a.0, b.0)
 }
 
 /// Erreur de l'export PDF.

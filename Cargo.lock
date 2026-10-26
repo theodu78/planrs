@@ -3501,8 +3501,10 @@ name = "planrs-pdf"
 version = "0.1.0"
 dependencies = [
  "krilla",
+ "miniz_oxide 0.8.9",
  "planrs-core",
  "planrs-render",
+ "proptest",
  "skrifa 0.42.1",
 ]
 

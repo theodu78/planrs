@@ -794,6 +794,10 @@ error-csv-error-encoding = Le fichier n'est pas dans l'encodage indiqué.
 error-csv-error-not_yet_available = Fonction pas encore disponible.
 
 # --- J8 L11 ---
+col-mode = Mode
+fmt-mode-manual = Manuelle
+fmt-mode-auto = Automatique
+gantt-status-label = État { $date }
 
 # --- J8 L12 ---
 

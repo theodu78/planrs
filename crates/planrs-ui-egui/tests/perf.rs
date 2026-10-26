@@ -56,6 +56,13 @@
 //!   `RowModel`) plus l'image suivante, décomposée ; budget médiane
 //!   < 500 ms publié (non tenu, non bloquant), garde bloquante < 1 s.
 //!
+//! - J8 L11 : `static_styled` (ignoré, release) : vue principale stylée
+//!   (Sobre, Présentation en densité Aérée, Chantier en densité Compacte,
+//!   clair et sombre), 5 000 tâches, molette au milieu du réseau, zoom
+//!   Semaine, mêmes seuils. Garde toujours exécutée :
+//!   `styled_counts_equal_at_1000_and_5000_tasks` (formes, sommets et
+//!   galleys à ± 5 % pour chaque modèle).
+//!
 //! Le rendu GPU n'est pas chronométré (lavapipe en CI n'est pas
 //! représentatif). Le projet est construit directement
 //! (`planrs_tests::generate::ui_network`) et ouvert sans MSPDI
@@ -97,6 +104,7 @@ use egui::{
 };
 use planrs_automation::filter::{FilterCtx, FilterPreset};
 use planrs_core::Moment;
+use planrs_render::style::TemplateId;
 use planrs_tests::generate::{ui_network, ui_network_with_resources};
 use planrs_ui_egui::column::Column;
 use planrs_ui_egui::edit::{EditState, commit_edit};
@@ -1374,4 +1382,101 @@ fn paste_1000() {
         median < PASTE_GUARD,
         "paste_1000 : médiane {median:?} ≥ {PASTE_GUARD:?}"
     );
+}
+
+/// J8 L11 : modèles mesurés par `static_styled` et la garde des formes
+/// (Sobre, Présentation en densité Aérée, Chantier en densité Compacte).
+const STYLED: [(TemplateId, &str); 3] = [
+    (TemplateId::Sobre, "sobre"),
+    (TemplateId::Presentation, "presentation"),
+    (TemplateId::Chantier, "chantier"),
+];
+
+/// Application ouverte sur un réseau généré, modèle par défaut `id`,
+/// thème `theme` (J8, lot L11).
+fn styled_app(summaries: usize, links: usize, id: TemplateId, theme: ThemePref) -> App {
+    let mut app = app_with(summaries, LEAVES_PER_SUMMARY, links);
+    app.state.default_template = id;
+    app.state.theme = theme;
+    app
+}
+
+/// Zoom Semaine, table et Gantt défilés au milieu du réseau, images
+/// stabilisées.
+fn styled_middle(app: &mut App, bench: &mut Bench) {
+    bench.settle(app);
+    app.dispatch(Action::SetZoom(TimeScaleZoom::Week));
+    bench.settle(app);
+    let row = app.rows().unwrap().len() / 2;
+    app.dispatch(Action::ScrollToRow(row));
+    bench.settle(app);
+    scroll_gantt_to_row(app, row);
+    bench.settle(app);
+}
+
+/// J8 L11 (`static_styled`) : vue principale stylée sur 5 000 tâches et
+/// 10 000 liens, Sobre, Présentation (Aérée), Chantier (Compacte), clair et
+/// sombre ; molette à chaque image au milieu du réseau, zoom Semaine
+/// (barres, liens, hachures et textes du moteur dessinés) ; mêmes seuils
+/// que la vue principale.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn static_styled() {
+    for (id, name) in STYLED {
+        for (theme, variant) in [(ThemePref::Light, "clair"), (ThemePref::Dark, "sombre")] {
+            let mut app = styled_app(SUMMARIES, LINKS, id, theme);
+            let mut bench = Bench::new();
+            styled_middle(&mut app, &mut bench);
+            for k in 0..WARMUP {
+                let dy = if k % 2 == 0 { -WHEEL_STEP } else { WHEEL_STEP };
+                bench.frame(&mut app, wheel_events(dy));
+            }
+            let samples: Vec<Duration> = (0..2 * FRAMES)
+                .map(|k| {
+                    let dy = if k < FRAMES { -WHEEL_STEP } else { WHEEL_STEP };
+                    bench.frame(&mut app, wheel_events(dy))
+                })
+                .collect();
+            assert_budget(&format!("static_styled_{name}_{variant}"), samples, bench.last);
+        }
+    }
+}
+
+/// J8 L11 (garde indépendante de la machine) : pour chaque modèle stylé,
+/// formes, sommets et galleys de la vue principale égaux à ± 5 % à 1 000 et
+/// 5 000 tâches (aucun travail proportionnel au nombre de tâches pendant
+/// une image : textes du moteur, bandes, hachures seulement sur les lignes
+/// visibles).
+#[test]
+fn styled_counts_equal_at_1000_and_5000_tasks() {
+    let close = |a: usize, b: usize| a.abs_diff(b) * 20 <= a.max(b);
+    for (id, name) in STYLED {
+        let mut measured = Vec::new();
+        for summaries in [50, SUMMARIES] {
+            let mut app = styled_app(
+                summaries,
+                2 * summaries * LEAVES_PER_SUMMARY,
+                id,
+                ThemePref::Light,
+            );
+            let mut bench = Bench::new();
+            styled_middle(&mut app, &mut bench);
+            measured.push(bench.last);
+        }
+        let (small, large) = (measured[0], measured[1]);
+        eprintln!("{name} : 1 000 tâches {small:?}, 5 000 tâches {large:?}");
+        assert!(small.shapes > 0 && small.galleys > 0, "{name} : {small:?}");
+        assert!(
+            close(small.shapes, large.shapes),
+            "{name} : formes {small:?} / {large:?}"
+        );
+        assert!(
+            close(small.vertices, large.vertices),
+            "{name} : sommets {small:?} / {large:?}"
+        );
+        assert!(
+            close(small.galleys, large.galleys),
+            "{name} : galleys {small:?} / {large:?}"
+        );
+    }
 }

@@ -4,8 +4,10 @@
 //! Nuances propres (barres bleues, chemin critique rouge, récapitulatives et
 //! jalons sombres, comme l'usage de MS Project), non copiées (hypothèse).
 
+use std::sync::Arc;
+
 use egui::Color32;
-use planrs_render::style::{BarRole, PlanStyle, Rgb, Variant};
+use planrs_render::style::{BarRole, FontChoice, PlanStyle, Rgb, TemplateId, Variant, template};
 
 /// Couleurs de dessin de la vue principale.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,6 +164,171 @@ impl Palette {
             egui::Theme::Light => Self::LIGHT,
             egui::Theme::Dark => Self::DARK,
         }
+    }
+}
+
+/// Variante du style pour un thème résolu de l'interface.
+#[must_use]
+pub const fn variant_for(theme: egui::Theme) -> Variant {
+    match theme {
+        egui::Theme::Light => Variant::Light,
+        egui::Theme::Dark => Variant::Dark,
+    }
+}
+
+/// Famille de police du planning (Inter Regular), chargée seulement quand
+/// le style effectif la demande (ADR-0016 D9, J8 lot L11).
+pub const PLAN_FAMILY: &str = "planrs-plan";
+
+/// Famille Inter `SemiBold` (textes appuyés : récapitulatives).
+pub const PLAN_FAMILY_STRONG: &str = "planrs-plan-semibold";
+
+/// Inter Regular (OFL-1.1, `assets/fonts`, mention dans `NOTICE`).
+static INTER_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+
+/// Inter `SemiBold`.
+static INTER_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf");
+
+/// Installe les deux familles Inter du planning dans `ctx` (sans effet si
+/// elles y sont déjà ; egui ne relit que les noms). Les polices d'egui
+/// suivent en repli pour les caractères absents d'Inter.
+pub fn install_plan_fonts(ctx: &egui::Context) {
+    use egui::epaint::text::{FontData, FontInsert, FontPriority, InsertFontFamily};
+    for (name, bytes) in [(PLAN_FAMILY, INTER_REGULAR), (PLAN_FAMILY_STRONG, INTER_SEMIBOLD)] {
+        ctx.add_font(FontInsert::new(
+            name,
+            FontData::from_static(bytes),
+            vec![InsertFontFamily {
+                family: egui::FontFamily::Name(name.into()),
+                priority: FontPriority::Highest,
+            }],
+        ));
+    }
+}
+
+/// Style du planning lu par l'écran à une image (J8, lot L11, ADR-0016
+/// D5) : style effectif du document (modèle par défaut des préférences pour
+/// un document sans style, H-UI-43) et variante du thème résolu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScreenStyle {
+    /// Style résolu.
+    pub style: Arc<PlanStyle>,
+    /// Variante (clair ou sombre).
+    pub variant: Variant,
+    /// Phase (0 ou 1) de chaque ligne du modèle pour les bandes de phase
+    /// (H-UI-53) ; vide sans bandes de phase. Calculée une fois par
+    /// génération du document, jamais pendant une image.
+    pub phases: Arc<Vec<u8>>,
+}
+
+impl Default for ScreenStyle {
+    /// Classique clair (J7).
+    fn default() -> Self {
+        Self {
+            style: Arc::new(template(TemplateId::Classique)),
+            variant: Variant::Light,
+            phases: Arc::new(Vec::new()),
+        }
+    }
+}
+
+impl ScreenStyle {
+    /// Hauteur d'une ligne (densité du style : 18, 22 ou 28 px).
+    #[must_use]
+    pub fn row_h(&self) -> f32 {
+        f32::from(self.style.density.row_px())
+    }
+
+    /// Le style demande la police Inter (table et Gantt).
+    #[must_use]
+    pub fn inter(&self) -> bool {
+        self.style.font.family == FontChoice::Inter
+    }
+}
+
+/// Cache du style effectif et de ses palettes (J8, lot L11) : relu
+/// seulement quand le document (ouverture, génération) ou le modèle par
+/// défaut changent ; la palette du thème courant est servie sans calcul.
+#[derive(Clone, Debug)]
+pub struct StyleCache {
+    /// Clé du style gardé : (ouverture, génération) du document, modèle
+    /// par défaut.
+    key: Option<(Option<(u64, u64)>, TemplateId)>,
+    /// Style gardé.
+    style: Arc<PlanStyle>,
+    /// Palettes claire et sombre du style gardé.
+    palettes: Option<(Palette, Palette)>,
+    /// Phases gardées et leur clé (document).
+    phases: (Option<(u64, u64)>, Arc<Vec<u8>>),
+    /// Lectures faites (tests).
+    builds: u64,
+}
+
+impl Default for StyleCache {
+    fn default() -> Self {
+        Self {
+            key: None,
+            style: ScreenStyle::default().style,
+            palettes: None,
+            phases: (None, Arc::new(Vec::new())),
+            builds: 0,
+        }
+    }
+}
+
+impl StyleCache {
+    /// Style et palette pour la clé `(document, défaut)` et le thème
+    /// `theme` ; `resolve` n'est appelé que si la clé change.
+    pub fn screen(
+        &mut self,
+        doc_key: Option<(u64, u64)>,
+        default: TemplateId,
+        theme: egui::Theme,
+        resolve: impl FnOnce() -> PlanStyle,
+    ) -> (ScreenStyle, Palette) {
+        let key = (doc_key, default);
+        if self.key != Some(key) || self.palettes.is_none() {
+            let style = resolve();
+            self.palettes = Some((
+                Palette::from_style(&style, Variant::Light),
+                Palette::from_style(&style, Variant::Dark),
+            ));
+            self.style = Arc::new(style);
+            self.key = Some(key);
+            self.builds = self.builds.saturating_add(1);
+        }
+        let (light, dark) = self.palettes.unwrap_or((Palette::LIGHT, Palette::DARK));
+        let palette = match theme {
+            egui::Theme::Light => light,
+            egui::Theme::Dark => dark,
+        };
+        let screen = ScreenStyle {
+            style: Arc::clone(&self.style),
+            variant: variant_for(theme),
+            phases: Arc::new(Vec::new()),
+        };
+        (screen, palette)
+    }
+
+    /// Phases des lignes du document `doc_key`, calculées par `compute`
+    /// seulement si le document a changé.
+    pub fn phases(&mut self, doc_key: Option<(u64, u64)>, compute: impl FnOnce() -> Vec<u8>) -> Arc<Vec<u8>> {
+        if self.phases.0 != doc_key || doc_key.is_none() {
+            self.phases = (doc_key, Arc::new(compute()));
+        }
+        Arc::clone(&self.phases.1)
+    }
+
+    /// Résolutions faites depuis la création (tests du cache).
+    #[must_use]
+    pub const fn builds(&self) -> u64 {
+        self.builds
+    }
+
+    /// Style gardé (hauteur de ligne de la navigation entre deux images).
+    #[must_use]
+    pub fn style(&self) -> &PlanStyle {
+        &self.style
     }
 }
 
@@ -333,6 +500,40 @@ mod tests {
         assert_eq!(Palette::from_style(&style, Variant::Light), Palette::LIGHT);
         assert_eq!(Palette::from_style(&style, Variant::Dark), Palette::DARK);
         assert_eq!(Palette::from_style(&style, Variant::Print), Palette::LIGHT);
+    }
+
+    /// Le style n'est relu que si le document ou le modèle par défaut
+    /// changent ; le thème ne fait que choisir la palette.
+    #[test]
+    fn style_cache_rebuilds_on_key_only() {
+        let mut cache = super::StyleCache::default();
+        let sobre = || template(TemplateId::Sobre);
+        let (a, light) = cache.screen(Some((1, 0)), TemplateId::Sobre, egui::Theme::Light, sobre);
+        let (b, dark) = cache.screen(Some((1, 0)), TemplateId::Sobre, egui::Theme::Dark, || {
+            panic!("relu")
+        });
+        assert_eq!(cache.builds(), 1);
+        assert_eq!(a.style, b.style);
+        assert_eq!(
+            light,
+            Palette::from_style(&template(TemplateId::Sobre), Variant::Light)
+        );
+        assert_eq!(
+            dark,
+            Palette::from_style(&template(TemplateId::Sobre), Variant::Dark)
+        );
+        assert_eq!(b.variant, Variant::Dark);
+        cache.screen(Some((1, 1)), TemplateId::Sobre, egui::Theme::Dark, sobre);
+        cache.screen(Some((1, 1)), TemplateId::Classique, egui::Theme::Dark, sobre);
+        assert_eq!(cache.builds(), 3);
+        let (classique, light) =
+            super::StyleCache::default().screen(None, TemplateId::Classique, egui::Theme::Light, || {
+                template(TemplateId::Classique)
+            });
+        assert_eq!(light, Palette::LIGHT);
+        assert_eq!(classique, super::ScreenStyle::default());
+        assert!((classique.row_h() - 22.0).abs() < f32::EPSILON);
+        assert!(!classique.inter());
     }
 
     #[test]

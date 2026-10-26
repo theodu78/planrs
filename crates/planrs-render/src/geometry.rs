@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 
 use planrs_core::{
-    BaselineNumber, LinkType, Moment, Project, Schedule, Task, TaskOutcome, TaskRole, TaskUid,
+    BaselineNumber, Day, LinkType, Moment, Project, Schedule, Task, TaskOutcome, TaskRole, TaskUid,
 };
 
 use crate::axis::{self, Axis, DaySpan, SUB, Scale};
@@ -56,10 +56,37 @@ impl Axis16 {
         }
     }
 
+    /// Axe d'une plage de jours explicite, `from` inclus, `to` exclu (au
+    /// moins un jour), à l'échelle `zoom`, début de plage en `left16` :
+    /// l'axe de l'écran (J8, lot L11), dont la plage par défaut est
+    /// calculée par l'interface sur la même règle (H-R3). `Zoom::Auto` se
+    /// résout sur le nombre de jours (H-R4).
+    #[must_use]
+    pub fn for_days(from: Day, to: Day, zoom: Zoom, left16: i64) -> Self {
+        let end = to.max(from.checked_add_days(1).unwrap_or(from));
+        let span = DaySpan {
+            start: from,
+            end,
+            truncated: false,
+        };
+        let scale = axis::resolve_scale(zoom, span.days());
+        Self {
+            inner: Axis::new(span, scale, left16),
+            span,
+            scale,
+        }
+    }
+
     /// Abscisse d'un instant.
     #[must_use]
     pub fn x16(&self, m: Moment) -> i64 {
         self.inner.x16(m)
+    }
+
+    /// Abscisse du minuit d'un jour.
+    #[must_use]
+    pub fn x16_day(&self, d: Day) -> i64 {
+        self.inner.x16_day(d)
     }
 
     /// Abscisse du début de plage.
@@ -80,7 +107,8 @@ impl Axis16 {
         self.inner.width16()
     }
 
-    /// Seizièmes de pixel par jour.
+    /// Seizièmes de pixel par jour, arrondis à l'entier inférieur
+    /// (Trimestre : 19 pour 19,2).
     #[must_use]
     pub const fn px16_per_day(&self) -> i64 {
         self.scale.px16_per_day()

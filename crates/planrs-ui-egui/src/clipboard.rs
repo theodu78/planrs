@@ -84,7 +84,8 @@ pub const fn tsv_column(column: Column) -> Option<CsvColumn> {
         | Column::ResourceNames
         | Column::BaselineStart
         | Column::BaselineFinish
-        | Column::FinishVariance => None,
+        | Column::FinishVariance
+        | Column::Mode => None,
     }
 }
 

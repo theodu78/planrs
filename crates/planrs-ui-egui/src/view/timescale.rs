@@ -5,11 +5,14 @@
 //! étiquettes sont centrées dans la partie visible de leur cellule et
 //! tronquées par egui (`LayoutJob`).
 
+use chrono::Datelike as _;
 use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{Color32, FontId, Rect, Shape, Stroke, pos2};
 use planrs_core::Weekday;
 
 use super::FrameCtx;
+use crate::format::DateOrder;
+use crate::i18n::{Arg, TextId};
 use crate::timescale::{TierCell, TimeAxis, tier_cells};
 
 /// Taille de police des étiquettes de l'en-tête.
@@ -44,10 +47,24 @@ pub fn paint_header(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, axis: &TimeAxis, r
         (bottom, bottom_unit, palette.grid),
     ];
     let mut texts = Vec::new();
+    // Étiquette de la date d'état (H-UI-54, J8 lot L11) : dans le niveau
+    // bas, à droite du trait (à gauche s'il n'y a pas la place) ; les
+    // étiquettes qu'elle recouvrirait ne sont pas écrites.
+    let tag = status_tag(&painter, fc, axis, bottom);
     for (band, unit, line_color) in bands {
         let cells = tier_cells(axis, unit, week_start, (band.left(), band.right()), labels);
         band_shapes(band, &cells, line_color, &mut shapes);
+        let before = texts.len();
         collect_labels(band, cells, &mut texts);
+        if band == bottom
+            && let Some((x0, x1, _)) = &tag
+        {
+            let kept: Vec<_> = texts
+                .drain(before..)
+                .filter(|(_, a, b, _)| *b <= *x0 - 2.0 || *a >= *x1 + 2.0)
+                .collect();
+            texts.extend(kept);
+        }
     }
     // Séparation des deux bandes et bord inférieur de l'en-tête.
     let stroke = Stroke::new(1.0, palette.grid_major);
@@ -80,8 +97,50 @@ pub fn paint_header(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, axis: &TimeAxis, r
             shapes.push(Shape::galley(pos2(x, y), galley, text_color));
         }
     }
+    if let Some((x0, _, galley)) = tag {
+        let y = bottom.center().y - galley.size().y / 2.0;
+        shapes.push(Shape::galley(pos2(x0, y), galley, Color32::PLACEHOLDER));
+    }
     fc.stats.shapes = fc.stats.shapes.saturating_add(shapes.len());
     painter.extend(shapes);
+}
+
+/// Étiquette « État 02/11 » de la date d'état si le style la demande
+/// (`scale.status_label`) et que la date est dans la bande : abscisses
+/// gauche et droite et texte mis en page (couleur de la date d'état).
+fn status_tag(
+    painter: &egui::Painter,
+    fc: &FrameCtx<'_>,
+    axis: &TimeAxis,
+    band: Rect,
+) -> Option<(f32, f32, std::sync::Arc<egui::Galley>)> {
+    let screen = &fc.task_view.style;
+    if !screen.style.scale.status_label {
+        return None;
+    }
+    let doc = fc.doc?;
+    let status = doc.project().effective_status_date();
+    let x = axis.x(status).round() + 0.5;
+    if !x.is_finite() || x < band.left() || x > band.right() {
+        return None;
+    }
+    let date = status.day().to_naive();
+    let date = match fc.texts.format_labels().date_order {
+        DateOrder::MonthDayYear => format!("{:02}/{:02}", date.month(), date.day()),
+        DateOrder::DayMonthYear => format!("{:02}/{:02}", date.day(), date.month()),
+    };
+    let text = fc
+        .texts
+        .get_args(TextId::GanttStatusLabel, &[("date", Arg::Str(date.into()))]);
+    let ink = fc.palette.status_date;
+    let galley = painter.layout_no_wrap(text, FontId::proportional(HEADER_FONT_PX), ink);
+    let w = galley.size().x;
+    let x0 = if x + 3.0 + w <= band.right() {
+        x + 3.0
+    } else {
+        x - 3.0 - w
+    };
+    Some((x0, x0 + w, galley))
 }
 
 /// Séparateurs verticaux au bord gauche de chaque cellule visible.

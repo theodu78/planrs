@@ -45,7 +45,6 @@ use crate::keymap::{self, Binding, UiBinding};
 use crate::row_view::{DisplayRow, VisibleRows};
 use crate::rows::RowKind;
 use crate::selection::SelectMode;
-use crate::state::GanttStyle;
 use crate::structure::StructureOp;
 use crate::timescale::TimeAxis;
 
@@ -419,8 +418,8 @@ fn bar_gesture(
         *drag = None;
         return false;
     };
-    let row_h = fc.metrics.row_h;
-    let tracking = fc.state.gantt_style == GanttStyle::Tracking;
+    let screen = fc.task_view.style.clone();
+    let geo = gantt::GanttGeo::new(fc, &screen.style);
     let left = gantt_clip.left();
     let pointer = ui.input(|i| i.pointer.interact_pos());
     if drag.is_none()
@@ -428,7 +427,7 @@ fn bar_gesture(
         && background.drag_started_by(PointerButton::Primary)
         && let Some(p) = ui.input(|i| i.pointer.press_origin())
     {
-        let start = match gantt::hit_test(rows, axis, origin, row_h, tracking, p) {
+        let start = match gantt::hit_test(rows, axis, origin, &geo, p) {
             GanttHit::Bar(uid) => Some((uid, GestureKind::Move)),
             GanttHit::BarStart(uid) => Some((uid, GestureKind::Progress)),
             GanttHit::BarEnd(uid) => Some((uid, GestureKind::Resize)),
@@ -440,7 +439,7 @@ fn bar_gesture(
                 kind,
                 origin_x: p.x - left,
                 days: 0,
-                over_row: link_target(rows, axis, origin, row_h, tracking, p, uid),
+                over_row: link_target(rows, axis, origin, &geo, p, uid),
                 preview: None,
             };
             d.days = gesture_days(&d, rows, axis, left, p.x);
@@ -455,7 +454,7 @@ fn bar_gesture(
             && let Some(p) = ui.ctx().pointer_hover_pos()
             && gantt_clip.contains(p)
         {
-            hover_cursor(ui, gantt::hit_test(rows, axis, origin, row_h, tracking, p));
+            hover_cursor(ui, gantt::hit_test(rows, axis, origin, &geo, p));
         }
         return false;
     };
@@ -469,7 +468,7 @@ fn bar_gesture(
             current.days = days;
             current.preview = gesture_preview(doc, current);
         }
-        current.over_row = link_target(rows, axis, origin, row_h, tracking, p, current.uid);
+        current.over_row = link_target(rows, axis, origin, &geo, p, current.uid);
     }
     let released = background.drag_stopped() || !ui.input(|i| i.pointer.primary_down());
     if released {
@@ -495,12 +494,11 @@ fn link_target(
     rows: VisibleRows<'_>,
     axis: &TimeAxis,
     origin: Pos2,
-    row_h: f32,
-    tracking: bool,
+    geo: &gantt::GanttGeo<'_>,
     p: Pos2,
     from: TaskUid,
 ) -> Option<DisplayRow> {
-    match gantt::hit_test(rows, axis, origin, row_h, tracking, p) {
+    match gantt::hit_test(rows, axis, origin, geo, p) {
         GanttHit::Bar(uid) | GanttHit::BarStart(uid) | GanttHit::BarEnd(uid) if uid != from => {
             rows.display_of(uid)
         }
@@ -577,8 +575,9 @@ fn gantt_double_click(
     if !gantt_clip.contains(p) {
         return;
     }
-    let tracking = fc.state.gantt_style == GanttStyle::Tracking;
-    let kind = match gantt::hit_test(rows, axis, origin, fc.metrics.row_h, tracking, p) {
+    let screen = fc.task_view.style.clone();
+    let geo = gantt::GanttGeo::new(fc, &screen.style);
+    let kind = match gantt::hit_test(rows, axis, origin, &geo, p) {
         GanttHit::Bar(uid) | GanttHit::BarStart(uid) | GanttHit::BarEnd(uid) => {
             DialogKind::TaskInformation(uid)
         }

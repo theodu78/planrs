@@ -127,6 +127,10 @@ pub struct FormatLabels {
     /// Suffixe d'un pourcentage (clé `fmt-percent-suffix` : FR « \u{a0}% » ;
     /// EN « % » ; J7 lot L6).
     pub percent_suffix: String,
+    /// Mode de planification manuel (colonne « Mode », J8 lot L11).
+    pub mode_manual: String,
+    /// Mode de planification automatique.
+    pub mode_auto: String,
 }
 
 /// Suffixe d'une durée estimée (« 1 jour? »), identique en français et en

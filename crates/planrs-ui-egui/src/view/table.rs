@@ -17,6 +17,7 @@ use egui::{
 use planrs_automation::text::Language as TextLanguage;
 use planrs_automation::{Batch, Session};
 use planrs_core::TaskUid;
+use planrs_render::style::RowBanding;
 
 use super::main_view::HBarSpec;
 use super::{FrameCtx, Pane};
@@ -160,6 +161,8 @@ impl Sheet for TaskSheet<'_> {
         CellStyle {
             color: cell_text_color(r, col, palette),
             faux_bold: r.kind == RowKind::Summary,
+            // Tâche inactive : grisée (exclue du calcul) et barrée (H-UI-37).
+            strike: !r.active && r.kind != RowKind::Null,
             level: match col {
                 Column::Name if self.outline => r.level.saturating_add(1),
                 Column::Name => r.level,
@@ -427,12 +430,11 @@ pub fn paint_body(
     let palette = fc.palette;
     let metrics = fc.metrics;
     let row_h = metrics.row_h;
-    let font = cell_font(ui);
+    let (font, bands) = RowFill::of(ui, fc);
     let mut shapes = 0_usize;
 
     painter.rect_filled(clip, 0.0, palette.background);
     shapes = shapes.saturating_add(1);
-    let zebra = palette.background.lerp_to_gamma(palette.header_bg, 0.6);
 
     let Some(rows) = fc.visible() else {
         fc.stats.shapes = fc.stats.shapes.saturating_add(shapes);
@@ -465,11 +467,13 @@ pub fn paint_body(
             Some(row) => fc.selected.contains(row.uid),
             None => fc.selection.is_none(),
         };
-        if selected {
-            painter.rect_filled(row_rect, 0.0, palette.selection);
-            shapes = shapes.saturating_add(1);
-        } else if !i.is_multiple_of(2) {
-            painter.rect_filled(row_rect, 0.0, zebra);
+        let fill = if selected {
+            Some(palette.selection)
+        } else {
+            bands.fill(rows, i)
+        };
+        if let Some(fill) = fill {
+            painter.rect_filled(row_rect, 0.0, fill);
             shapes = shapes.saturating_add(1);
         }
         painter.hline(
@@ -522,6 +526,53 @@ pub fn paint_body(
     shapes = shapes.saturating_add(paint_cursor(ui, &painter, fc, &sheet, edit, cursor, &at));
     fc.stats.shapes = fc.stats.shapes.saturating_add(shapes);
     edit_cells(ui, fc, &sheet, edit, cursor, &at, clip);
+}
+
+/// Fond des lignes non sélectionnées de la table : bandes du style
+/// (H-UI-53, J8 lot L11), alignées sur celles du Gantt ; sans bandes, le
+/// zébrage de J7.
+struct RowFill {
+    /// Bandes du style.
+    banding: RowBanding,
+    /// Couleurs des deux bandes.
+    band: [planrs_render::style::Rgb; 2],
+    /// Fond du style (une bande de cette couleur n'est pas dessinée).
+    bg: planrs_render::style::Rgb,
+    /// Zébrage J7 (lignes impaires).
+    zebra: egui::Color32,
+    /// Phases du modèle (bandes de phase).
+    phases: std::sync::Arc<Vec<u8>>,
+}
+
+impl RowFill {
+    /// Police des cellules (Inter si le style la demande, J8 lot L11) et
+    /// fonds des lignes de l'image.
+    fn of(ui: &egui::Ui, fc: &FrameCtx<'_>) -> (egui::FontId, Self) {
+        let mut font = cell_font(ui);
+        let screen = &fc.task_view.style;
+        if screen.inter() {
+            font.family = egui::FontFamily::Name(crate::theme::PLAN_FAMILY.into());
+        }
+        let tokens = screen.style.tokens(screen.variant);
+        let fill = Self {
+            banding: screen.style.grid.rows,
+            band: tokens.band,
+            bg: tokens.bg,
+            zebra: fc.palette.background.lerp_to_gamma(fc.palette.header_bg, 0.6),
+            phases: std::sync::Arc::clone(&screen.phases),
+        };
+        (font, fill)
+    }
+
+    /// Fond de la ligne affichée `i` (`None` : fond de la table).
+    fn fill(&self, rows: VisibleRows<'_>, i: usize) -> Option<egui::Color32> {
+        if self.banding == RowBanding::None {
+            return (!i.is_multiple_of(2)).then_some(self.zebra);
+        }
+        let band = super::gantt::band_of(self.banding, rows, i, &self.phases)?;
+        let rgb = if band == 0 { self.band[0] } else { self.band[1] };
+        (rgb != self.bg).then(|| egui::Color32::from_rgb(rgb.0, rgb.1, rgb.2))
+    }
 }
 
 /// Position du triangle de repli d'une ligne.
@@ -1028,6 +1079,8 @@ mod tests {
             baseline: None,
             finish_variance: None,
             stop: None,
+            manual: false,
+            active: true,
         }
     }
 

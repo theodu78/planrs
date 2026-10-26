@@ -40,18 +40,32 @@ pub(crate) enum Scale {
     Week,
     /// 3,5 px par jour.
     Month,
-    /// 1,1875 px par jour (19/16, arrondi de 1,2).
+    /// 1,2 px par jour (19,2/16, exact : 96/5 seizièmes ; J8 lot L11, comme
+    /// l'écran J7).
     Quarter,
 }
 
 impl Scale {
-    /// Seizièmes de pixel par jour civil.
-    pub(crate) const fn px16_per_day(self) -> i64 {
+    /// Seizièmes de pixel par jour civil, en fraction `(numérateur,
+    /// dénominateur)` : exacte pour les quatre échelles de l'interface
+    /// (36, 12, 3,5 et 1,2 px par jour), pour que l'écran et la scène
+    /// tombent au même 1/16 px (P55).
+    pub(crate) const fn rate(self) -> (i64, i64) {
         match self {
-            Self::Day => 576,
-            Self::Week => 192,
-            Self::Month => 56,
-            Self::Quarter => 19,
+            Self::Day => (576, 1),
+            Self::Week => (192, 1),
+            Self::Month => (56, 1),
+            Self::Quarter => (96, 5),
+        }
+    }
+
+    /// Seizièmes de pixel par jour civil, arrondis à l'entier inférieur
+    /// (seuils de la scène).
+    pub(crate) const fn px16_per_day(self) -> i64 {
+        let (num, den) = self.rate();
+        match num.checked_div(den) {
+            Some(v) => v,
+            None => num,
         }
     }
 
@@ -192,8 +206,10 @@ fn auto_range(project: &Project, schedule: &Schedule, max_days: i64) -> (Day, Da
 pub(crate) struct Axis {
     /// Minute du minuit du premier jour.
     origin: i64,
-    /// Seizièmes de pixel par jour.
+    /// Seizièmes de pixel par jour : numérateur.
     px16: i64,
+    /// Seizièmes de pixel par jour : dénominateur (≥ 1).
+    den: i64,
     /// Abscisse (1/16 px) du début de la plage.
     left16: i64,
     /// Largeur du contenu (1/16 px).
@@ -203,22 +219,35 @@ pub(crate) struct Axis {
 impl Axis {
     /// Axe de `span` à l'échelle `scale`, le début de plage étant en `left16`.
     pub(crate) fn new(span: DaySpan, scale: Scale, left16: i64) -> Self {
-        let px16 = scale.px16_per_day();
+        let (px16, den) = scale.rate();
+        let width16 = round_div(
+            i128::from(span.days()).saturating_mul(i128::from(px16)),
+            i128::from(den),
+        )
+        .unwrap_or(0);
         Self {
             origin: day_minutes(span.start),
             px16,
+            den,
             left16,
-            width16: span.days().saturating_mul(px16),
+            width16,
         }
     }
 
     /// Abscisse d'une minute absolue :
-    /// `left16 + round_div((minutes − origine) × px16, 1 440)`.
+    /// `left16 + round_div((minutes − origine) × px16, 1 440 × den)`.
     pub(crate) fn x16_minutes(&self, minutes: i64) -> i64 {
         let delta = i128::from(minutes.saturating_sub(self.origin));
         let px16 = i128::from(self.px16);
-        let x = round_div(delta.saturating_mul(px16), i128::from(MINUTES_PER_DAY)).unwrap_or(0);
+        let den = i128::from(MINUTES_PER_DAY).saturating_mul(i128::from(self.den.max(1)));
+        let x = round_div(delta.saturating_mul(px16), den).unwrap_or(0);
         self.left16.saturating_add(x)
+    }
+
+    /// Seizièmes de pixel par jour, en fraction `(numérateur,
+    /// dénominateur)`.
+    pub(crate) const fn rate(&self) -> (i64, i64) {
+        (self.px16, self.den)
     }
 
     /// Abscisse d'un instant.
@@ -365,7 +394,7 @@ pub(crate) fn tier_cells(
     font: FontRef,
     week_numbers: bool,
 ) -> Vec<Cell> {
-    let level = label_level(unit, axis.px16, lang, font, week_numbers);
+    let level = label_level(unit, axis.rate(), lang, font, week_numbers);
     let mut cells = Vec::new();
     let mut cur = unit_start(span.start, unit, week_start);
     while cells.len() < MAX_CELLS && cur < span.end {
@@ -505,8 +534,18 @@ pub(crate) fn label_width16(text: &str, font: FontRef) -> i64 {
 /// Rang de variante commun à un niveau : la plus longue dont toutes les
 /// formes (les douze mois de 2026) tiennent dans la plus petite cellule de
 /// l'unité ; `None` si aucune ne tient.
-fn label_level(unit: TierUnit, px16: i64, lang: Lang, font: FontRef, week_numbers: bool) -> Option<usize> {
-    let width = unit.min_days().saturating_mul(px16);
+fn label_level(
+    unit: TierUnit,
+    rate: (i64, i64),
+    lang: Lang,
+    font: FontRef,
+    week_numbers: bool,
+) -> Option<usize> {
+    let width = unit
+        .min_days()
+        .saturating_mul(rate.0)
+        .checked_div(rate.1)
+        .unwrap_or(0);
     let dom = match unit {
         TierUnit::Day | TierUnit::Week => 28,
         TierUnit::Month | TierUnit::Quarter | TierUnit::Year => 1,
@@ -576,6 +615,26 @@ mod tests {
         assert_eq!(resolve_scale(Zoom::Auto { width_px: 1200 }, 600), Scale::Quarter);
     }
 
+    /// Trimestre exact (J8, lot L11) : 1,2 px par jour, comme l'écran J7 ;
+    /// cinq jours font 6 px pile, un jour 19,2 arrondi à 19/16 px.
+    #[test]
+    fn quarter_scale_is_exactly_1_2_px_per_day() {
+        let start: Day = "2026-10-19".parse().unwrap();
+        let span = DaySpan {
+            start,
+            end: start.checked_add_days(100).unwrap(),
+            truncated: false,
+        };
+        let axis = Axis::new(span, Scale::Quarter, 0);
+        assert_eq!(axis.width16(), 1_920);
+        assert_eq!(axis.x16_day(start.checked_add_days(5).unwrap()), 96);
+        assert_eq!(axis.x16_day(start.checked_add_days(1).unwrap()), 19);
+        assert_eq!(Scale::Quarter.px16_per_day(), 19);
+        for scale in [Scale::Day, Scale::Week, Scale::Month] {
+            assert_eq!(scale.rate().1, 1);
+        }
+    }
+
     const BODY: FontRef = FontRef {
         weight: crate::metrics::FontWeight::Regular,
         size16: 192,
@@ -583,8 +642,14 @@ mod tests {
 
     #[test]
     fn labels_fit_their_cells() {
-        assert_eq!(label_level(TierUnit::Month, 192, Lang::Fr, BODY, false), Some(0));
-        assert_eq!(label_level(TierUnit::Week, 192, Lang::Fr, BODY, false), Some(0));
+        assert_eq!(
+            label_level(TierUnit::Month, (192, 1), Lang::Fr, BODY, false),
+            Some(0)
+        );
+        assert_eq!(
+            label_level(TierUnit::Week, (192, 1), Lang::Fr, BODY, false),
+            Some(0)
+        );
         let d: Day = "2026-11-02".parse().unwrap();
         assert_eq!(label_variants(d, TierUnit::Week, Lang::En, false)[0], "Nov 2");
         assert_eq!(

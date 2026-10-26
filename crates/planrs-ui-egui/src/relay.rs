@@ -70,7 +70,7 @@ use crate::geom;
 use crate::state::{LanguagePref, ThemePref, ViewKind};
 use crate::timescale::TimeScaleZoom;
 use crate::view::side_panel::{AiHistoryEntry, AiOutcome, AiPanelInput, SideOp, SideTab, push_history};
-use crate::view::{self, ApprovalBanner, ApprovalSummary};
+use crate::view::{ApprovalBanner, ApprovalSummary};
 
 /// Écritures qui demandent une validation sans être du genre `Write`.
 const APPROVED_TOOLS: [&str; 5] = [
@@ -707,7 +707,8 @@ impl App {
         // Lignes affichées (J8, lot L5 : la vue filtrée, triée ou repliée).
         let visible = self.visible_rows().map(|rows| {
             let top = self.view.last_scroll_y;
-            let range = geom::visible_rows(top, top + self.view.last_body_height, view::ROW_H, rows.len(), 0);
+            let range =
+                geom::visible_rows(top, top + self.view.last_body_height, self.row_h(), rows.len(), 0);
             json!([range.start, range.end.saturating_sub(1).max(range.start)])
         });
         json!({

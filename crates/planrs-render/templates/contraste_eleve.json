@@ -226,16 +226,26 @@
     "critical": {
       "right": "name"
     },
-    "milestone": {
-      "right": "finish"
-    },
-    "milestone_critical": {
-      "right": "finish"
-    },
-    "summary": {
+    "manual": {
       "right": "name"
     },
+    "inactive": {
+      "right": "name"
+    },
+    "summary": {
+      "left": "name",
+      "right": "duration_short"
+    },
     "summary_critical": {
+      "left": "name",
+      "right": "duration_short"
+    },
+    "milestone": {
+      "left": "finish_short",
+      "right": "name"
+    },
+    "milestone_critical": {
+      "left": "finish_short",
       "right": "name"
     }
   },

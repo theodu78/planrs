@@ -860,3 +860,85 @@ proptest! {
         assert_table_texts_in_columns(&names, TemplateId::Sobre);
     }
 }
+
+/// Source qui donne un texte à chaque champ.
+struct AllTexts;
+
+impl planrs_render::geometry::BarTextSource for AllTexts {
+    fn bar_text(&self, _uid: planrs_core::TaskUid, f: planrs_render::style::BarField) -> Option<String> {
+        Some(format!("{f:?}"))
+    }
+
+    fn token(&self, _t: planrs_render::geometry::Token) -> String {
+        String::new()
+    }
+}
+
+/// H-UI-63 et H-UI-64, valables pour tous les modèles (relecture finale de
+/// J8, F4) : sous chaque modèle stylé (Classique garde le rendu nu de J7),
+/// chaque barre porte au moins une étiquette, tâche manuelle et inactive
+/// comprises ; récapitulative : nom à gauche, durée à droite ; jalon : date
+/// à gauche, nom à droite.
+#[test]
+fn h_ui_64_every_bar_labelled_in_every_template() {
+    use planrs_core::SchedulingMode;
+    use planrs_render::geometry::TextSide;
+    let mut p = project_p();
+    let manual = add(&mut p, "Manuelle", 2, 2);
+    p.tasks.get_mut(manual).unwrap().mode = SchedulingMode::Manual {
+        start: Some(at("2026-10-21T08:00")),
+        finish: None,
+        duration: None,
+    };
+    let inactive = add(&mut p, "Inactive", 2, 2);
+    p.tasks.get_mut(inactive).unwrap().active = false;
+    let s = planrs_core::schedule(&p);
+    for id in TemplateId::ALL {
+        if id == TemplateId::Classique {
+            continue;
+        }
+        let sc = layout(
+            &p,
+            &s,
+            &template(id),
+            &AllTexts,
+            &Viewport::new(Variant::Print, Lang::Fr),
+        )
+        .0;
+        let mut roles = std::collections::BTreeSet::new();
+        for row in &sc.rows {
+            let Some(bar) = &row.bar else { continue };
+            roles.insert(format!("{:?}", bar.role));
+            assert!(
+                !row.texts.items.is_empty(),
+                "{id:?} : barre {:?} de la ligne {} sans étiquette",
+                bar.role,
+                row.id
+            );
+            let side = |s: TextSide| {
+                row.texts
+                    .items
+                    .iter()
+                    .find(|t| t.side == s)
+                    .map(|t| t.text.as_str())
+            };
+            match bar.role {
+                BarRole::Summary | BarRole::SummaryCritical => {
+                    assert_eq!(side(TextSide::Right), Some("DurationShort"), "{id:?}");
+                }
+                BarRole::Milestone | BarRole::MilestoneCritical => {
+                    assert_eq!(side(TextSide::Left), Some("FinishShort"), "{id:?}");
+                    assert_eq!(side(TextSide::Right), Some("Name"), "{id:?}");
+                }
+                _ => {}
+            }
+        }
+        for role in ["Manual", "Inactive", "Summary", "Critical"] {
+            assert!(
+                roles.iter().any(|r| r.starts_with(role)),
+                "{id:?} : rôle {role} absent : {roles:?}"
+            );
+        }
+        assert!(roles.iter().any(|r| r.starts_with("Milestone")), "{roles:?}");
+    }
+}

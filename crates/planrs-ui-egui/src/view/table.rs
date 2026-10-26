@@ -91,6 +91,9 @@ pub struct TaskSheet<'a> {
     columns: Vec<(Column, u16)>,
     /// Messages (refus d'une saisie).
     texts: &'a Texts,
+    /// Triangles de repli (J8, lot L9) : un cran de retrait de plus pour
+    /// chaque nom, où se dessine le triangle des récapitulatives.
+    outline: bool,
 }
 
 impl<'a> TaskSheet<'a> {
@@ -101,7 +104,15 @@ impl<'a> TaskSheet<'a> {
             rows,
             columns: visible_columns(state),
             texts,
+            outline: false,
         }
+    }
+
+    /// Avec ou sans triangles de repli (H-UI-34, J8 lot L9).
+    #[must_use]
+    pub const fn with_outline(mut self, outline: bool) -> Self {
+        self.outline = outline;
+        self
     }
 }
 
@@ -149,7 +160,11 @@ impl Sheet for TaskSheet<'_> {
         CellStyle {
             color: cell_text_color(r, col, palette),
             faux_bold: r.kind == RowKind::Summary,
-            level: if col == Column::Name { r.level } else { 0 },
+            level: match col {
+                Column::Name if self.outline => r.level.saturating_add(1),
+                Column::Name => r.level,
+                _ => 0,
+            },
         }
     }
 
@@ -424,7 +439,7 @@ pub fn paint_body(
         return;
     };
     focus_widget(ui, fc, clip);
-    let sheet = TaskSheet::new(rows, fc.state, fc.texts);
+    let sheet = TaskSheet::new(rows, fc.state, fc.texts).with_outline(fc.task_view.outline_triangles);
     open_from_keys(ui, fc, &sheet, edit, cursor);
     fc.stats.table_rows = range.clone();
     let left = clip.left();
@@ -476,6 +491,19 @@ pub fn paint_body(
             let response = row_widget(ui, fc, rows, hit, i, selected);
             row_clicked(fc, &sheet, edit, cursor, &response, i, cols_left);
         }
+        // Triangle de repli (J8, lot L9, H-UI-34), interactif au-dessus de
+        // la ligne : déclaré après elle.
+        if sheet.outline
+            && let Some(row) = row
+            && row.kind == RowKind::Summary
+        {
+            let at = TrianglePlace {
+                row_rect,
+                cols_left,
+                clip,
+            };
+            shapes = shapes.saturating_add(outline_triangle(ui, &painter, fc, &sheet, row, i, &at));
+        }
     }
 
     // Séparateurs verticaux de colonnes, sur toute la hauteur visible.
@@ -494,6 +522,85 @@ pub fn paint_body(
     shapes = shapes.saturating_add(paint_cursor(ui, &painter, fc, &sheet, edit, cursor, &at));
     fc.stats.shapes = fc.stats.shapes.saturating_add(shapes);
     edit_cells(ui, fc, &sheet, edit, cursor, &at, clip);
+}
+
+/// Position du triangle de repli d'une ligne.
+struct TrianglePlace {
+    /// Rectangle écran de la ligne.
+    row_rect: Rect,
+    /// Bord gauche écran de la première colonne (défilement déduit).
+    cols_left: f32,
+    /// Zone visible de la table.
+    clip: Rect,
+}
+
+/// Triangle de repli d'une récapitulative (H-UI-34, J8 lot L9) : dans le
+/// cran de retrait qui précède son nom, pointe vers la droite si elle est
+/// repliée (à la main ou par le niveau affiché), vers le bas sinon ; un
+/// clic replie ou déplie (`TaskViewOp::ToggleCollapsed`). Libellé
+/// d'accessibilité « Déplier … » / « Replier … ». Rend le nombre de formes.
+fn outline_triangle(
+    ui: &egui::Ui,
+    painter: &Painter,
+    fc: &mut FrameCtx<'_>,
+    sheet: &TaskSheet<'_>,
+    row: &Row,
+    i: usize,
+    at: &TrianglePlace,
+) -> usize {
+    let metrics = fc.metrics;
+    let Some((left, w)) = column_span(sheet.columns(), at.cols_left, Column::Name) else {
+        return 0;
+    };
+    let x0 = left + metrics.pad_x + grid::name_indent(metrics.indent, row.level, w);
+    let rect = Rect::from_min_size(
+        pos2(x0, at.row_rect.top()),
+        vec2(metrics.indent, at.row_rect.height()),
+    );
+    let hit = rect.intersect(at.clip);
+    if !rect.is_finite() || !hit.is_positive() {
+        return 0;
+    }
+    let folded = fc.task_view.is_folded(row.uid, row.level);
+    let c = rect.center();
+    let r = 4.0_f32;
+    let points = if folded {
+        vec![
+            pos2(c.x - r * 0.6, c.y - r),
+            pos2(c.x - r * 0.6, c.y + r),
+            pos2(c.x + r * 0.8, c.y),
+        ]
+    } else {
+        vec![
+            pos2(c.x - r, c.y - r * 0.6),
+            pos2(c.x + r, c.y - r * 0.6),
+            pos2(c.x, c.y + r * 0.8),
+        ]
+    };
+    painter.add(egui::Shape::convex_polygon(points, fc.palette.text, Stroke::NONE));
+    let response = ui.interact(
+        hit,
+        ui.make_persistent_id(("planrs-outline", row.uid)),
+        Sense::click(),
+    );
+    let texts = fc.texts;
+    let name = sheet.rows.text(DisplayRow::at(i), Column::Name).to_owned();
+    response.widget_info(|| {
+        let id = if folded {
+            TextId::OutlineExpandRow
+        } else {
+            TextId::OutlineCollapseRow
+        };
+        let label = texts.get_args(id, &[("name", Arg::Str(name.clone().into()))]);
+        egui::WidgetInfo::labeled(egui::Role::Button, true, label)
+    });
+    if response.clicked() {
+        fc.actions
+            .push(Action::TaskView(super::task_view::TaskViewOp::ToggleCollapsed(
+                row.uid,
+            )));
+    }
+    1
 }
 
 /// Zone cliquable de la ligne `i` (ou de la ligne vide) et son libellé

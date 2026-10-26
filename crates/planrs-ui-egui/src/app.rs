@@ -291,9 +291,12 @@ struct RowViewKey {
     outline_level: Option<u8>,
     /// Version du repli.
     collapse_version: u64,
+    /// Version de réapplication du filtre (J8, lot L9).
+    reapply_version: u64,
 }
 
 /// Application egui de planrs, indépendante d'eframe.
+#[allow(clippy::struct_excessive_bools, reason = "drapeaux indépendants de l'image")]
 pub struct App {
     /// Préférences persistées.
     pub state: UiState,
@@ -322,6 +325,9 @@ pub struct App {
     row_view_key: Option<RowViewKey>,
     /// État transitoire de la vue.
     pub(crate) view: ViewTransient,
+    /// Triangles de repli dans la colonne Nom (J8, lot L9, H-UI-34) : faux
+    /// jusqu'au lot L15, voir [`App::set_outline_triangles`].
+    pub(crate) outline_triangles: bool,
     /// File des actions en attente.
     pub(crate) actions: Vec<Action>,
     /// Messages affichés.
@@ -398,6 +404,7 @@ impl App {
             row_view: RowView::default(),
             row_view_key: None,
             view: ViewTransient::default(),
+            outline_triangles: false,
             actions: Vec::new(),
             messages: Vec::new(),
             tx,
@@ -643,6 +650,7 @@ impl App {
             sort: task_view.sort,
             outline_level: task_view.outline_level,
             collapse_version: self.view.collapse_version,
+            reapply_version: self.view.reapply_version,
         };
         if self.row_view_key.as_ref() != Some(&key) {
             let project = document.project();
@@ -651,7 +659,18 @@ impl App {
                 schedule: document.schedule(),
                 status: project.effective_status_date(),
             };
-            self.row_view = RowView::build(model, &ctx, task_view, &self.view.collapsed);
+            // H-UI-30 (J8, lot L9) : lignes gardées par le filtre jusqu'à
+            // sa réapplication.
+            let mut shown = RowView::filter_shown(model, &ctx, task_view);
+            self.view.filter_memo.update(
+                model,
+                &task_view.filter,
+                document.cache_key(),
+                self.view.reapply_version,
+                &mut shown,
+            );
+            self.row_view =
+                RowView::build_with_shown(model, &ctx, task_view, &self.view.collapsed, shown.as_deref());
             self.row_view_key = Some(key);
         }
         self.drop_hidden_selection();
@@ -1467,6 +1486,12 @@ impl App {
             // commande de structure ni fenêtre d'une tâche.
             Action::Structure(_) | Action::ShowTaskInformation
                 if self.state.view == ViewKind::ResourceUsage => {}
+            // H-UI-32 (J8, lot L9) : sous tri ou filtre, déplacer, hausser et
+            // abaisser sont refusés, avec un message.
+            Action::Structure(op) if self.structure_locked(op) => {
+                let text = self.texts.get(TextId::ViewReorderLocked);
+                self.push_message(Severity::Info, text);
+            }
             Action::Structure(op) => self.run_structure(op),
             Action::ConfirmDelete(confirmed) if self.view.resources.pending_delete.is_some() => {
                 self.answer_resource_delete(confirmed);
@@ -1535,6 +1560,7 @@ impl App {
             Action::Approve(id) => self.approve_relayed(id),
             Action::Reject(id) => self.reject_relayed(id),
             Action::Ui(op) => self.apply_ui(op, ctx),
+            Action::TaskView(op) => self.apply_task_view(op),
         }
     }
 
@@ -2129,6 +2155,7 @@ impl App {
         let idle = self.document.is_some()
             && self.view.focus == Pane::Table
             && self.view.dialog.is_none()
+            && !self.view_dialog_open()
             && !self.popup_open
             && self.pending_delete.is_none()
             && self.view.resources.pending_delete.is_none()
@@ -2182,6 +2209,10 @@ impl App {
                 crate::keymap::dispatch_beside_window(ctx, keys, actions);
             }
             self.show_dialog(ctx);
+        } else if self.view_dialog_open() {
+            // Fenêtres « Trier » et « Filtre » (J8, lot L9) : modales.
+            self.show_view_dialog(ctx);
+            strip_keys(ctx);
         } else if self.view.edit.editing.is_none() && self.view.resources.edit.editing.is_none() {
             // Saisie de cellule ouverte : aucun raccourci, même si sa zone
             // n'a pas encore le focus (relecture finale J7, F2 : Retour
@@ -2192,6 +2223,10 @@ impl App {
 
     /// Une image complète dans `ui` (appelée par [`crate::ui`]) : relève des
     /// ouvertures, réglages, panneaux, vue centrale, puis réducteur.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "suite d'étapes de l'image, une ligne chacune"
+    )]
     pub(crate) fn show(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         // Appels relayés d'un agent d'abord (ADR-0015 D9) : la session vue
@@ -2220,6 +2255,7 @@ impl App {
         // d'abord et les touches qu'elle n'a pas prises sont retirées de
         // l'image (rien n'atteint la table ni le Gantt).
         self.read_keys(&ctx, &mut actions);
+        let task_view = self.task_view_frame();
         let mut stats = FrameStats::default();
         #[cfg(not(target_arch = "wasm32"))]
         let recovery_offer = self.recovery_offer();
@@ -2247,9 +2283,11 @@ impl App {
                 actions: &mut actions,
                 stats: &mut stats,
                 window_open: self.view.dialog.is_some(),
+                task_view,
             };
             view::chrome::menu_bar(ui, &mut fc);
             view::chrome::toolbar(ui, &mut fc);
+            view::search::search_bar(ui, &mut fc);
             view::chrome::status_bar(ui, &mut fc, &self.messages);
             view::chrome::confirm_banner(ui, &mut fc, confirm_name.as_deref());
             #[cfg(not(target_arch = "wasm32"))]

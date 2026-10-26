@@ -198,16 +198,35 @@ impl RowView {
         state: &TaskViewState,
         collapsed: &BTreeSet<TaskUid>,
     ) -> Self {
-        let len = model.len();
+        let shown = Self::filter_shown(model, ctx, state);
+        Self::build_with_shown(model, ctx, state, collapsed, shown.as_deref())
+    }
+
+    /// Lignes du modèle retenues par le filtre de `state` (récapitulatives
+    /// liées comprises), par position ; `None` sans filtre (ou si le projet
+    /// et le modèle diffèrent, jamais) : toute ligne passe.
+    #[must_use]
+    pub fn filter_shown(model: &RowModel, ctx: &FilterCtx<'_>, state: &TaskViewState) -> Option<Vec<bool>> {
         let filter = match &state.filter {
             FilterChoice::Preset(preset) => TaskFilter::from_preset(preset),
             FilterChoice::Custom(filter) => filter.clone(),
         };
-        let shown = if filter.is_empty() || ctx.project.tasks.len() != len {
-            Vec::new()
-        } else {
-            filter.hits(ctx).shown
-        };
+        (!filter.is_empty() && ctx.project.tasks.len() == model.len()).then(|| filter.hits(ctx).shown)
+    }
+
+    /// Comme [`RowView::build`], avec les lignes retenues par le filtre
+    /// déjà calculées (`None` : toutes ; J8 lot L9, H-UI-30 : lignes
+    /// gardées par [`FilterMemo`] ajoutées par l'appelant).
+    #[must_use]
+    pub fn build_with_shown(
+        model: &RowModel,
+        ctx: &FilterCtx<'_>,
+        state: &TaskViewState,
+        collapsed: &BTreeSet<TaskUid>,
+        shown: Option<&[bool]>,
+    ) -> Self {
+        let len = model.len();
+        let shown = shown.unwrap_or(&[]);
         let rows: Vec<ViewRow> = (0..len)
             .filter_map(|i| model.row(i).map(|row| (i, row)))
             .map(|(i, row)| ViewRow {
@@ -513,6 +532,93 @@ fn sort_keep_outline(rows: &[ViewRow], visible: &[usize], sort: &SortInput<'_>) 
         }
     }
     out
+}
+
+/// Mémoire du filtre appliqué (J8 lot L9, H-UI-30) : un filtre est une
+/// vue, appliquée quand on le choisit (ou le réapplique) ; une ligne éditée
+/// qui ne le satisfait plus reste visible jusqu'à sa réapplication, et une
+/// tâche créée sous le filtre aussi (hypothèse : sinon l'insertion sous un
+/// filtre ferait disparaître la ligne créée). Tenue par la vue transitoire
+/// d'`App`, jamais persistée.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FilterMemo {
+    /// Application du filtre à la dernière construction : filtre, numéro
+    /// d'ouverture et génération du document, version de réapplication ;
+    /// `None` sans filtre.
+    applied: Option<(FilterChoice, u64, u64, u64)>,
+    /// Tâches montrées par le filtre (gardées comprises) à la dernière
+    /// construction.
+    shown: BTreeSet<TaskUid>,
+    /// Tâches du document à la dernière construction.
+    known: BTreeSet<TaskUid>,
+    /// Tâches gardées visibles malgré le filtre jusqu'à sa réapplication.
+    kept: BTreeSet<TaskUid>,
+}
+
+impl FilterMemo {
+    /// Complète `shown` (lignes retenues par le filtre, par position du
+    /// modèle ; `None` : aucun filtre, la mémoire est vidée) par les tâches
+    /// gardées. Même filtre, même document et même version de
+    /// réapplication qu'à la construction précédente, mais génération
+    /// changée (édition, annulation, écriture d'un agent) : les tâches
+    /// alors montrées et les tâches apparues depuis sont gardées ; filtre,
+    /// document ou version changés : plus rien n'est gardé (filtre
+    /// appliqué à neuf).
+    pub fn update(
+        &mut self,
+        model: &RowModel,
+        filter: &FilterChoice,
+        document: (u64, u64),
+        reapply: u64,
+        shown: &mut Option<Vec<bool>>,
+    ) {
+        let Some(shown) = shown.as_mut() else {
+            *self = Self::default();
+            return;
+        };
+        let (opening, generation) = document;
+        match &self.applied {
+            Some((f, o, g, r)) if f == filter && *o == opening && *r == reapply => {
+                if *g != generation {
+                    let fresh: Vec<TaskUid> = (0..model.len())
+                        .filter_map(|i| model.row(i))
+                        .map(|row| row.uid)
+                        .filter(|uid| self.shown.contains(uid) || !self.known.contains(uid))
+                        .collect();
+                    self.kept.extend(fresh);
+                }
+            }
+            _ => self.kept.clear(),
+        }
+        self.known.clear();
+        self.shown.clear();
+        for (i, slot) in shown.iter_mut().enumerate() {
+            let Some(row) = model.row(i) else {
+                continue;
+            };
+            self.known.insert(row.uid);
+            if self.kept.contains(&row.uid) {
+                *slot = true;
+            }
+            if *slot {
+                self.shown.insert(row.uid);
+            }
+        }
+        self.applied = Some((filter.clone(), opening, generation, reapply));
+    }
+
+    /// Vrai si un filtre est appliqué et masque la tâche `uid` (compteur
+    /// « n masquées par le filtre » de la recherche, H-UI-33).
+    #[must_use]
+    pub fn hides(&self, uid: TaskUid) -> bool {
+        self.applied.is_some() && !self.shown.contains(&uid)
+    }
+
+    /// Nombre de tâches gardées visibles malgré le filtre.
+    #[must_use]
+    pub fn kept_len(&self) -> usize {
+        self.kept.len()
+    }
 }
 
 /// Lignes du modèle lues à travers leur vue : toute lecture d'une ligne

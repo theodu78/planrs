@@ -251,6 +251,8 @@ fn check_keymap_entry(i: usize) {
         Binding::Command(id) if crate::structure::COMMANDS.contains(&id) => {
             crate::structure::check_keymap_entry(id, KEYMAP[i].1);
         }
+        // Filtres, tri, recherche, repli (J8 lot L9) : `filters.rs`.
+        binding if crate::filters::is_view_entry(binding) => crate::filters::check_keymap_entry(i),
         other => panic!("entrée {i} sans vérification : {other:?}"),
     }
 }
@@ -326,6 +328,15 @@ keymap_entry_tests! {
     ui_keymap_each_shortcut_dispatches_50 => 50,
     ui_keymap_each_shortcut_dispatches_51 => 51,
     ui_keymap_each_shortcut_dispatches_52 => 52,
+    // J8 L9.
+    ui_keymap_each_shortcut_dispatches_53 => 53,
+    ui_keymap_each_shortcut_dispatches_54 => 54,
+    ui_keymap_each_shortcut_dispatches_55 => 55,
+    ui_keymap_each_shortcut_dispatches_56 => 56,
+    ui_keymap_each_shortcut_dispatches_57 => 57,
+    ui_keymap_each_shortcut_dispatches_58 => 58,
+    ui_keymap_each_shortcut_dispatches_59 => 59,
+    ui_keymap_each_shortcut_dispatches_60 => 60,
 }
 
 /// Lot refusé : UID absent.

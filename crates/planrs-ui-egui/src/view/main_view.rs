@@ -643,6 +643,7 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
     // déjà comme sélectionnée pour griser les entrées.
     let has_selection = fc.selection.is_some() || click.is_some_and(|c| c.uid.is_some());
     let texts = fc.texts;
+    let reorder_locked = fc.task_view.state.reorder_locked();
     let ctx = ui.ctx().clone();
     let mut chosen = None;
     let mut information = false;
@@ -662,10 +663,15 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
             if let Some(shortcut) = keymap::shortcut_for_os(Binding::Command(command), ctx.os()) {
                 button = button.shortcut_text(keymap::shortcut_text(&ctx, shortcut));
             }
-            if ui
-                .add_enabled(has_selection || !needs_selection, button)
-                .clicked()
-            {
+            // H-UI-32 (J8, lot L9) : grisé sous tri ou filtre.
+            let locked = super::task_view::reorders(op) && reorder_locked;
+            let response = ui.add_enabled((has_selection || !needs_selection) && !locked, button);
+            let response = if locked {
+                response.on_disabled_hover_text(texts.get(TextId::ViewReorderLocked))
+            } else {
+                response
+            };
+            if response.clicked() {
                 chosen = Some(op);
             }
         }
@@ -962,6 +968,7 @@ mod tests {
                 actions: &mut actions,
                 stats: &mut stats,
                 window_open: false,
+                task_view: crate::view::task_view::TaskViewFrame::default(),
             };
             super::show(ui, &mut fc, view);
         });

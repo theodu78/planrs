@@ -62,6 +62,7 @@ pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
                 ui.menu_button(texts.get(TextId::MenuTheme), |ui| theme_choices(ui, fc));
                 ui.menu_button(texts.get(TextId::MenuLanguage), |ui| language_choices(ui, fc));
                 // --- J8 L9 : filtres, tri, niveau ---
+                super::task_view::view_menu(ui, fc);
                 // --- J8 L11 : surbrillance du critique ---
                 // --- J8 L12 : volet IA, « Pourquoi cette date ? » ---
                 // --- J8 L15 : galerie, mise en page ---
@@ -232,8 +233,17 @@ fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
         if let Some(shortcut) = shortcut_for_os(Binding::Command(id), ui.ctx().os()) {
             button = button.shortcut_text(shortcut_text(ui.ctx(), shortcut));
         }
-        let enabled = has_doc && (has_selection || !needs_selection);
-        if ui.add_enabled(enabled, button).clicked() {
+        // H-UI-32 (J8, lot L9) : sous tri ou filtre, déplacer, hausser et
+        // abaisser sont grisés.
+        let locked = super::task_view::reorders(op) && fc.task_view.state.reorder_locked();
+        let enabled = has_doc && (has_selection || !needs_selection) && !locked;
+        let response = ui.add_enabled(enabled, button);
+        let response = if locked {
+            response.on_disabled_hover_text(texts.get(TextId::ViewReorderLocked))
+        } else {
+            response
+        };
+        if response.clicked() {
             fc.actions.push(Action::Structure(op));
         }
     }
@@ -243,6 +253,8 @@ fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     menu_item(ui, fc, TextId::MenuAssignResources, None, has_doc, assign);
     ui.menu_button(texts.get(TextId::MenuProject), |ui| project_menu(ui, fc));
     // --- J8 L9 : rechercher ---
+    ui.separator();
+    super::search::edit_menu_entries(ui, fc);
     // --- J8 L10 : couper, copier, coller ---
     // --- J8 L15 : menu Tâche (%, mode, actif) ---
 }
@@ -488,6 +500,8 @@ pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
                     fc.actions.push(Action::ToggleDiagnostics);
                 }
             }
+            // --- J8 L9 : « Filtre : Critiques » (rien sans filtre).
+            super::task_view::status_indicator(ui, fc);
         });
     });
     message_banner(ui, fc, messages);

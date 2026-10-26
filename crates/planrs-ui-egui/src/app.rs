@@ -380,6 +380,9 @@ pub struct App {
     /// [`App::control_inbox`].
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) relay: Option<crate::relay::Relay>,
+    /// Volet latéral : opérations IA et « Pourquoi cette date ? » (J8 lot
+    /// L12) ; jamais persisté.
+    pub(crate) side: crate::view::side_panel::SidePanelState,
     /// Journal de reprise après plantage (desktop, J7 lot L15) : branché
     /// par [`App::set_recovery`], suit le document à chaque changement.
     #[cfg(not(target_arch = "wasm32"))]
@@ -444,6 +447,7 @@ impl App {
             popup_open: false,
             #[cfg(not(target_arch = "wasm32"))]
             relay: None,
+            side: crate::view::side_panel::SidePanelState::default(),
             #[cfg(not(target_arch = "wasm32"))]
             recovery: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -1162,6 +1166,12 @@ impl App {
         &self.view
     }
 
+    /// Volet latéral (J8 lot L12).
+    #[must_use]
+    pub const fn side_panel(&self) -> &crate::view::side_panel::SidePanelState {
+        &self.side
+    }
+
     /// Une ouverture par le sélecteur de fichiers est en cours.
     #[must_use]
     pub const fn is_opening(&self) -> bool {
@@ -1615,6 +1625,8 @@ impl App {
             // J8, lot L10 : presse-papiers et import CSV.
             Action::Clipboard(op) => self.clipboard_op(op, ctx),
             Action::ImportCsv => self.start_csv_import(ctx),
+            // J8, lot L12 : volet latéral.
+            Action::SidePanel(op) => self.side.apply(op),
             Action::ShowDialog(DialogKind::PasteSpecial) => self.open_paste_special(),
             // L'aperçu s'ouvre à l'arrivée des octets du fichier choisi.
             Action::ShowDialog(DialogKind::CsvImport) => self.start_csv_import(ctx),
@@ -2378,6 +2390,11 @@ impl App {
         self.read_keys(&ctx, &mut actions);
         let mut task_view = self.task_view_frame();
         task_view.style = screen;
+        // Explication de la tâche active (H-UI-58) : relue seulement quand
+        // la tâche, la génération ou la langue changent.
+        let lang = self.text_language();
+        self.side
+            .refresh_explain(self.document.as_ref(), self.selection, lang);
         let mut stats = FrameStats::default();
         #[cfg(not(target_arch = "wasm32"))]
         let recovery_offer = self.recovery_offer();
@@ -2407,7 +2424,7 @@ impl App {
                 window_open: self.view.dialog.is_some(),
                 task_view,
             };
-            view::chrome::menu_bar(ui, &mut fc);
+            view::chrome::menu_bar(ui, &mut fc, self.side.open);
             view::chrome::toolbar(ui, &mut fc);
             view::search::search_bar(ui, &mut fc);
             view::chrome::status_bar(ui, &mut fc, &self.messages);
@@ -2422,9 +2439,22 @@ impl App {
                     .relay
                     .as_ref()
                     .and_then(|relay| crate::relay::banner_for(relay, document));
-                view::approval::approval_banner(ui, &mut fc, banner);
+                // Volet « Opérations IA » visible : il porte la décision, le
+                // bandeau J7 se retire (H-UI-41).
+                if !self.side.shows_ai() {
+                    view::approval::approval_banner(ui, &mut fc, banner);
+                }
                 view::recovery::recovery_banner(ui, &mut fc, recovery_offer);
+                let ai = self
+                    .relay
+                    .as_ref()
+                    .map_or(view::side_panel::AiPanelInput::EMPTY, |relay| {
+                        crate::relay::panel_input(relay, banner)
+                    });
+                view::side_panel::panel(ui, &mut fc, &self.side, ai);
             }
+            #[cfg(target_arch = "wasm32")]
+            view::side_panel::panel(ui, &mut fc, &self.side, view::side_panel::AiPanelInput::EMPTY);
             if self.state.diagnostics_open {
                 view::diagnostics::panel(ui, &mut fc);
             }

@@ -112,40 +112,44 @@ pub fn approval_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, banner: Option<
     let Some(banner) = banner else {
         return;
     };
-    let text = banner_text(fc, &banner);
-    let texts = fc.texts;
-    let fg = fc.palette.text_strong;
     let frame = egui::Frame::side_top_panel(ui.style()).fill(fc.palette.message_warning_bg);
     egui::Panel::top("planrs_approval_banner")
         .frame(frame)
-        .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new(text).strong().color(fg));
-                if banner.queued > 0 {
-                    let queued = i64::try_from(banner.queued).unwrap_or(i64::MAX);
-                    ui.label(texts.get_args(TextId::ApprovalQueued, &[("count", Arg::Count(queued))]));
-                }
-                let accept = ui.push_id("planrs_approval_accept", |ui| {
-                    ui.button(texts.get(TextId::ApprovalAccept))
-                });
-                let reject = ui.push_id("planrs_approval_reject", |ui| {
-                    ui.button(texts.get(TextId::ApprovalReject))
-                });
-                let (accept, reject) = (accept.inner, reject.inner);
-                // egui retire le focus sur Échap en début d'image : le bouton
-                // qui vient de le perdre compte aussi.
-                let focused =
-                    accept.has_focus() || reject.has_focus() || accept.lost_focus() || reject.lost_focus();
-                let escape = focused && ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
-                // Ctrl/Cmd+Entrée : jamais pendant la saisie d'un champ (la
-                // touche reste à la zone de saisie).
-                let shortcut = !ui.ctx().text_edit_focused()
-                    && ui.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::Enter));
-                if accept.clicked() || shortcut {
-                    fc.actions.push(Action::Approve(banner.id));
-                } else if reject.clicked() || escape {
-                    fc.actions.push(Action::Reject(banner.id));
-                }
-            });
+        .show(ui, |ui| decision_row(ui, fc, banner));
+}
+
+/// Phrase, compteur de file, Accepter et Refuser de l'écriture en tête de
+/// file : contenu du bandeau, repris en tête du volet « Opérations IA »
+/// (J8 lot L12, H-UI-41) avec les mêmes règles de focus et de clavier.
+pub fn decision_row(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, banner: ApprovalBanner<'_>) {
+    let text = banner_text(fc, &banner);
+    let texts = fc.texts;
+    let fg = fc.palette.text_strong;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(egui::RichText::new(text).strong().color(fg));
+        if banner.queued > 0 {
+            let queued = i64::try_from(banner.queued).unwrap_or(i64::MAX);
+            ui.label(texts.get_args(TextId::ApprovalQueued, &[("count", Arg::Count(queued))]));
+        }
+        let accept = ui.push_id("planrs_approval_accept", |ui| {
+            ui.button(texts.get(TextId::ApprovalAccept))
         });
+        let reject = ui.push_id("planrs_approval_reject", |ui| {
+            ui.button(texts.get(TextId::ApprovalReject))
+        });
+        let (accept, reject) = (accept.inner, reject.inner);
+        // egui retire le focus sur Échap en début d'image : le bouton
+        // qui vient de le perdre compte aussi.
+        let focused = accept.has_focus() || reject.has_focus() || accept.lost_focus() || reject.lost_focus();
+        let escape = focused && ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
+        // Ctrl/Cmd+Entrée : jamais pendant la saisie d'un champ (la
+        // touche reste à la zone de saisie).
+        let shortcut = !ui.ctx().text_edit_focused()
+            && ui.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::Enter));
+        if accept.clicked() || shortcut {
+            fc.actions.push(Action::Approve(banner.id));
+        } else if reject.clicked() || escape {
+            fc.actions.push(Action::Reject(banner.id));
+        }
+    });
 }

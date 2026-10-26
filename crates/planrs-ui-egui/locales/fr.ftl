@@ -800,6 +800,33 @@ fmt-mode-auto = Automatique
 gantt-status-label = État { $date }
 
 # --- J8 L12 ---
+menu-ai-panel = Opérations IA
+side-tab-ai = Opérations IA
+side-tab-why = Pourquoi cette date ?
+side-close = Fermer le volet
+ai-no-pending = Aucune proposition d'un agent en attente.
+ai-more =
+    { $count ->
+        [one] { $count } autre tâche modifiée
+       *[other] { $count } autres tâches modifiées
+    }
+ai-critical-entered = devient critique
+ai-critical-left = n'est plus critique
+ai-added = + { $name }
+ai-removed = supprimée : { $name }
+ai-no-preview = Pas d'aperçu pour cette opération : { $detail }
+ai-history = Historique de la session
+ai-history-empty = Aucune proposition traitée pour l'instant.
+ai-history-line = { $value } — { $name } sur « { $document } » : { $detail }
+ai-outcome-accepted = acceptée
+ai-outcome-rejected = refusée
+ai-outcome-expired = expirée
+ai-outcome-stale = périmée (document fermé ou remplacé)
+ai-outcome-failed = échouée ({ $detail })
+ai-undo-entry = Annuler cette opération
+why-no-task = Sélectionnez une tâche pour voir ce qui fixe ses dates.
+why-drivers = Pilotes (cliquer pour sélectionner)
+why-unavailable = Explication indisponible : { $detail }
 
 # --- J8 L13 ---
 

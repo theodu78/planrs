@@ -62,6 +62,10 @@
 //!   Semaine, mêmes seuils. Garde toujours exécutée :
 //!   `styled_counts_equal_at_1000_and_5000_tasks` (formes, sommets et
 //!   galleys à ± 5 % pour chaque modèle).
+//! - J8 L12 (ignoré, release) : `ai_panel` (volet d'opérations IA ouvert
+//!   sur une proposition de 250 tâches décalées, diff affiché de 200
+//!   lignes, défilement de la table à chaque image) : mêmes seuils ; le
+//!   diff n'est calculé qu'une fois.
 //!
 //! Le rendu GPU n'est pas chronométré (lavapipe en CI n'est pas
 //! représentatif). Le projet est construit directement
@@ -1479,4 +1483,67 @@ fn styled_counts_equal_at_1000_and_5000_tasks() {
             "{name} : galleys {small:?} / {large:?}"
         );
     }
+
+/// J8 L12 : volet d'opérations IA ouvert sur une proposition de 250 tâches
+/// décalées (diff affiché de 200 lignes, H-UI-41), 5 000 tâches,
+/// défilement de la table à chaque image ; budget : médiane < 16 ms.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn ai_panel() {
+    use std::sync::Arc;
+    use std::sync::mpsc::sync_channel;
+
+    use planrs_automation::control::{CallState, RelayCall, RelayKind, Reply};
+    use planrs_core::{Task, TaskRole};
+    use planrs_ui_egui::view::side_panel::MAX_DIFF_ROWS;
+
+    let (mut app, mut bench) = nav_bench();
+    let doc = app.document.as_ref().unwrap();
+    let ops: Vec<serde_json::Value> = doc
+        .project()
+        .tasks
+        .iter()
+        .map(Task::uid)
+        .filter(|uid| {
+            doc.schedule()
+                .scheduled(*uid)
+                .is_some_and(|s| s.role == TaskRole::Leaf)
+        })
+        .take(250)
+        .map(|uid| serde_json::json!({ "op": "task.update", "uid": uid.get(), "duration": { "text": "9j" } }))
+        .collect();
+    let (tx, rx) = sync_channel(4);
+    app.control_inbox(rx);
+    let (reply, replies) = sync_channel(4);
+    tx.send(RelayCall {
+        id: 1,
+        kind: RelayKind::Execute {
+            tool: "batch.apply".to_owned(),
+            params: serde_json::json!({ "ops": ops }),
+        },
+        state: Arc::new(CallState::new()),
+        reply,
+    })
+    .unwrap();
+    bench.settle(&mut app);
+    assert_eq!(replies.try_recv().unwrap(), Reply::PendingApproval { id: 1 });
+    let relay = app.relay().unwrap();
+    assert_eq!(relay.diff_builds(), 1);
+    assert_eq!(
+        relay.pending()[0].diff.as_ref().map(|d| d.rows.len()),
+        Some(MAX_DIFF_ROWS)
+    );
+    assert!(app.side_panel().shows_ai(), "volet ouvert");
+    for _ in 0..WARMUP {
+        bench.frame(&mut app, wheel_events(-WHEEL_STEP));
+    }
+    let samples: Vec<Duration> = (0..120)
+        .map(|i| {
+            let dy = if i % 2 == 0 { -WHEEL_STEP } else { WHEEL_STEP };
+            bench.frame(&mut app, wheel_events(dy))
+        })
+        .collect();
+    assert_eq!(app.relay().unwrap().diff_builds(), 1, "diff calculé une fois");
+    assert_budget("ai_panel", samples, bench.last);
 }

@@ -708,6 +708,17 @@ pub(crate) mod relay_app {
         now: Moment,
         transport: Transport,
     ) -> (Harness<'static, App>, ListenerHandle, RendezvousGuard, PathBuf) {
+        wired_with(tmp, now, transport, APPROVAL_SECS)
+    }
+
+    /// Comme [`wired`], délai de validation `approval_secs` (J8 lot L16 :
+    /// `relay_j8` laisse expirer une demande).
+    pub(crate) fn wired_with(
+        tmp: &TempDir,
+        now: Moment,
+        transport: Transport,
+        approval_secs: u64,
+    ) -> (Harness<'static, App>, ListenerHandle, RendezvousGuard, PathBuf) {
         let plan = tmp.path().join("maison.xml");
         std::fs::write(&plan, planrs_ui_egui::DEMO_MSPDI).unwrap();
         let state = UiState {
@@ -732,7 +743,7 @@ pub(crate) mod relay_app {
             harness.state().messages()
         );
         let options = ListenerOptions {
-            approval_timeout: Duration::from_secs(APPROVAL_SECS),
+            approval_timeout: Duration::from_secs(approval_secs),
             reply_grace: Duration::from_secs(2),
         };
         let sockets = tmp.path().join("sock");

@@ -421,23 +421,59 @@ fn h_ui_58_why_date_drivers_click() {
 /// Scénario `relay_j8.jsonl` avec un vrai `planrs mcp` (comme
 /// `relay_app_real_mcp`) : chaque décision est prise **dans le volet**
 /// (clic sur Accepter, clic sur Refuser, Ctrl/Cmd+Entrée) ; journal égal au
-/// scénario, historique du volet [acceptée, refusée, acceptée].
+/// scénario. J8 lot L16 (vérification 6) : `apply_style` et `export_pdf`
+/// validés dans le volet, une écriture laissée sans réponse jusqu'à
+/// l'expiration (délai de validation court, `RELAY_J8_APPROVAL_SECS`),
+/// socket Unix et TCP en boucle locale.
 #[cfg(unix)]
 #[test]
+fn relay_j8_panel_real_mcp() {
+    relay_j8_scenario(planrs_automation::control::Transport::Unix, "relayj8");
+}
+
+/// Même scénario relayé en TCP sur la boucle locale (transport de Windows,
+/// J8 lot L8) : même journal.
+#[cfg(unix)]
+#[test]
+fn relay_j8_panel_real_mcp_tcp() {
+    relay_j8_scenario(planrs_automation::control::Transport::Tcp, "relayj8tcp");
+}
+
+/// Délai de validation du scénario `relay_j8` (écouteur et serveur) : assez
+/// long pour qu'une décision prise à la première image arrive, assez court
+/// pour attendre l'expiration de l'appel 7.
+#[cfg(unix)]
+const RELAY_J8_APPROVAL_SECS: u64 = 4;
+
+#[cfg(unix)]
 #[allow(
     clippy::disallowed_methods,
-    reason = "test natif : processus fils et attentes, comme `planrs mcp` en vrai"
+    clippy::too_many_lines,
+    reason = "test natif : processus fils et attentes, comme `planrs mcp` en vrai ; scénario lu d'un bloc"
 )]
-fn relay_j8_panel_real_mcp() {
+fn relay_j8_scenario(transport: planrs_automation::control::Transport, tag: &str) {
     use std::process::{Command, Stdio};
     use std::thread;
     use std::time::Duration;
 
-    use planrs_automation::control::Transport;
     use planrs_core::Moment;
 
-    use crate::e2e::relay_app::{APPROVAL_SECS, MAX_FRAMES, client_thread, mcp_binary, wired};
+    use crate::e2e::relay_app::{MAX_FRAMES, client_thread, mcp_binary, wired_with};
     use crate::e2e::replay::{self, Scenario, TempDir, normalized, repo_root, substitute};
+
+    /// Décision prise dans le volet pour l'appel d'indice `i`.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Decide {
+        Click(TextId),
+        Keys,
+        Wait,
+    }
+    let decide = |i: usize| match i {
+        0 => Decide::Click(TextId::ApprovalAccept),
+        1 => Decide::Click(TextId::ApprovalReject),
+        6 => Decide::Wait,
+        _ => Decide::Keys,
+    };
 
     let Some(binary) = mcp_binary().filter(|p| p.is_file()) else {
         let required = std::env::var("PLANRS_RELAY").is_ok_and(|v| v == "required");
@@ -453,13 +489,19 @@ fn relay_j8_panel_real_mcp() {
     let root = repo_root(env!("CARGO_MANIFEST_DIR"));
     let scenario = Scenario::load(&root, "relay_j8");
     let now: Moment = replay::NOW.parse().unwrap();
-    let tmp = TempDir::new("relayj8");
-    let (mut harness, handle, guard, control) = wired(&tmp, now, Transport::Unix);
+    let tmp = TempDir::new(tag);
+    let (mut harness, handle, guard, control) = wired_with(&tmp, now, transport, RELAY_J8_APPROVAL_SECS);
+    assert_eq!(
+        handle.endpoint().starts_with("tcp:127.0.0.1:"),
+        transport == planrs_automation::control::Transport::Tcp,
+        "{}",
+        handle.endpoint()
+    );
     let journal = tmp.path().join("run.jsonl");
     let mut child = Command::new(&binary)
         .args(["--now", replay::NOW, "--lang", "fr", "mcp", "--journal"])
         .arg(&journal)
-        .args(["--approval-timeout", &APPROVAL_SECS.to_string()])
+        .args(["--approval-timeout", &RELAY_J8_APPROVAL_SECS.to_string()])
         .env("PLANRS_CONTROL_DIR", &control)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -469,8 +511,6 @@ fn relay_j8_panel_real_mcp() {
     let (calls_tx, calls_rx) = sync_channel::<Option<(String, Value)>>(1);
     let (results_tx, results_rx) = sync_channel::<Value>(1);
     client_thread(&mut child, calls_rx, results_tx);
-    let accept = fr(TextId::ApprovalAccept);
-    let reject = fr(TextId::ApprovalReject);
     let mut got = Vec::new();
     for (i, call) in scenario.calls.iter().enumerate() {
         let params = substitute(&call.params, tmp.path());
@@ -489,10 +529,10 @@ fn relay_j8_panel_real_mcp() {
             if pending && !decided {
                 harness.run();
                 assert!(harness.state().side_panel().shows_ai(), "volet ouvert d'office");
-                match i {
-                    0 => harness.get_by_label(&accept).click(),
-                    1 => harness.get_by_label(&reject).click(),
-                    _ => harness.key_press_modifiers(Modifiers::COMMAND, Key::Enter),
+                match decide(i) {
+                    Decide::Click(id) => harness.get_by_label(&fr(id)).click(),
+                    Decide::Keys => harness.key_press_modifiers(Modifiers::COMMAND, Key::Enter),
+                    Decide::Wait => {}
                 }
                 decided = true;
             }
@@ -500,7 +540,7 @@ fn relay_j8_panel_real_mcp() {
             thread::sleep(Duration::from_millis(5));
         }
         got.push(normalized(
-            &result.expect("aucun résultat de l'appel relayé"),
+            &result.unwrap_or_else(|| panic!("aucun résultat de l'appel relayé {}", i + 1)),
             tmp.path(),
         ));
     }
@@ -528,7 +568,21 @@ fn relay_j8_panel_real_mcp() {
     let app = harness.state();
     assert_eq!(
         outcomes(app),
-        [AiOutcome::Accepted, AiOutcome::Rejected, AiOutcome::Accepted]
+        [
+            AiOutcome::Accepted,
+            AiOutcome::Rejected,
+            AiOutcome::Accepted,
+            AiOutcome::Accepted,
+            AiOutcome::Accepted,
+            AiOutcome::Expired
+        ]
     );
-    assert_eq!(app.relay().unwrap().diff_builds(), 3);
+    // Style validé dans le document de l'application ; PDF écrit.
+    let style = planrs_automation::command::style::doc_style(app.document.as_ref().unwrap().project());
+    assert_eq!(
+        style.map(|d| d.base),
+        Some(planrs_render::style::TemplateId::Presentation)
+    );
+    let pdf = std::fs::read(tmp.path().join("relay_j8.pdf")).unwrap();
+    assert!(pdf.starts_with(b"%PDF-"));
 }

@@ -566,8 +566,8 @@ mod relay_app {
 
     use egui_kittest::Harness;
     use planrs_automation::control::{
-        ListenerHandle, ListenerOptions, RendezvousGuard, canonical_project, new_token, publish_in,
-        spawn_listener_with,
+        ListenerHandle, ListenerOptions, RendezvousGuard, Transport, canonical_project, new_token,
+        publish_in, spawn_listener_on,
     };
     use planrs_automation::text::Language as ToolLanguage;
     use planrs_automation::{Batch, EditSource, Workspace};
@@ -701,10 +701,12 @@ mod relay_app {
 
     /// Application de test branchée sur un écouteur réel, fichier
     /// `maison.xml` (l'exemple) tenu dans `tmp`, rendez-vous publié dans
-    /// `tmp/control`.
+    /// `tmp/control` ; écouteur sur `transport` (J8 lot L8 : socket Unix
+    /// ou TCP en boucle locale).
     fn wired(
         tmp: &TempDir,
         now: Moment,
+        transport: Transport,
     ) -> (Harness<'static, App>, ListenerHandle, RendezvousGuard, PathBuf) {
         let plan = tmp.path().join("maison.xml");
         std::fs::write(&plan, planrs_ui_egui::DEMO_MSPDI).unwrap();
@@ -734,8 +736,15 @@ mod relay_app {
             reply_grace: Duration::from_secs(2),
         };
         let sockets = tmp.path().join("sock");
-        let handle =
-            spawn_listener_with(&sockets, new_token().unwrap(), tx, Arc::new(|| {}), options).unwrap();
+        let handle = spawn_listener_on(
+            &sockets,
+            new_token().unwrap(),
+            tx,
+            Arc::new(|| {}),
+            options,
+            transport,
+        )
+        .unwrap();
         let control = tmp.path().join("control");
         let guard = publish_in(&control, &handle.rendezvous(canonical_project(&plan))).unwrap();
         (harness, handle, guard, control)
@@ -801,6 +810,36 @@ mod relay_app {
 
     #[test]
     fn relay_app_real_mcp() {
+        relay_scenario(Transport::Unix, "relay");
+    }
+
+    /// Même scénario, même journal, relayé en TCP sur la boucle locale (J8
+    /// lot L8, transport de Windows rejoué sous Linux ; P47).
+    #[test]
+    fn relay_app_real_mcp_tcp() {
+        relay_scenario(Transport::Tcp, "relaytcp");
+    }
+
+    /// Détail du système dans `control.app_gone` : l'application fermée
+    /// laisse une socket absente (`ENOENT`) en Unix, un port fermé
+    /// (`ECONNREFUSED`) en TCP. Seul ce détail change d'un transport à
+    /// l'autre ; il est ramené à la forme Unix du scénario.
+    fn as_unix_detail(text: &str) -> String {
+        const UNIX: &str = "No such file or directory (os error 2)";
+        // Linux (111) et macOS (61).
+        [
+            "Connection refused (os error 111)",
+            "Connection refused (os error 61)",
+        ]
+        .into_iter()
+        .fold(text.to_owned(), |acc, tcp| acc.replace(tcp, UNIX))
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "scénario de bout en bout lu d'un bloc, appel par appel"
+    )]
+    fn relay_scenario(transport: Transport, tag: &str) {
         let Some(binary) = mcp_binary().filter(|p| p.is_file()) else {
             let required = std::env::var("PLANRS_RELAY").is_ok_and(|v| v == "required");
             assert!(
@@ -815,8 +854,14 @@ mod relay_app {
         let root = repo_root(env!("CARGO_MANIFEST_DIR"));
         let scenario = Scenario::load(&root, SCENARIO);
         let now: Moment = replay::NOW.parse().unwrap();
-        let tmp = TempDir::new("relay");
-        let (mut harness, handle, guard, control) = wired(&tmp, now);
+        let tmp = TempDir::new(tag);
+        let (mut harness, handle, guard, control) = wired(&tmp, now, transport);
+        assert_eq!(
+            handle.endpoint().starts_with("tcp:127.0.0.1:"),
+            transport == Transport::Tcp,
+            "{}",
+            handle.endpoint()
+        );
         let initial_session = harness.state().document.as_ref().unwrap().session.clone();
         let mut app_side: (Option<ListenerHandle>, Option<RendezvousGuard>) = (Some(handle), Some(guard));
 
@@ -864,7 +909,11 @@ mod relay_app {
                 }
                 _ => {}
             }
-            got.push(normalized(&result, tmp.path()));
+            let result = normalized(&result, tmp.path());
+            got.push(match transport {
+                Transport::Unix => result,
+                Transport::Tcp => serde_json::from_str(&as_unix_detail(&result.to_string())).unwrap(),
+            });
         }
         calls_tx.send(None).unwrap();
         drop(calls_tx);
@@ -883,7 +932,10 @@ mod relay_app {
         drop(app_side);
 
         // Journal produit : scénario octet pour octet (ou régénéré).
-        let produced = std::fs::read_to_string(&journal).unwrap();
+        let mut produced = std::fs::read_to_string(&journal).unwrap();
+        if transport == Transport::Tcp {
+            produced = as_unix_detail(&produced);
+        }
         if replay::blessing() {
             replay::bless(&root, &scenario, &produced, tmp.path(), None);
             return;

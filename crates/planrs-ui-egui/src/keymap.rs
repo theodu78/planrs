@@ -23,6 +23,7 @@ use egui::{Key, KeyboardShortcut, Modifiers};
 use crate::action::Action;
 use crate::nav::NavMove;
 use crate::structure::StructureOp;
+use crate::view::task_view::TaskViewOp;
 
 /// Raccourci de navigation dans la table.
 const fn nav(modifiers: Modifiers, key: Key, mv: NavMove, extend: bool) -> (KeyContext, Shortcut, Binding) {
@@ -91,6 +92,20 @@ pub enum UiBinding {
     ZoomFiner,
     /// Unités de temps plus grossières (Ctrl+-, H-UI-18).
     ZoomCoarser,
+    /// F3 : retire le filtre (J8, H-UI-30, S79).
+    ClearFilter,
+    /// Maj+F3 : ordre des ID (J8, H-UI-31, S75).
+    SortById,
+    /// Ctrl/Cmd+F : barre de recherche (J8, H-UI-33, S61).
+    Find,
+    /// Ctrl/Cmd+G : correspondance suivante (J8, H-UI-33).
+    FindNext,
+    /// Ctrl/Cmd+Maj+G : correspondance précédente (J8, H-UI-33).
+    FindPrevious,
+    /// Alt+Maj+− : masque les sous-tâches (J8, H-UI-34, S61).
+    HideSubtasks,
+    /// Alt+Maj++ ou = : affiche les sous-tâches (J8, H-UI-34, S61).
+    ShowSubtasks,
 }
 
 /// Liaison d'un raccourci.
@@ -273,7 +288,16 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
     doc_ui(COMMAND, Key::Equals, UiBinding::ZoomFiner),
     doc_ui(COMMAND, Key::Plus, UiBinding::ZoomFiner),
     doc_ui(COMMAND, Key::Minus, UiBinding::ZoomCoarser),
-    // --- J8 L9 ---
+    // --- J8 L9 : filtres, tri, recherche, repli (S61, S75, S79 ; H-UI-30 à
+    // H-UI-34). Maj+F3 avant F3 ; Ctrl/Cmd+Maj+G avant Ctrl/Cmd+G.
+    doc_ui(SHIFT, Key::F3, UiBinding::SortById),
+    doc_ui(NONE, Key::F3, UiBinding::ClearFilter),
+    doc_ui(COMMAND, Key::F, UiBinding::Find),
+    doc_ui(COMMAND_SHIFT, Key::G, UiBinding::FindPrevious),
+    doc_ui(COMMAND, Key::G, UiBinding::FindNext),
+    doc_ui(ALT_SHIFT, Key::Minus, UiBinding::HideSubtasks),
+    doc_ui(ALT_SHIFT, Key::Plus, UiBinding::ShowSubtasks),
+    doc_ui(ALT_SHIFT, Key::Equals, UiBinding::ShowSubtasks),
     // --- J8 L10 ---
     // --- J8 L12 ---
     // --- J8 L13 ---
@@ -367,6 +391,13 @@ pub const fn ui_action(binding: UiBinding) -> Action {
         UiBinding::TimescaleToEnd => Action::TimescaleToEnd,
         UiBinding::ZoomFiner => Action::ZoomBy(1),
         UiBinding::ZoomCoarser => Action::ZoomBy(-1),
+        UiBinding::ClearFilter => Action::TaskView(TaskViewOp::ClearFilter),
+        UiBinding::SortById => Action::TaskView(TaskViewOp::ResetSort),
+        UiBinding::Find => Action::TaskView(TaskViewOp::OpenSearch),
+        UiBinding::FindNext => Action::TaskView(TaskViewOp::SearchNext),
+        UiBinding::FindPrevious => Action::TaskView(TaskViewOp::SearchPrev),
+        UiBinding::HideSubtasks => Action::TaskView(TaskViewOp::HideSubtasks),
+        UiBinding::ShowSubtasks => Action::TaskView(TaskViewOp::ShowSubtasks),
     }
 }
 

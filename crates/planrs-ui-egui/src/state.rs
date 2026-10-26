@@ -161,6 +161,33 @@ pub enum SortKey {
     TotalSlack,
 }
 
+impl SortKey {
+    /// Clés proposées par la fenêtre « Trier » (J8, lot L9), dans l'ordre.
+    pub const ALL: [Self; 7] = [
+        Self::Id,
+        Self::Name,
+        Self::Start,
+        Self::Finish,
+        Self::Duration,
+        Self::PercentComplete,
+        Self::TotalSlack,
+    ];
+
+    /// Colonne dont le titre nomme la clé.
+    #[must_use]
+    pub const fn column(self) -> Column {
+        match self {
+            Self::Id => Column::Id,
+            Self::Name => Column::Name,
+            Self::Start => Column::Start,
+            Self::Finish => Column::Finish,
+            Self::Duration => Column::Duration,
+            Self::PercentComplete => Column::PercentComplete,
+            Self::TotalSlack => Column::TotalSlack,
+        }
+    }
+}
+
 /// Tri de la vue des tâches (sans renumérotation).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SortSpec {
@@ -184,6 +211,41 @@ pub struct TaskViewState {
     pub outline_level: Option<u8>,
     /// Surbrillance du chemin critique.
     pub highlight_critical: bool,
+}
+
+impl TaskViewState {
+    /// Filtre effectif (préréglage déplié).
+    #[must_use]
+    pub fn task_filter(&self) -> TaskFilter {
+        match &self.filter {
+            FilterChoice::Preset(preset) => TaskFilter::from_preset(preset),
+            FilterChoice::Custom(filter) => filter.clone(),
+        }
+    }
+
+    /// Un filtre est posé (autre que « Toutes les tâches »).
+    #[must_use]
+    pub fn is_filtered(&self) -> bool {
+        match &self.filter {
+            FilterChoice::Preset(FilterPreset::All) => false,
+            FilterChoice::Preset(_) => true,
+            FilterChoice::Custom(filter) => !filter.is_empty(),
+        }
+    }
+
+    /// Un tri est posé (autre que l'ordre des ID croissant).
+    #[must_use]
+    pub fn is_sorted(&self) -> bool {
+        self.sort
+            .is_some_and(|spec| spec.key != SortKey::Id || spec.descending)
+    }
+
+    /// Sous tri ou filtre, les opérations de structure qui déplacent des
+    /// lignes sont grisées (H-UI-32, J8 lot L9).
+    #[must_use]
+    pub fn reorder_locked(&self) -> bool {
+        self.is_filtered() || self.is_sorted()
+    }
 }
 
 impl Default for TaskViewState {

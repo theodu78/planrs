@@ -15,6 +15,7 @@ use crate::state::{GanttStyle, LanguagePref, ThemePref, ViewKind};
 use crate::structure::StructureOp;
 use crate::timescale::TimeScaleZoom;
 use crate::view::Pane;
+use crate::view::task_view::TaskViewOp;
 
 /// Intention de l'utilisateur, appliquée en fin d'image. Pas `Copy` :
 /// [`Action::Exec`] porte un lot de commandes (ADR-0012 D11).
@@ -160,6 +161,10 @@ pub enum Action {
     /// Geste du Gantt refusé au lâcher (J7, lot L8 : barre commencée,
     /// jalon, écart hors limites) : message au bandeau.
     GestureRefused(GestureError),
+    // --- J8 L9 : vue des tâches (filtres, tri, repli, recherche).
+    /// Commande de la vue des tâches (aucune écriture dans le document,
+    /// P50).
+    TaskView(TaskViewOp),
 }
 
 /// Fenêtre à ouvrir (J7, ADR-0015 D6 ; `Action::OpenDialog` reste le

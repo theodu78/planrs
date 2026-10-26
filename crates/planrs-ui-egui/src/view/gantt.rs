@@ -1268,6 +1268,7 @@ mod tests {
                     actions: &mut actions,
                     stats: &mut stats,
                     window_open: false,
+                    task_view: crate::view::task_view::TaskViewFrame::default(),
                 };
                 let header = Rect::from_min_max(pos2(600.0, 0.0), pos2(1400.0, 44.0));
                 let clip = Rect::from_min_max(pos2(600.0, 44.0), pos2(1400.0, 700.0));

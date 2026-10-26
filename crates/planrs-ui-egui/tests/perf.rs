@@ -46,6 +46,9 @@
 //!   images) et `outline_5000` (niveau 1, Tous, 2, puis repli de 50
 //!   récapitulatives) : `RowView::build` médiane < 8 ms, images mêmes
 //!   seuils.
+//! - J8 L9 (ignoré, release) : `search_5000` (barre de recherche ouverte,
+//!   10 caractères tapés, un par image, puis 20 « suivant ») : image
+//!   médiane < 16 ms, p95 < 32 ms.
 //!
 //! Le rendu GPU n'est pas chronométré (lavapipe en CI n'est pas
 //! représentatif). Le projet est construit directement
@@ -1196,4 +1199,35 @@ fn outline_5000() {
     );
     assert_build_budget("outline_5000 build", builds);
     assert_budget("outline_5000", samples, bench.last);
+}
+
+/// J8 L9 : barre de recherche ouverte, « préparatio » tapé un caractère par
+/// image (correspondances recalculées à chaque frappe), puis 20 « suivant »
+/// (sélection, défilement) ; image médiane < 16 ms, p95 < 32 ms.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn search_5000() {
+    use planrs_ui_egui::view::task_view::TaskViewOp;
+    let (mut app, mut bench) = nav_bench();
+    app.dispatch(Action::TaskView(TaskViewOp::OpenSearch));
+    bench.settle(&mut app);
+    let query = "préparatio";
+    let mut samples = Vec::new();
+    for (end, _) in query.char_indices().skip(1).chain([(query.len(), ' ')]) {
+        let prefix = query.get(..end).unwrap_or(query).to_owned();
+        app.dispatch(Action::TaskView(TaskViewOp::SetQuery(prefix)));
+        samples.push(bench.frame(&mut app, Vec::new()));
+    }
+    let search = app.search().unwrap();
+    assert_eq!(search.query, query);
+    assert_ne!(search.hits.len(), 0);
+    let mut seen = std::collections::BTreeSet::new();
+    for _ in 0..20 {
+        app.dispatch(Action::TaskView(TaskViewOp::SearchNext));
+        samples.push(bench.frame(&mut app, Vec::new()));
+        seen.extend(app.selection);
+    }
+    assert!(seen.len() > 1, "« suivant » doit avancer");
+    assert_eq!(app.document.as_ref().unwrap().generation(), 0);
+    assert_budget("search_5000", samples, bench.last);
 }

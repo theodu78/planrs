@@ -17,7 +17,7 @@ use crate::dialog::DialogState;
 use crate::edit::TableEdit;
 use crate::i18n::Texts;
 use crate::nav::CellCursor;
-use crate::row_view::{DisplayRow, RowView, VisibleRows};
+use crate::row_view::{DisplayRow, FilterMemo, RowView, VisibleRows};
 use crate::rows::RowModel;
 use crate::selection::Selection;
 use crate::state::{TaskViewState, UiState};
@@ -33,6 +33,7 @@ pub mod resource_sheet;
 pub mod search;
 pub mod side_panel;
 pub mod table;
+pub mod task_view;
 pub mod timescale;
 pub mod usage;
 
@@ -148,6 +149,18 @@ pub struct ViewTransient {
     /// Version du repli : change à chaque changement de `collapsed` (clé du
     /// cache de `RowView`).
     pub collapse_version: u64,
+    /// Version de réapplication du filtre (J8, lot L9, H-UI-30) : change à
+    /// chaque application d'un filtre (clé du cache de `RowView`).
+    pub reapply_version: u64,
+    /// Lignes gardées visibles malgré le filtre jusqu'à sa réapplication
+    /// (J8, lot L9, H-UI-30).
+    pub filter_memo: FilterMemo,
+    /// Barre de recherche ouverte (J8, lot L9, H-UI-33).
+    pub search: Option<search::SearchState>,
+    /// Fenêtre « Trier » ouverte (J8, lot L9, H-UI-31).
+    pub sort_dialog: Option<crate::dialog::sort::SortDialog>,
+    /// Fenêtre « Filtre » ouverte (J8, lot L9, H-UI-30).
+    pub filter_dialog: Option<crate::dialog::filter::FilterDialog>,
 }
 
 /// Volet de la vue principale (J7).
@@ -287,6 +300,9 @@ pub struct FrameCtx<'a> {
     /// laisse la table cliquable) : aucune saisie de cellule ne s'ouvre, ses
     /// touches seraient retirées de l'image (relecture finale J7, F9).
     pub window_open: bool,
+    /// Vue des tâches à cette image : filtre, tri, niveau, recherche,
+    /// triangles de repli (J8, lot L9).
+    pub task_view: task_view::TaskViewFrame,
 }
 
 impl<'a> FrameCtx<'a> {

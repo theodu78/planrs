@@ -652,6 +652,66 @@ error-control-bad_endpoint = Invalid control channel address: { $detail }
 # --- J8 L8 ---
 
 # --- J8 L9 ---
+menu-filter = Filter
+filter-all = All tasks
+filter-critical = Critical tasks
+filter-late = Late tasks
+filter-incomplete = Incomplete tasks
+filter-milestones = Milestones
+filter-summaries = Summary tasks
+filter-using-resource = Using resource…
+filter-date-range = Date range…
+filter-custom = Custom filter…
+filter-reapply = Reapply filter
+filter-clear = Clear filter
+filter-using-named = Using { $name }
+status-filter = Filter: { $name }
+filter-custom-title = Custom filter
+filter-resource-title = Using resource
+filter-date-range-title = Date range
+filter-apply = Apply
+filter-resource = Resource
+filter-no-resource = No resource in the project
+filter-use-resource = Assigned to the resource
+filter-from = From
+filter-to = To
+filter-active-only = Active tasks
+filter-outline-max = Outline level at most
+filter-name-contains = Name containing
+filter-related = Show related summary rows
+filter-date-order = The first day is after the last one.
+filter-dates-required = Enter the first and the last day.
+filter-resource-missing = Choose a resource.
+menu-sort = Sort…
+menu-sort-by-id = Sort by ID
+sort-title = Sort
+sort-by = Sort by
+sort-ascending = Ascending
+sort-descending = Descending
+sort-keep-outline = Keep outline structure
+sort-apply = Sort tasks
+sort-reset = Reset (ID order)
+menu-outline-level = Outline level
+outline-level-n = Level { $count }
+outline-all = All levels
+menu-hide-subtasks = Hide subtasks
+menu-show-subtasks = Show subtasks
+outline-expand-row = Expand { $name }
+outline-collapse-row = Collapse { $name }
+view-reorder-locked = Remove the sort or the filter to move, indent or outdent tasks.
+menu-find = Find…
+search-label = Find
+search-previous = Previous
+search-next = Next
+search-all-columns = Visible columns
+search-close = Close search
+search-none = No match
+search-counter = { $id }/{ $count }
+search-hidden =
+    { $count ->
+        [one] ({ $count } hidden by the filter)
+       *[other] ({ $count } hidden by the filter)
+    }
 
 # --- J8 L10 ---
 

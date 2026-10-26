@@ -651,6 +651,66 @@ error-control-bad_endpoint = Adresse du canal de contrôle invalide : { $detail
 # --- J8 L8 ---
 
 # --- J8 L9 ---
+menu-filter = Filtre
+filter-all = Toutes les tâches
+filter-critical = Tâches critiques
+filter-late = Tâches en retard
+filter-incomplete = Tâches inachevées
+filter-milestones = Jalons
+filter-summaries = Tâches récapitulatives
+filter-using-resource = Utilisant la ressource…
+filter-date-range = Plage de dates…
+filter-custom = Filtre personnalisé…
+filter-reapply = Réappliquer le filtre
+filter-clear = Retirer le filtre
+filter-using-named = Utilisant { $name }
+status-filter = Filtre : { $name }
+filter-custom-title = Filtre personnalisé
+filter-resource-title = Utilisant la ressource
+filter-date-range-title = Plage de dates
+filter-apply = Appliquer
+filter-resource = Ressource
+filter-no-resource = Aucune ressource dans le projet
+filter-use-resource = Affectées à la ressource
+filter-from = Du
+filter-to = Au
+filter-active-only = Tâches actives
+filter-outline-max = Niveau au plus
+filter-name-contains = Nom contenant
+filter-related = Afficher les récapitulatives liées
+filter-date-order = Le premier jour suit le dernier.
+filter-dates-required = Indiquez le premier et le dernier jour.
+filter-resource-missing = Choisissez une ressource.
+menu-sort = Trier…
+menu-sort-by-id = Trier par ID
+sort-title = Trier
+sort-by = Trier par
+sort-ascending = Croissant
+sort-descending = Décroissant
+sort-keep-outline = Conserver la structure
+sort-apply = Trier les tâches
+sort-reset = Réinitialiser (ordre des ID)
+menu-outline-level = Niveau hiérarchique
+outline-level-n = Niveau { $count }
+outline-all = Tous les niveaux
+menu-hide-subtasks = Masquer les sous-tâches
+menu-show-subtasks = Afficher les sous-tâches
+outline-expand-row = Déplier { $name }
+outline-collapse-row = Replier { $name }
+view-reorder-locked = Retirez le tri ou le filtre pour déplacer, hausser ou abaisser des tâches.
+menu-find = Rechercher…
+search-label = Rechercher
+search-previous = Précédent
+search-next = Suivant
+search-all-columns = Colonnes visibles
+search-close = Fermer la recherche
+search-none = Aucun résultat
+search-counter = { $id }/{ $count }
+search-hidden =
+    { $count ->
+        [one] ({ $count } masquée par le filtre)
+       *[other] ({ $count } masquées par le filtre)
+    }
 
 # --- J8 L10 ---
 

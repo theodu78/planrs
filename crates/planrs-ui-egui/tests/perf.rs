@@ -41,6 +41,12 @@
 //!   `usage_counts_equal_at_1000_and_5000_tasks` (formes, sommets et galleys
 //!   de la vue à ± 5 %).
 //!
+//! - J8 L5 (ignorés, release) : `filter_sort_5000` (filtre « Critiques »,
+//!   tri Début décroissant avec structure, retour à l'ordre des ID, 60
+//!   images) et `outline_5000` (niveau 1, Tous, 2, puis repli de 50
+//!   récapitulatives) : `RowView::build` médiane < 8 ms, images mêmes
+//!   seuils.
+//!
 //! Le rendu GPU n'est pas chronométré (lavapipe en CI n'est pas
 //! représentatif). Le projet est construit directement
 //! (`planrs_tests::generate::ui_network`) et ouvert sans MSPDI
@@ -80,12 +86,15 @@ use egui::epaint::{ClippedPrimitive, Primitive, Shape};
 use egui::{
     Event, Key, Modifiers, MouseWheelSource, MouseWheelUnit, Pos2, RawInput, Rect, TouchPhase, pos2, vec2,
 };
+use planrs_automation::filter::{FilterCtx, FilterPreset};
 use planrs_core::Moment;
 use planrs_tests::generate::{ui_network, ui_network_with_resources};
 use planrs_ui_egui::column::Column;
 use planrs_ui_egui::edit::{EditState, commit_edit};
 use planrs_ui_egui::nav::RowRef;
+use planrs_ui_egui::row_view::RowView;
 use planrs_ui_egui::rows::{RowKind, RowModel};
+use planrs_ui_egui::state::{FilterChoice, SortKey, SortSpec, TaskViewState};
 use planrs_ui_egui::timescale::TimeAxis;
 use planrs_ui_egui::view::{OVERSCAN, ROW_H};
 use planrs_ui_egui::{
@@ -1049,4 +1058,142 @@ fn usage_scroll() {
     );
     assert_budget("usage_scroll horizontal", horizontal, bench.last);
     assert!(worst < SPIKE, "bloc neuf : {worst:?} ≥ {SPIKE:?}");
+}
+
+/// Budget de `RowView::build` (J8, lot L5) : médiane.
+const VIEW_BUILD_BUDGET: Duration = Duration::from_millis(8);
+
+/// Durées de `RowView::build` pour `state` (repli courant de `app`), `n`
+/// constructions.
+fn view_builds(app: &App, state: &TaskViewState, n: usize) -> Vec<Duration> {
+    let doc = app.document.as_ref().unwrap();
+    let project = doc.project();
+    let ctx = FilterCtx {
+        project,
+        schedule: doc.schedule(),
+        status: project.effective_status_date(),
+    };
+    let model = app.rows().unwrap();
+    (0..n)
+        .map(|_| {
+            let t0 = Instant::now();
+            black_box(RowView::build(model, &ctx, state, app.collapsed()));
+            t0.elapsed()
+        })
+        .collect()
+}
+
+/// Médiane des constructions de la vue, vérifiée contre
+/// [`VIEW_BUILD_BUDGET`] (rapport JSON écrit avant).
+fn assert_build_budget(label: &str, mut builds: Vec<Duration>) {
+    builds.sort();
+    let median = percentile(&builds, 50);
+    eprintln!(
+        "perf UI {label} : RowView::build médiane {:.2} ms, max {:.2} ms ({} constructions)",
+        ms(median),
+        builds.last().map_or(0.0, |d| ms(*d)),
+        builds.len()
+    );
+    report(
+        label,
+        &builds,
+        Counts::default(),
+        serde_json::json!({ "budget_median_ms": VIEW_BUILD_BUDGET.as_millis() }),
+    );
+    assert!(
+        median < VIEW_BUILD_BUDGET,
+        "{label} : médiane {median:?} ≥ {VIEW_BUILD_BUDGET:?}"
+    );
+}
+
+/// J8 L5 : filtre « Critiques », puis tri Début décroissant avec structure,
+/// puis retour à l'ordre des ID, 20 images par étape (molette à chaque
+/// image ; l'image du changement compte la reconstruction de la vue).
+/// `RowView::build` médiane < 8 ms ; image médiane < 16 ms, p95 < 32 ms.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn filter_sort_5000() {
+    let (mut app, mut bench) = nav_bench();
+    let critical = TaskViewState {
+        filter: FilterChoice::Preset(FilterPreset::Critical),
+        ..TaskViewState::default()
+    };
+    let sorted = TaskViewState {
+        sort: Some(SortSpec {
+            key: SortKey::Start,
+            descending: true,
+            keep_outline: true,
+        }),
+        ..critical.clone()
+    };
+    let by_id = TaskViewState {
+        sort: Some(SortSpec {
+            key: SortKey::Id,
+            descending: false,
+            keep_outline: true,
+        }),
+        ..critical.clone()
+    };
+    let mut builds = Vec::new();
+    let mut samples = Vec::new();
+    for state in [critical, sorted, by_id] {
+        builds.extend(view_builds(&app, &state, 20));
+        let t0 = Instant::now();
+        app.set_task_view(state);
+        let change = t0.elapsed();
+        samples.push(change + bench.frame(&mut app, wheel_events(-WHEEL_STEP)));
+        for _ in 1..20 {
+            samples.push(bench.frame(&mut app, wheel_events(-WHEEL_STEP)));
+        }
+        assert!(!app.row_view().is_empty());
+        assert!(app.row_view().len() < app.rows().unwrap().len());
+    }
+    assert_build_budget("filter_sort_5000 build", builds);
+    assert_budget("filter_sort_5000", samples, bench.last);
+}
+
+/// J8 L5 : niveau 1, Tous, niveau 2 (20 images chacun), puis repli de 50
+/// récapitulatives une par image ; mêmes seuils que `filter_sort_5000`.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn outline_5000() {
+    let (mut app, mut bench) = nav_bench();
+    let mut builds = Vec::new();
+    let mut samples = Vec::new();
+    for level in [Some(1), None, Some(2)] {
+        let state = TaskViewState {
+            outline_level: level,
+            ..TaskViewState::default()
+        };
+        builds.extend(view_builds(&app, &state, 20));
+        let t0 = Instant::now();
+        app.set_task_view(state);
+        let change = t0.elapsed();
+        samples.push(change + bench.frame(&mut app, wheel_events(-WHEEL_STEP)));
+        for _ in 1..20 {
+            samples.push(bench.frame(&mut app, wheel_events(-WHEEL_STEP)));
+        }
+    }
+    assert_eq!(app.row_view().len(), app.rows().unwrap().len());
+    app.set_task_view(TaskViewState::default());
+    let summaries: Vec<_> = (0..app.rows().unwrap().len())
+        .filter_map(|i| app.rows().unwrap().row(i))
+        .filter(|row| row.kind == RowKind::Summary)
+        .map(|row| row.uid)
+        .take(50)
+        .collect();
+    assert_eq!(summaries.len(), 50);
+    for uid in summaries {
+        let t0 = Instant::now();
+        app.toggle_collapsed(uid);
+        let change = t0.elapsed();
+        samples.push(change + bench.frame(&mut app, Vec::new()));
+    }
+    builds.extend(view_builds(&app, &TaskViewState::default(), 20));
+    assert_eq!(
+        app.row_view().len(),
+        app.rows().unwrap().len() - 50 * LEAVES_PER_SUMMARY
+    );
+    assert_build_budget("outline_5000 build", builds);
+    assert_budget("outline_5000", samples, bench.last);
 }

@@ -1392,7 +1392,7 @@ fn ai_panel() {
     use std::sync::mpsc::sync_channel;
 
     use planrs_automation::control::{CallState, RelayCall, RelayKind, Reply};
-    use planrs_core::{HasUid as _, TaskRole};
+    use planrs_core::{Task, TaskRole};
     use planrs_ui_egui::view::side_panel::MAX_DIFF_ROWS;
 
     let (mut app, mut bench) = nav_bench();
@@ -1401,8 +1401,12 @@ fn ai_panel() {
         .project()
         .tasks
         .iter()
-        .map(|t| t.uid())
-        .filter(|uid| doc.schedule().scheduled(*uid).is_some_and(|s| s.role == TaskRole::Leaf))
+        .map(Task::uid)
+        .filter(|uid| {
+            doc.schedule()
+                .scheduled(*uid)
+                .is_some_and(|s| s.role == TaskRole::Leaf)
+        })
         .take(250)
         .map(|uid| serde_json::json!({ "op": "task.update", "uid": uid.get(), "duration": { "text": "9j" } }))
         .collect();

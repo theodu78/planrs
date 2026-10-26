@@ -19,8 +19,9 @@
 //! `control.approval_timeout` (le rattachement est gardé). Le délai de
 //! validation est transmis à l'application (`approval_timeout_ms` d'un
 //! `execute`), qui le prend s'il est plus court que le sien : l'expiration
-//! est tranchée d'un seul côté. Hors Unix, pas de relais (J7 : règle des
-//! 24 h sous Windows, ADR-0015).
+//! est tranchée d'un seul côté. Transport (J8, lot L8) : celui de
+//! l'adresse du rendez-vous, socket Unix ou TCP en boucle locale
+//! ([`super::Endpoint::connect`]), sur tous les systèmes.
 
 use std::path::Path;
 use std::time::Duration;
@@ -29,7 +30,6 @@ use serde_json::Value;
 
 use super::ControlError;
 use super::Rendezvous;
-#[cfg(unix)]
 use super::{Frame, Method, PROTOCOL_VERSION};
 use crate::error::codes;
 use crate::text::Language;
@@ -113,7 +113,7 @@ impl RelayClient {
     ///
     /// [`ControlError::Io`] (connexion, délai, réponse illisible),
     /// [`ControlError::Refused`] (jeton refusé),
-    /// [`ControlError::Unsupported`] hors Unix.
+    /// [`ControlError::BadEndpoint`] (adresse du rendez-vous illisible).
     pub fn connect(r: &Rendezvous, timeout: Duration) -> Result<Self, ControlError> {
         let mut client = Self {
             rendezvous: r.clone(),
@@ -162,34 +162,23 @@ impl RelayClient {
     pub fn call(&mut self, tool: &str, params: Value, approval: Duration) -> Result<Value, RelayError> {
         let hello_id = self.take_id();
         let id = self.take_id();
-        #[cfg(unix)]
-        {
-            let approval_ms = u64::try_from(approval.as_millis()).unwrap_or(u64::MAX).max(1);
-            let (method, params) = match tool {
-                "app.ui_state" => (Method::UiState, params),
-                "app.screenshot" => (Method::Screenshot, params),
-                _ => (
-                    Method::Execute,
-                    serde_json::json!({ "tool": tool, "params": params, "approval_timeout_ms": approval_ms }),
-                ),
-            };
-            let frame = Frame {
-                v: PROTOCOL_VERSION,
-                id,
-                method,
-                params,
-            };
-            let deadline = approval.saturating_add(self.margin);
-            unix::call(self, hello_id, &frame, deadline)
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = (tool, params, approval, hello_id, id);
-            Err(self.gone(
-                "relais non disponible sur cette plateforme",
-                "relay unavailable on this platform",
-            ))
-        }
+        let approval_ms = u64::try_from(approval.as_millis()).unwrap_or(u64::MAX).max(1);
+        let (method, params) = match tool {
+            "app.ui_state" => (Method::UiState, params),
+            "app.screenshot" => (Method::Screenshot, params),
+            _ => (
+                Method::Execute,
+                serde_json::json!({ "tool": tool, "params": params, "approval_timeout_ms": approval_ms }),
+            ),
+        };
+        let frame = Frame {
+            v: PROTOCOL_VERSION,
+            id,
+            method,
+            params,
+        };
+        let deadline = approval.saturating_add(self.margin);
+        wire::call(self, hello_id, &frame, deadline)
     }
 
     /// Rendez-vous vivant **unique** de `dir` (rattachement au démarrage,
@@ -197,12 +186,9 @@ impl RelayClient {
     ///
     /// Les fichiers `.json` de version 1 sont sondés par un `hello` ; rien
     /// n'est supprimé (le nettoyage reste à `find_live_for_in`). Au plus
-    /// 64 rendez-vous examinés ; hors Unix, toujours `None`.
+    /// 64 rendez-vous examinés.
     #[must_use]
     pub fn single_live_in(dir: &Path) -> Option<Rendezvous> {
-        if cfg!(not(unix)) {
-            return None;
-        }
         let mut files: Vec<_> = std::fs::read_dir(dir)
             .ok()?
             .filter_map(Result::ok)
@@ -221,15 +207,8 @@ impl RelayClient {
 
     /// Vérifie que l'application répond (`hello`).
     fn check(&mut self) -> Result<(), ControlError> {
-        #[cfg(unix)]
-        {
-            let id = self.take_id();
-            unix::open(&self.rendezvous, id, self.hello_timeout).map(drop)
-        }
-        #[cfg(not(unix))]
-        {
-            Err(ControlError::Unsupported)
-        }
+        let id = self.take_id();
+        wire::open(&self.rendezvous, id, self.hello_timeout).map(drop)
     }
 
     fn take_id(&mut self) -> u64 {
@@ -258,25 +237,25 @@ fn read_v1(file: &Path) -> Option<Rendezvous> {
     (r.v == super::PROTOCOL_VERSION).then_some(r)
 }
 
-#[cfg(unix)]
-mod unix {
+/// Échanges sur le fil, communs aux deux transports.
+mod wire {
     use std::io::{BufReader, ErrorKind, Write};
-    use std::os::unix::net::UnixStream;
     use std::time::{Duration, Instant};
 
     use serde_json::Value;
 
     use super::super::{
-        ControlError, Frame, LineError, MAX_LINE_BYTES, Method, PROTOCOL_VERSION, Rendezvous, Reply,
-        read_line_bounded, to_line,
+        ControlError, ControlStream, Endpoint, Frame, LineError, MAX_LINE_BYTES, Method, PROTOCOL_VERSION,
+        Rendezvous, Reply, read_line_bounded, to_line,
     };
     use super::{RelayClient, RelayError, tr};
     use crate::error::codes;
     use crate::workspace::ToolError;
 
     /// Connexion authentifiée : `hello` envoyé et accepté en `timeout`.
-    pub(super) fn open(r: &Rendezvous, id: u64, timeout: Duration) -> Result<UnixStream, ControlError> {
-        let stream = UnixStream::connect(&r.endpoint)
+    pub(super) fn open(r: &Rendezvous, id: u64, timeout: Duration) -> Result<ControlStream, ControlError> {
+        let stream = Endpoint::from_rendezvous(&r.endpoint)?
+            .connect(non_zero(timeout))
             .map_err(|e| ControlError::io("connexion à l'application", &e))?;
         stream
             .set_read_timeout(Some(non_zero(timeout)))
@@ -433,7 +412,7 @@ mod unix {
         }
     }
 
-    fn send(mut stream: &UnixStream, frame: &Frame) -> std::io::Result<()> {
+    fn send(mut stream: &ControlStream, frame: &Frame) -> std::io::Result<()> {
         let line = to_line(frame).map_err(std::io::Error::other)?;
         stream.write_all(&line)
     }

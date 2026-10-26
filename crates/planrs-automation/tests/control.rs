@@ -5,6 +5,11 @@
 //! (`control.busy`), expiration et `Cancel` (C-CTL-04), lectures seules
 //! par `query`. Le déroulé complet avec l'application est testé dans
 //! `planrs-ui-egui/tests/ui/relay.rs`.
+//!
+//! Transport TCP en boucle locale (J8, lot L8, C-CTL-11 à C-CTL-14) : les
+//! tests de l'écouteur et du client sont rejoués sur les deux transports
+//! (suffixe `_tcp`, compilé et exécuté sur tous les systèmes, Windows
+//! compris) ; les tests propres aux fichiers de socket restent Unix.
 
 #![cfg(not(target_arch = "wasm32"))]
 #![allow(
@@ -20,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use planrs_automation::control::{
-    Frame, LineError, MAX_LINE_BYTES, Method, Reply, codes, read_line_bounded, to_line,
+    Frame, LineError, MAX_LINE_BYTES, Method, Reply, Transport, codes, read_line_bounded, to_line,
 };
 use serde_json::{Value, json};
 
@@ -149,113 +154,91 @@ fn control_line_too_long_refused() {
     assert_eq!(MAX_LINE_BYTES, 8 * 1024 * 1024);
 
     #[cfg(unix)]
-    unix::line_too_long_over_socket();
+    live::line_too_long_over_socket(Transport::Unix);
+}
+
+#[test]
+fn control_line_too_long_refused_tcp() {
+    live::line_too_long_over_socket(Transport::Tcp);
+}
+
+/// Test du canal sur les deux transports : `$unix` sur la socket Unix
+/// (Unix seulement), `$tcp` en TCP sur la boucle locale (tous systèmes).
+macro_rules! on_both_transports {
+    ($( $(#[$doc:meta])* $unix:ident, $tcp:ident => $body:path; )*) => {$(
+        $(#[$doc])*
+        #[cfg(unix)]
+        #[test]
+        fn $unix() {
+            $body(Transport::Unix);
+        }
+
+        $(#[$doc])*
+        #[test]
+        fn $tcp() {
+            $body(Transport::Tcp);
+        }
+    )*};
 }
 
 #[cfg(unix)]
 #[test]
 fn control_rendezvous_mode_0600() {
-    unix::rendezvous_mode_0600();
+    live::rendezvous_mode_0600();
 }
 
 #[cfg(unix)]
 #[test]
 fn control_stale_rendezvous_removed() {
-    unix::stale_rendezvous_removed();
+    live::stale_rendezvous_removed();
 }
 
-#[cfg(unix)]
-#[test]
-fn control_busy_app_kept_live() {
-    unix::busy_app_kept_live();
-}
-
-#[cfg(unix)]
-#[test]
-fn control_hello_wrong_token_refused() {
-    unix::hello_wrong_token_refused();
+on_both_transports! {
+    control_busy_app_kept_live, control_busy_app_kept_live_tcp => live::busy_app_kept_live;
+    control_hello_wrong_token_refused, control_hello_wrong_token_refused_tcp => live::hello_wrong_token_refused;
 }
 
 #[cfg(unix)]
 #[test]
 fn control_find_live_matches_canonical_path() {
-    unix::find_live_matches_canonical_path();
+    live::find_live_matches_canonical_path();
 }
 
-#[cfg(unix)]
-#[test]
-fn control_unsupported_methods_in_j4() {
-    unix::unsupported_methods_in_j4();
+on_both_transports! {
+    control_unsupported_methods_in_j4, control_unsupported_methods_in_j4_tcp => live::unsupported_methods_in_j4;
 }
 
-/// C-CTL-01 (relais J7) : jeton faux ou absent, ou requête avant `hello` ⇒
-/// refus et connexion fermée ; rien n'atteint la file de l'application.
-#[cfg(unix)]
-#[test]
-fn c_ctl_01_bad_token_closes() {
-    unix::relay_bad_token_closes();
-}
-
-/// File de l'application pleine ⇒ `control.busy`, connexion maintenue ;
-/// l'appel en file reçoit sa réponse quand l'application la vide.
-#[cfg(unix)]
-#[test]
-fn relay_queue_full_busy() {
-    unix::relay_queue_full_busy();
-}
-
-/// C-CTL-04 (côté écouteur) : sans réponse finale dans le délai, l'appel
-/// expire (`claim` faux ensuite), `Cancel(id)` suit dans la file et l'agent
-/// reçoit `control.approval_timeout` après `pending_approval`.
-#[cfg(unix)]
-#[test]
-fn c_ctl_04_listener_expires_and_cancels() {
-    unix::relay_expires_and_cancels();
-}
-
-/// Relecture finale J7, relais F1 : le délai demandé par le client
-/// (`approval_timeout_ms`), plus court que celui de l'écouteur, l'emporte ;
-/// l'agent reçoit `control.approval_timeout` et le `Cancel` porte l'état de
-/// l'appel abandonné.
-#[cfg(unix)]
-#[test]
-fn relay_asked_timeout_shorter_wins() {
-    unix::relay_asked_timeout_shorter_wins();
-}
-
-/// Relecture finale J7, relais F1 : un client parti pendant l'attente
-/// (processus mort, délai du client écoulé) fait expirer l'appel, bandeau
-/// retiré (`Cancel`) : plus rien ne peut être accepté.
-#[cfg(unix)]
-#[test]
-fn relay_client_hangup_expires_call() {
-    unix::relay_client_hangup_expires_call();
-}
-
-/// Relecture finale J7, relais F4 : connexions pleines ⇒ `control.busy`
-/// dit au client, qui ne se détache pas (pas `control.app_gone`).
-#[cfg(unix)]
-#[test]
-fn relay_connections_full_busy() {
-    unix::relay_connections_full_busy();
-}
-
-/// Relecture finale J7, relais F2 : jeton remplacé (document neuf) ⇒ un
-/// client du jeton précédent reçoit `control.document_changed` (et se
-/// détache) ; le nouveau rendez-vous sert normalement.
-#[cfg(unix)]
-#[test]
-fn relay_rotated_token_refuses_previous_document() {
-    unix::relay_rotated_token_refuses_previous_document();
-}
-
-/// `query` relaie les seules lectures du registre (`project.summary` par
-/// défaut) ; `execute`, `ui_state`, `screenshot` donnent leur appel ;
-/// paramètres mal formés refusés sans fermer.
-#[cfg(unix)]
-#[test]
-fn relay_methods_become_calls() {
-    unix::relay_methods_become_calls();
+on_both_transports! {
+    /// C-CTL-01 (relais J7) : jeton faux ou absent, ou requête avant `hello` ⇒
+    /// refus et connexion fermée ; rien n'atteint la file de l'application.
+    c_ctl_01_bad_token_closes, c_ctl_01_bad_token_closes_tcp => live::relay_bad_token_closes;
+    /// File de l'application pleine ⇒ `control.busy`, connexion maintenue ;
+    /// l'appel en file reçoit sa réponse quand l'application la vide.
+    relay_queue_full_busy, relay_queue_full_busy_tcp => live::relay_queue_full_busy;
+    /// C-CTL-04 (côté écouteur) : sans réponse finale dans le délai, l'appel
+    /// expire (`claim` faux ensuite), `Cancel(id)` suit dans la file et l'agent
+    /// reçoit `control.approval_timeout` après `pending_approval`.
+    c_ctl_04_listener_expires_and_cancels, c_ctl_04_listener_expires_and_cancels_tcp => live::relay_expires_and_cancels;
+    /// Relecture finale J7, relais F1 : le délai demandé par le client
+    /// (`approval_timeout_ms`), plus court que celui de l'écouteur, l'emporte ;
+    /// l'agent reçoit `control.approval_timeout` et le `Cancel` porte l'état de
+    /// l'appel abandonné.
+    relay_asked_timeout_shorter_wins, relay_asked_timeout_shorter_wins_tcp => live::relay_asked_timeout_shorter_wins;
+    /// Relecture finale J7, relais F1 : un client parti pendant l'attente
+    /// (processus mort, délai du client écoulé) fait expirer l'appel, bandeau
+    /// retiré (`Cancel`) : plus rien ne peut être accepté.
+    relay_client_hangup_expires_call, relay_client_hangup_expires_call_tcp => live::relay_client_hangup_expires_call;
+    /// Relecture finale J7, relais F4 : connexions pleines ⇒ `control.busy`
+    /// dit au client, qui ne se détache pas (pas `control.app_gone`).
+    relay_connections_full_busy, relay_connections_full_busy_tcp => live::relay_connections_full_busy;
+    /// Relecture finale J7, relais F2 : jeton remplacé (document neuf) ⇒ un
+    /// client du jeton précédent reçoit `control.document_changed` (et se
+    /// détache) ; le nouveau rendez-vous sert normalement.
+    relay_rotated_token_refuses_previous_document, relay_rotated_token_refuses_previous_document_tcp => live::relay_rotated_token_refuses_previous_document;
+    /// `query` relaie les seules lectures du registre (`project.summary` par
+    /// défaut) ; `execute`, `ui_state`, `screenshot` donnent leur appel ;
+    /// paramètres mal formés refusés sans fermer.
+    relay_methods_become_calls, relay_methods_become_calls_tcp => live::relay_methods_become_calls;
 }
 
 /// `call_with` (ADR-0015 D9) : même JSON que `Workspace::call` ; une
@@ -299,81 +282,64 @@ fn relay_call_with_marks_agent_source() {
     );
 }
 
-/// Hors Unix (Windows, J4) : pas d'écouteur ; un rendez-vous est vivant
-/// s'il a été écrit il y a moins de 24 h (hypothèse documentée).
-#[cfg(not(unix))]
+/// C-CTL-13 : sous TCP, un rendez-vous dont la sonde `hello` échoue en
+/// 2 s est retiré (port fermé, programme muet sur le port, jeton refusé,
+/// adresse illisible) ; une réponse (`hello` accepté ou `control.busy`)
+/// le garde. Remplace la règle des 24 h de Windows (J4).
 #[test]
-fn control_find_live_by_age_without_listener() {
-    use std::sync::{Arc, Mutex};
-    use std::time::{Duration, SystemTime};
-
-    use planrs_automation::control::{
-        ControlError, Rendezvous, canonical_project, find_live_for_in, new_token, publish_in,
-        spawn_hello_listener_in,
-    };
-
-    let tmp = TempDir::new("age");
-    let dir = tmp.path().join("control");
-    let file = tmp.path().join("plan.xml");
-    std::fs::write(&file, b"<Project/>").unwrap();
-    assert_eq!(
-        spawn_hello_listener_in(&dir, new_token().unwrap(), Arc::new(Mutex::new(None))).unwrap_err(),
-        ControlError::Unsupported
-    );
-    let r = Rendezvous {
-        v: 1,
-        pid: std::process::id(),
-        endpoint: String::new(),
-        token: new_token().unwrap(),
-        project: canonical_project(&file),
-    };
-    let guard = publish_in(&dir, &r).unwrap();
-    assert_eq!(find_live_for_in(&dir, &file), Some(r));
-    let old = SystemTime::now() - Duration::from_hours(25);
-    std::fs::File::options()
-        .write(true)
-        .open(guard.path())
-        .unwrap()
-        .set_modified(old)
-        .unwrap();
-    assert!(find_live_for_in(&dir, &file).is_none());
-    assert!(!guard.path().exists());
+fn c_ctl_13_dead_rendezvous_removed_by_probe() {
+    live::dead_tcp_rendezvous_removed_by_probe();
 }
 
-#[cfg(unix)]
-mod unix {
-    use std::io::{BufReader, Write};
+on_both_transports! {
+    /// C-CTL-14 : une première ligne qui n'est pas une trame (requête HTTP
+    /// d'une page web, texte quelconque, ligne trop longue) ferme la
+    /// connexion sans réponse ; rien n'atteint l'application.
+    c_ctl_14_http_first_line_closed_unix, c_ctl_14_http_first_line_closed => live::first_line_not_a_frame_closed;
+    /// C-CTL-11 : adresse publiée dans le rendez-vous (`tcp:127.0.0.1:<port>`
+    /// ou chemin de la socket) et client commun (`RelayClient`, `probe`,
+    /// `find_live_for_in`) ; arrêt de l'écouteur ⇒ adresse injoignable.
+    c_ctl_11_rendezvous_and_common_client_unix, c_ctl_11_rendezvous_and_common_client => live::rendezvous_and_common_client;
+}
+
+/// Tests de l'écouteur, du rendez-vous et du client ; transport en
+/// paramètre quand le test vaut pour les deux.
+mod live {
+    use std::io::{BufReader, ErrorKind, Write};
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
-    use std::os::unix::net::UnixStream;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use std::sync::mpsc::{Receiver, sync_channel};
 
     use planrs_automation::control::{
-        ControlError, ListenerHandle, ListenerOptions, RelayCall, RelayKind, Rendezvous, WireError,
-        canonical_project, find_live_for_in, new_token, probe, publish_in, spawn_hello_listener_in,
-        spawn_listener_with,
+        ControlError, ControlStream, Endpoint, ListenerHandle, ListenerOptions, RelayCall, RelayClient,
+        RelayKind, Rendezvous, WireError, canonical_project, find_live_for_in, new_token, probe, publish_in,
+        spawn_hello_listener_in, spawn_hello_listener_on, spawn_listener_on,
     };
     use planrs_automation::error::codes as tool_codes;
 
     use super::*;
 
-    fn listener(dir: &Path) -> (ListenerHandle, String) {
+    fn listener(dir: &Path, t: Transport) -> (ListenerHandle, String) {
         let token = new_token().unwrap();
-        let handle = spawn_hello_listener_in(dir, token.clone(), Arc::new(Mutex::new(None))).unwrap();
+        let handle = spawn_hello_listener_on(dir, token.clone(), Arc::new(Mutex::new(None)), t).unwrap();
         (handle, token)
     }
 
     /// Connexion de test : envoie des trames, lit les réponses.
     struct Client {
-        stream: UnixStream,
-        reader: BufReader<UnixStream>,
+        stream: ControlStream,
+        reader: BufReader<ControlStream>,
     }
 
     impl Client {
         fn connect(endpoint: &str) -> Self {
-            let stream = UnixStream::connect(endpoint).unwrap();
+            let stream = Endpoint::from_rendezvous(endpoint)
+                .unwrap()
+                .connect(Duration::from_secs(5))
+                .unwrap();
             stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             let reader = BufReader::new(stream.try_clone().unwrap());
             Self { stream, reader }
@@ -401,9 +367,19 @@ mod unix {
             serde_json::from_slice(&line).unwrap()
         }
 
-        /// La connexion a été fermée par l'application.
+        /// La connexion a été fermée par l'application, sans réponse de
+        /// plus (fin de flux ; en TCP, une remise à zéro vaut fermeture).
         fn is_closed(&mut self) -> bool {
-            matches!(read_line_bounded(&mut self.reader, MAX_LINE_BYTES), Ok(None))
+            match read_line_bounded(&mut self.reader, MAX_LINE_BYTES) {
+                Ok(None) => true,
+                Err(LineError::Io(e)) => {
+                    matches!(
+                        e.kind(),
+                        ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted
+                    )
+                }
+                _ => false,
+            }
         }
 
         fn hello(&mut self, token: &str) -> Reply {
@@ -437,9 +413,9 @@ mod unix {
         names
     }
 
-    pub(super) fn line_too_long_over_socket() {
+    pub(super) fn line_too_long_over_socket(t: Transport) {
         let tmp = TempDir::new("long");
-        let (handle, token) = listener(tmp.path());
+        let (handle, token) = listener(tmp.path(), t);
         let mut client = Client::connect(handle.endpoint());
         assert!(matches!(client.hello(&token), Reply::Ok { .. }));
         // Écriture dans un fil : l'application coupe avant la fin.
@@ -455,6 +431,7 @@ mod unix {
         sender.join().unwrap();
     }
 
+    #[cfg(unix)]
     pub(super) fn rendezvous_mode_0600() {
         let tmp = TempDir::new("mode");
         // Dossier existant trop ouvert : resserré à 0700.
@@ -504,6 +481,7 @@ mod unix {
         assert_eq!(json_files(&dir), Vec::<String>::new());
     }
 
+    #[cfg(unix)]
     pub(super) fn stale_rendezvous_removed() {
         let tmp = TempDir::new("stale");
         let dir = tmp.path().join("control");
@@ -525,7 +503,7 @@ mod unix {
         assert_eq!(json_files(&dir), Vec::<String>::new());
 
         // 2. Écouteur vivant mais jeton du rendez-vous faux.
-        let (handle, _token) = listener(&dir);
+        let (handle, _token) = listener(&dir, Transport::Unix);
         let mut wrong = handle.rendezvous(project.clone());
         wrong.token = new_token().unwrap();
         std::mem::forget(publish_in(&dir, &wrong).unwrap());
@@ -560,14 +538,14 @@ mod unix {
         assert_eq!(json_files(&dir), ["3-0.json"]);
     }
 
-    pub(super) fn busy_app_kept_live() {
+    pub(super) fn busy_app_kept_live(t: Transport) {
         // Application vivante qui sert déjà ses 8 connexions : la sonde
         // reçoit `control.busy` puis est fermée, le rendez-vous reste et
         // l'application est tenue pour vivante (la garde ADR-0002 tient).
         let tmp = TempDir::new("busy");
         let dir = tmp.path().join("control");
         let file = project_file(tmp.path(), "plan.xml");
-        let (handle, _token) = listener(&dir);
+        let (handle, _token) = listener(&dir, t);
         let _guard = publish_in(&dir, &handle.rendezvous(canonical_project(&file))).unwrap();
         let idle: Vec<Client> = (0..8).map(|_| Client::connect(handle.endpoint())).collect();
         // La neuvième reçoit `control.busy` puis est fermée : le plafond
@@ -581,9 +559,9 @@ mod unix {
         drop(idle);
     }
 
-    pub(super) fn hello_wrong_token_refused() {
+    pub(super) fn hello_wrong_token_refused(t: Transport) {
         let tmp = TempDir::new("tok");
-        let (handle, token) = listener(tmp.path());
+        let (handle, token) = listener(tmp.path(), t);
 
         // Jeton faux : refus puis fermeture.
         let mut client = Client::connect(handle.endpoint());
@@ -628,13 +606,14 @@ mod unix {
         );
     }
 
+    #[cfg(unix)]
     pub(super) fn find_live_matches_canonical_path() {
         let tmp = TempDir::new("find");
         let dir = tmp.path().join("control");
         std::fs::create_dir_all(tmp.path().join("sub")).unwrap();
         let file = project_file(tmp.path(), "plan.xml");
         let other = project_file(tmp.path(), "autre.xml");
-        let (handle, _token) = listener(&dir);
+        let (handle, _token) = listener(&dir, Transport::Unix);
         let r = handle.rendezvous(canonical_project(&file));
         let _guard = publish_in(&dir, &r).unwrap();
 
@@ -653,9 +632,9 @@ mod unix {
         assert_eq!(json_files(&dir).len(), 1);
     }
 
-    pub(super) fn unsupported_methods_in_j4() {
+    pub(super) fn unsupported_methods_in_j4(t: Transport) {
         let tmp = TempDir::new("meth");
-        let (handle, token) = listener(tmp.path());
+        let (handle, token) = listener(tmp.path(), t);
         let mut client = Client::connect(handle.endpoint());
         match client.hello(&token) {
             Reply::Ok { id, result } => {
@@ -711,6 +690,7 @@ mod unix {
         dir: &Path,
         capacity: usize,
         timeout: Duration,
+        t: Transport,
     ) -> (ListenerHandle, String, Receiver<RelayCall>, Arc<AtomicU64>) {
         let token = new_token().unwrap();
         let (tx, rx) = sync_channel(capacity);
@@ -723,7 +703,7 @@ mod unix {
             approval_timeout: timeout,
             reply_grace: Duration::from_millis(200),
         };
-        let handle = spawn_listener_with(dir, token.clone(), tx, wake, options).unwrap();
+        let handle = spawn_listener_on(dir, token.clone(), tx, wake, options, t).unwrap();
         (handle, token, rx, woken)
     }
 
@@ -731,9 +711,9 @@ mod unix {
         json!({ "tool": tool, "params": {} })
     }
 
-    pub(super) fn relay_bad_token_closes() {
+    pub(super) fn relay_bad_token_closes(t: Transport) {
         let tmp = TempDir::new("rtok");
-        let (handle, token, rx, _) = relay_listener(tmp.path(), 4, Duration::from_secs(5));
+        let (handle, token, rx, _) = relay_listener(tmp.path(), 4, Duration::from_secs(5), t);
         for bad in [json!({ "token": "0".repeat(64) }), json!({}), Value::Null] {
             let mut client = Client::connect(handle.endpoint());
             let reply = client.call(1, Method::Hello, bad);
@@ -756,9 +736,9 @@ mod unix {
         }
     }
 
-    pub(super) fn relay_queue_full_busy() {
+    pub(super) fn relay_queue_full_busy(t: Transport) {
         let tmp = TempDir::new("rbusy");
-        let (handle, token, rx, woken) = relay_listener(tmp.path(), 1, Duration::from_secs(10));
+        let (handle, token, rx, woken) = relay_listener(tmp.path(), 1, Duration::from_secs(10), t);
         let endpoint = handle.endpoint().to_owned();
         let first_token = token.clone();
         let first = std::thread::spawn(move || {
@@ -820,9 +800,9 @@ mod unix {
         );
     }
 
-    pub(super) fn relay_expires_and_cancels() {
+    pub(super) fn relay_expires_and_cancels(t: Transport) {
         let tmp = TempDir::new("rexp");
-        let (handle, token, rx, _) = relay_listener(tmp.path(), 4, Duration::from_millis(300));
+        let (handle, token, rx, _) = relay_listener(tmp.path(), 4, Duration::from_millis(300), t);
         let mut client = Client::connect(handle.endpoint());
         client.hello(&token);
         let frame = Frame {
@@ -874,9 +854,9 @@ mod unix {
         );
     }
 
-    pub(super) fn relay_asked_timeout_shorter_wins() {
+    pub(super) fn relay_asked_timeout_shorter_wins(t: Transport) {
         let tmp = TempDir::new("rask");
-        let (handle, token, rx, _) = relay_listener(tmp.path(), 4, Duration::from_secs(30));
+        let (handle, token, rx, _) = relay_listener(tmp.path(), 4, Duration::from_secs(30), t);
         let mut client = Client::connect(handle.endpoint());
         client.hello(&token);
         let frame = Frame {
@@ -908,9 +888,9 @@ mod unix {
         assert_eq!(err_code(&client.reply()), codes::INVALID_FRAME);
     }
 
-    pub(super) fn relay_client_hangup_expires_call() {
+    pub(super) fn relay_client_hangup_expires_call(t: Transport) {
         let tmp = TempDir::new("rhup");
-        let (handle, token, rx, _) = relay_listener(tmp.path(), 4, Duration::from_secs(30));
+        let (handle, token, rx, _) = relay_listener(tmp.path(), 4, Duration::from_secs(30), t);
         let mut client = Client::connect(handle.endpoint());
         client.hello(&token);
         let frame = Frame {
@@ -933,11 +913,9 @@ mod unix {
         );
     }
 
-    pub(super) fn relay_connections_full_busy() {
-        use planrs_automation::control::RelayClient;
-
+    pub(super) fn relay_connections_full_busy(t: Transport) {
         let tmp = TempDir::new("rconn");
-        let (handle, token, _rx, _) = relay_listener(tmp.path(), 4, Duration::from_secs(5));
+        let (handle, token, _rx, _) = relay_listener(tmp.path(), 4, Duration::from_secs(5), t);
         let rendezvous = handle.rendezvous(None);
         let mut agent = RelayClient::connect(&rendezvous, Duration::from_secs(2)).unwrap();
         // Huit connexions muettes (sans hello) occupent toutes les places.
@@ -959,11 +937,9 @@ mod unix {
         let _ = token;
     }
 
-    pub(super) fn relay_rotated_token_refuses_previous_document() {
-        use planrs_automation::control::RelayClient;
-
+    pub(super) fn relay_rotated_token_refuses_previous_document(t: Transport) {
         let tmp = TempDir::new("rrot");
-        let (mut handle, token, rx, _) = relay_listener(tmp.path(), 4, Duration::from_secs(5));
+        let (mut handle, token, rx, _) = relay_listener(tmp.path(), 4, Duration::from_secs(5), t);
         let old = handle.rendezvous(None);
         assert_eq!(old.token, token);
         let mut agent = RelayClient::connect(&old, Duration::from_secs(2)).unwrap();
@@ -982,9 +958,9 @@ mod unix {
         assert_eq!(err_code(&stale.hello(&old.token)), codes::BAD_TOKEN);
     }
 
-    pub(super) fn relay_methods_become_calls() {
+    pub(super) fn relay_methods_become_calls(t: Transport) {
         let tmp = TempDir::new("rmeth");
-        let (handle, token, rx, _) = relay_listener(tmp.path(), 8, Duration::from_secs(5));
+        let (handle, token, rx, _) = relay_listener(tmp.path(), 8, Duration::from_secs(5), t);
         let mut client = Client::connect(handle.endpoint());
         client.hello(&token);
         let cases = [
@@ -1075,5 +1051,190 @@ mod unix {
         drop(rx);
         let reply = client.call(60, Method::UiState, Value::Null);
         assert_eq!(err_code(&reply), tool_codes::CONTROL_APP_GONE);
+    }
+
+    /// C-CTL-11, sur `t` : adresse de l'écouteur publiée telle quelle,
+    /// rendez-vous trouvé, rattachement et appel relayé par le client
+    /// commun ; écouteur arrêté ⇒ sonde en échec, rendez-vous retiré,
+    /// `control.app_gone`.
+    pub(super) fn rendezvous_and_common_client(t: Transport) {
+        let tmp = TempDir::new("common");
+        let dir = tmp.path().join("control");
+        let sockets = tmp.path().join("sock");
+        let file = project_file(tmp.path(), "plan.xml");
+        let (handle, _token, rx, _) = relay_listener(&sockets, 4, Duration::from_secs(5), t);
+        let endpoint = handle.endpoint().to_owned();
+        let parsed = Endpoint::from_rendezvous(&endpoint).unwrap();
+        assert_eq!(parsed.transport(), t);
+        match t {
+            Transport::Tcp => {
+                assert!(endpoint.starts_with("tcp:127.0.0.1:"), "{endpoint}");
+                // Aucun fichier de socket : le dossier n'est pas créé.
+                assert!(!sockets.exists());
+            }
+            Transport::Unix => {
+                assert!(Path::new(&endpoint).is_absolute(), "{endpoint}");
+                assert!(
+                    Path::new(&endpoint).extension().is_some_and(|e| e == "sock"),
+                    "{endpoint}"
+                );
+            }
+        }
+        let guard = publish_in(&dir, &handle.rendezvous(canonical_project(&file))).unwrap();
+        let written: Value = serde_json::from_slice(&std::fs::read(guard.path()).unwrap()).unwrap();
+        assert_eq!(written["endpoint"], json!(endpoint));
+        let found = find_live_for_in(&dir, &file).unwrap();
+        assert_eq!(found.endpoint, endpoint);
+        assert_eq!(RelayClient::single_live_in(&dir), Some(found.clone()));
+        assert_eq!(probe(&found).unwrap()["app"], "planrs");
+
+        // L'application répond au premier appel relayé.
+        let app = std::thread::spawn(move || {
+            let call = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(
+                call.kind,
+                RelayKind::Execute {
+                    tool: "project.summary".to_owned(),
+                    params: json!({}),
+                }
+            );
+            assert!(call.state.claim());
+            call.reply
+                .send(Reply::Ok {
+                    id: call.id,
+                    result: json!({ "name": "P" }),
+                })
+                .unwrap();
+            rx
+        });
+        let mut agent = RelayClient::connect(&found, Duration::from_secs(2)).unwrap();
+        let result = agent
+            .call("project.summary", json!({}), Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(result, json!({ "name": "P" }));
+        let rx = app.join().unwrap();
+
+        // Écouteur arrêté : plus personne ne répond à cette adresse.
+        drop(handle);
+        drop(rx);
+        std::mem::forget(guard);
+        assert!(probe(&found).is_err());
+        assert!(find_live_for_in(&dir, &file).is_none());
+        assert_eq!(json_files(&dir), Vec::<String>::new());
+        let err = agent
+            .call("project.summary", json!({}), Duration::from_secs(2))
+            .unwrap_err();
+        assert!(err.is_app_gone(), "{err:?}");
+    }
+
+    /// C-CTL-13 (TCP seulement).
+    pub(super) fn dead_tcp_rendezvous_removed_by_probe() {
+        let tmp = TempDir::new("tdead");
+        let dir = tmp.path().join("control");
+        let file = project_file(tmp.path(), "plan.xml");
+        let project = canonical_project(&file);
+        let at = |endpoint: String, project: Option<String>| Rendezvous {
+            v: 1,
+            pid: 999_999,
+            endpoint,
+            token: new_token().unwrap(),
+            project,
+        };
+
+        // 1. Port fermé (application morte).
+        let closed = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        std::mem::forget(publish_in(&dir, &at(format!("tcp:127.0.0.1:{closed}"), project.clone())).unwrap());
+        assert!(find_live_for_in(&dir, &file).is_none());
+        assert_eq!(json_files(&dir), Vec::<String>::new());
+
+        // 2. Programme muet sur le port (port repris) : la sonde échoue en
+        // 2 s, le rendez-vous est retiré (une socket Unix muette, elle, le
+        // garderait : `control_busy_app_kept_live`).
+        let mute = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = mute.local_addr().unwrap().port();
+        let holder = std::thread::spawn(move || mute.accept().map(|(stream, _)| stream));
+        std::mem::forget(publish_in(&dir, &at(format!("tcp:127.0.0.1:{port}"), project.clone())).unwrap());
+        let start = std::time::Instant::now();
+        assert!(find_live_for_in(&dir, &file).is_none());
+        let waited = start.elapsed();
+        assert!(waited >= Duration::from_millis(1_500), "{waited:?}");
+        assert!(waited < Duration::from_secs(10), "{waited:?}");
+        assert_eq!(json_files(&dir), Vec::<String>::new());
+        drop(holder.join().unwrap());
+
+        // 3. Écouteur vivant, jeton du rendez-vous refusé.
+        let (handle, _token) = listener(tmp.path(), Transport::Tcp);
+        let mut wrong = handle.rendezvous(project.clone());
+        wrong.token = new_token().unwrap();
+        std::mem::forget(publish_in(&dir, &wrong).unwrap());
+        assert!(find_live_for_in(&dir, &file).is_none());
+        assert_eq!(json_files(&dir), Vec::<String>::new());
+
+        // 4. Adresse illisible ou hors boucle locale, pour ce fichier ou un
+        // autre : retirée sans connexion.
+        for (i, bad) in ["tcp:10.0.0.1:80", "tcp:127.0.0.1:0", "ftp:x", "relatif.sock"]
+            .into_iter()
+            .enumerate()
+        {
+            let other = (i % 2 == 1).then(|| "/ailleurs/autre.xml".to_owned());
+            let target = if other.is_some() { other } else { project.clone() };
+            std::mem::forget(publish_in(&dir, &at(bad.to_owned(), target)).unwrap());
+        }
+        assert!(find_live_for_in(&dir, &file).is_none());
+        assert_eq!(json_files(&dir), Vec::<String>::new());
+
+        // 5. Application vivante : gardée ; le rendez-vous TCP d'un autre
+        // fichier n'est ni sondé ni retiré.
+        let live = handle.rendezvous(project);
+        let _live = publish_in(&dir, &live).unwrap();
+        let _other = publish_in(
+            &dir,
+            &at(
+                format!("tcp:127.0.0.1:{closed}"),
+                Some("/ailleurs/b.xml".to_owned()),
+            ),
+        )
+        .unwrap();
+        assert_eq!(find_live_for_in(&dir, &file), Some(live));
+        assert_eq!(json_files(&dir).len(), 2);
+    }
+
+    /// C-CTL-14, sur `t`.
+    pub(super) fn first_line_not_a_frame_closed(t: Transport) {
+        let tmp = TempDir::new("http");
+        let (handle, token, rx, _) = relay_listener(tmp.path(), 4, Duration::from_secs(5), t);
+        let firsts: [&[u8]; 5] = [
+            b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://exemple.test\r\n\r\n",
+            b"POST /execute HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}",
+            b"pas du json\n",
+            b"{\"v\":1,\"id\":3}\n",
+            b"\n",
+        ];
+        for first in firsts {
+            let mut client = Client::connect(handle.endpoint());
+            client.send_raw(first);
+            assert!(client.is_closed(), "{:?}", String::from_utf8_lossy(first));
+        }
+        // Première ligne trop longue : fermée sans réponse elle aussi.
+        let mut client = Client::connect(handle.endpoint());
+        let mut writer = client.stream.try_clone().unwrap();
+        let sender = std::thread::spawn(move || {
+            let line = vec![b'G'; MAX_LINE_BYTES + 1];
+            let _ = writer.write_all(&line);
+        });
+        assert!(client.is_closed());
+        sender.join().unwrap();
+        assert!(rx.try_recv().is_err(), "rien ne doit atteindre la file");
+        // L'écouteur sert toujours ; après le `hello`, une trame illisible
+        // reçoit sa réponse (`control.invalid_frame`), connexion maintenue.
+        let mut client = Client::connect(handle.endpoint());
+        assert!(matches!(client.hello(&token), Reply::Ok { .. }));
+        client.send_raw(b"GET / HTTP/1.1\r\n");
+        assert_eq!(err_code(&client.reply()), codes::INVALID_FRAME);
+        assert!(matches!(client.hello(&token), Reply::Ok { .. }));
     }
 }

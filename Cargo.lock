@@ -3409,7 +3409,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "planrs"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "chrono",
  "eframe",
@@ -3421,7 +3421,7 @@ dependencies = [
 
 [[package]]
 name = "planrs-automation"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "chrono",
  "csv",
@@ -3441,7 +3441,7 @@ dependencies = [
 
 [[package]]
 name = "planrs-cli"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "chrono",
  "clap",
@@ -3457,7 +3457,7 @@ dependencies = [
 
 [[package]]
 name = "planrs-core"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "chrono",
  "criterion",
@@ -3469,7 +3469,7 @@ dependencies = [
 
 [[package]]
 name = "planrs-mcp"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "bytes",
  "http-body-util",
@@ -3487,7 +3487,7 @@ dependencies = [
 
 [[package]]
 name = "planrs-mspdi"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "chrono",
  "planrs-core",
@@ -3499,7 +3499,7 @@ dependencies = [
 
 [[package]]
 name = "planrs-pdf"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "krilla",
  "miniz_oxide 0.8.9",
@@ -3511,7 +3511,7 @@ dependencies = [
 
 [[package]]
 name = "planrs-render"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "planrs-core",
  "planrs-mspdi",
@@ -3523,7 +3523,7 @@ dependencies = [
 
 [[package]]
 name = "planrs-tests"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "chrono",
  "criterion",
@@ -3540,7 +3540,7 @@ dependencies = [
 
 [[package]]
 name = "planrs-ui-egui"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -3572,7 +3572,7 @@ dependencies = [
 
 [[package]]
 name = "planrs-web"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "chrono",
  "eframe",
@@ -5923,7 +5923,7 @@ checksum = "9440ea3e5aeabb0ac63af70daf835274065238cdd0cec83418f417eae38bacee"
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "cab",
  "cargo_metadata",

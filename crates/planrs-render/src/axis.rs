@@ -43,6 +43,17 @@ pub(crate) enum Scale {
     /// 1,2 px par jour (19,2/16, exact : 96/5 seizièmes ; J8 lot L11, comme
     /// l'écran J7).
     Quarter,
+    /// Échelle continue de `Zoom::Fill` : `num / den` seizièmes de pixel
+    /// par jour (largeur remplie / jours, exacte), niveaux de l'en-tête
+    /// `tiers` (ceux de l'échelle discrète atteinte).
+    Fill {
+        /// Niveaux de l'en-tête (haut, bas).
+        tiers: (TierUnit, TierUnit),
+        /// Seizièmes de pixel par jour : numérateur (≥ 1).
+        num: i64,
+        /// Seizièmes de pixel par jour : dénominateur (≥ 1).
+        den: i64,
+    },
 }
 
 impl Scale {
@@ -56,6 +67,7 @@ impl Scale {
             Self::Week => (192, 1),
             Self::Month => (56, 1),
             Self::Quarter => (96, 5),
+            Self::Fill { num, den, .. } => (num, den),
         }
     }
 
@@ -76,6 +88,7 @@ impl Scale {
             Self::Week => (TierUnit::Month, TierUnit::Week),
             Self::Month => (TierUnit::Quarter, TierUnit::Month),
             Self::Quarter => (TierUnit::Year, TierUnit::Quarter),
+            Self::Fill { tiers, .. } => tiers,
         }
     }
 }
@@ -85,6 +98,13 @@ impl Scale {
 /// `Auto { width_px }` (H-R, comme « Ajuster » de l'interface) : Semaine si
 /// `jours × 12 ≤ largeur` ; sinon Trimestre si `jours × 3,5 > 1,5 × largeur`
 /// (écrit `jours × 7 > 3 × largeur`) ; sinon Mois. Largeur nulle : Mois.
+///
+/// `Fill { width_px }` (J8 lot L16) : `largeur × 16 / jours` seizièmes de
+/// pixel par jour, exactement (la plage remplit la largeur) ; au-delà de
+/// Jour (36 px), Jour ; niveaux de l'en-tête (mois et semaines) de Semaine
+/// à partir de 3,5 px par jour, de Mois à partir de 1,2 px, de Trimestre en
+/// dessous (hypothèse de design, H-R4 : un cran plus fin que l'échelle
+/// discrète atteinte, les libellés suivant H-R5). Largeur nulle : Mois.
 pub(crate) fn resolve_scale(zoom: Zoom, days: i64) -> Scale {
     match zoom {
         Zoom::Day => Scale::Day,
@@ -103,6 +123,36 @@ pub(crate) fn resolve_scale(zoom: Zoom, days: i64) -> Scale {
                 Scale::Month
             }
         }
+        Zoom::Fill { width_px } => fill_scale(width_px, days),
+    }
+}
+
+/// Échelle continue de `Zoom::Fill` (voir [`resolve_scale`]).
+fn fill_scale(width_px: u32, days: i64) -> Scale {
+    if width_px == 0 {
+        return Scale::Month;
+    }
+    let width16 = i64::from(width_px).saturating_mul(SUB);
+    let days = days.max(1);
+    let reaches = |s: Scale| width16 >= days.saturating_mul(s.px16_per_day());
+    if reaches(Scale::Day) {
+        return Scale::Day;
+    }
+    // Niveaux d'un cran plus fins que l'échelle discrète atteinte : à
+    // 3,5 px par jour une semaine fait 24,5 px, assez pour son numéro ou son
+    // jour (H-R5 choisit la variante), comme les plannings de chantier de
+    // référence (mois et semaines même sur deux ans en A3).
+    let base = if reaches(Scale::Month) {
+        Scale::Week
+    } else if reaches(Scale::Quarter) {
+        Scale::Month
+    } else {
+        Scale::Quarter
+    };
+    Scale::Fill {
+        tiers: base.tiers(),
+        num: width16,
+        den: days,
     }
 }
 
@@ -639,6 +689,35 @@ mod tests {
         assert_eq!(resolve_scale(Zoom::Auto { width_px: 1200 }, 100), Scale::Week);
         assert_eq!(resolve_scale(Zoom::Auto { width_px: 1200 }, 300), Scale::Month);
         assert_eq!(resolve_scale(Zoom::Auto { width_px: 1200 }, 600), Scale::Quarter);
+    }
+
+    /// `Zoom::Fill` : la plage remplit exactement la largeur ; niveaux de
+    /// l'échelle discrète atteinte ; plafond Jour ; largeur nulle : Mois.
+    #[test]
+    fn fill_scale_fills_width() {
+        assert_eq!(resolve_scale(Zoom::Fill { width_px: 0 }, 10), Scale::Month);
+        assert_eq!(resolve_scale(Zoom::Fill { width_px: 1_000 }, 10), Scale::Day);
+        let scale = resolve_scale(Zoom::Fill { width_px: 800 }, 70);
+        assert_eq!(scale.rate(), (800 * 16, 70));
+        assert_eq!(scale.tiers(), Scale::Week.tiers(), "11,4 px par jour ≥ 3,5");
+        assert_eq!(
+            resolve_scale(Zoom::Fill { width_px: 800 }, 400).tiers(),
+            Scale::Month.tiers(),
+            "2 px par jour : 1,2 ≤ … < 3,5"
+        );
+        assert_eq!(
+            resolve_scale(Zoom::Fill { width_px: 800 }, 1_000).tiers(),
+            Scale::Quarter.tiers(),
+            "0,8 px par jour < 1,2"
+        );
+        let start: Day = "2026-10-19".parse().unwrap();
+        let span = DaySpan {
+            start,
+            end: start.checked_add_days(70).unwrap(),
+            truncated: false,
+        };
+        let axis = Axis::new(span, resolve_scale(Zoom::Fill { width_px: 800 }, 70), 0);
+        assert_eq!(axis.width16(), 800 * 16);
     }
 
     /// Trimestre exact (J8, lot L11) : 1,2 px par jour, comme l'écran J7 ;

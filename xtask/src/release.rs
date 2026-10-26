@@ -7,6 +7,12 @@
 //!   (format Keep a Changelog : titres `## [X.Y.Z] - …`). Une section
 //!   « Non publié » (ou « Unreleased ») en tête est admise vide seulement :
 //!   non vide, son contenu manquerait aux notes de la version taguée.
+//! - Tag d'essai `vX.Y.Z-test.N` (J8, lot L16 : release complète en
+//!   brouillon, jamais publique) : il éprouve la version du workspace qu'il
+//!   prépare, sans la renommer. Accepté quand `X.Y.Z` égale le noyau de la
+//!   version du workspace (`1.0.0-test.1` pour `1.0.0-rc.1`) ; CHANGELOG et
+//!   notes sont alors ceux de la version du workspace, comme les noms des
+//!   artefacts (`desktop-build.yml`).
 //! - `release-notes` : imprime sur la sortie standard le corps de la section
 //!   de la version du tag, suivi du lien vers `docs/user/install.md` à ce
 //!   tag (dépôt lu dans `[workspace.package] repository`). Le workflow
@@ -86,6 +92,32 @@ fn tag_version(tag: &str) -> Result<Version, String> {
     Ok(version)
 }
 
+/// Vrai pour un tag d'essai `vX.Y.Z-test.N` (brouillon de `release.yml`).
+fn is_test_tag(version: &Version) -> bool {
+    version.pre.as_str().starts_with("test.")
+}
+
+/// Version publiée que vérifie `tag` : la sienne, ou, pour un tag d'essai,
+/// celle du workspace dont il partage le noyau `X.Y.Z`.
+fn checked_version(tag: &str, cargo_toml: &str) -> Result<Version, String> {
+    let version = tag_version(tag)?;
+    if !is_test_tag(&version) {
+        return Ok(version);
+    }
+    let raw = workspace_package(cargo_toml, "version")?;
+    let workspace = Version::parse(&raw)
+        .map_err(|error| format!("version du workspace {raw} : SemVer invalide ({error})"))?;
+    let core = |v: &Version| (v.major, v.minor, v.patch);
+    if core(&workspace) == core(&version) {
+        Ok(workspace)
+    } else {
+        Err(format!(
+            "tag d'essai {tag} : noyau {}.{}.{} ≠ version du workspace {workspace}",
+            version.major, version.minor, version.patch
+        ))
+    }
+}
+
 /// Valeur d'une clé de `[workspace.package]` du `Cargo.toml` racine.
 fn workspace_package(cargo_toml: &str, key: &str) -> Result<String, String> {
     let table: toml::Table =
@@ -103,7 +135,7 @@ fn workspace_package(cargo_toml: &str, key: &str) -> Result<String, String> {
 /// sinon la liste des écarts (tous, pas seulement le premier).
 fn release_check(tag: &str, cargo_toml: &str, changelog: &str) -> Result<Version, Vec<String>> {
     let mut errors = Vec::new();
-    let version = match tag_version(tag) {
+    let version = match checked_version(tag, cargo_toml) {
         Ok(version) => Some(version),
         Err(error) => {
             errors.push(error);
@@ -163,7 +195,7 @@ fn release_check(tag: &str, cargo_toml: &str, changelog: &str) -> Result<Version
 /// Notes de la release du tag : corps de sa section et lien vers le guide
 /// d'installation à ce tag.
 fn release_notes(tag: &str, cargo_toml: &str, changelog: &str) -> Result<String, String> {
-    let version = tag_version(tag)?.to_string();
+    let version = checked_version(tag, cargo_toml)?.to_string();
     let repository = workspace_package(cargo_toml, "repository")?;
     let section = sections(changelog)
         .into_iter()
@@ -285,6 +317,35 @@ repository = "https://github.com/exemple/planrs"
         // Sans section « Non publié » : même verdict.
         let without = CHANGELOG.replace("## [Non publié]\n\n", "");
         assert!(release_check("v1.0.0-rc.1", CARGO, &without).is_ok());
+    }
+
+    /// Tag d'essai (L16) : vérifie la version du workspace qu'il prépare ;
+    /// noyau différent refusé ; notes de la version du workspace.
+    #[test]
+    fn release_check_test_tag_checks_workspace_version() {
+        let version = release_check("v1.0.0-test.1", CARGO, CHANGELOG).unwrap();
+        assert_eq!(version.to_string(), "1.0.0-rc.1");
+        let found = errors("v1.0.1-test.1", CARGO, CHANGELOG);
+        assert!(
+            found
+                .iter()
+                .any(|e| e.contains("noyau 1.0.1 ≠ version du workspace 1.0.0-rc.1")),
+            "{found:?}"
+        );
+        let notes = release_notes("v1.0.0-test.2", CARGO, CHANGELOG).unwrap();
+        assert!(notes.starts_with("### Ajouté\n- Export PDF."), "{notes}");
+        assert!(
+            notes.contains("/blob/v1.0.0-test.2/docs/user/install.md"),
+            "{notes}"
+        );
+        // Une préversion ordinaire reste comparée telle quelle.
+        let found = errors("v1.0.0-rc.2", CARGO, CHANGELOG);
+        assert!(
+            found
+                .iter()
+                .any(|e| e.contains("version du workspace 1.0.0-rc.1")),
+            "{found:?}"
+        );
     }
 
     #[test]

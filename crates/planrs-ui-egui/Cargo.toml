@@ -53,7 +53,7 @@ egui_kittest.workspace = true
 egui_system_font_provider.workspace = true
 # Réseau généré ouvert sans MSPDI (N8 : `App::open_project`), exemple
 # `snapshot --generate N` et test de fluidité.
-planrs-tests = { path = "../../tests", version = "0.1.0" }
+planrs-tests = { path = "../../tests", version = "1.0.0-rc.1" }
 fluent-syntax.workspace = true
 proptest.workspace = true
 

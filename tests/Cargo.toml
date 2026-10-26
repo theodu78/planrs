@@ -40,6 +40,13 @@ path = "schema/main.rs"
 name = "perf"
 path = "perf/main.rs"
 
+# Captures PDF des six modèles et du réseau de 5 000 tâches (J8, lot L16,
+# vérification 4) ; PDF écrits sous `PLANRS_PDF_CAPTURES` (job CI
+# `pdf-captures`, rendus en PNG par pdftoppm).
+[[test]]
+name = "pdf_captures"
+path = "pdf_captures/main.rs"
+
 # Benchmark informatif du moteur (criterion), exécuté par le job CI `perf`.
 [[bench]]
 name = "schedule"

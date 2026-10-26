@@ -166,35 +166,42 @@ fn h_ui_48_continued_parent() {
     }
 }
 
-/// H-UI-50 : « 2 pages en largeur » choisit l'échelle de temps qui tient
-/// (`Zoom::Auto` sur la largeur de deux pages), puis réduit au besoin ;
-/// jamais plus de deux colonnes de pages.
+/// H-UI-50 : « 2 pages en largeur » choisit l'échelle de temps qui remplit
+/// la largeur de deux pages (`Zoom::Fill`, J8 lot L16 : le Gantt imprimé
+/// remplit la page), puis réduit au besoin ; jamais plus de deux colonnes
+/// de pages.
 #[test]
 fn h_ui_50_pages_wide_2() {
     let mut style = page_style(TemplateId::Sobre);
     style.fit = Fit::PagesWide(2);
-    let Some(Zoom::Auto { width_px }) = fit_zoom(&style) else {
+    let Some(Zoom::Fill { width_px }) = fit_zoom(&style) else {
         panic!("zoom ajusté attendu")
     };
     // A4 paysage : 842 − 2 × 28 = 786 pt = 1 048 px ; table 280 px
     // répétée : 2 × 768 px.
     assert_eq!(width_px, 1_536);
-    // Projet P : tient en une page à 100 %.
+    // Projet P : remplit les deux pages en largeur, à 100 %.
     let p = project_p();
     let pages = paginate(
-        &scene_of(&p, Zoom::Auto { width_px }, TemplateId::Sobre),
+        &scene_of(&p, Zoom::Fill { width_px }, TemplateId::Sobre),
         &style,
         &Tokens,
     )
     .unwrap();
     assert_eq!(pages.scale, FULL_SCALE);
     assert!(pages.pages.iter().all(|pg| pg.col < 2));
+    assert!(pages.pages.iter().any(|pg| pg.col == 1), "deux pages remplies");
     // Deux ans de travaux : deux colonnes au plus, échelle réduite.
     let mut long = project("L", "2026-10-19T08:00");
     let a = add(&mut long, "Gros œuvre", 300, 1);
     let b = add(&mut long, "Second œuvre", 220, 1);
     link(&mut long, a, b, LinkType::FinishToStart);
-    for zoom in [Zoom::Auto { width_px }, Zoom::Week, Zoom::Month] {
+    for zoom in [
+        Zoom::Fill { width_px },
+        Zoom::Auto { width_px },
+        Zoom::Week,
+        Zoom::Month,
+    ] {
         let pages = paginate(&scene_of(&long, zoom, TemplateId::Sobre), &style, &Tokens).unwrap();
         let cols = pages.pages.iter().map(|pg| pg.col).max().unwrap() + 1;
         assert!(cols <= 2, "{zoom:?} : {cols} colonnes");

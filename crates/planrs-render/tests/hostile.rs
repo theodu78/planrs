@@ -204,6 +204,9 @@ fn render_range_bounded_by_max_days() {
         Zoom::Quarter,
         Zoom::Auto { width_px: 0 },
         Zoom::Auto { width_px: u32::MAX },
+        Zoom::Fill { width_px: 0 },
+        Zoom::Fill { width_px: 1 },
+        Zoom::Fill { width_px: u32::MAX },
     ] {
         for limits in [
             RenderLimits {

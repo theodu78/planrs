@@ -57,8 +57,8 @@
 //!   < 500 ms publié (non tenu, non bloquant), garde bloquante < 1 s.
 //!
 //! - J8 L11 : `static_styled` (ignoré, release) : vue principale stylée
-//!   (Sobre, Présentation en densité Aérée, Chantier en densité Compacte,
-//!   clair et sombre), 5 000 tâches, molette au milieu du réseau, zoom
+//!   (Classique depuis L16, Sobre, Présentation en densité Aérée, Chantier
+//!   en densité Compacte, clair et sombre), 5 000 tâches, molette au milieu du réseau, zoom
 //!   Semaine, mêmes seuils. Garde toujours exécutée :
 //!   `styled_counts_equal_at_1000_and_5000_tasks` (formes, sommets et
 //!   galleys à ± 5 % pour chaque modèle).
@@ -66,6 +66,13 @@
 //!   sur une proposition de 250 tâches décalées, diff affiché de 200
 //!   lignes, défilement de la table à chaque image) : mêmes seuils ; le
 //!   diff n'est calculé qu'une fois.
+//!
+//! - J8 L16 : modèle de la vue principale de **tous** les scénarios
+//!   (sauf `static_styled`, qui fixe les siens) lu dans
+//!   `PLANRS_PERF_TEMPLATE` (`sobre` par défaut, défaut de l'application
+//!   depuis L15 ; `classique` : apparence de J7). Le job CI `perf` lance la
+//!   série deux fois, en Sobre puis en Classique, rapports dans deux
+//!   dossiers. `static_styled` mesure aussi Classique.
 //!
 //! Le rendu GPU n'est pas chronométré (lavapipe en CI n'est pas
 //! représentatif). Le projet est construit directement
@@ -147,11 +154,27 @@ fn now() -> Moment {
     "2026-01-05T08:00".parse().unwrap()
 }
 
-/// Application ouverte sur un réseau généré : français, thème clair.
+/// Modèle de la mesure (`PLANRS_PERF_TEMPLATE`, clé d'un modèle intégré :
+/// `sobre` par défaut, `classique`…) ; une valeur inconnue fait échouer la
+/// mesure plutôt que de mesurer autre chose.
+fn perf_template() -> TemplateId {
+    match std::env::var("PLANRS_PERF_TEMPLATE") {
+        Err(std::env::VarError::NotPresent) => TemplateId::Sobre,
+        Ok(key) => TemplateId::ALL
+            .into_iter()
+            .find(|id| id.key() == key)
+            .unwrap_or_else(|| panic!("PLANRS_PERF_TEMPLATE inconnu : {key:?}")),
+        Err(e) => panic!("PLANRS_PERF_TEMPLATE illisible : {e}"),
+    }
+}
+
+/// Application ouverte sur un réseau généré : français, thème clair, modèle
+/// de [`perf_template`].
 fn app_with(summaries: usize, leaves: usize, max_links: usize) -> App {
     let state = UiState {
         language: LanguagePref::Fr,
         theme: ThemePref::Light,
+        default_template: perf_template(),
         ..UiState::default()
     };
     let mut app = App::new(state, Env::fixed(now()));
@@ -1389,8 +1412,10 @@ fn paste_1000() {
 }
 
 /// J8 L11 : modèles mesurés par `static_styled` et la garde des formes
-/// (Sobre, Présentation en densité Aérée, Chantier en densité Compacte).
-const STYLED: [(TemplateId, &str); 3] = [
+/// (Classique depuis L16, Sobre, Présentation en densité Aérée, Chantier
+/// en densité Compacte).
+const STYLED: [(TemplateId, &str); 4] = [
+    (TemplateId::Classique, "classique"),
     (TemplateId::Sobre, "sobre"),
     (TemplateId::Presentation, "presentation"),
     (TemplateId::Chantier, "chantier"),
@@ -1419,8 +1444,8 @@ fn styled_middle(app: &mut App, bench: &mut Bench) {
 }
 
 /// J8 L11 (`static_styled`) : vue principale stylée sur 5 000 tâches et
-/// 10 000 liens, Sobre, Présentation (Aérée), Chantier (Compacte), clair et
-/// sombre ; molette à chaque image au milieu du réseau, zoom Semaine
+/// 10 000 liens, Classique, Sobre, Présentation (Aérée), Chantier
+/// (Compacte), clair et sombre ; molette à chaque image au milieu du réseau, zoom Semaine
 /// (barres, liens, hachures et textes du moteur dessinés) ; mêmes seuils
 /// que la vue principale.
 #[test]

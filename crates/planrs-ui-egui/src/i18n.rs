@@ -784,6 +784,15 @@ text_ids! {
     WhyDrivers => "why-drivers",
     WhyUnavailable => "why-unavailable",
     // --- J8 L13 ---
+    WebStartFailed => "web-start-failed",
+    DroppedFirstOnly => "dropped-first-only",
+    MenuExport => "menu-export",
+    MenuExportPdf => "menu-export-pdf",
+    MenuExportSvg => "menu-export-svg",
+    MenuExportCsv => "menu-export-csv",
+    ExportDone => "export-done",
+    ExportErrorTitle => "export-error-title",
+    ExportErrorFailed => "export-error-failed",
     // --- J8 L14 ---
     // --- J8 L15 ---
     // --- J8 L16 ---

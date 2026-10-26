@@ -168,7 +168,7 @@ Observations du corpus (fichiers du manifeste `tests/corpus/manifest.toml`, ADR-
 | O52 | A1, A2, A4, A6, A7 | Relu le 2026-10-25 (J8, lot L0, `python3 -I`) : `<Views>` de 3 à 11 vues, chacune avec `Name` et `IsCustomized` seulement ; aucun élément de style de barre, de couleur ni de police dans les fichiers (`Filters` : noms seuls, O48) : la mise en forme de MS Project ne voyage pas en MSPDI |
 | O53 | A1, A2, A4, A6, A7 | Relu le 2026-10-25 (J8, lot L0, `python3 -I`) : `HideBar` sur les 174 tâches (51 + 18 + 42 + 37 + 26), toujours 0 : seul réglage visuel par tâche |
 | O54 | A1, A2, A4, A6, A7 | Relu le 2026-10-25 (J8, lot L0, `python3 -I`) : aucune instruction de traitement hors de la déclaration `<?xml …?>` : comportement de MS Project face à `<?planrs-style?>` non observé (action du propriétaire, ADR-0016) |
-| O55 | A6 (interface web) | Noms CJK rendus en boîtes vides sur le web (aucune police de repli, `ui.md` § limites) ; à confirmer sous trunk en L13 (non relu en L0 : pas de build web en L0) |
+| O55 | A6 (interface web) | Noms CJK rendus en boîtes vides sur le web (aucune police de repli, `ui.md` § limites) ; à confirmer sous trunk (non relu en L0 : pas de build web ; non relu en L13 : ni trunk ni navigateur sur la machine du lot, essai manuel à faire, `ui.md` § 5) |
 
 ### Point fixe et temps
 

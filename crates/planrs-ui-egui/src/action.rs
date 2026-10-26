@@ -174,6 +174,11 @@ pub enum Action {
     Clipboard(ClipboardOp),
     /// Fichier → Importer CSV… : sélecteur de fichiers, puis aperçu.
     ImportCsv,
+    // --- J8 L13 : exports téléchargés (web) ou enregistrés (desktop).
+    /// Fichier → Exporter → PDF, SVG ou CSV : octets produits par
+    /// `planrs_automation`, remis au `FileService` (boîte « Enregistrer
+    /// sous » sur le desktop, téléchargement sur le web).
+    Export(crate::io::SaveKind),
     // --- J8 L12 : volet latéral (H-UI-41, H-UI-58).
     /// Ouvre, referme ou change d'onglet le volet latéral.
     SidePanel(SideOp),

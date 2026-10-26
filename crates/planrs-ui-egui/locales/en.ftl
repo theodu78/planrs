@@ -714,6 +714,85 @@ search-hidden =
     }
 
 # --- J8 L10 ---
+menu-cut = Cut
+menu-copy = Copy
+menu-paste = Paste
+menu-paste-special = Paste Special…
+menu-import-csv = Import CSV…
+paste-report-title = Paste
+paste-report-tasks = { $count ->
+        [one] { $count } task pasted
+       *[other] { $count } tasks pasted
+    }
+paste-report-links = { $count ->
+        [one] { $count } link not copied (one end outside the copy)
+       *[other] { $count } links not copied (one end outside the copy)
+    }
+paste-report-assignments = { $count ->
+        [one] { $count } assignment skipped (missing resource)
+       *[other] { $count } assignments skipped (missing resources)
+    }
+paste-report-resources = { $count ->
+        [one] { $count } resource created
+       *[other] { $count } resources created
+    }
+paste-hint-unrecognized = paste a header row (Name, Duration…) followed by the rows, or a single column of names
+paste-hint-too-large = 10,000 lines and 4 MiB at most
+paste-use-shortcut = The browser does not give the clipboard to a menu: paste with Ctrl+V (Cmd+V on Mac).
+ps-title = Paste Special
+ps-source = { $count ->
+        [one] Last copy: { $count } task
+       *[other] Last copy: { $count } tasks
+    }
+ps-links = Recreate the links between the pasted tasks
+ps-resources = Assignments
+ps-res-match = By resource name (skipped if the resource does not exist)
+ps-res-create = By name, creating missing resources
+ps-res-drop = Do not paste assignments
+ps-nothing = Nothing to paste: copy rows first (Ctrl+C).
+ci-pick-title = Import a CSV file
+ci-pick-filter = CSV files
+ci-title = Import CSV
+ci-file = File: { $name }
+ci-separator = Separator
+ci-encoding = Encoding
+ci-language = Language
+ci-auto = Automatic
+ci-sep-semicolon = Semicolon (;)
+ci-sep-comma = Comma (,)
+ci-sep-tab = Tab
+ci-enc-utf8 = UTF-8
+ci-enc-utf16le = UTF-16 LE
+ci-enc-utf16be = UTF-16 BE
+ci-enc-windows1252 = Windows-1252
+ci-detected = Using: { $detail }
+ci-columns = Columns
+ci-rows = { $count ->
+        [one] Preview ({ $count } row)
+       *[other] Preview ({ $count } rows)
+    }
+ci-recognized = recognized
+ci-unknown = ignored (unknown)
+ci-unsupported = not supported
+ci-duplicate = ignored (duplicate)
+ci-diagnostics = { $count ->
+        [one] { $count } remark on the rows shown
+       *[other] { $count } remarks on the rows shown
+    }
+ci-diagnostic-line = Line { $count }: { $detail }
+ci-import = Import
+ci-imported = { $count ->
+        [one] “{ $name }” imported with { $count } remark (default value or ignored column).
+       *[other] “{ $name }” imported with { $count } remarks (default values or ignored columns).
+    }
+error-csv-error-too_large = CSV file too large (64 MiB at most).
+error-csv-error-empty = Empty CSV file.
+error-csv-error-no_header = No header row in the file.
+error-csv-error-no_known_column = No Name or Duration column in the header.
+error-csv-error-too_many_rows = Too many rows (200,000 at most).
+error-csv-error-too_many_columns = Too many columns (256 at most).
+error-csv-error-encoding = The file is not in the selected encoding.
+error-csv-error-not_yet_available = Feature not available yet.
 
 # --- J8 L11 ---
 

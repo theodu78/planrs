@@ -8,6 +8,7 @@ use planrs_automation::Batch;
 use planrs_automation::gesture::GestureError;
 use planrs_core::TaskUid;
 
+use crate::clipboard::ClipboardOp;
 use crate::column::Column;
 use crate::nav::NavMove;
 use crate::selection::SelectMode;
@@ -165,6 +166,13 @@ pub enum Action {
     /// Commande de la vue des tâches (aucune écriture dans le document,
     /// P50).
     TaskView(TaskViewOp),
+    // --- J8 L10 : presse-papiers et import CSV (H-UI-39, H-UI-40).
+    /// Couper, copier, coller ou « Collage spécial… » des lignes
+    /// sélectionnées (menu Édition ; les touches arrivent en
+    /// `Event::Cut/Copy/Paste`).
+    Clipboard(ClipboardOp),
+    /// Fichier → Importer CSV… : sélecteur de fichiers, puis aperçu.
+    ImportCsv,
 }
 
 /// Fenêtre à ouvrir (J7, ADR-0015 D6 ; `Action::OpenDialog` reste le
@@ -190,6 +198,12 @@ pub enum DialogKind {
     Reschedule,
     /// « Affecter des ressources » (lot L13).
     AssignResources,
+    /// « Collage spécial… » (J8, lot L10) : options du collage du tampon
+    /// interne.
+    PasteSpecial,
+    /// Aperçu de l'import CSV (J8, lot L10, H-UI-40), ouvert à l'arrivée
+    /// du fichier choisi.
+    CsvImport,
 }
 
 /// Action d'interface d'un agent (`app.ui`, J7) : sans historique, sans

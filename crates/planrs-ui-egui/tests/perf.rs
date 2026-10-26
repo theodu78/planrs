@@ -50,6 +50,12 @@
 //!   10 caractères tapés, un par image, puis 20 « suivant ») : image
 //!   médiane < 16 ms, p95 < 32 ms.
 //!
+//! - J8 L10 (ignoré, release) : `paste_1000` (1 000 lignes copiées par
+//!   `Event::Copy`, collées par `Event::Paste` au milieu du réseau, cinq
+//!   fois, annulées entre deux) : image du collage (lot, recalcul,
+//!   `RowModel`) plus l'image suivante, décomposée ; budget médiane
+//!   < 500 ms publié (non tenu, non bloquant), garde bloquante < 1 s.
+//!
 //! Le rendu GPU n'est pas chronométré (lavapipe en CI n'est pas
 //! représentatif). Le projet est construit directement
 //! (`planrs_tests::generate::ui_network`) et ouvert sans MSPDI
@@ -1230,4 +1236,142 @@ fn search_5000() {
     assert!(seen.len() > 1, "« suivant » doit avancer");
     assert_eq!(app.document.as_ref().unwrap().generation(), 0);
     assert_budget("search_5000", samples, bench.last);
+}
+
+/// Budget du collage de 1 000 lignes (J8, § 2.8) : collage → recalcul →
+/// `RowModel` → image. **Non tenu au lot L10** : médiane mesurée de 522 à
+/// 896 ms sur serveurdvp (machine partagée), dont 80 à 90 % dans
+/// `Session::apply`, et là dans les 1 000 `task.add` (environ 0,7 ms chacun
+/// sur 6 000 tâches ; les 1 985 `link.add` et le recalcul unique pèsent
+/// peu) : coût du moteur, hors de l'interface. Publié dans le rapport, non
+/// bloquant, en attendant l'arbitrage de la session principale (ADR-0016,
+/// écarts du lot L10).
+const PASTE_BUDGET: Duration = Duration::from_millis(500);
+
+/// Garde bloquante du collage de 1 000 lignes (régression grossière) :
+/// deux fois le budget.
+const PASTE_GUARD: Duration = Duration::from_millis(1_000);
+
+/// Décomposition d'un collage du tampon `slot` avant `uid`, sur une copie
+/// du document : construction du lot, `Session::apply`, `RowModel::build`.
+fn paste_parts(
+    doc: &planrs_ui_egui::app::OpenDocument,
+    slot: &planrs_ui_egui::clipboard::ClipboardSlot,
+    uid: planrs_core::TaskUid,
+    labels: &planrs_ui_egui::format::FormatLabels,
+) -> (Duration, Duration, Duration) {
+    let at = planrs_automation::Placement::Before(planrs_automation::TaskRef::Uid(uid));
+    let t0 = Instant::now();
+    let (batch, _) = planrs_automation::clip::paste_batch(
+        &doc.session,
+        &slot.clip,
+        &at,
+        &planrs_automation::clip::PasteOptions::default(),
+    )
+    .unwrap();
+    let batch_time = t0.elapsed();
+    let mut copy = doc.clone();
+    let t0 = Instant::now();
+    copy.session
+        .apply(&batch, planrs_automation::ApplyMode::Commit)
+        .unwrap();
+    let apply = t0.elapsed();
+    let t0 = Instant::now();
+    black_box(RowModel::build(&copy, labels));
+    (batch_time, apply, t0.elapsed())
+}
+
+/// J8 L10 : coller 1 000 lignes copiées (tampon interne reconnu par son
+/// empreinte) au milieu du réseau de 5 000 tâches.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn paste_1000() {
+    let (mut app, mut bench) = nav_bench();
+    let first = app.rows().unwrap().row(0).unwrap().uid;
+    let last = app.rows().unwrap().row(999).unwrap().uid;
+    app.dispatch(Action::Select(Some(first)));
+    app.dispatch(Action::SelectWith {
+        uid: last,
+        mode: planrs_ui_egui::selection::SelectMode::Range,
+    });
+    bench.settle(&mut app);
+    bench.frame(&mut app, vec![Event::Copy]);
+    let slot = app.clipboard().expect("rien copié").clone();
+    assert_eq!(slot.clip.tasks.len(), 1_000);
+    // Le texte émis (relu ici par les mêmes fonctions) : même empreinte.
+    let doc = app.document.as_ref().unwrap();
+    let ctx = planrs_automation::text::TextContext::for_project(
+        doc.project(),
+        planrs_automation::text::Language::Fr,
+    );
+    let text = slot
+        .clip
+        .to_tsv(&planrs_ui_egui::clipboard::tsv_columns(&app.state), &ctx);
+    assert_eq!(planrs_automation::clip::fingerprint(&text), slot.fingerprint);
+    let len = app.rows().unwrap().len();
+    let labels = planrs_ui_egui::i18n::Texts::new(planrs_ui_egui::Language::Fr)
+        .format_labels()
+        .clone();
+    let mut samples = Vec::new();
+    let (mut batches, mut applies, mut builds) = (Vec::new(), Vec::new(), Vec::new());
+    for k in 0..5 {
+        let index = 2_500 + k * 100;
+        let uid = app.rows().unwrap().row(index).unwrap().uid;
+        app.dispatch(Action::ScrollToRow(index));
+        app.dispatch(Action::Select(Some(uid)));
+        bench.settle(&mut app);
+        // Décomposition, hors image, sur une copie du document.
+        let (batch, apply, build) = paste_parts(app.document.as_ref().unwrap(), &slot, uid, &labels);
+        batches.push(batch);
+        applies.push(apply);
+        builds.push(build);
+        let generation = app.document.as_ref().unwrap().generation();
+        let paste = bench.frame(&mut app, vec![Event::Paste(text.clone())]);
+        let next = bench.frame(&mut app, Vec::new());
+        let doc = app.document.as_ref().unwrap();
+        assert_eq!(doc.generation(), generation + 1, "collage non appliqué ({k})");
+        assert_eq!(doc.project().tasks.len(), len + 1_000);
+        samples.push(paste + next);
+        app.dispatch(Action::Undo);
+        bench.settle(&mut app);
+        assert_eq!(app.document.as_ref().unwrap().project().tasks.len(), len);
+    }
+    samples.sort();
+    let (median, max) = (percentile(&samples, 50), *samples.last().unwrap());
+    let (batch_median, _, _) = stats(batches);
+    let (apply_median, _, _) = stats(applies);
+    let (build_median, _, _) = stats(builds);
+    let rest = (ms(median) - ms(batch_median) - ms(apply_median) - ms(build_median)).max(0.0);
+    eprintln!(
+        "perf UI paste_1000 (5 collages de 1 000 lignes dans 5 000 tâches) : médiane {:.1} ms, max {:.1} ms ; \
+         décomposition (médianes) : lot (paste_batch) {:.1} ms, Session::apply {:.1} ms, RowModel::build {:.1} ms, \
+         reste {:.1} ms ; budget : médiane < {} ms",
+        ms(median),
+        ms(max),
+        ms(batch_median),
+        ms(apply_median),
+        ms(build_median),
+        rest,
+        PASTE_BUDGET.as_millis(),
+    );
+    report(
+        "paste_1000",
+        &samples,
+        bench.last,
+        serde_json::json!({
+            "guard_median_ms": PASTE_GUARD.as_millis(),
+            "paste_batch_median_ms": ms(batch_median),
+            "apply_median_ms": ms(apply_median),
+            "row_model_build_median_ms": ms(build_median),
+            "rest_median_ms": rest,
+            "budget_median_ms": PASTE_BUDGET.as_millis(),
+        }),
+    );
+    if median >= PASTE_BUDGET {
+        eprintln!("perf UI paste_1000 : HORS BUDGET (médiane {median:?} ≥ {PASTE_BUDGET:?}), non bloquant");
+    }
+    assert!(
+        median < PASTE_GUARD,
+        "paste_1000 : médiane {median:?} ≥ {PASTE_GUARD:?}"
+    );
 }

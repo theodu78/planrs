@@ -35,6 +35,7 @@ use planrs_core::{Day, Moment, PRODUCT_NAME, Project, Schedule, Severity, TaskUi
 use planrs_mspdi::ImportDiagnostic;
 
 use crate::action::{Action, ConfirmChoice, DialogKind, UiOp};
+use crate::clipboard::ClipboardSlot;
 use crate::column::Column;
 use crate::dialog::link::{self, LinkOutcome, LinkState};
 use crate::dialog::task_info::{self, FieldError, TaskInfoState};
@@ -44,7 +45,8 @@ use crate::edit::TableEdit;
 use crate::geom;
 use crate::i18n::{Arg, Language, TextId, Texts, error_text_id};
 use crate::io::{
-    FileService, NoFileService, OpenEvent, SaveEvent, SaveRequest, SaveTarget, suggested_file_name,
+    FileService, NoFileService, OpenEvent, PickedFile, SaveEvent, SaveRequest, SaveTarget,
+    suggested_file_name,
 };
 use crate::keymap::KeyState;
 use crate::nav::{self, GridPos, GridShape, NavMove, RowRef};
@@ -246,6 +248,9 @@ enum Pending {
     /// Restaurer un journal orphelin (reprise après plantage, J7 lot L15).
     #[cfg(not(target_arch = "wasm32"))]
     Restore(String),
+    /// Installer un document importé d'un CSV (J8, lot L10, H-UI-40), avec
+    /// le nom du fichier et le nombre de remarques de l'import.
+    InstallCsv(Box<(LoadedDocument, DocOrigin, (String, usize))>),
 }
 
 /// Enregistrement en cours.
@@ -381,6 +386,17 @@ pub struct App {
     /// affiché), posés par [`App::offer_recovery`].
     #[cfg(not(target_arch = "wasm32"))]
     orphans: Vec<planrs_automation::recovery::Orphan>,
+    /// Dernière copie de lignes (J8, lot L10, H-UI-39) : survit à
+    /// l'ouverture d'un autre document.
+    pub(crate) clipboard: Option<ClipboardSlot>,
+    /// Image d'un « Coller » du menu (desktop) : l'événement `Paste` qui
+    /// suit est accepté hors du focus de la table.
+    pub(crate) menu_paste_at: Option<u64>,
+    /// Émetteur des fichiers choisis pour l'import CSV (cloné vers le
+    /// sélecteur).
+    pub(crate) pick_tx: Sender<PickedFile>,
+    /// Récepteur des fichiers choisis pour l'import CSV.
+    pub(crate) pick_rx: Receiver<PickedFile>,
 }
 
 impl App {
@@ -391,6 +407,7 @@ impl App {
         let texts = Texts::new(Language::resolve(state.language, env.system_language));
         let (tx, rx) = mpsc::channel();
         let (save_tx, save_rx) = mpsc::channel();
+        let (pick_tx, pick_rx) = mpsc::channel();
         Self {
             state,
             document: None,
@@ -428,6 +445,10 @@ impl App {
             recovery: None,
             #[cfg(not(target_arch = "wasm32"))]
             orphans: Vec::new(),
+            clipboard: None,
+            menu_paste_at: None,
+            pick_tx,
+            pick_rx,
         }
     }
 
@@ -822,7 +843,31 @@ impl App {
             Pending::OpenPath(path) => self.open_path(&path),
             #[cfg(not(target_arch = "wasm32"))]
             Pending::Restore(id) => self.restore_orphan(&id),
+            Pending::InstallCsv(boxed) => {
+                let (loaded, origin, (file, remarks)) = *boxed;
+                self.install(loaded, origin);
+                if remarks > 0 {
+                    let count = i64::try_from(remarks).unwrap_or(i64::MAX);
+                    let text = self.texts.get_args(
+                        TextId::CiImported,
+                        &[("count", Arg::Count(count)), ("name", Arg::Str(file.into()))],
+                    );
+                    self.push_message(Severity::Warning, text);
+                }
+            }
         }
+    }
+
+    /// Document importé d'un CSV (J8, lot L10) : installé après le bandeau
+    /// de confirmation si le document courant est modifié.
+    pub(crate) fn request_install_csv(
+        &mut self,
+        loaded: LoadedDocument,
+        origin: DocOrigin,
+        remarks: (String, usize),
+        ctx: &egui::Context,
+    ) {
+        self.request(Pending::InstallCsv(Box::new((loaded, origin, remarks))), ctx);
     }
 
     /// Réponse au bandeau de confirmation.
@@ -1135,7 +1180,7 @@ impl App {
     }
 
     /// Comme [`App::push_message`], avec un titre.
-    fn push_titled(&mut self, severity: Severity, title: Option<TextId>, text: String) {
+    pub(crate) fn push_titled(&mut self, severity: Severity, title: Option<TextId>, text: String) {
         self.messages.retain(|message| message.text != text);
         self.messages.push(UserMessage {
             severity,
@@ -1149,7 +1194,7 @@ impl App {
     }
 
     /// Retire les messages de titre `title` (refus devenus caducs).
-    fn clear_titled(&mut self, title: TextId) {
+    pub(crate) fn clear_titled(&mut self, title: TextId) {
         self.messages.retain(|message| message.title != Some(title));
     }
 
@@ -1252,10 +1297,13 @@ impl App {
         self.push_titled(Severity::Error, Some(TextId::OpenErrorTitle), text);
     }
 
-    /// Relève les résultats d'ouverture arrivés depuis l'image précédente.
+    /// Relève les résultats d'ouverture arrivés depuis l'image précédente
+    /// (et les fichiers choisis pour l'import CSV, J8 lot L10).
     /// Seule la demande en cours peut répondre : une demande abandonnée
     /// (voir [`App::open_dialog`]) écrit dans un canal fermé.
     fn poll_io(&mut self) {
+        // Fichiers choisis pour l'import CSV (J8, lot L10).
+        self.poll_picked();
         while let Ok(event) = self.rx.try_recv() {
             self.opening = false;
             match event {
@@ -1561,6 +1609,12 @@ impl App {
             Action::Reject(id) => self.reject_relayed(id),
             Action::Ui(op) => self.apply_ui(op, ctx),
             Action::TaskView(op) => self.apply_task_view(op),
+            // J8, lot L10 : presse-papiers et import CSV.
+            Action::Clipboard(op) => self.clipboard_op(op, ctx),
+            Action::ImportCsv => self.start_csv_import(ctx),
+            Action::ShowDialog(DialogKind::PasteSpecial) => self.open_paste_special(),
+            // L'aperçu s'ouvre à l'arrivée des octets du fichier choisi.
+            Action::ShowDialog(DialogKind::CsvImport) => self.start_csv_import(ctx),
         }
     }
 
@@ -2046,6 +2100,20 @@ impl App {
             /// Boîte d'un lien.
             Link(LinkOutcome),
         }
+        // Fenêtres du lot L10 de J8 (collage spécial, import CSV).
+        match self.view.dialog.as_ref().map(|d| &d.body) {
+            Some(DialogBody::PasteSpecial(_)) => {
+                self.show_paste_special(ctx);
+                strip_keys(ctx);
+                return;
+            }
+            Some(DialogBody::CsvImport(_)) => {
+                self.show_csv_import(ctx);
+                strip_keys(ctx);
+                return;
+            }
+            _ => {}
+        }
         if self.view.dialog.as_ref().is_some_and(|d| d.body.is_window()) {
             // Fenêtres du lot L12 (`dialog/mod.rs`).
             self.show_window(ctx);
@@ -2061,7 +2129,9 @@ impl App {
                 | DialogBody::ProjectInfo(_)
                 | DialogBody::Baseline(_)
                 | DialogBody::Reschedule(_)
-                | DialogBody::Assign(_),
+                | DialogBody::Assign(_)
+                | DialogBody::PasteSpecial(_)
+                | DialogBody::CsvImport(_),
             )
             | None => Shown::TaskInfo(task_info::Outcome::Cancel),
         };
@@ -2217,7 +2287,11 @@ impl App {
             // Saisie de cellule ouverte : aucun raccourci, même si sa zone
             // n'a pas encore le focus (relecture finale J7, F2 : Retour
             // arrière supprimait la tâche).
-            crate::keymap::dispatch(ctx, self.key_state(ctx), actions);
+            let keys = self.key_state(ctx);
+            // Couper, copier, coller (J8, lot L10) : pris seulement quand la
+            // table a le focus ; sinon laissés aux widgets.
+            self.take_clipboard_events(ctx, keys.table);
+            crate::keymap::dispatch(ctx, keys, actions);
         }
     }
 

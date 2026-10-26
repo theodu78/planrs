@@ -751,6 +751,63 @@ fn h_ui_68_print_mode_keeps_screen_columns() {
     assert!(doc(app).is_none());
 }
 
+/// Relecture finale de J8, F1 : le mode impression, ses exports et
+/// Fichier → Exporter → PDF/SVG impriment les lignes de la vue affichée
+/// (ici le niveau de plan 1 : deux récapitulatives), pas tout le projet.
+#[test]
+fn print_follows_displayed_rows() {
+    use planrs_ui_egui::view::task_view::TaskViewOp;
+    let (mut harness, saved) = sobre_p();
+    harness
+        .state_mut()
+        .dispatch(Action::TaskView(TaskViewOp::SetOutlineLevel(Some(1))));
+    harness.run();
+    let shown = crate::filters::shown(harness.state());
+    assert_eq!(shown, vec![1, 5]);
+    // Aperçu du mode impression : deux lignes.
+    click(&mut harness, &fr(TextId::ToolbarPrintMode));
+    let state = page_state(harness.state());
+    let pages = state.preview_pages().expect("aperçu calculé");
+    let printed: Vec<u32> = pages
+        .scene
+        .rows
+        .iter()
+        .filter_map(|r| r.uid.map(TaskUid::get))
+        .collect();
+    assert_eq!(printed, shown);
+    // Export SVG de l'aperçu : les sous-tâches n'y sont pas.
+    click(&mut harness, &fr(TextId::PsExportSvg));
+    {
+        let saved = saved.borrow();
+        let svg = String::from_utf8(saved.last().unwrap().bytes.clone()).unwrap();
+        assert!(svg.contains("Gros œuvre"), "{svg}");
+        assert!(!svg.contains("Fondations"), "sous-tâche imprimée");
+    }
+    click(&mut harness, &fr(TextId::PsClose));
+    // Fichier → Exporter → PDF : même filtre.
+    harness.state_mut().dispatch(Action::Export(SaveKind::Pdf));
+    harness.run();
+    let app = harness.state();
+    let session = &app.document.as_ref().unwrap().session;
+    let params = planrs_automation::command::params::ExportPdfParams {
+        path: String::new(),
+        style: Some(TemplateId::Sobre.into()),
+        page: None,
+        range: None,
+        rows: None,
+    };
+    let lang = planrs_automation::text::Language::Fr;
+    let rows = app.printed_rows();
+    assert_eq!(rows.as_ref().map(std::collections::BTreeSet::len), Some(2));
+    let filtered = planrs_automation::pdf::export_rows(session, &params, rows.as_ref(), lang).unwrap();
+    assert_eq!(filtered.report.shown, 2);
+    let all = planrs_automation::pdf::export(session, &params, lang).unwrap();
+    assert_ne!(filtered.bytes, all.bytes);
+    let saved = saved.borrow();
+    assert_eq!(saved.last().unwrap().kind, SaveKind::Pdf);
+    assert_eq!(saved.last().unwrap().bytes, filtered.bytes);
+}
+
 /// Aperçu paginé : « Page 1 / N » avec N pages de la pagination ; page
 /// suivante.
 #[test]

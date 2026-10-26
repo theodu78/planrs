@@ -985,7 +985,7 @@ impl App {
                     &options,
                 ))
             }
-            SaveKind::Svg => Ok(export_svg(session, &self.state, lang).into_bytes()),
+            SaveKind::Svg => Ok(export_svg(session, &self.state, lang, self.printed_rows()).into_bytes()),
             SaveKind::Pdf => {
                 // Document sans style : modèle par défaut des préférences
                 // (H-UI-43 ; Sobre depuis J8 lot L15), comme l'écran, et non
@@ -1000,7 +1000,8 @@ impl App {
                     range: None,
                     rows: None,
                 };
-                planrs_automation::pdf::export(session, &params, lang)
+                let rows = self.printed_rows();
+                planrs_automation::pdf::export_rows(session, &params, rows.as_ref(), lang)
                     .map(|export| export.bytes)
                     .map_err(|error| error.message)
             }
@@ -1345,6 +1346,26 @@ impl App {
     #[must_use]
     pub const fn row_view(&self) -> &RowView {
         &self.row_view
+    }
+
+    /// Tâches imprimées (relecture finale de J8, F1) : lignes de la vue
+    /// affichée (filtre, niveau de plan, récapitulatives repliées), comme
+    /// MS Project qui imprime la vue courante ; `None` si toutes les lignes
+    /// sont affichées (ou sans document). L'ordre imprimé reste celui des
+    /// ID.
+    #[must_use]
+    pub fn printed_rows(&self) -> Option<std::collections::BTreeSet<TaskUid>> {
+        let model = self.rows.as_ref()?;
+        if self.row_view.len() >= self.row_view.model_len() {
+            return None;
+        }
+        Some(
+            self.row_view
+                .order()
+                .iter()
+                .filter_map(|m| model.row(m.index()).map(|row| row.uid))
+                .collect(),
+        )
     }
 
     /// Lignes affichées du document ouvert (modèle lu à travers sa vue).
@@ -3051,13 +3072,22 @@ fn dropped_name(file: &egui::DroppedFileHandle) -> String {
 
 /// SVG du planning de `session` (J8, lot L13) : style affiché à l'écran
 /// (`UiState::effective_style`), plage du projet, largeur automatique,
-/// textes formatés par `SessionTexts` (règle 3).
-fn export_svg(session: &Session, state: &UiState, lang: planrs_automation::text::Language) -> String {
+/// textes formatés par `SessionTexts` (règle 3), lignes de la vue affichée
+/// (`rows`, relecture finale de J8, F1).
+fn export_svg(
+    session: &Session,
+    state: &UiState,
+    lang: planrs_automation::text::Language,
+    rows: Option<std::collections::BTreeSet<TaskUid>>,
+) -> String {
     let style = state.effective_style(session.project());
     let req = planrs_render::GanttRequest {
         range: planrs_render::RangeSpec::Auto,
         zoom: planrs_render::Zoom::Auto { width_px: 1_200 },
-        filter: planrs_render::RowFilter::default(),
+        filter: planrs_render::RowFilter {
+            uids: rows,
+            ..planrs_render::RowFilter::default()
+        },
         language: match lang {
             planrs_automation::text::Language::Fr => planrs_render::Lang::Fr,
             planrs_automation::text::Language::En => planrs_render::Lang::En,

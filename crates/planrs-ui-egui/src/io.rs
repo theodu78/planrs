@@ -116,6 +116,71 @@ pub trait FileService {
         drop(request);
         deliver(&tx, ctx, SaveEvent::Cancelled);
     }
+
+    /// Ouvre le sélecteur de fichiers et envoie les octets du fichier
+    /// choisi (au plus [`MAX_PICKED_BYTES`]) par `tx`, sans les
+    /// interpréter (J8, lot L10 : Fichier → Importer CSV…). Par défaut :
+    /// [`PickedFile::Cancelled`], comme un utilisateur qui referme la boîte.
+    fn pick_bytes(&mut self, ctx: &egui::Context, request: PickRequest, tx: Sender<PickedFile>) {
+        drop(request);
+        deliver(&tx, ctx, PickedFile::Cancelled);
+    }
+}
+
+/// Octets au plus d'un fichier lu par [`FileService::pick_bytes`] : la
+/// borne de l'import CSV (64 Mio, `CsvLimits::max_bytes`).
+pub const MAX_PICKED_BYTES: u64 = 64 << 20;
+
+/// Demande de [`FileService::pick_bytes`] : textes déjà traduits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PickRequest {
+    /// Titre du sélecteur.
+    pub title: String,
+    /// Libellé du filtre.
+    pub filter: String,
+    /// Extensions du filtre, sans point (`csv`, `txt`).
+    pub extensions: Vec<String>,
+}
+
+/// Résultat de [`FileService::pick_bytes`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PickedFile {
+    /// L'utilisateur a refermé le sélecteur sans choisir.
+    Cancelled,
+    /// Un fichier a été choisi : octets lus, ou détail de l'échec (cause
+    /// système, ou fichier plus grand que [`MAX_PICKED_BYTES`]).
+    Picked {
+        /// Nom affiché du fichier.
+        name: String,
+        /// Octets, ou détail de l'échec de lecture.
+        result: Result<Vec<u8>, PickError>,
+    },
+}
+
+/// Échec de lecture d'un fichier choisi.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PickError {
+    /// Lecture impossible (détail du système ou du navigateur).
+    Read(String),
+    /// Fichier plus grand que [`MAX_PICKED_BYTES`].
+    TooLarge,
+}
+
+/// Lit au plus [`MAX_PICKED_BYTES`] octets de `path` (desktop) : un
+/// fichier plus grand est refusé sans être lu en entier.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_bounded(path: &std::path::Path) -> Result<Vec<u8>, PickError> {
+    use std::io::Read as _;
+    let file = std::fs::File::open(path).map_err(|e| PickError::Read(e.to_string()))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_PICKED_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|e| PickError::Read(e.to_string()))?;
+    let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if len > MAX_PICKED_BYTES {
+        return Err(PickError::TooLarge);
+    }
+    Ok(bytes)
 }
 
 /// Sélecteur réel : rfd asynchrone (natif : attendu dans un fil dédié ; web :
@@ -299,6 +364,84 @@ impl FileService for RfdFileService {
             log::error!("enregistrement : le fil d'attente du sélecteur s'est arrêté");
             deliver(&tx, ctx, SaveEvent::Cancelled);
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn pick_bytes(&mut self, ctx: &egui::Context, request: PickRequest, tx: Sender<PickedFile>) {
+        // Même schéma que l'ouverture : fil d'attente d'abord, sélecteur
+        // créé sur le fil d'interface ensuite (ADR-0011).
+        let (dialog_tx, dialog_rx) = std::sync::mpsc::channel::<PickFuture>();
+        let thread_ctx = ctx.clone();
+        let thread_tx = tx.clone();
+        let spawned = std::thread::Builder::new()
+            .name("planrs-pick".to_owned())
+            .spawn(move || {
+                let Ok(picked) = dialog_rx.recv() else {
+                    return;
+                };
+                let event = match pollster::block_on(picked) {
+                    None => PickedFile::Cancelled,
+                    Some(handle) => PickedFile::Picked {
+                        name: handle
+                            .path()
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                        result: read_bounded(handle.path()),
+                    },
+                };
+                deliver(&thread_tx, &thread_ctx, event);
+            });
+        if let Err(error) = spawned {
+            let event = PickedFile::Picked {
+                name: String::new(),
+                result: Err(PickError::Read(error.to_string())),
+            };
+            deliver(&tx, ctx, event);
+            return;
+        }
+        let picked = rfd::AsyncFileDialog::new()
+            .set_title(request.title)
+            .add_filter(request.filter, &request.extensions)
+            .pick_file();
+        if dialog_tx.send(Box::pin(picked)).is_err() {
+            log::error!("import : le fil d'attente du sélecteur s'est arrêté");
+            deliver(&tx, ctx, PickedFile::Cancelled);
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn pick_bytes(&mut self, ctx: &egui::Context, request: PickRequest, tx: Sender<PickedFile>) {
+        let ctx = ctx.clone();
+        // Téléversement comme l'ouverture (fenêtre d'activation qui suit le
+        // clic) ; taille contrôlée avant la lecture du `Blob`.
+        let dialog = rfd::AsyncFileDialog::new()
+            .set_title(request.title)
+            .add_filter(request.filter, &request.extensions);
+        wasm_bindgen_futures::spawn_local(async move {
+            let event = match dialog.pick_file().await {
+                None => PickedFile::Cancelled,
+                Some(handle) => {
+                    // `Blob.size` (f64) comparé à `MAX_PICKED_BYTES` (64 Mio,
+                    // exact en f64) ; une valeur non finie est refusée.
+                    let size = handle.inner().size();
+                    let too_large = !(0.0..=67_108_864.0).contains(&size);
+                    let result = if too_large {
+                        Err(PickError::TooLarge)
+                    } else {
+                        read_web_file(&handle).await.map_err(|error| match error {
+                            OpenError::Read(detail) => PickError::Read(detail),
+                            OpenError::Mspdi(error) => PickError::Read(error.to_string()),
+                        })
+                    };
+                    PickedFile::Picked {
+                        name: handle.file_name(),
+                        result,
+                    }
+                }
+            };
+            deliver(&tx, &ctx, event);
+        });
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -553,6 +696,29 @@ mod tests {
         assert_eq!(
             load_csv(b"", &opts, now).map(|_| ()).unwrap_err(),
             CsvError::Empty
+        );
+    }
+
+    /// Lecture d'un fichier choisi pour l'import (J8, lot L10) : octets
+    /// rendus tels quels ; fichier absent ⇒ détail du système, jamais de
+    /// panique.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn read_bounded_reads_and_reports_errors() {
+        let dir = std::env::temp_dir().join(format!("planrs-io-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("taches.csv");
+        std::fs::write(&path, b"Nom;Dur\xc3\xa9e\n").unwrap();
+        assert_eq!(super::read_bounded(&path).unwrap(), b"Nom;Dur\xc3\xa9e\n");
+        std::fs::remove_file(&path).unwrap();
+        assert!(matches!(
+            super::read_bounded(&path),
+            Err(super::PickError::Read(_))
+        ));
+        std::fs::remove_dir(&dir).unwrap();
+        assert_eq!(
+            super::MAX_PICKED_BYTES,
+            planrs_automation::csv::CsvLimits::default().max_bytes
         );
     }
 

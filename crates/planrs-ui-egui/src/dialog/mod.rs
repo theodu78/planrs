@@ -15,6 +15,10 @@
 //! brouillon relu, avertissement, rien appliqué ; refus du registre
 //! (`EditOrigin::Dialog`) affiché dans la fenêtre, jamais dans le bandeau.
 //!
+//! J8, lot L10 : « Collage spécial… » (`paste.rs`) et l'aperçu de
+//! l'import CSV (`csv_import.rs`, ouvert sans document) sont dessinés par
+//! `App::show_dialog` avant les fenêtres du lot L12.
+//!
 //! « Affecter des ressources » (lot L13) est hébergée de même mais **non
 //! modale** (`egui::Window`) : la table et le Gantt restent cliquables, la
 //! fenêtre est relue sur la sélection et le document à chaque image où ils
@@ -97,6 +101,10 @@ pub enum DialogBody {
     Reschedule(Box<reschedule::RescheduleState>),
     /// « Affecter des ressources » (lot L13, non modale).
     Assign(Box<assign::AssignState>),
+    /// « Collage spécial… » (J8, lot L10).
+    PasteSpecial(Box<paste::PasteSpecialState>),
+    /// Aperçu de l'import CSV (J8, lot L10, H-UI-40).
+    CsvImport(Box<csv_import::CsvImportState>),
 }
 
 impl DialogBody {
@@ -121,7 +129,12 @@ impl DialogBody {
             Self::ProjectInfo(s) => Some(s.key),
             Self::Baseline(s) => Some(s.key),
             Self::Reschedule(s) => Some(s.key),
-            Self::Empty | Self::TaskInfo(_) | Self::Link(_) | Self::Assign(_) => None,
+            Self::Empty
+            | Self::TaskInfo(_)
+            | Self::Link(_)
+            | Self::Assign(_)
+            | Self::PasteSpecial(_)
+            | Self::CsvImport(_) => None,
         }
     }
 }
@@ -210,7 +223,10 @@ impl App {
                 lang,
                 self.selected.uids(),
             ))),
-            DialogKind::TaskInformation(_) | DialogKind::Link { .. } => return,
+            DialogKind::TaskInformation(_)
+            | DialogKind::Link { .. }
+            | DialogKind::PasteSpecial
+            | DialogKind::CsvImport => return,
         };
         self.view.edit.editing = None;
         self.view.drag = None;
@@ -398,7 +414,12 @@ impl App {
                 fresh.stale = true;
                 **state = fresh;
             }
-            DialogBody::Empty | DialogBody::TaskInfo(_) | DialogBody::Link(_) | DialogBody::Assign(_) => {}
+            DialogBody::Empty
+            | DialogBody::TaskInfo(_)
+            | DialogBody::Link(_)
+            | DialogBody::Assign(_)
+            | DialogBody::PasteSpecial(_)
+            | DialogBody::CsvImport(_) => {}
         }
         true
     }
@@ -446,7 +467,12 @@ impl App {
                     return;
                 }
             },
-            DialogBody::Empty | DialogBody::TaskInfo(_) | DialogBody::Link(_) | DialogBody::Assign(_) => {
+            DialogBody::Empty
+            | DialogBody::TaskInfo(_)
+            | DialogBody::Link(_)
+            | DialogBody::Assign(_)
+            | DialogBody::PasteSpecial(_)
+            | DialogBody::CsvImport(_) => {
                 return;
             }
         };
@@ -487,7 +513,9 @@ impl App {
                     DialogBody::Empty
                     | DialogBody::TaskInfo(_)
                     | DialogBody::Link(_)
-                    | DialogBody::Assign(_) => {}
+                    | DialogBody::Assign(_)
+                    | DialogBody::PasteSpecial(_)
+                    | DialogBody::CsvImport(_) => {}
                 }
             }
         }

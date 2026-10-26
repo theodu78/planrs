@@ -653,6 +653,85 @@ error-control-bad_endpoint = Adresse du canal de contrôle invalide : { $detail
 # --- J8 L9 ---
 
 # --- J8 L10 ---
+menu-cut = Couper
+menu-copy = Copier
+menu-paste = Coller
+menu-paste-special = Collage spécial…
+menu-import-csv = Importer CSV…
+paste-report-title = Collage
+paste-report-tasks = { $count ->
+        [one] { $count } tâche collée
+       *[other] { $count } tâches collées
+    }
+paste-report-links = { $count ->
+        [one] { $count } lien non recopié (un bout hors de la copie)
+       *[other] { $count } liens non recopiés (un bout hors de la copie)
+    }
+paste-report-assignments = { $count ->
+        [one] { $count } affectation omise (ressource absente)
+       *[other] { $count } affectations omises (ressources absentes)
+    }
+paste-report-resources = { $count ->
+        [one] { $count } ressource créée
+       *[other] { $count } ressources créées
+    }
+paste-hint-unrecognized = collez une ligne d'en-tête (Nom, Durée…) suivie des lignes, ou une seule colonne de noms
+paste-hint-too-large = 10 000 lignes et 4 Mio au plus
+paste-use-shortcut = Le navigateur ne donne pas le presse-papiers à un menu : collez avec Ctrl+V (Cmd+V sur Mac).
+ps-title = Collage spécial
+ps-source = { $count ->
+        [one] Dernière copie : { $count } tâche
+       *[other] Dernière copie : { $count } tâches
+    }
+ps-links = Recréer les liens entre les tâches collées
+ps-resources = Affectations
+ps-res-match = Par nom de ressource (omises si la ressource n'existe pas)
+ps-res-create = Par nom, en créant les ressources absentes
+ps-res-drop = Ne pas coller les affectations
+ps-nothing = Rien à coller : copiez d'abord des lignes (Ctrl+C).
+ci-pick-title = Importer un fichier CSV
+ci-pick-filter = Fichiers CSV
+ci-title = Importer CSV
+ci-file = Fichier : { $name }
+ci-separator = Séparateur
+ci-encoding = Encodage
+ci-language = Langue
+ci-auto = Automatique
+ci-sep-semicolon = Point-virgule (;)
+ci-sep-comma = Virgule (,)
+ci-sep-tab = Tabulation
+ci-enc-utf8 = UTF-8
+ci-enc-utf16le = UTF-16 LE
+ci-enc-utf16be = UTF-16 BE
+ci-enc-windows1252 = Windows-1252
+ci-detected = Retenu : { $detail }
+ci-columns = Colonnes
+ci-rows = { $count ->
+        [one] Aperçu ({ $count } ligne)
+       *[other] Aperçu ({ $count } lignes)
+    }
+ci-recognized = reconnue
+ci-unknown = ignorée (inconnue)
+ci-unsupported = non prise en charge
+ci-duplicate = ignorée (en double)
+ci-diagnostics = { $count ->
+        [one] { $count } remarque sur les lignes montrées
+       *[other] { $count } remarques sur les lignes montrées
+    }
+ci-diagnostic-line = Ligne { $count } : { $detail }
+ci-import = Importer
+ci-imported = { $count ->
+        [one] « { $name } » importé avec { $count } remarque (valeur par défaut ou colonne ignorée).
+       *[other] « { $name } » importé avec { $count } remarques (valeurs par défaut ou colonnes ignorées).
+    }
+error-csv-error-too_large = Fichier CSV trop grand (64 Mio au plus).
+error-csv-error-empty = Fichier CSV vide.
+error-csv-error-no_header = Aucune ligne d'en-tête dans le fichier.
+error-csv-error-no_known_column = Aucune colonne Nom ni Durée dans l'en-tête.
+error-csv-error-too_many_rows = Trop de lignes (200 000 au plus).
+error-csv-error-too_many_columns = Trop de colonnes (256 au plus).
+error-csv-error-encoding = Le fichier n'est pas dans l'encodage indiqué.
+error-csv-error-not_yet_available = Fonction pas encore disponible.
 
 # --- J8 L11 ---
 

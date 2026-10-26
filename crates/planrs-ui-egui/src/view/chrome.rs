@@ -105,6 +105,9 @@ fn file_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     menu_item(ui, fc, TextId::MenuSaveAs, Some(save_as), has_doc, Action::SaveAs);
     // --- J8 L7 : Exporter en PDF ---
     // --- J8 L10 : Importer CSV ---
+    // Fichier → Importer CSV… (H-UI-40) : sans document aussi (le résultat
+    // est un nouveau document).
+    menu_item(ui, fc, TextId::MenuImportCsv, None, true, Action::ImportCsv);
     // --- J8 L13 ---
     ui.separator();
     menu_item(ui, fc, TextId::MenuClose, None, has_doc, Action::CloseDocument);
@@ -244,6 +247,8 @@ fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     ui.menu_button(texts.get(TextId::MenuProject), |ui| project_menu(ui, fc));
     // --- J8 L9 : rechercher ---
     // --- J8 L10 : couper, copier, coller ---
+    ui.separator();
+    clipboard_items(ui, fc);
     // --- J8 L15 : menu Tâche (%, mode, actif) ---
 }
 
@@ -600,6 +605,44 @@ fn message_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
                 });
             });
         });
+}
+
+// --- J8 L10 : couper, copier, coller ---
+
+/// Entrées Couper, Copier, Coller et « Collage spécial… » du menu Édition
+/// (H-UI-39, lot L10). Les raccourcis affichés sont ceux qu'egui livre en
+/// `Event::Cut/Copy/Paste` (pas des entrées de `KEYMAP`) ; Couper et Copier
+/// demandent une sélection, Coller et « Collage spécial… » un document.
+fn clipboard_items(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    use crate::clipboard::ClipboardOp;
+    let has_doc = fc.doc.is_some();
+    let has_selection = has_doc && fc.selection.is_some();
+    let entries = [
+        (
+            TextId::MenuCut,
+            Some(egui::Key::X),
+            has_selection,
+            ClipboardOp::Cut,
+        ),
+        (
+            TextId::MenuCopy,
+            Some(egui::Key::C),
+            has_selection,
+            ClipboardOp::Copy,
+        ),
+        (TextId::MenuPaste, Some(egui::Key::V), has_doc, ClipboardOp::Paste),
+        (TextId::MenuPasteSpecial, None, has_doc, ClipboardOp::PasteSpecial),
+    ];
+    for (label, key, enabled, op) in entries {
+        let mut button = egui::Button::new(fc.texts.get(label));
+        if let Some(key) = key {
+            let shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, key);
+            button = button.shortcut_text(shortcut_text(ui.ctx(), &shortcut));
+        }
+        if ui.add_enabled(enabled, button).clicked() {
+            fc.actions.push(Action::Clipboard(op));
+        }
+    }
 }
 
 #[cfg(test)]

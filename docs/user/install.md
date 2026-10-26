@@ -7,6 +7,8 @@ Chaque release (`https://github.com/theodu78/planrs/releases`) porte cinq fichie
 
 `planrs --version` et `planrs-desktop --version` impriment `planrs <version>`.
 
+La première version publique est la pré-version `1.0.0-rc.1` (marquée « Pre-release » sur GitHub) : `<version>` vaut alors `1.0.0-rc.1` dans les noms de fichiers ci-dessous.
+
 Les binaires ne sont ni notarisés (macOS) ni signés par un certificat (Windows) : chaque système demande une confirmation au premier lancement, détaillée ci-dessous.
 
 ## Vérifier le téléchargement

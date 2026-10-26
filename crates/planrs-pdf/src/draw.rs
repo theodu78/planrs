@@ -11,7 +11,7 @@ use krilla::surface::Surface;
 use planrs_render::geometry::{
     Anchor, Class, Clip, FontRef, FontWeight, Item, Paint, Part, Prim, Scene, fit_text, pattern_segments,
 };
-use planrs_render::paginate::{Page, Pages, SLOT_GAP_PT, SLOT_LINE_PT};
+use planrs_render::paginate::{Page, Pages, SLOT_GAP_PT, SLOT_LINE_PT, TITLE_LINE_PT};
 use planrs_render::style::Rgb;
 use planrs_render::{InterMetrics, Lang, TextMeasure};
 
@@ -20,6 +20,18 @@ use crate::fonts::{Fonts, to_f32};
 /// Corps des en-têtes et pieds de page : 12 px (9 pt).
 const SLOT_FONT: FontRef = FontRef {
     weight: FontWeight::Regular,
+    size16: 192,
+};
+
+/// Police du titre du cartouche (H-UI-66) : Inter `SemiBold` 22 px.
+const TITLE_FONT: FontRef = FontRef {
+    weight: FontWeight::SemiBold,
+    size16: 352,
+};
+
+/// Police de la première ligne de la zone droite du cartouche.
+const STRONG_SLOT_FONT: FontRef = FontRef {
+    weight: FontWeight::SemiBold,
     size16: 192,
 };
 
@@ -261,16 +273,25 @@ pub fn draw_page(surface: &mut Surface<'_>, ctx: &mut PageCtx<'_>, page: &Page) 
     }
     // En-tête et pied de page.
     let color = text_color(scene);
-    slots(surface, ctx.fonts, &page.header, ml, mt, content_w, color);
+    let title = pages
+        .title_block
+        .then(|| paint_of(scene, Class::Title).fill.unwrap_or(color));
+    slots(
+        surface,
+        ctx.fonts,
+        &page.header,
+        (ml, mt, content_w),
+        color,
+        title,
+    );
     if footer_pt > 0.0 {
         slots(
             surface,
             ctx.fonts,
             &page.footer,
-            ml,
-            h_pt - mb - footer_pt,
-            content_w,
+            (ml, h_pt - mb - footer_pt, content_w),
             color,
+            None,
         );
     }
 }
@@ -639,34 +660,52 @@ fn text(
 }
 
 /// Trois zones d'en-tête ou de pied de page (gauche, centre, droite), une
-/// ligne tous les 12 pt, textes tronqués à leur tiers avec « … ».
+/// ligne tous les 12 pt, textes tronqués à leur tiers avec « … ». Avec un
+/// cartouche (`title` : couleur du titre, H-UI-66), la première ligne de
+/// la zone centrale est un titre sur 26 pt (Inter `SemiBold` 22 px) et la
+/// première ligne de la zone droite est appuyée.
 fn slots(
     surface: &mut Surface<'_>,
     fonts: &mut Fonts,
     zones: &[String; 3],
-    ox: f64,
-    oy: f64,
-    width: f64,
+    (ox, oy, width): (f64, f64, f64),
     ink: Rgb,
+    title: Option<Rgb>,
 ) {
     // Espace de tracé : 1/16 px à 100 %.
     let k = PT_PER_16;
     let width16 = (width / k).max(1.0);
     let third = width16 / 3.0;
     let line16 = f64::from(SLOT_LINE_PT) / k;
+    let title16 = f64::from(TITLE_LINE_PT) / k;
     let pad = 8.0_f64;
     let room = round16(third - 2.0 * pad);
+    // Le titre, s'il y en a un, décale les autres lignes de toutes les zones.
+    let shift = if title.is_some() && !zones[1].trim().is_empty() {
+        title16 - line16
+    } else {
+        0.0
+    };
     surface.push_transform(&Transform::from_row(f(k), 0.0, 0.0, f(k), f(ox), f(oy)));
     for (z, zone) in zones.iter().enumerate() {
         for (n, line) in zone.lines().enumerate() {
-            let Some((shown, w16)) = fit_text(line, room, SLOT_FONT, &InterMetrics) else {
+            let (font, color) = match (title, z, n) {
+                (Some(t), 1, 0) => (TITLE_FONT, t),
+                (Some(_), 2, 0) => (STRONG_SLOT_FONT, ink),
+                _ => (SLOT_FONT, ink),
+            };
+            let Some((shown, w16)) = fit_text(line, room, font, &InterMetrics) else {
                 continue;
             };
             if shown.is_empty() {
                 continue;
             }
             #[allow(clippy::cast_precision_loss, reason = "rang de ligne, petit entier")]
-            let baseline = line16 * (n as f64 + 1.0) - 3.0 / k;
+            let baseline = if title.is_some() && z == 1 && n == 0 && shift > 0.0 {
+                title16 - 6.0 / k
+            } else {
+                line16 * (n as f64 + 1.0) - 3.0 / k + shift
+            };
             let left = match z {
                 0 => 0.0,
                 1 => (width16 - d(w16)) / 2.0,
@@ -678,9 +717,9 @@ fn slots(
                 &shown,
                 round16(left),
                 round16(baseline),
-                SLOT_FONT,
+                font,
                 Anchor::Start,
-                ink,
+                color,
             );
         }
     }

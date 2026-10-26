@@ -593,42 +593,19 @@ pub fn place_texts(
         left_anchor.saturating_sub(lo)
     };
     let mut items = Vec::new();
-    let place = |s: &str, prefer: TextSide| -> Option<PlacedText> {
-        if s.is_empty() {
-            return None;
-        }
-        let full = m.width16(s, font);
-        let (first, first_room, second, second_room) = match prefer {
-            TextSide::Left => (TextSide::Left, left_room, TextSide::Right, right_room),
-            _ => (TextSide::Right, right_room, TextSide::Left, left_room),
-        };
-        let (side, text, width) = if full <= first_room {
-            (first, s.to_owned(), full)
-        } else if full <= second_room {
-            (second, s.to_owned(), full)
-        } else {
-            let (side, room) = if first_room >= second_room {
-                (first, first_room)
-            } else {
-                (second, second_room)
-            };
-            let (t, w) = fit_text(s, room, font, m)?;
-            (side, t, w)
-        };
-        let x = match side {
-            TextSide::Left => left_anchor.saturating_sub(width),
-            _ => right_anchor,
-        };
-        Some(PlacedText {
-            text,
-            x16: x,
-            y16: y,
-            width16: width,
-            font,
-            side,
-        })
+    // Côtés déjà occupés : un texte basculé du côté de l'autre se range
+    // après lui (J8 L15 : jamais deux étiquettes superposées).
+    let mut sides = Sides {
+        right_anchor,
+        left_anchor,
+        right_room,
+        left_room,
     };
-    if let Some(t) = texts.left.as_deref().and_then(|s| place(s, TextSide::Left)) {
+    if let Some(t) = texts
+        .left
+        .as_deref()
+        .and_then(|s| sides.place(s, TextSide::Left, font, m))
+    {
         items.push(t);
     }
     if let Some(s) = texts.inside.as_deref().filter(|s| !s.is_empty()) {
@@ -653,10 +630,77 @@ pub fn place_texts(
             });
         }
     }
-    if let Some(t) = texts.right.as_deref().and_then(|s| place(s, TextSide::Right)) {
+    if let Some(t) = texts
+        .right
+        .as_deref()
+        .and_then(|s| sides.place(s, TextSide::Right, font, m))
+    {
         items.push(t);
     }
+    for t in &mut items {
+        t.y16 = y;
+    }
     PlacedTexts { items }
+}
+
+/// Place restante de chaque côté d'une barre pendant `place_texts`.
+struct Sides {
+    /// Début du prochain texte à droite.
+    right_anchor: i64,
+    /// Fin du prochain texte à gauche.
+    left_anchor: i64,
+    /// Place à droite (−1 : aucune).
+    right_room: i64,
+    /// Place à gauche (−1 : aucune).
+    left_room: i64,
+}
+
+impl Sides {
+    /// Place `s` du côté préféré, sinon de l'autre, sinon tronqué du côté le
+    /// plus large (H-UI-46) ; le côté choisi est consommé.
+    fn place(&mut self, s: &str, prefer: TextSide, font: FontRef, m: &dyn TextMeasure) -> Option<PlacedText> {
+        if s.is_empty() {
+            return None;
+        }
+        let full = m.width16(s, font);
+        let (first, first_room, second, second_room) = match prefer {
+            TextSide::Left => (TextSide::Left, self.left_room, TextSide::Right, self.right_room),
+            _ => (TextSide::Right, self.right_room, TextSide::Left, self.left_room),
+        };
+        let (side, text, width) = if full <= first_room {
+            (first, s.to_owned(), full)
+        } else if full <= second_room {
+            (second, s.to_owned(), full)
+        } else {
+            let (side, room) = if first_room >= second_room {
+                (first, first_room)
+            } else {
+                (second, second_room)
+            };
+            let (t, w) = fit_text(s, room, font, m)?;
+            (side, t, w)
+        };
+        let used = width.saturating_add(TEXT_GAP);
+        let x = if side == TextSide::Left {
+            let x = self.left_anchor.saturating_sub(width);
+            self.left_anchor = self.left_anchor.saturating_sub(used);
+            self.left_room = self.left_room.saturating_sub(used);
+            x
+        } else {
+            let x = self.right_anchor;
+            self.right_anchor = self.right_anchor.saturating_add(used);
+            self.right_room = self.right_room.saturating_sub(used);
+            x
+        };
+        Some(PlacedText {
+            text,
+            x16: x,
+            y16: 0,
+            width16: width,
+            font,
+            side,
+        })
+    }
 }
 
 /// Jeton d'en-tête ou de pied de page (H-UI-51).
@@ -698,6 +742,29 @@ impl BarTextSource for NoTexts {
     fn token(&self, _t: Token) -> String {
         String::new()
     }
+}
+
+/// Jours chômés consécutifs à partir desquels une période est grisée aux
+/// échelles larges (H-UI-62 : fériés accolés, fermetures, congés) ; une
+/// fin de semaine seule (2 jours) ne l'est pas.
+pub const LONG_OFF_DAYS: i64 = 3;
+
+/// Rang du mois de `day` relatif au mois de `start` (H-UI-67) : 1 pour le
+/// mois du démarrage, 2 le suivant… ; −1, −2… avant (aucun mois 0).
+#[must_use]
+pub fn relative_month(day: planrs_core::Day, start: planrs_core::Day) -> i32 {
+    let month_index = |d: planrs_core::Day| {
+        let (y, m, _) = crate::axis::ymd(d);
+        y.saturating_mul(12).saturating_add(i32::try_from(m).unwrap_or(1))
+    };
+    let diff = month_index(day).saturating_sub(month_index(start));
+    if diff >= 0 { diff.saturating_add(1) } else { diff }
+}
+
+/// Étiquette d'un mois relatif : « M1 », « M-3 » (H-UI-67).
+#[must_use]
+pub fn relative_month_label(k: i32) -> String {
+    format!("M{k}")
 }
 
 /// Fenêtre rendue.
@@ -801,6 +868,13 @@ pub enum Class {
     TextMuted,
     /// Ligne de troncature.
     TextCut,
+    /// Barre d'un rôle peinte à la couleur de la phase d'indice donné
+    /// (H-UI-65, rang dans `PlanStyle::phases`).
+    Phase(u16, BarRole),
+    /// Fond d'une ligne de phase dans la table (teinte lisible, H-UI-65).
+    PhaseRow(u16),
+    /// Titre du cartouche (H-UI-66, couleur d'accent `cursor`).
+    Title,
 }
 
 /// Peinture d'une classe.

@@ -419,6 +419,32 @@ pub(crate) fn tier_cells(
     cells
 }
 
+/// Cellules du niveau des mois relatifs au démarrage `start` (H-UI-67) :
+/// une par mois de la plage, étiquette « M1 », « M-3 » (vide si elle ne
+/// tient pas dans la cellule, mesurée dans `font`).
+pub(crate) fn relative_month_cells(axis: &Axis, span: DaySpan, start: Day, font: FontRef) -> Vec<Cell> {
+    let mut cells = Vec::new();
+    let mut cur = unit_start(span.start, TierUnit::Month, Weekday::Monday);
+    while cells.len() < MAX_CELLS && cur < span.end {
+        let next = match next_unit_start(cur, TierUnit::Month) {
+            Some(next) if next > cur => next,
+            _ => span.end,
+        };
+        let x0 = axis.x16_day(cur.max(span.start));
+        let x1 = axis.x16_day(next.min(span.end));
+        let label = crate::geometry::relative_month_label(crate::geometry::relative_month(cur, start));
+        let fits = label_width16(&label, font).saturating_add(4 * SUB) <= x1.saturating_sub(x0);
+        cells.push(Cell {
+            x0,
+            x1,
+            boundary: cur >= span.start,
+            label: if fits { label } else { String::new() },
+        });
+        cur = next;
+    }
+    cells
+}
+
 /// Noms longs des mois.
 const MONTHS_LONG_FR: [&str; 12] = [
     "janvier",

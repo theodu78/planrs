@@ -19,7 +19,9 @@ use crate::geometry::{
     link_path, place_texts, row_geom_input, row_h16,
 };
 use crate::request::{Lang, RenderReport};
-use crate::style::{BarField, BarRole, BarShape, Pattern, PlanStyle, RowBanding};
+use crate::style::{
+    BarField, BarRole, BarShape, Pattern, PhaseColor, PlanStyle, Rgb, RowBanding, TableColumn, readable_tint,
+};
 
 /// Hauteur d'un niveau de l'en-tête (22 px).
 pub(crate) const TIER_H: i64 = 22 * SUB;
@@ -27,9 +29,77 @@ pub(crate) const TIER_H: i64 = 22 * SUB;
 pub(crate) const HEADER_H: i64 = 2 * TIER_H;
 /// Largeur de la colonne ID.
 pub(crate) const ID_W: i64 = 40 * SUB;
-/// Largeur de la table : colonne ID et colonne Nom de 240 px (début du
-/// Gantt).
-pub(crate) const TABLE_W: i64 = ID_W + 240 * SUB;
+/// Largeur de la colonne Nom.
+const NAME_W: i64 = 240 * SUB;
+
+/// Largeur d'une colonne de la table (H-UI-68).
+const fn column_w(c: TableColumn) -> i64 {
+    match c {
+        TableColumn::Id => ID_W,
+        TableColumn::Name => NAME_W,
+        TableColumn::Duration | TableColumn::Start | TableColumn::Finish => 64 * SUB,
+        TableColumn::Percent => 48 * SUB,
+        TableColumn::Resources => 140 * SUB,
+    }
+}
+
+/// Colonnes de la table d'un style : celles de `page.columns`, sinon N° et
+/// Nom (sortie de L7).
+pub(crate) fn table_columns(columns: Option<&[TableColumn]>) -> Vec<TableColumn> {
+    columns.map_or_else(|| TableColumn::CHART_ONLY.to_vec(), <[_]>::to_vec)
+}
+
+/// Largeur de la table (début du Gantt) pour ces colonnes ; 0 sans
+/// colonne (« graphique seul », H-UI-64).
+pub(crate) fn table_width16(columns: Option<&[TableColumn]>) -> i64 {
+    table_columns(columns)
+        .into_iter()
+        .map(column_w)
+        .fold(0, i64::saturating_add)
+}
+
+/// Couleur de phase de chaque tâche du projet, par position (H-UI-65) :
+/// `(rang de la phase, la tâche porte elle-même la couleur)`. Une tâche
+/// sans couleur propre prend celle de l'ancêtre le plus proche qui en a une
+/// avec `children`.
+fn phase_of_tasks(p: &Project, phases: &BTreeMap<u32, PhaseColor>) -> Vec<Option<(u16, bool)>> {
+    if phases.is_empty() {
+        return vec![None; p.tasks.len()];
+    }
+    let rank = |uid: u32| {
+        phases
+            .keys()
+            .position(|k| *k == uid)
+            .and_then(|i| u16::try_from(i).ok())
+    };
+    // Pile des ancêtres : (niveau, phase transmise aux descendants).
+    let mut stack: Vec<(u16, Option<u16>)> = Vec::new();
+    let mut out = Vec::with_capacity(p.tasks.len());
+    for task in &p.tasks {
+        let level = task.outline_level.get();
+        while stack.last().is_some_and(|(l, _)| *l >= level) {
+            stack.pop();
+        }
+        let inherited = stack.iter().rev().find_map(|(_, ph)| *ph);
+        let own = rank(task.uid().get()).filter(|_| !task.is_null);
+        let passed = own.filter(|_| phases.get(&task.uid().get()).is_some_and(|c| c.children));
+        out.push(match own {
+            Some(i) => Some((i, true)),
+            None => inherited.map(|i| (i, false)),
+        });
+        stack.push((level, passed.or(inherited)));
+    }
+    out
+}
+
+/// Rôles peints à la couleur d'une phase (barres de tâches et de
+/// récapitulatives ; jalons, inactives et repères gardent la leur).
+const fn phase_painted(role: BarRole) -> bool {
+    matches!(
+        role,
+        BarRole::Task | BarRole::Critical | BarRole::Summary | BarRole::SummaryCritical | BarRole::Manual
+    )
+}
 /// Retrait par niveau hiérarchique (12 px), plafonné à [`MAX_INDENT`].
 const INDENT: i64 = 12 * SUB;
 /// Retrait maximal d'un nom (120 px).
@@ -248,6 +318,7 @@ fn truncate_chars(s: &str, max: usize) -> String {
 /// Peintures des classes d'un style, pour une variante.
 fn paints_of(st: &PlanStyle, v: crate::style::Variant) -> impl Fn(Class) -> Paint + '_ {
     let c = st.tokens(v);
+    let phase_fill = move |i: u16| -> Option<Rgb> { st.phases.values().nth(usize::from(i)).map(|p| p.fill) };
     move |class: Class| {
         let fill = |rgb| Paint {
             fill: Some(rgb),
@@ -304,6 +375,23 @@ fn paints_of(st: &PlanStyle, v: crate::style::Variant) -> impl Fn(Class) -> Pain
             Class::Text => fill(c.text),
             Class::TextStrong => fill(c.text_strong),
             Class::TextMuted | Class::TextCut => fill(c.text_muted),
+            Class::Phase(i, role) => {
+                // Forme et contour du rôle, remplissage de la phase.
+                let shape = st.bars.get(&role).copied();
+                let outline16 = shape.map_or(0, |b| i64::from(b.outline16));
+                let rgb = phase_fill(i).unwrap_or(c.text);
+                let outline_rgb = c.bars.get(&role).and_then(|p| p.outline).unwrap_or(c.text_strong);
+                Paint {
+                    fill: Some(rgb),
+                    stroke: (outline16 > 0).then_some(outline_rgb),
+                    width16: outline16,
+                    dash16: None,
+                }
+            }
+            Class::PhaseRow(i) => {
+                fill(phase_fill(i).map_or(c.bg, |rgb| readable_tint(rgb, c.bg, &[c.text, c.text_strong])))
+            }
+            Class::Title => fill(c.cursor),
         }
     }
 }
@@ -363,7 +451,7 @@ struct Kept<'a> {
 }
 
 /// Primitives d'une barre.
-fn bar_items(items: &mut Items, part: Part, bar: &BarGeom, st: &PlanStyle) {
+fn bar_items(items: &mut Items, part: Part, bar: &BarGeom, st: &PlanStyle, phase: Option<u16>) {
     let style = st.bars.get(&bar.role).copied();
     let pattern = style.map_or(Pattern::Solid, |b| b.pattern);
     let radius = style.map_or(0, |b| i64::from(b.radius16));
@@ -384,7 +472,10 @@ fn bar_items(items: &mut Items, part: Part, bar: &BarGeom, st: &PlanStyle) {
         };
         items.push(Clip::Gantt, part, Class::Bar(BarRole::Baseline), prim);
     }
-    let class = Class::Bar(bar.role);
+    let class = match phase {
+        Some(i) if phase_painted(bar.role) => Class::Phase(i, bar.role),
+        _ => Class::Bar(bar.role),
+    };
     let mut pattern_rect = r;
     let mut diamond = false;
     match bar.shape {
@@ -522,8 +613,15 @@ pub(crate) fn build(
         weight: FontWeight::SemiBold,
         ..body
     };
-    let axis = Axis16::new(p, s, vp.range, vp.zoom, vp.limits.max_days, TABLE_W);
-    let width = TABLE_W.saturating_add(axis.width16());
+    let columns = table_columns(st.page.columns.as_deref());
+    let table_w = table_width16(Some(&columns));
+    let axis = Axis16::new(p, s, vp.range, vp.zoom, vp.limits.max_days, table_w);
+    let width = table_w.saturating_add(axis.width16());
+    // H-UI-67 : un niveau de plus en haut de l'en-tête pour les mois
+    // relatifs ; les deux niveaux de l'échelle descendent d'autant.
+    let tier0 = if st.scale.relative_months { TIER_H } else { 0 };
+    let header_h = HEADER_H.saturating_add(tier0);
+    let phase_by_pos = phase_of_tasks(p, &st.phases);
     let name_chars = usize::from(vp.limits.name_chars);
     let baseline_dy = (row_h / 2).saturating_add(i64::from(body.size16) / 3);
 
@@ -557,9 +655,9 @@ pub(crate) fn build(
     let cut = kept.len().saturating_sub(shown);
     let kept = kept.get(..shown).unwrap_or(&[]);
     let n_rows = i64::try_from(shown.saturating_add(usize::from(cut > 0))).unwrap_or(i64::MAX);
-    let rows_bottom = HEADER_H.saturating_add(n_rows.saturating_mul(row_h));
+    let rows_bottom = header_h.saturating_add(n_rows.saturating_mul(row_h));
     let row_top =
-        |i: usize| HEADER_H.saturating_add(i64::try_from(i).unwrap_or(i64::MAX).saturating_mul(row_h));
+        |i: usize| header_h.saturating_add(i64::try_from(i).unwrap_or(i64::MAX).saturating_mul(row_h));
     let part_of = |i: usize| Part::Row(u32::try_from(i).unwrap_or(u32::MAX));
 
     // Lignes de la scène : barres et textes.
@@ -678,6 +776,25 @@ pub(crate) fn build(
                 Some(phase.unwrap_or(0) % 2)
             }
         };
+        // H-UI-62 : bandes dans la table seulement, jamais dans le Gantt.
+        let own_phase = kept
+            .get(i)
+            .and_then(|k| phase_by_pos.get(k.position).copied().flatten())
+            .filter(|(_, own)| *own);
+        if let Some((pi, _)) = own_phase {
+            items.rect(
+                Clip::Table,
+                part_of(i),
+                Class::PhaseRow(pi),
+                Rect16 {
+                    x: 0,
+                    y: r.y16,
+                    w: table_w,
+                    h: row_h,
+                },
+            );
+            continue;
+        }
         let Some(band) = band else {
             continue;
         };
@@ -686,19 +803,25 @@ pub(crate) fn build(
             continue;
         }
         items.rect(
-            Clip::None,
+            Clip::Table,
             part_of(i),
             class,
             Rect16 {
                 x: 0,
                 y: r.y16,
-                w: width,
+                w: table_w,
                 h: row_h,
             },
         );
     }
-    if st.scale.shade_non_working && axis.px16_per_day() >= 192 {
+    // Jours chômés : tous à l'échelle Semaine et plus fine ; aux échelles
+    // larges, les périodes d'au moins `LONG_OFF_DAYS` jours (H-UI-62).
+    if st.scale.shade_non_working {
+        let fine = axis.px16_per_day() >= 192;
         for (a, b) in non_working_runs(p, &axis) {
+            if !fine && i64::from(b.index().saturating_sub(a.index())) < crate::geometry::LONG_OFF_DAYS {
+                continue;
+            }
             let x0 = axis.inner.x16_day(a);
             let x1 = axis.inner.x16_day(b);
             items.rect(
@@ -707,9 +830,9 @@ pub(crate) fn build(
                 Class::NonWorking,
                 Rect16 {
                     x: x0,
-                    y: HEADER_H,
+                    y: header_h,
                     w: x1.saturating_sub(x0),
-                    h: rows_bottom.saturating_sub(HEADER_H),
+                    h: rows_bottom.saturating_sub(header_h),
                 },
             );
         }
@@ -724,33 +847,35 @@ pub(crate) fn build(
             x: 0,
             y: 0,
             w: width,
-            h: HEADER_H,
+            h: header_h,
         },
     );
     let l = labels(vp.lang);
     // Milieu de l'en-tête, ligne de base 5/12 du corps plus bas (27 px en
     // 12 px, comme J7).
-    let header_y = (HEADER_H / 2).saturating_add(i64::from(strong.size16).saturating_mul(5) / 12);
-    items.text(
-        Clip::None,
-        Part::Fixed,
-        Class::TextStrong,
-        ID_W.saturating_sub(PAD),
-        header_y,
-        l.id.to_owned(),
-        strong,
-        Anchor::End,
-    );
-    items.text(
-        Clip::None,
-        Part::Fixed,
-        Class::TextStrong,
-        ID_W.saturating_add(PAD),
-        header_y,
-        l.name.to_owned(),
-        strong,
-        Anchor::Start,
-    );
+    let header_y = (header_h / 2).saturating_add(i64::from(strong.size16).saturating_mul(5) / 12);
+    let mut col_x = 0_i64;
+    for &c in &columns {
+        let w = column_w(c);
+        let (x, anchor) = column_anchor(c, col_x, w);
+        let title = column_title(c, &l, vp.lang);
+        // Titre plus large que sa colonne : coupé avec « … » (H-UI-46).
+        let room = w.saturating_sub(2 * PAD);
+        let shown = fit_chars(title, room, strong, &metrics);
+        if !shown.is_empty() {
+            items.text(
+                Clip::None,
+                Part::Fixed,
+                Class::TextStrong,
+                x,
+                header_y,
+                shown,
+                strong,
+                anchor,
+            );
+        }
+        col_x = col_x.saturating_add(w);
+    }
     let label_font = FontRef {
         weight: FontWeight::Regular,
         size16: 192,
@@ -774,9 +899,43 @@ pub(crate) fn build(
     });
     let (major, minor) = axis.scale.tiers();
     let week_start = p.options.week_start_day;
+    if st.scale.relative_months {
+        // H-UI-67 : mois relatifs au démarrage, niveau du haut ; frontières
+        // tracées dans l'en-tête seulement.
+        let start = s.project_start.day();
+        let cells = axis::relative_month_cells(&axis.inner, axis.span, start, label_font);
+        let segs: Vec<(i64, i64, i64, i64)> = cells
+            .iter()
+            .filter(|c| c.boundary && c.x0 > axis.left16())
+            .map(|c| (c.x0, 0, c.x0, TIER_H))
+            .collect();
+        if !segs.is_empty() {
+            items.push(Clip::None, Part::Fixed, Class::GridMajor, Prim::Segments { segs });
+        }
+        for c in cells.iter().filter(|c| !c.label.is_empty()) {
+            items.text(
+                Clip::Gantt,
+                Part::Fixed,
+                Class::Title,
+                c.x0.saturating_add(3 * SUB),
+                15 * SUB,
+                c.label.clone(),
+                label_font,
+                Anchor::Start,
+            );
+        }
+        items.push(
+            Clip::None,
+            Part::Fixed,
+            Class::GridMajor,
+            Prim::Segments {
+                segs: vec![(table_w, TIER_H, width, TIER_H)],
+            },
+        );
+    }
     for (unit, class, y0, show) in [
-        (major, Class::GridMajor, 0, st.grid.major_v),
-        (minor, Class::Grid, TIER_H, st.grid.minor_v),
+        (major, Class::GridMajor, tier0, st.grid.major_v),
+        (minor, Class::Grid, tier0.saturating_add(TIER_H), st.grid.minor_v),
     ] {
         let numbers = st.scale.week_numbers && unit == TierUnit::Week;
         let cells = axis::tier_cells(
@@ -801,7 +960,7 @@ pub(crate) fn build(
         for c in cells.iter().filter(|c| {
             let w = axis::label_width16(&c.label, label_font);
             let x = c.x0.saturating_add(3 * SUB);
-            let hidden = y0 == TIER_H
+            let hidden = y0 == tier0.saturating_add(TIER_H)
                 && status_tag.as_ref().is_some_and(|(a, b, _)| {
                     x < b.saturating_add(4 * SUB) && x.saturating_add(w) > a.saturating_sub(4 * SUB)
                 });
@@ -819,15 +978,16 @@ pub(crate) fn build(
             );
         }
     }
+    // H-UI-62 : traits entre lignes dans la table seulement.
     if st.grid.row_lines {
         for (i, r) in rows.iter().enumerate() {
             let y = r.y16.saturating_add(row_h);
             items.push(
-                Clip::None,
+                Clip::Table,
                 part_of(i),
                 Class::RowLine,
                 Prim::Segments {
-                    segs: vec![(0, y, width, y)],
+                    segs: vec![(0, y, table_w, y)],
                 },
             );
         }
@@ -840,7 +1000,7 @@ pub(crate) fn build(
             Part::Fixed,
             Class::StatusLine,
             Prim::Segments {
-                segs: vec![(sx, HEADER_H, sx, rows_bottom)],
+                segs: vec![(sx, header_h, sx, rows_bottom)],
             },
         );
         if let Some((x, _, text)) = status_tag.clone() {
@@ -849,7 +1009,7 @@ pub(crate) fn build(
                 Part::Fixed,
                 Class::StatusLabel,
                 x,
-                TIER_H.saturating_add(15 * SUB),
+                tier0.saturating_add(TIER_H).saturating_add(15 * SUB),
                 text,
                 label_font,
                 Anchor::Start,
@@ -864,7 +1024,7 @@ pub(crate) fn build(
                 Part::Fixed,
                 Class::Today,
                 Prim::Segments {
-                    segs: vec![(tx, HEADER_H, tx, rows_bottom)],
+                    segs: vec![(tx, header_h, tx, rows_bottom)],
                 },
             );
         }
@@ -876,11 +1036,7 @@ pub(crate) fn build(
         Part::Fixed,
         Class::Splitter,
         Prim::Segments {
-            segs: vec![
-                (ID_W, 0, ID_W, rows_bottom),
-                (TABLE_W, 0, TABLE_W, rows_bottom),
-                (0, HEADER_H, width, HEADER_H),
-            ],
+            segs: splitters(&columns, rows_bottom, width, header_h),
         },
     );
 
@@ -912,13 +1068,19 @@ pub(crate) fn build(
     }
 
     // Barres et leurs textes.
-    for (i, r) in rows.iter().enumerate() {
+    for (i, (r, k)) in rows.iter().zip(kept).enumerate() {
         if let Some(b) = &r.bar {
-            bar_items(&mut items, part_of(i), b, st);
+            let phase = phase_by_pos.get(k.position).copied().flatten().map(|(pi, _)| pi);
+            bar_items(&mut items, part_of(i), b, st, phase);
         }
     }
     for (i, r) in rows.iter().enumerate() {
         for t in &r.texts.items {
+            // H-UI-64 : fond sous une étiquette hors de la barre, au-dessus
+            // des liens et de la grille (lisible sans la table).
+            if t.side != crate::geometry::TextSide::Inside {
+                items.rect(Clip::Gantt, part_of(i), Class::Bg, label_halo(t));
+            }
             items.text(
                 Clip::Gantt,
                 part_of(i),
@@ -932,7 +1094,7 @@ pub(crate) fn build(
         }
     }
 
-    // Table : ID et nom.
+    // Table : colonnes du style (N° et Nom par défaut, H-UI-68).
     for (i, (r, k)) in rows.iter().zip(kept).enumerate() {
         let outcome = s.tasks.get(&k.task.uid());
         let (class, font) = if r.summary {
@@ -943,29 +1105,36 @@ pub(crate) fn build(
             (Class::Text, body)
         };
         let y = r.y16.saturating_add(baseline_dy);
-        items.text(
-            Clip::Table,
-            part_of(i),
-            class,
-            ID_W.saturating_sub(PAD),
-            y,
-            r.id.to_string(),
-            font,
-            Anchor::End,
-        );
-        if !k.task.name.is_empty() {
-            let level = i64::from(r.level.saturating_sub(1));
-            let indent = level.saturating_mul(INDENT).min(MAX_INDENT);
-            items.text(
-                Clip::Table,
-                part_of(i),
-                class,
-                ID_W.saturating_add(PAD).saturating_add(indent),
-                y,
-                truncate_chars(&k.task.name, name_chars),
-                font,
-                Anchor::Start,
-            );
+        let mut col_x = 0_i64;
+        for &c in &columns {
+            let w = column_w(c);
+            let x_here = col_x;
+            col_x = col_x.saturating_add(w);
+            let text = match c {
+                TableColumn::Id => Some(r.id.to_string()),
+                TableColumn::Name => {
+                    (!k.task.name.is_empty()).then(|| truncate_chars(&k.task.name, name_chars))
+                }
+                _ if k.task.is_null => None,
+                other => column_field(other).and_then(|f| src.bar_text(k.task.uid(), f)),
+            };
+            let Some(text) = text.filter(|t| !t.is_empty()) else {
+                continue;
+            };
+            let (mut x, anchor) = column_anchor(c, x_here, w);
+            let mut room = w.saturating_sub(2 * PAD);
+            if c == TableColumn::Name {
+                let level = i64::from(r.level.saturating_sub(1));
+                let indent = level.saturating_mul(INDENT).min(MAX_INDENT);
+                x = x.saturating_add(indent);
+                room = room.saturating_sub(indent);
+            }
+            let text = if c == TableColumn::Name || c == TableColumn::Id {
+                text
+            } else {
+                fit_chars(&text, room, font, &metrics)
+            };
+            items.text(Clip::Table, part_of(i), class, x, y, text, font, anchor);
         }
     }
 
@@ -1003,16 +1172,18 @@ pub(crate) fn build(
     }
 
     let used: BTreeSet<Class> = items.0.iter().map(|i| i.class).collect();
+    let title = st.page.title_block.then_some(Class::Title);
     let paints: BTreeMap<Class, Paint> = used
         .into_iter()
         .chain([Class::Text])
+        .chain(title)
         .map(|c| (c, paint(c)))
         .collect();
     let scene = Scene {
         width16: width,
         height16: height,
-        header16: HEADER_H,
-        table16: TABLE_W,
+        header16: header_h,
+        table16: table_w,
         title: p.info.name.clone(),
         family: st.font.family,
         font: body,
@@ -1030,6 +1201,102 @@ pub(crate) fn build(
         bytes: 0,
     };
     (scene, report)
+}
+
+/// Fond d'une étiquette de barre (H-UI-64) : boîte du texte, 1 px de
+/// marge à gauche et à droite, hauteur du corps de la police.
+pub(crate) fn label_halo(t: &crate::geometry::PlacedText) -> Rect16 {
+    let size = i64::from(t.font.size16);
+    // Ascendantes ≈ 0,8 du corps au-dessus de la ligne de base, descendantes
+    // ≈ 0,25 en dessous.
+    let top = t.y16.saturating_sub(size.saturating_mul(4) / 5);
+    Rect16 {
+        x: t.x16.saturating_sub(SUB),
+        y: top,
+        w: t.width16.saturating_add(2 * SUB),
+        h: size.saturating_mul(21) / 20,
+    }
+}
+
+/// Abscisse d'ancrage et ancrage d'un texte de colonne : nombres et
+/// durées à droite, le reste à gauche.
+const fn column_anchor(c: TableColumn, x0: i64, w: i64) -> (i64, Anchor) {
+    match c {
+        TableColumn::Id | TableColumn::Duration | TableColumn::Percent => {
+            (x0.saturating_add(w).saturating_sub(PAD), Anchor::End)
+        }
+        _ => (x0.saturating_add(PAD), Anchor::Start),
+    }
+}
+
+/// Champ de la source affiché par une colonne (règle 3).
+const fn column_field(c: TableColumn) -> Option<BarField> {
+    match c {
+        TableColumn::Id | TableColumn::Name => None,
+        TableColumn::Duration => Some(BarField::DurationShort),
+        TableColumn::Start => Some(BarField::StartShort),
+        TableColumn::Finish => Some(BarField::FinishShort),
+        TableColumn::Percent => Some(BarField::Percent),
+        TableColumn::Resources => Some(BarField::Resources),
+    }
+}
+
+/// Titre d'une colonne.
+const fn column_title(c: TableColumn, l: &Labels, lang: Lang) -> &'static str {
+    match (c, lang) {
+        (TableColumn::Id, _) => l.id,
+        (TableColumn::Name, _) => l.name,
+        (TableColumn::Duration, Lang::Fr) => "Durée",
+        (TableColumn::Duration, Lang::En) => "Duration",
+        (TableColumn::Start, Lang::Fr) => "Début",
+        (TableColumn::Start, Lang::En) => "Start",
+        (TableColumn::Finish, Lang::Fr) => "Fin",
+        (TableColumn::Finish, Lang::En) => "Finish",
+        (TableColumn::Percent, Lang::Fr) => "% achevé",
+        (TableColumn::Percent, Lang::En) => "% Complete",
+        (TableColumn::Resources, Lang::Fr) => "Ressources",
+        (TableColumn::Resources, Lang::En) => "Resource Names",
+    }
+}
+
+/// Texte coupé avec « … » pour tenir dans `room` (1/16 px), mesuré en
+/// Inter (H-R11) ; vide si même « … » ne tient pas.
+fn fit_chars(text: &str, room: i64, font: FontRef, m: &dyn TextMeasure) -> String {
+    if m.width16(text, font) <= room {
+        return text.to_owned();
+    }
+    let mut out = String::new();
+    for c in text.chars() {
+        let mut candidate = out.clone();
+        candidate.push(c);
+        candidate.push('…');
+        if m.width16(&candidate, font) > room {
+            break;
+        }
+        out.push(c);
+    }
+    if out.is_empty() && m.width16("…", font) > room {
+        return String::new();
+    }
+    out.push('…');
+    out
+}
+
+/// Séparateurs de la table (un par bord de colonne) et bas de l'en-tête.
+fn splitters(
+    columns: &[TableColumn],
+    rows_bottom: i64,
+    width: i64,
+    header_h: i64,
+) -> Vec<(i64, i64, i64, i64)> {
+    let mut segs = Vec::new();
+    let mut x = 0_i64;
+    for &c in columns {
+        x = x.saturating_add(column_w(c));
+        segs.push((x, 0, x, rows_bottom));
+    }
+    segs.push((0, header_h, width, header_h));
+    segs
 }
 
 /// Largeur d'un échantillon de légende (16 px).

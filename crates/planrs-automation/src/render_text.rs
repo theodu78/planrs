@@ -10,7 +10,10 @@
 //! jours ; % entier (« 50 % ») ; ressources comme la colonne « Noms
 //! ressources » (« Maçon[50 %];Électricien ») ; « début – fin ».
 
-use planrs_core::{DurationUnit, LinkType, Moment, TaskOutcome, TaskRole, TaskUid, TimeBasis};
+use planrs_core::{
+    ConversionFactors, Decimal, DurationUnit, LinkType, Minutes, Moment, TaskOutcome, TaskRole, TaskUid,
+    TimeBasis,
+};
 use planrs_render::geometry::{BarTextSource, Token};
 use planrs_render::style::BarField;
 
@@ -139,6 +142,107 @@ impl SessionTexts<'_> {
         let full = format_date(m, &self.ctx());
         full.split_once(' ').map_or(full.clone(), |(d, _)| d.to_owned())
     }
+
+    /// Date courte `JJ/MM/AA` (`MM/JJ/AA` en anglais), comme la table de
+    /// l'interface sans le jour de la semaine (H-UI-63).
+    fn day_short(&self, m: Moment) -> String {
+        let day = self.day(m);
+        // « 19/10/2026 » → « 19/10/26 » : les deux derniers chiffres de
+        // l'année.
+        match day.rsplit_once('/') {
+            Some((head, year)) if year.len() == 4 => {
+                format!("{head}/{}", year.get(2..).unwrap_or(year))
+            }
+            _ => day,
+        }
+    }
+}
+
+/// Abréviation d'une unité dans les étiquettes courtes (H-UI-63) :
+/// « j », « sem. », « mois » en français, « d », « wk », « mo » en
+/// anglais ; « e » devant pour une durée écoulée.
+fn short_unit(lang: Language, unit: DurationUnit, basis: TimeBasis) -> String {
+    let word = match (lang, unit) {
+        (_, DurationUnit::Minute) => "min",
+        (_, DurationUnit::Hour) => "h",
+        (Language::Fr, DurationUnit::Day) => "j",
+        (Language::En, DurationUnit::Day) => "d",
+        (Language::Fr, DurationUnit::Week) => "sem.",
+        (Language::En, DurationUnit::Week) => "wk",
+        (Language::Fr, DurationUnit::Month) => "mois",
+        (Language::En, DurationUnit::Month) => "mo",
+    };
+    if basis == TimeBasis::Elapsed {
+        format!("e{word}")
+    } else {
+        word.to_owned()
+    }
+}
+
+/// Valeur à une décimale au plus (arrondi au plus proche, demi vers le
+/// haut en valeur absolue), marque décimale de la langue : « 17,4 »,
+/// « 13 ».
+fn one_decimal(v: Decimal, sep: char) -> String {
+    // Dixièmes : mantisse ramenée à l'échelle 1.
+    let tenths = match v.scale() {
+        0 => v.mantissa().saturating_mul(10),
+        1 => v.mantissa(),
+        s => {
+            let den = 10_i64.saturating_pow(u32::from(s).saturating_sub(1));
+            let m = v.mantissa();
+            let half = den / 2;
+            let adj = if m < 0 {
+                m.saturating_sub(half)
+            } else {
+                m.saturating_add(half)
+            };
+            adj.checked_div(den).unwrap_or(0)
+        }
+    };
+    let sign = if tenths < 0 { "-" } else { "" };
+    let abs = tenths.unsigned_abs();
+    let (int, frac) = (abs / 10, abs % 10);
+    if frac == 0 {
+        format!("{sign}{int}")
+    } else {
+        format!("{sign}{int}{sep}{frac}")
+    }
+}
+
+/// Durée courte (H-UI-63) : `m` minutes dans l'unité donnée, une décimale
+/// au plus (« 13 j », « 4 sem. », « 1,5 mois ») ; « ? » si la conversion
+/// échoue (règle 10).
+fn short_duration(
+    m: Minutes,
+    unit: DurationUnit,
+    basis: TimeBasis,
+    f: &ConversionFactors,
+    lang: Language,
+) -> String {
+    let sep = match lang {
+        Language::Fr => ',',
+        Language::En => '.',
+    };
+    match f.to_unit_value(m, unit, basis) {
+        Ok(v) => format!("{}\u{a0}{}", one_decimal(v, sep), short_unit(lang, unit, basis)),
+        Err(_) => "?".to_owned(),
+    }
+}
+
+/// Durée courte d'une récapitulative (H-UI-63) : jours ouvrés, ou mois
+/// (une décimale) au-delà de deux mois (`2 × jours par mois`) : « 45 j »,
+/// « 17,4 mois ».
+fn short_summary_duration(m: Minutes, f: &ConversionFactors, lang: Language) -> String {
+    let per_day = i64::from(f.minutes_per_day());
+    let two_months = per_day
+        .saturating_mul(i64::from(f.days_per_month()))
+        .saturating_mul(2);
+    let unit = if m.get() > two_months {
+        DurationUnit::Month
+    } else {
+        DurationUnit::Day
+    };
+    short_duration(m, unit, TimeBasis::Working, f, lang)
 }
 
 impl BarTextSource for SessionTexts<'_> {
@@ -178,6 +282,24 @@ impl BarTextSource for SessionTexts<'_> {
                     display_duration(&task.duration, factors, &labels)
                 }
             }
+            BarField::DurationShort => {
+                let s = scheduled?;
+                if s.role == TaskRole::Summary {
+                    short_summary_duration(s.duration, factors, self.lang)
+                } else {
+                    let d = &task.duration;
+                    short_duration(d.minutes(), d.unit(), d.basis(), factors, self.lang)
+                }
+            }
+            BarField::NameDuration => {
+                let d = self.bar_text(uid, BarField::DurationShort);
+                match d {
+                    Some(d) if !task.name.is_empty() => format!("{} ({d})", task.name),
+                    _ => task.name.clone(),
+                }
+            }
+            BarField::StartShort => self.day_short(scheduled?.start),
+            BarField::FinishShort => self.day_short(scheduled?.finish),
             BarField::Percent => display_percent(scheduled?.percent_complete, &labels),
             BarField::TotalSlack => display_minutes_as(
                 scheduled?.total_slack,
@@ -285,5 +407,77 @@ mod tests {
         assert_eq!(fr.token(Token::PrintDate), "25/10/2026");
         assert_eq!(fr.token(Token::StatusDate), "19/10/2026");
         assert_eq!(fr.token(Token::Page), "");
+    }
+
+    /// H-UI-63 : étiquettes courtes (durée après le nom, durée courte,
+    /// dates courtes), toujours venues du moteur (règle 3).
+    #[test]
+    fn h_ui_63_short_labels() {
+        let s = session();
+        let fr = SessionTexts {
+            session: &s,
+            lang: Language::Fr,
+        };
+        let uid = TaskUid::new(1);
+        assert_eq!(
+            fr.bar_text(uid, BarField::NameDuration).as_deref(),
+            Some("Murs (10\u{a0}j)")
+        );
+        assert_eq!(
+            fr.bar_text(uid, BarField::DurationShort).as_deref(),
+            Some("10\u{a0}j")
+        );
+        assert_eq!(
+            fr.bar_text(uid, BarField::StartShort).as_deref(),
+            Some("19/10/26")
+        );
+        assert_eq!(
+            fr.bar_text(uid, BarField::FinishShort).as_deref(),
+            Some("30/10/26")
+        );
+        let en = SessionTexts {
+            session: &s,
+            lang: Language::En,
+        };
+        assert_eq!(
+            en.bar_text(uid, BarField::FinishShort).as_deref(),
+            Some("10/30/26")
+        );
+        assert_eq!(
+            en.bar_text(uid, BarField::NameDuration).as_deref(),
+            Some("Murs (10\u{a0}d)")
+        );
+    }
+
+    #[test]
+    fn h_ui_63_short_durations() {
+        let f = ConversionFactors::default();
+        let fr = Language::Fr;
+        let m = |v: i64| Minutes::new(v);
+        // 4 semaines.
+        assert_eq!(
+            short_duration(m(4 * 2_400), DurationUnit::Week, TimeBasis::Working, &f, fr),
+            "4\u{a0}sem."
+        );
+        // 1,5 mois (20 j/mois).
+        assert_eq!(
+            short_duration(m(15 * 480), DurationUnit::Month, TimeBasis::Working, &f, fr),
+            "0,8\u{a0}mois"
+        );
+        // Récapitulative : jusqu'à 40 j (2 mois) en jours, au-delà en mois.
+        assert_eq!(short_summary_duration(m(45 * 480), &f, fr), "2,3\u{a0}mois");
+        assert_eq!(short_summary_duration(m(40 * 480), &f, fr), "40\u{a0}j");
+        assert_eq!(short_summary_duration(m(348 * 480), &f, fr), "17,4\u{a0}mois");
+        assert_eq!(
+            short_summary_duration(m(348 * 480), &f, Language::En),
+            "17.4\u{a0}mo"
+        );
+        assert_eq!(
+            short_duration(m(3 * 1_440), DurationUnit::Day, TimeBasis::Elapsed, &f, fr),
+            "3\u{a0}ej"
+        );
+        assert_eq!(one_decimal(Decimal::new(1_745, 2).unwrap(), ','), "17,5");
+        assert_eq!(one_decimal(Decimal::new(-1_745, 2).unwrap(), ','), "-17,5");
+        assert_eq!(one_decimal(Decimal::integer(13), ','), "13");
     }
 }

@@ -226,16 +226,23 @@
     "critical": {
       "right": "name"
     },
-    "milestone": {
-      "right": "finish"
-    },
-    "milestone_critical": {
-      "right": "finish"
-    },
-    "summary": {
+    "manual": {
       "right": "name"
     },
+    "summary": {
+      "left": "name",
+      "right": "duration_short"
+    },
     "summary_critical": {
+      "left": "name",
+      "right": "duration_short"
+    },
+    "milestone": {
+      "left": "finish_short",
+      "right": "name"
+    },
+    "milestone_critical": {
+      "left": "finish_short",
       "right": "name"
     }
   },
@@ -247,10 +254,10 @@
     "today_mark": true
   },
   "grid": {
-    "rows": "zebra",
+    "rows": "none",
     "major_v": true,
-    "minor_v": false,
-    "row_lines": false
+    "minor_v": true,
+    "row_lines": true
   },
   "density": "normal",
   "font": {

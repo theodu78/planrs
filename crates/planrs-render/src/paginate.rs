@@ -20,7 +20,7 @@ use std::ops::Range;
 use crate::axis::SUB;
 use crate::geometry::{BarTextSource, Part, Scene, Token};
 use crate::request::Zoom;
-use crate::scene::TABLE_W;
+use crate::scene::table_width16;
 use crate::style::{Fit, PageStyle, Paper, Slot};
 
 /// Plafond du nombre de pages d'un export (règle 10 : entrée bornée).
@@ -35,6 +35,8 @@ pub const FOOTER_LINES: usize = 3;
 /// Interligne des en-têtes et pieds de page, en points.
 pub const SLOT_LINE_PT: u32 = 12;
 
+/// Hauteur de la ligne de titre du cartouche (H-UI-66), en points.
+pub const TITLE_LINE_PT: u32 = 26;
 /// Écart entre l'en-tête (ou le pied) de page et le planning, en points.
 pub const SLOT_GAP_PT: u32 = 6;
 
@@ -104,6 +106,10 @@ pub struct Pages {
     pub legend16: (i64, i64),
     /// Scène paginée (le PDF la lit page par page).
     pub scene: Scene,
+    /// Cartouche (H-UI-66) : première ligne de la zone centrale de
+    /// l'en-tête en titre sur [`TITLE_LINE_PT`], première ligne de la zone
+    /// droite appuyée.
+    pub title_block: bool,
 }
 
 /// Erreur de pagination.
@@ -204,10 +210,11 @@ pub fn fit_zoom(page: &PageStyle) -> Option<Zoom> {
     };
     let (w_pt, _) = printable_pt(page);
     let content16 = pt_to16(w_pt, FULL_SCALE);
-    let gantt16 = if page.repeat_table && content16 >= TABLE_W.saturating_add(MIN_SLICE16) {
-        content16.saturating_sub(TABLE_W).saturating_mul(n)
+    let table16 = table_width16(page.columns.as_deref());
+    let gantt16 = if page.repeat_table && content16 >= table16.saturating_add(MIN_SLICE16) {
+        content16.saturating_sub(table16).saturating_mul(n)
     } else {
-        content16.saturating_mul(n).saturating_sub(TABLE_W)
+        content16.saturating_mul(n).saturating_sub(table16)
     };
     let width_px = u32::try_from((gantt16 / SUB).max(1)).unwrap_or(u32::MAX);
     Some(Zoom::Auto { width_px })
@@ -534,7 +541,14 @@ pub fn paginate_with(
     let (_, h_pt) = printable_pt(page);
     let header_lines = lines_of(&page.header, HEADER_LINES);
     let footer_lines = lines_of(&page.footer, FOOTER_LINES);
-    let header_pt = header_lines.saturating_mul(SLOT_LINE_PT);
+    let title = page.title_block && !page.header[1].0.trim().is_empty();
+    let header_pt = header_lines
+        .saturating_mul(SLOT_LINE_PT)
+        .saturating_add(if title {
+            TITLE_LINE_PT.saturating_sub(SLOT_LINE_PT)
+        } else {
+            0
+        });
     let footer_pt = footer_lines.saturating_mul(SLOT_LINE_PT);
     let gaps = if header_pt > 0 { SLOT_GAP_PT } else { 0 }.saturating_add(if footer_pt > 0 {
         SLOT_GAP_PT
@@ -619,6 +633,7 @@ pub fn paginate_with(
         cut16: shape.cut16,
         legend16: (shape.legend_top16, shape.legend16),
         scene: scene.clone(),
+        title_block: title,
     })
 }
 

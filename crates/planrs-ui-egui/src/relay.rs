@@ -630,7 +630,8 @@ impl App {
         }
         let mut selection: Vec<u32> = self.selected.click_order().iter().map(|uid| uid.get()).collect();
         selection.sort_unstable();
-        let visible = self.rows.as_ref().map(|rows| {
+        // Lignes affichées (J8, lot L5 : la vue filtrée, triée ou repliée).
+        let visible = self.visible_rows().map(|rows| {
             let top = self.view.last_scroll_y;
             let range = geom::visible_rows(top, top + self.view.last_body_height, view::ROW_H, rows.len(), 0);
             json!([range.start, range.end.saturating_sub(1).max(range.start)])

@@ -17,9 +17,10 @@ use crate::dialog::DialogState;
 use crate::edit::TableEdit;
 use crate::i18n::Texts;
 use crate::nav::CellCursor;
+use crate::row_view::{DisplayRow, RowView, VisibleRows};
 use crate::rows::RowModel;
 use crate::selection::Selection;
-use crate::state::UiState;
+use crate::state::{TaskViewState, UiState};
 use crate::theme::Palette;
 
 pub mod approval;
@@ -139,6 +140,14 @@ pub struct ViewTransient {
     /// Utilisation des ressources : curseur, lignes, blocs de périodes du
     /// moteur (J7, lot L11).
     pub usage: usage::UsageState,
+    /// Filtre, tri et niveau affiché de la vue des tâches (J8, lot L5) :
+    /// une vue, rien d'écrit (P50).
+    pub task_view: TaskViewState,
+    /// Récapitulatives repliées (J8, lot L5, H-UI-34).
+    pub collapsed: BTreeSet<TaskUid>,
+    /// Version du repli : change à chaque changement de `collapsed` (clé du
+    /// cache de `RowView`).
+    pub collapse_version: u64,
 }
 
 /// Volet de la vue principale (J7).
@@ -164,9 +173,9 @@ pub struct BarDrag {
     pub origin_x: f32,
     /// Écart courant en jours entiers (`TimeAxis::days_for_dx`).
     pub days: i64,
-    /// Ligne de la barre d'une autre tâche sous le pointeur (tracer un
-    /// lien, R-243) ; `None` ailleurs, même sur une autre ligne.
-    pub over_row: Option<usize>,
+    /// Ligne affichée de la barre d'une autre tâche sous le pointeur
+    /// (tracer un lien, R-243) ; `None` ailleurs, même sur une autre ligne.
+    pub over_row: Option<DisplayRow>,
     /// Aperçu pour `days`, recalculé seulement quand `days` change.
     pub preview: Option<Preview>,
 }
@@ -252,8 +261,12 @@ pub struct FrameCtx<'a> {
     pub state: &'a UiState,
     /// Document ouvert, s'il y en a un.
     pub doc: Option<&'a OpenDocument>,
-    /// Modèle de lignes du document (dans la langue courante).
+    /// Modèle de lignes du document (dans la langue courante, ordre des
+    /// ID).
     pub rows: Option<&'a RowModel>,
+    /// Vue des lignes (J8, lot L5) : lignes affichées, construite sur
+    /// `rows` ; lue par [`FrameCtx::visible`].
+    pub row_view: Option<&'a RowView>,
     /// Messages traduits.
     pub texts: &'a Texts,
     /// Couleurs du thème résolu.
@@ -274,4 +287,14 @@ pub struct FrameCtx<'a> {
     /// laisse la table cliquable) : aucune saisie de cellule ne s'ouvre, ses
     /// touches seraient retirées de l'image (relecture finale J7, F9).
     pub window_open: bool,
+}
+
+impl<'a> FrameCtx<'a> {
+    /// Lignes affichées (modèle lu à travers sa vue) ; `None` sans document.
+    #[must_use]
+    pub fn visible(&self) -> Option<VisibleRows<'a>> {
+        self.rows
+            .zip(self.row_view)
+            .map(|(model, view)| VisibleRows::new(model, view))
+    }
 }

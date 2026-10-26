@@ -2,7 +2,9 @@
 //!
 //! Seules les lignes de la plage visible sont dessinées ; chaque ligne déclare
 //! un nœud d'accessibilité (`row-label`) pour être retrouvée par les tests.
-//! Les textes viennent tout formatés du `RowModel` : aucune mise en forme ni
+//! Les textes viennent tout formatés du `RowModel`, lus à travers la vue
+//! des lignes (`VisibleRows`, J8 lot L5 : indice de ligne = ligne affichée) :
+//! aucune mise en forme ni
 //! aucun parcours proportionnel au nombre de tâches pendant l'image. Chaque
 //! cellule est une galley du cache d'egui (`LayoutJob` tronqué par « … »),
 //! colorée au dessin (`Color32::PLACEHOLDER`), donc partagée entre les thèmes.
@@ -31,7 +33,8 @@ use crate::grid::{
 use crate::grid::{NAME_MIN_TEXT_ROOM, name_indent};
 use crate::i18n::{Arg, TextId, Texts};
 use crate::nav::{CellCursor, RowRef};
-use crate::rows::{Row, RowKind, RowModel};
+use crate::row_view::{DisplayRow, VisibleRows};
+use crate::rows::{Row, RowKind};
 use crate::state::UiState;
 use crate::theme::Palette;
 
@@ -78,11 +81,12 @@ fn cell_text_color(row: &Row, column: Column, palette: &Palette) -> egui::Color3
 }
 
 /// La table des tâches vue comme une grille ([`Sheet`], J7 lot L10) : lignes
-/// du `RowModel`, colonnes visibles de l'état d'interface, nom indenté par
-/// niveau, récapitulative en gras simulé.
+/// affichées du `RowModel` (indice de la grille = ligne affichée, J8 lot
+/// L5), colonnes visibles de l'état d'interface, nom indenté par niveau,
+/// récapitulative en gras simulé.
 pub struct TaskSheet<'a> {
-    /// Lignes et textes pré-formatés.
-    rows: &'a RowModel,
+    /// Lignes affichées et textes pré-formatés.
+    rows: VisibleRows<'a>,
     /// Colonnes visibles et leurs largeurs.
     columns: Vec<(Column, u16)>,
     /// Messages (refus d'une saisie).
@@ -92,7 +96,7 @@ pub struct TaskSheet<'a> {
 impl<'a> TaskSheet<'a> {
     /// Grille des lignes `rows` avec les colonnes visibles de `state`.
     #[must_use]
-    pub fn new(rows: &'a RowModel, state: &UiState, texts: &'a Texts) -> Self {
+    pub fn new(rows: VisibleRows<'a>, state: &UiState, texts: &'a Texts) -> Self {
         Self {
             rows,
             columns: visible_columns(state),
@@ -119,11 +123,11 @@ impl Sheet for TaskSheet<'_> {
     }
 
     fn key(&self, row: usize) -> Option<TaskUid> {
-        self.rows.row(row).map(|row| row.uid)
+        self.rows.uid(DisplayRow::at(row))
     }
 
     fn index_of(&self, key: TaskUid) -> Option<usize> {
-        self.rows.index_of(key)
+        self.rows.display_of(key).map(DisplayRow::index)
     }
 
     fn columns(&self) -> &[(Column, u16)] {
@@ -139,7 +143,7 @@ impl Sheet for TaskSheet<'_> {
     }
 
     fn style(&self, row: usize, col: Column, palette: &Palette) -> CellStyle {
-        let Some(r) = self.rows.row(row) else {
+        let Some(r) = self.rows.row(DisplayRow::at(row)) else {
             return CellStyle::plain(palette.text);
         };
         CellStyle {
@@ -150,7 +154,7 @@ impl Sheet for TaskSheet<'_> {
     }
 
     fn text(&self, row: usize, col: Column) -> &str {
-        self.rows.text(row, col)
+        self.rows.text(DisplayRow::at(row), col)
     }
 
     fn editable(&self, col: Column) -> bool {
@@ -415,7 +419,7 @@ pub fn paint_body(
     shapes = shapes.saturating_add(1);
     let zebra = palette.background.lerp_to_gamma(palette.header_bg, 0.6);
 
-    let Some(rows) = fc.rows else {
+    let Some(rows) = fc.visible() else {
         fc.stats.shapes = fc.stats.shapes.saturating_add(shapes);
         return;
     };
@@ -438,7 +442,7 @@ pub fn paint_body(
         if !row_rect.is_finite() {
             continue;
         }
-        let row = rows.row(i);
+        let row = rows.row(DisplayRow::at(i));
         if row.is_none() && i != blank {
             continue;
         }
@@ -497,7 +501,7 @@ pub fn paint_body(
 fn row_widget(
     ui: &egui::Ui,
     fc: &FrameCtx<'_>,
-    rows: &RowModel,
+    rows: VisibleRows<'_>,
     hit: Rect,
     i: usize,
     selected: bool,
@@ -509,12 +513,13 @@ fn row_widget(
     );
     let texts = fc.texts;
     response.widget_info(|| {
-        let label = match rows.row(i) {
+        let d = DisplayRow::at(i);
+        let label = match rows.row(d) {
             Some(row) => texts.get_args(
                 TextId::RowLabel,
                 &[
                     ("id", Arg::Count(i64::from(row.id))),
-                    ("name", Arg::Str(rows.text(i, Column::Name).into())),
+                    ("name", Arg::Str(rows.text(d, Column::Name).into())),
                 ],
             ),
             None => texts.get(TextId::BlankRowLabel),
@@ -582,9 +587,10 @@ fn paint_cursor(
         let rows = sheet.rows;
         let column = texts.get(cursor.column.title());
         response.widget_info(|| {
-            let label = match rows.row(index) {
+            let d = DisplayRow::at(index);
+            let label = match rows.row(d) {
                 Some(row) => {
-                    let value = rows.text(index, cursor.column);
+                    let value = rows.text(d, cursor.column);
                     let value = if value.is_empty() {
                         texts.get(TextId::NavCursorEmptyValue)
                     } else {
@@ -648,11 +654,12 @@ fn row_clicked(
     }
 }
 
-/// Ouvre la saisie de la cellule (`uid`, `column`) avec son texte initial
-/// (F2, double-clic) ; rien sur une colonne calculée.
+/// Ouvre la saisie de la cellule (`uid`, `column`) de la ligne affichée
+/// `i` avec son texte initial (F2, double-clic) ; rien sur une colonne
+/// calculée.
 fn open_editor(
     fc: &FrameCtx<'_>,
-    rows: &RowModel,
+    rows: VisibleRows<'_>,
     edit: &mut TableEdit,
     column: Column,
     uid: Option<TaskUid>,
@@ -662,15 +669,16 @@ fn open_editor(
     if !editable(column) {
         return;
     }
-    let text = initial_text(doc, rows, i, column, fc.texts.language());
+    let model_index = rows.model_index_or_blank(DisplayRow::at(i));
+    let text = initial_text(doc, rows.model(), model_index, column, fc.texts.language());
     edit.start(EditState::open(uid, column, text));
 }
 
-/// Ligne courante pour la saisie : tâche sélectionnée, ou ligne vide sans
-/// sélection.
-fn current_row(fc: &FrameCtx<'_>, rows: &RowModel) -> Option<(Option<TaskUid>, usize)> {
+/// Ligne courante pour la saisie (ligne affichée) : tâche sélectionnée, ou
+/// ligne vide sans sélection.
+fn current_row(fc: &FrameCtx<'_>, rows: VisibleRows<'_>) -> Option<(Option<TaskUid>, usize)> {
     match fc.selection {
-        Some(uid) => rows.index_of(uid).map(|i| (Some(uid), i)),
+        Some(uid) => rows.display_of(uid).map(|d| (Some(uid), d.index())),
         None => Some((None, rows.len())),
     }
 }

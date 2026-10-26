@@ -21,9 +21,11 @@
 //! Annuler) ; sur le desktop, la fermeture de la fenêtre est annulée
 //! (`ViewportCommand::CancelClose`) jusqu'à la réponse.
 
+use std::collections::BTreeSet;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use planrs_automation::error::codes;
+use planrs_automation::filter::FilterCtx;
 use planrs_automation::gesture::{GestureError, NotDraggable};
 use planrs_automation::{
     AnchorSpec, ApplyMode, ApplyOutcome, Batch, CommandError, CommandErrorKind, HistoryError, NewProject,
@@ -46,9 +48,13 @@ use crate::io::{
 };
 use crate::keymap::KeyState;
 use crate::nav::{self, GridPos, GridShape, NavMove, RowRef};
+use crate::row_view::{DisplayRow, ModelRow, RowView, VisibleRows};
 use crate::rows::RowModel;
 use crate::selection::{SelectMode, Selection};
-use crate::state::{StateLoadError, TABLE_WIDTH_MAX, TABLE_WIDTH_MIN, ThemePref, UiState, ViewKind};
+use crate::state::{
+    FilterChoice, SortSpec, StateLoadError, TABLE_WIDTH_MAX, TABLE_WIDTH_MIN, TaskViewState, ThemePref,
+    UiState, ViewKind,
+};
 use crate::structure::PendingDelete;
 use crate::theme::Palette;
 use crate::timescale::{
@@ -267,6 +273,26 @@ pub struct UserMessage {
     pub text: String,
 }
 
+/// Clé du cache de la vue des lignes ([`RowView`]) : elle est reconstruite
+/// seulement quand l'un de ces éléments change (ADR-0016 D1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RowViewKey {
+    /// Numéro d'ouverture et génération du document.
+    document: (u64, u64),
+    /// Langue des textes du `RowModel` (tri par nom).
+    language: Language,
+    /// Nombre de lignes du modèle.
+    rows: usize,
+    /// Filtre.
+    filter: FilterChoice,
+    /// Tri.
+    sort: Option<SortSpec>,
+    /// Niveau affiché.
+    outline_level: Option<u8>,
+    /// Version du repli.
+    collapse_version: u64,
+}
+
 /// Application egui de planrs, indépendante d'eframe.
 pub struct App {
     /// Préférences persistées.
@@ -289,6 +315,11 @@ pub struct App {
     pub(crate) texts: Texts,
     /// Modèle de lignes du document, dans la langue courante.
     pub(crate) rows: Option<RowModel>,
+    /// Vue des lignes (J8, lot L5) : lignes affichées par filtre, tri et
+    /// repli, construite sur `rows` ; identité sans état de vue.
+    row_view: RowView,
+    /// Clé de la vue construite (`None` : à reconstruire).
+    row_view_key: Option<RowViewKey>,
     /// État transitoire de la vue.
     pub(crate) view: ViewTransient,
     /// File des actions en attente.
@@ -364,6 +395,8 @@ impl App {
             env,
             texts,
             rows: None,
+            row_view: RowView::default(),
+            row_view_key: None,
             view: ViewTransient::default(),
             actions: Vec::new(),
             messages: Vec::new(),
@@ -537,9 +570,128 @@ impl App {
         self.rows = Some(rows);
         self.diagnostics = DiagnosticsView::build(document);
         self.selected.retain(|uid| document.project().tasks.contains(uid));
+        self.row_view_key = None;
+        self.ensure_row_view();
         self.sync_selection();
         self.clamp_gantt_scroll();
         self.notify_observer();
+    }
+
+    /// État de la vue des tâches (filtre, tri, niveau affiché ; J8, lot
+    /// L5).
+    #[must_use]
+    pub const fn task_view(&self) -> &TaskViewState {
+        &self.view.task_view
+    }
+
+    /// Change l'état de la vue des tâches : une vue, rien d'écrit dans le
+    /// document (P50) ; la vue des lignes est reconstruite aussitôt, une
+    /// sélection devenue masquée est retirée.
+    pub fn set_task_view(&mut self, state: TaskViewState) {
+        if self.view.task_view != state {
+            self.view.task_view = state;
+            self.ensure_row_view();
+            self.sync_selection();
+        }
+    }
+
+    /// Récapitulatives repliées (J8, lot L5).
+    #[must_use]
+    pub const fn collapsed(&self) -> &BTreeSet<TaskUid> {
+        &self.view.collapsed
+    }
+
+    /// Replie (`true`) ou déplie la tâche `uid` (sans effet sur une feuille,
+    /// qui n'a rien à masquer) ; rien d'écrit dans le document.
+    pub fn set_collapsed(&mut self, uid: TaskUid, collapsed: bool) {
+        let changed = if collapsed {
+            self.view.collapsed.insert(uid)
+        } else {
+            self.view.collapsed.remove(&uid)
+        };
+        if changed {
+            self.view.collapse_version = self.view.collapse_version.wrapping_add(1);
+            self.ensure_row_view();
+            self.sync_selection();
+        }
+    }
+
+    /// Inverse le repli de `uid`.
+    pub fn toggle_collapsed(&mut self, uid: TaskUid) {
+        let collapsed = self.view.collapsed.contains(&uid);
+        self.set_collapsed(uid, !collapsed);
+    }
+
+    /// Reconstruit la vue des lignes si sa clé a changé (document, édition,
+    /// langue, filtre, tri, niveau, repli), puis retire de la sélection les
+    /// tâches masquées : la tâche active masquée est remplacée par la
+    /// prochaine tâche affichée dans l'ordre des ID (la précédente en fin de
+    /// liste ; aucune si rien n'est affiché). Une saisie ouverte sur une
+    /// ligne masquée est abandonnée. Sans document : vue vide.
+    pub(crate) fn ensure_row_view(&mut self) {
+        let (Some(document), Some(model)) = (&self.document, &self.rows) else {
+            self.row_view = RowView::default();
+            self.row_view_key = None;
+            return;
+        };
+        let task_view = &self.view.task_view;
+        let key = RowViewKey {
+            document: document.cache_key(),
+            language: self.texts.language(),
+            rows: model.len(),
+            filter: task_view.filter.clone(),
+            sort: task_view.sort,
+            outline_level: task_view.outline_level,
+            collapse_version: self.view.collapse_version,
+        };
+        if self.row_view_key.as_ref() != Some(&key) {
+            let project = document.project();
+            let ctx = FilterCtx {
+                project,
+                schedule: document.schedule(),
+                status: project.effective_status_date(),
+            };
+            self.row_view = RowView::build(model, &ctx, task_view, &self.view.collapsed);
+            self.row_view_key = Some(key);
+        }
+        self.drop_hidden_selection();
+    }
+
+    /// Retire de la sélection les tâches que la vue masque (voir
+    /// [`App::ensure_row_view`]).
+    fn drop_hidden_selection(&mut self) {
+        let Some(model) = &self.rows else {
+            return;
+        };
+        let view = &self.row_view;
+        let shown = |uid: TaskUid| {
+            model
+                .index_of(uid)
+                .is_some_and(|i| view.display_row(ModelRow::at(i)).is_some())
+        };
+        if let Some(active) = self.selection
+            && !shown(active)
+            && let Some(i) = model.index_of(active)
+        {
+            let visible_at = |j: usize| {
+                view.display_row(ModelRow::at(j))
+                    .and_then(|_| model.row(j))
+                    .map(|row| row.uid)
+            };
+            let next = (i.saturating_add(1)..model.len())
+                .find_map(visible_at)
+                .or_else(|| (0..i).rev().find_map(visible_at));
+            self.selected.retain(|uid| uid != active);
+            self.selection = next;
+        }
+        if self.selected.uids().iter().any(|&uid| !shown(uid)) {
+            self.selected.retain(shown);
+        }
+        if let Some(editing) = &self.view.edit.editing
+            && editing.uid.is_some_and(|uid| !shown(uid))
+        {
+            self.view.edit.editing = None;
+        }
     }
 
     /// Tâches sélectionnées (lot L14).
@@ -670,6 +822,8 @@ impl App {
     fn close_document(&mut self) {
         self.document = None;
         self.rows = None;
+        self.row_view = RowView::default();
+        self.row_view_key = None;
         self.diagnostics = DiagnosticsView::default();
         self.selection = None;
         self.view = self.fresh_view(false);
@@ -922,6 +1076,21 @@ impl App {
         self.rows.as_ref()
     }
 
+    /// Vue des lignes du document ouvert (J8, lot L5) : lignes affichées
+    /// (vide sans document).
+    #[must_use]
+    pub const fn row_view(&self) -> &RowView {
+        &self.row_view
+    }
+
+    /// Lignes affichées du document ouvert (modèle lu à travers sa vue).
+    #[must_use]
+    pub fn visible_rows(&self) -> Option<VisibleRows<'_>> {
+        self.rows
+            .as_ref()
+            .map(|model| VisibleRows::new(model, &self.row_view))
+    }
+
     /// État transitoire de la vue (défilements, ajustement en attente).
     #[must_use]
     pub const fn view(&self) -> &ViewTransient {
@@ -997,6 +1166,13 @@ impl App {
             last_gantt_width: self.view.last_gantt_width,
             last_gantt_left: self.view.last_gantt_left,
             edit: TableEdit::default(),
+            // Préférences de la vue des tâches (niveau affiché, surbrillance
+            // du critique) ; filtre, tri et repli repartent de zéro.
+            task_view: TaskViewState {
+                outline_level: self.state.task_view.outline_level,
+                highlight_critical: self.state.task_view.highlight_critical,
+                ..TaskViewState::default()
+            },
             ..ViewTransient::default()
         }
     }
@@ -1009,16 +1185,18 @@ impl App {
         let document = OpenDocument::new(loaded, origin, opening);
         self.rows = Some(RowModel::build(&document, self.texts.format_labels()));
         self.diagnostics = DiagnosticsView::build(&document);
-        // Curseur sur la première ligne, colonne Nom, focus à la table
-        // (J7 lot L1) ; projet sans tâche : la ligne vide.
-        self.selection = self.rows.as_ref().and_then(|rows| rows.row(0)).map(|row| row.uid);
-        self.selected = Selection::single(self.selection);
         if let Some(path) = &document.origin.path {
             self.state.remember_recent(path, &document.origin.name);
         }
         self.document = Some(document);
         self.view = self.fresh_view(true);
         self.view.focus_table_pending = true;
+        self.row_view_key = None;
+        self.ensure_row_view();
+        // Curseur sur la première ligne affichée, colonne Nom, focus à la
+        // table (J7 lot L1) ; projet sans tâche : la ligne vide.
+        self.selection = self.visible_rows().and_then(|rows| rows.uid(DisplayRow(0)));
+        self.selected = Selection::single(self.selection);
         self.sync_selection();
         // Une ouverture réussie rend caduques les erreurs et avertissements
         // d'ouverture précédents.
@@ -1114,6 +1292,8 @@ impl App {
             }
             self.rows = Some(RowModel::build(document, self.texts.format_labels()));
             self.diagnostics = DiagnosticsView::build(document);
+            self.row_view_key = None;
+            self.ensure_row_view();
         }
     }
 
@@ -1243,7 +1423,8 @@ impl App {
                 self.clamp_gantt_scroll();
             }
             Action::ScrollToRow(index) => {
-                let len = self.rows.as_ref().map_or(0, RowModel::len);
+                // Ligne affichée (J8, lot L5).
+                let len = self.row_view.len();
                 let row = index.min(len.saturating_sub(1));
                 self.view.pending_scroll_y = Some(geom::index_to_f32(row) * view::ROW_H);
             }
@@ -1266,7 +1447,11 @@ impl App {
             Action::Redo => drop(self.redo()),
             Action::SelectWith { uid, mode } => {
                 self.sync_selection();
-                if let Some(rows) = &self.rows {
+                if let Some(rows) = self
+                    .rows
+                    .as_ref()
+                    .map(|model| VisibleRows::new(model, &self.row_view))
+                {
                     self.selected.click(uid, mode, rows);
                     self.selection = self.selected.focus();
                 }
@@ -1487,12 +1672,12 @@ impl App {
                 }
             }
             UiOp::ScrollTo(uid) => {
-                if let Some(index) = self
-                    .rows
-                    .as_ref()
-                    .and_then(|rows| rows.index_of(TaskUid::new(uid)))
+                // Ligne affichée ; une tâche masquée par la vue : rien.
+                if let Some(d) = self
+                    .visible_rows()
+                    .and_then(|rows| rows.display_of(TaskUid::new(uid)))
                 {
-                    self.apply(Action::ScrollToRow(index), ctx);
+                    self.apply(Action::ScrollToRow(d.index()), ctx);
                 }
             }
             UiOp::Zoom(zoom) => self.apply(Action::SetZoom(zoom), ctx),
@@ -1574,13 +1759,15 @@ impl App {
     /// ligne vide) ; le défilement vertical suit le curseur avec une ligne
     /// de marge ([`nav::ensure_visible`]).
     fn navigate(&mut self, mv: NavMove, extend: bool) {
-        let Some(rows) = &self.rows else {
+        let Some(model) = &self.rows else {
             return;
         };
+        // Lignes affichées (J8, lot L5) : la navigation suit la vue.
+        let rows = VisibleRows::new(model, &self.row_view);
         let len = rows.len();
         let visible: Vec<Column> = self.state.visible_columns().map(|state| state.column).collect();
         let row = match self.selection {
-            Some(uid) => rows.index_of(uid).unwrap_or(0),
+            Some(uid) => rows.display_of(uid).map_or(0, DisplayRow::index),
             None => len,
         };
         let col = visible
@@ -1601,7 +1788,7 @@ impl App {
         if let Some(column) = visible.get(target.col) {
             self.view.cursor.column = *column;
         }
-        let uid = rows.row(target.row).map(|row| row.uid);
+        let uid = rows.uid(DisplayRow::at(target.row));
         match uid {
             Some(uid) if extend => {
                 let anchor = self.selected.anchor().or(self.selection).unwrap_or(uid);
@@ -2018,6 +2205,7 @@ impl App {
         self.guard_close(&ctx);
         self.apply_theme(&ctx);
         self.apply_language();
+        self.ensure_row_view();
         let palette = Palette::for_theme(ctx.theme());
         let metrics = Metrics::default();
         self.sync_selection();
@@ -2051,6 +2239,7 @@ impl App {
                 state: &self.state,
                 doc: self.document.as_ref(),
                 rows: self.rows.as_ref(),
+                row_view: Some(&self.row_view),
                 texts: &self.texts,
                 palette: &palette,
                 metrics: &metrics,
@@ -2113,6 +2302,7 @@ impl App {
         }
         // Après le réducteur : un clic dans le Gantt a déjà changé de volet.
         self.refocus_table_after_click(&ctx);
+        self.ensure_row_view();
         self.sync_selection();
         // Ajustement du zoom après une ouverture, dès que la largeur du
         // Gantt est connue : là aussi, une image de plus au bon zoom.

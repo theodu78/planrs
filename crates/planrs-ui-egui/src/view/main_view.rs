@@ -42,7 +42,8 @@ use crate::app::OpenDocument;
 use crate::geom::{self, GanttHit, MainLayout};
 use crate::i18n::TextId;
 use crate::keymap::{self, Binding, UiBinding};
-use crate::rows::{RowKind, RowModel};
+use crate::row_view::{DisplayRow, VisibleRows};
+use crate::rows::RowKind;
 use crate::selection::SelectMode;
 use crate::state::GanttStyle;
 use crate::structure::StructureOp;
@@ -182,12 +183,12 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
 /// la zone de saisie est dessinée dès l'image suivante (relecture finale J7,
 /// F2 : une saisie ouverte hors de l'écran ne recevait pas la frappe).
 fn reveal_edited_row(fc: &FrameCtx<'_>, view: &mut ViewTransient) {
-    let (Some(rows), Some(state)) = (fc.rows, view.edit.editing.as_ref()) else {
+    let (Some(rows), Some(state)) = (fc.visible(), view.edit.editing.as_ref()) else {
         return;
     };
     let index = match state.uid {
-        Some(uid) => match rows.index_of(uid) {
-            Some(index) => index,
+        Some(uid) => match rows.display_of(uid) {
+            Some(d) => d.index(),
             None => return,
         },
         None => rows.len(),
@@ -274,7 +275,7 @@ fn paint_rows(
 ) -> RowsOut {
     let row_h = fc.metrics.row_h;
     // Une ligne de plus que de tâches : la ligne vide de fin (création).
-    let len = fc.rows.map_or(0, |rows| rows.len().saturating_add(1));
+    let len = fc.visible().map_or(0, |rows| rows.len().saturating_add(1));
     let content_h = geom::index_to_f32(len) * row_h;
     let content_h = if content_h.is_finite() {
         content_h.max(0.0)
@@ -333,8 +334,7 @@ fn paint_rows(
             let in_gantt = gantt_clip.contains(p);
             let uid = if in_gantt {
                 geom::row_at(p.y - origin.y, row_h, len)
-                    .and_then(|i| fc.rows.and_then(|rows| rows.row(i)))
-                    .map(|row| row.uid)
+                    .and_then(|i| fc.visible().and_then(|rows| rows.uid(DisplayRow::at(i))))
             } else {
                 None
             };
@@ -347,8 +347,7 @@ fn paint_rows(
         apply_click_modifiers(fc.actions, first_action, modifiers);
         let context_click = secondary_click(ui, table_clip.union(gantt_clip)).map(|p| ContextClick {
             uid: geom::row_at(p.y - origin.y, row_h, len)
-                .and_then(|i| fc.rows.and_then(|rows| rows.row(i)))
-                .map(|row| row.uid),
+                .and_then(|i| fc.visible().and_then(|rows| rows.uid(DisplayRow::at(i)))),
         });
         let from_gantt = ui
             .input(|i| i.pointer.press_origin())
@@ -380,12 +379,12 @@ fn paint_rows(
 /// Écart en jours du glisser `d` pour l'abscisse écran `x` : depuis le
 /// point de départ (déplacer, redimensionner), depuis le début de la barre
 /// (avancement, R-242). `left` : bord gauche du Gantt.
-fn gesture_days(d: &BarDrag, rows: &RowModel, axis: &TimeAxis, left: f32, x: f32) -> i64 {
+fn gesture_days(d: &BarDrag, rows: VisibleRows<'_>, axis: &TimeAxis, left: f32, x: f32) -> i64 {
     match d.kind {
         GestureKind::Move | GestureKind::Resize => axis.days_for_dx(x - left - d.origin_x),
         GestureKind::Progress => {
             let start_x = rows
-                .index_of(d.uid)
+                .display_of(d.uid)
                 .and_then(|i| rows.row(i))
                 .and_then(|row| row.bar)
                 .map_or(left + d.origin_x, |(start, _)| axis.x(start));
@@ -416,7 +415,7 @@ fn bar_gesture(
     gantt_clip: Rect,
     from_gantt: bool,
 ) -> bool {
-    let (Some(doc), Some(rows)) = (fc.doc, fc.rows) else {
+    let (Some(doc), Some(rows)) = (fc.doc, fc.visible()) else {
         *drag = None;
         return false;
     };
@@ -493,17 +492,17 @@ fn bar_gesture(
 /// relecture finale J7, F7 : lâcher n'importe où sur une autre ligne,
 /// même dans le vide, liait au lieu de déplacer).
 fn link_target(
-    rows: &RowModel,
+    rows: VisibleRows<'_>,
     axis: &TimeAxis,
     origin: Pos2,
     row_h: f32,
     tracking: bool,
     p: Pos2,
     from: TaskUid,
-) -> Option<usize> {
+) -> Option<DisplayRow> {
     match gantt::hit_test(rows, axis, origin, row_h, tracking, p) {
         GanttHit::Bar(uid) | GanttHit::BarStart(uid) | GanttHit::BarEnd(uid) if uid != from => {
-            rows.index_of(uid)
+            rows.display_of(uid)
         }
         _ => None,
     }
@@ -525,9 +524,9 @@ fn hover_cursor(ui: &egui::Ui, hit: GanttHit) {
 /// ailleurs, même sur une autre ligne, le geste reste un déplacement), déplacement (R-240 ; récapitulative : rien),
 /// redimensionnement (R-241), avancement (R-242, seulement si le pointeur
 /// a bougé d'au moins un demi-jour).
-fn drop_gesture(fc: &mut FrameCtx<'_>, doc: &OpenDocument, rows: &RowModel, d: &BarDrag, moved: bool) {
+fn drop_gesture(fc: &mut FrameCtx<'_>, doc: &OpenDocument, rows: VisibleRows<'_>, d: &BarDrag, moved: bool) {
     let s = &doc.session;
-    let origin_row = rows.index_of(d.uid);
+    let origin_row = rows.display_of(d.uid);
     let result = match d.kind {
         GestureKind::Move => {
             if let Some(target) = d.over_row.filter(|&r| Some(r) != origin_row) {
@@ -572,7 +571,7 @@ fn gantt_double_click(
     if !(background.double_clicked() || background.triple_clicked()) {
         return;
     }
-    let (Some(rows), Some(p)) = (fc.rows, background.interact_pointer_pos()) else {
+    let (Some(rows), Some(p)) = (fc.visible(), background.interact_pointer_pos()) else {
         return;
     };
     if !gantt_clip.contains(p) {
@@ -953,6 +952,7 @@ mod tests {
                 state: &app.state,
                 doc: app.document.as_ref(),
                 rows: app.rows(),
+                row_view: Some(app.row_view()),
                 texts: &texts,
                 palette: &palette,
                 metrics: &metrics,

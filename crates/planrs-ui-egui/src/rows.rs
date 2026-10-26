@@ -11,8 +11,8 @@ use std::ops::Range;
 use planrs_automation::text::format_resource_names;
 use planrs_core::baseline::{TaskVariance, variance};
 use planrs_core::{
-    Assignment, BaselineNumber, LinkType, Minutes, Moment, Percent, Project, Task, TaskOutcome, TaskRole,
-    TaskSchedule, TaskUid, TimeBasis,
+    Assignment, BaselineNumber, LinkType, Minutes, Moment, Percent, Project, SchedulingMode, Task,
+    TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis,
 };
 
 use crate::app::OpenDocument;
@@ -64,6 +64,12 @@ pub struct Row {
     /// Fin de la partie réelle (`Stop`, R-204) d'une tâche commencée (J7,
     /// lot L6 ; bande d'avancement au lot L7).
     pub stop: Option<Moment>,
+    /// Planifiée manuellement d'après le moteur (J8, lot L11 : barre du
+    /// rôle `Manual`, H-UI-36).
+    pub manual: bool,
+    /// Tâche active (J8, lot L11 : une inactive est grisée et barrée dans
+    /// la table, H-UI-37).
+    pub active: bool,
 }
 
 /// Lien à dessiner, en indices de ligne.
@@ -272,6 +278,8 @@ fn make_row(
             .filter(|v| v.baseline.is_some_and(|b| b.finish.is_some()))
             .map(|v| v.variance.finish),
         stop: progress.map(|p| p.stop),
+        manual: scheduled(outcome).is_some_and(|s| s.manual),
+        active: task.active,
     }
 }
 
@@ -384,6 +392,11 @@ fn push_texts(
                     .finish_variance
                     .map(|m| format_slack(m, f, l))
                     .unwrap_or_default(),
+                // Mode saisi dans le modèle (H-UI-36, J8 lot L11).
+                Column::Mode => match task.mode {
+                    SchedulingMode::Auto => l.mode_auto.clone(),
+                    SchedulingMode::Manual { .. } => l.mode_manual.clone(),
+                },
             }
         };
         texts.push(text);

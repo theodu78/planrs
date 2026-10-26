@@ -755,6 +755,10 @@ text_ids! {
     ErrorCsvErrorEncoding => "error-csv-error-encoding",
     ErrorCsvErrorNotYetAvailable => "error-csv-error-not_yet_available",
     // --- J8 L11 ---
+    ColMode => "col-mode",
+    FmtModeManual => "fmt-mode-manual",
+    FmtModeAuto => "fmt-mode-auto",
+    GanttStatusLabel => "gantt-status-label",
     // --- J8 L12 ---
     // --- J8 L13 ---
     // --- J8 L14 ---
@@ -1033,6 +1037,8 @@ impl Texts {
             quarter_prefix: self.get(TextId::TierQuarter),
             week_prefix: self.get(TextId::TierWeek),
             percent_suffix: self.get(TextId::FmtPercentSuffix),
+            mode_manual: self.get(TextId::FmtModeManual),
+            mode_auto: self.get(TextId::FmtModeAuto),
         }
     }
 }
@@ -1094,6 +1100,7 @@ mod tests {
             ("value", Arg::Str("5 jours".into())),
             ("document", Arg::Str("maison.xml".into())),
             ("stem", Arg::Str("maison".into())),
+            ("date", Arg::Str("02/11".into())),
         ]
     }
 

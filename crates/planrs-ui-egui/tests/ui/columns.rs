@@ -463,7 +463,8 @@ fn table_horizontal_scroll_follows_cursor() {
             harness.state().view().cursor.column
         );
     }
-    assert_eq!(harness.state().view().cursor.column, Column::FinishVariance);
+    // Dernière colonne : « Mode » (J8, lot L11).
+    assert_eq!(harness.state().view().cursor.column, Column::Mode);
     let max = total - view_w;
     assert!((harness.state().view().table_scroll_x - max).abs() < 0.5);
     // Origine : premier champ, défilement ramené à 0.

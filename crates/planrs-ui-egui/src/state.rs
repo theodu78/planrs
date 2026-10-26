@@ -742,9 +742,10 @@ mod tests {
         assert_eq!(state.view, ViewKind::Gantt);
         assert_eq!(state.gantt_style, GanttStyle::Standard);
         assert_eq!(state.recent.len(), 0);
-        let j7: Vec<ColumnState> = state.columns.iter().copied().skip(8).collect();
-        assert_eq!(j7.len(), 5);
-        assert!(j7.iter().all(|c| !c.visible));
+        // Colonnes J7 et colonne « Mode » (J8, lot L11) ajoutées masquées.
+        let added: Vec<ColumnState> = state.columns.iter().copied().skip(8).collect();
+        assert_eq!(added.len(), 6);
+        assert!(added.iter().all(|c| !c.visible));
     }
 
     /// Champs J7 relus ; fichiers récents coupés à 10 (H-UI-28).

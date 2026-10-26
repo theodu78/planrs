@@ -795,6 +795,10 @@ error-csv-error-encoding = The file is not in the selected encoding.
 error-csv-error-not_yet_available = Feature not available yet.
 
 # --- J8 L11 ---
+col-mode = Task Mode
+fmt-mode-manual = Manually Scheduled
+fmt-mode-auto = Auto Scheduled
+gantt-status-label = Status { $date }
 
 # --- J8 L12 ---
 

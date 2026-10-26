@@ -34,8 +34,8 @@ use crate::state::{FilterChoice, MAX_OUTLINE_LEVEL, SortSpec, TaskViewState};
 use crate::structure::StructureOp;
 use planrs_automation::filter::FilterPreset;
 
+use super::FrameCtx;
 use super::search::{self, FoldKey, SearchBar, SearchScope, SearchState};
-use super::{FrameCtx, ROW_H};
 
 /// Commande de la vue des tâches (aucune écriture dans le document).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -92,6 +92,9 @@ pub struct TaskViewFrame {
     pub outline_triangles: bool,
     /// Récapitulatives repliées (copiées seulement avec les triangles).
     pub collapsed: BTreeSet<TaskUid>,
+    /// Style du planning à l'écran (J8, lot L11) : style effectif du
+    /// document et variante du thème (Classique clair par défaut).
+    pub style: crate::theme::ScreenStyle,
 }
 
 impl TaskViewFrame {
@@ -566,14 +569,15 @@ impl App {
         let Some(d) = self.visible_rows().and_then(|rows| rows.display_of(uid)) else {
             return;
         };
-        let top = index_to_f32(d.index()) * ROW_H;
+        let row_h = self.row_h();
+        let top = index_to_f32(d.index()) * row_h;
         let view = &self.view;
         let (scroll, height) = (view.last_scroll_y, view.last_body_height);
         let visible = scroll.is_finite()
             && height.is_finite()
-            && height > ROW_H
+            && height > row_h
             && top >= scroll
-            && top + ROW_H <= scroll + height;
+            && top + row_h <= scroll + height;
         if !visible {
             let third = if height.is_finite() { height / 3.0 } else { 0.0 };
             self.view.pending_scroll_y = Some((top - third).max(0.0));
@@ -618,6 +622,8 @@ impl App {
             } else {
                 BTreeSet::new()
             },
+            // Posé par `App::show` (style effectif de l'image).
+            style: crate::theme::ScreenStyle::default(),
         }
     }
 

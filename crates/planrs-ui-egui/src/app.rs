@@ -333,6 +333,8 @@ pub struct App {
     /// Triangles de repli dans la colonne Nom (J8, lot L9, H-UI-34) : faux
     /// jusqu'au lot L15, voir [`App::set_outline_triangles`].
     pub(crate) outline_triangles: bool,
+    /// Style effectif du planning et ses palettes (J8, lot L11).
+    pub(crate) style_cache: crate::theme::StyleCache,
     /// File des actions en attente.
     pub(crate) actions: Vec<Action>,
     /// Messages affichés.
@@ -422,6 +424,7 @@ impl App {
             row_view_key: None,
             view: ViewTransient::default(),
             outline_triangles: false,
+            style_cache: crate::theme::StyleCache::default(),
             actions: Vec::new(),
             messages: Vec::new(),
             tx,
@@ -1491,7 +1494,7 @@ impl App {
                 // Ligne affichée (J8, lot L5).
                 let len = self.row_view.len();
                 let row = index.min(len.saturating_sub(1));
-                self.view.pending_scroll_y = Some(geom::index_to_f32(row) * view::ROW_H);
+                self.view.pending_scroll_y = Some(geom::index_to_f32(row) * self.row_h());
             }
             Action::ToggleDiagnostics => self.state.diagnostics_open = !self.state.diagnostics_open,
             Action::DismissMessage => self.messages.clear(),
@@ -1855,7 +1858,7 @@ impl App {
         let shape = GridShape {
             rows: len.saturating_add(1),
             cols: visible.len(),
-            page: nav::page_rows(self.view.last_body_height, view::ROW_H),
+            page: nav::page_rows(self.view.last_body_height, self.row_h()),
         };
         let mut target = nav::step(GridPos { row, col }, mv, shape);
         let extend = extend && len > 0;
@@ -1889,7 +1892,7 @@ impl App {
         if let Some(y) = nav::ensure_visible(
             self.view.last_scroll_y,
             target.row,
-            view::ROW_H,
+            self.row_h(),
             view_h,
             shape.rows,
         ) {
@@ -2295,6 +2298,36 @@ impl App {
         }
     }
 
+    /// Style du planning à l'écran et palette du thème `theme` (J8, lot
+    /// L11) : style effectif du document (`UiState::effective_style`,
+    /// H-UI-43), modèle par défaut sans document ; mis en cache par
+    /// ouverture, génération et modèle par défaut.
+    pub(crate) fn screen_style(&mut self, theme: egui::Theme) -> (crate::theme::ScreenStyle, Palette) {
+        let doc_key = self.document.as_ref().map(OpenDocument::cache_key);
+        let default = self.state.default_template;
+        let (document, state) = (self.document.as_ref(), &self.state);
+        let (mut screen, palette) = self
+            .style_cache
+            .screen(doc_key, default, theme, || match document {
+                Some(document) => state.effective_style(document.project()),
+                None => planrs_render::style::template(default),
+            });
+        if screen.style.grid.rows == planrs_render::style::RowBanding::Phase {
+            let rows = self.rows.as_ref();
+            screen.phases = self
+                .style_cache
+                .phases(doc_key, || rows.map(view::gantt::phases).unwrap_or_default());
+        }
+        (screen, palette)
+    }
+
+    /// Hauteur d'une ligne de la table et du Gantt (densité du style de la
+    /// dernière image, J8 lot L11) ; 22 px avant la première image.
+    #[must_use]
+    pub fn row_h(&self) -> f32 {
+        f32::from(self.style_cache.style().density.row_px())
+    }
+
     /// Une image complète dans `ui` (appelée par [`crate::ui`]) : relève des
     /// ouvertures, réglages, panneaux, vue centrale, puis réducteur.
     #[allow(
@@ -2313,8 +2346,22 @@ impl App {
         self.apply_theme(&ctx);
         self.apply_language();
         self.ensure_row_view();
-        let palette = Palette::for_theme(ctx.theme());
-        let metrics = Metrics::default();
+        // Style effectif du document (J8, lot L11) : palette, densité,
+        // police du planning ; relu seulement quand le document change.
+        let (screen, palette) = self.screen_style(ctx.theme());
+        if screen.inter() {
+            crate::theme::install_plan_fonts(&ctx);
+        }
+        // Densité : table et Gantt seulement ; feuilles des ressources à
+        // 22 px comme J7.
+        let metrics = Metrics {
+            row_h: if self.state.view == ViewKind::Gantt {
+                screen.row_h()
+            } else {
+                view::ROW_H
+            },
+            ..Metrics::default()
+        };
         self.sync_selection();
         self.drop_stale_delete();
         let current = self.document.as_ref().map(OpenDocument::cache_key);
@@ -2329,7 +2376,8 @@ impl App {
         // d'abord et les touches qu'elle n'a pas prises sont retirées de
         // l'image (rien n'atteint la table ni le Gantt).
         self.read_keys(&ctx, &mut actions);
-        let task_view = self.task_view_frame();
+        let mut task_view = self.task_view_frame();
+        task_view.style = screen;
         let mut stats = FrameStats::default();
         #[cfg(not(target_arch = "wasm32"))]
         let recovery_offer = self.recovery_offer();

@@ -540,7 +540,7 @@ fn relay_j8_scenario(transport: planrs_automation::control::Transport, tag: &str
             thread::sleep(Duration::from_millis(5));
         }
         got.push(normalized(
-            &result.unwrap_or_else(|| panic!("aucun résultat de l'appel relayé {}", i + 1)),
+            &result.unwrap_or_else(|| panic!("aucun résultat de l'appel relayé d'indice {i}")),
             tmp.path(),
         ));
     }

@@ -227,7 +227,11 @@ fn page_setup<'a>(
 /// Résumé comparé après relecture : nom, niveau, mode, actif ; durée et
 /// % achevé des feuilles (ceux des récapitulatives sont recalculés par le
 /// moteur et écrits tels quels dans le fichier).
-fn summary(p: &Project) -> Vec<(String, u16, Option<(i64, i64)>, bool, bool)> {
+/// Ligne du résumé : nom, niveau, (durée, % achevé) d'une feuille,
+/// manuelle, active.
+type SummaryRow = (String, u16, Option<(i64, i64)>, bool, bool);
+
+fn summary(p: &Project) -> Vec<SummaryRow> {
     let levels: Vec<u16> = p.tasks.iter().map(|t| t.outline_level.get()).collect();
     p.tasks
         .iter()

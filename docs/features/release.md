@@ -44,7 +44,7 @@ Mesure du lot L0 (sonde `cdylib` wasm32, `opt-level = "s"`, LTO) : krilla seule 
 | `verify-macos` | `hdiutil verify`, `codesign --verify --deep --strict`, `lipo -archs`, `--version` des deux binaires (tranche x86_64 aussi si Rosetta est présent) | C-REL-02, C-REL-03 |
 | `verify-windows` | contenu du zip, `--version` des deux `.exe` (sortie redirigée) | C-REL-03 |
 | `verify-linux` | dans `debian:bookworm` : `objdump -T` (plus haute `GLIBC_` ≤ 2.36), `--version`, `desktop-file-validate` | C-REL-03, C-REL-04 |
-| `verify-web` | taille du `.wasm` gzip -9 publiée dans le résumé du run (avertissement au-delà de 3 Mio, porte en L13) ; `dist` servi en HTTP, Chromium headless, `data-planrs-started="1"` cherché dans le DOM | C-REL-05 (mesure), C-REL-06 |
+| `verify-web` | taille du `.wasm` gzip -9 publiée dans le résumé du run, **échec** au-delà de 3 Mio (porte depuis le lot L13) ; `dist` servi en HTTP, Chromium headless, `data-planrs-started="1"` cherché dans le DOM | C-REL-05, C-REL-06 |
 | `publish` | tag `v*` seulement : `SHA256SUMS`, `actions/attest-build-provenance`, `gh release create --verify-tag --notes-file` (`--draft` si `-test.`, `--prerelease` si `-`), puis contrôle de la release publiée : téléchargement, `sha256sum -c`, liste exacte des cinq fichiers, `gh attestation verify` | C-REL-07, C-REL-08 |
 
 Le contrôle après publication est fait dans le job `publish` et non dans un job séparé : un brouillon n'est visible que d'un jeton en écriture, et ce job est le seul à en avoir un. Aucun secret n'est ajouté (seul `github.token`).

@@ -180,7 +180,7 @@ jobs:
 
   verify-web:
     timeout-minutes: 15
-    name: Vérification web (C-REL-05 mesuré, C-REL-06)
+    name: Vérification web (C-REL-05, C-REL-06)
     needs: build
     runs-on: ubuntu-24.04
     env:
@@ -207,9 +207,10 @@ jobs:
             echo "| $(basename "$wasm") | $raw | $gz | $budget |"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "wasm : $raw octets, gzip -9 : $gz octets (budget $budget)"
-          # Mesure seulement en L1 ; la porte bloquante arrive au lot L13.
+          # Porte bloquante depuis le lot L13 (C-REL-05).
           if [ "$gz" -gt "$budget" ]; then
-            echo "::warning::.wasm gzip -9 = $gz octets > 3 Mio (porte au lot L13)"
+            echo "::error::.wasm gzip -9 = $gz octets > 3 Mio (C-REL-05)"
+            exit 1
           fi
 
       - name: Démarrage du wasm dans Chromium headless

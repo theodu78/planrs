@@ -48,6 +48,7 @@ fn r244_relative_levels() {
     assert_eq!(rel, [0, 1, 1, 1]);
     let (report, created) = paste(&mut s, &[1], &before(6), PasteOptions::default());
     assert_eq!(report.tasks, 4);
+    assert_eq!(report.tracking_dropped, 0, "aucun suivi dans P");
     assert_eq!(created, [8, 9, 10, 11]);
     let got = level_names(&s);
     let tail: Vec<(&str, u16)> = got.iter().skip(4).map(|(n, l)| (n.as_str(), *l)).collect();
@@ -222,6 +223,9 @@ fn r244_no_progress_no_baseline() {
     );
     let (report, created) = paste(&mut s, &[2, 6, 7], &Placement::End, PasteOptions::default());
     assert_eq!(report.tasks, 3);
+    // Ligne de base posée sur toutes : les trois perdent un suivi
+    // (relecture finale de J8, compté pour l'avertissement de l'interface).
+    assert_eq!(report.tracking_dropped, 3);
     assert_eq!(created, [8, 9, 10]);
     let (src, new) = (get(&s, 2), get(&s, 8));
     assert_eq!(new.progress.percent_complete.get(), 0);
@@ -279,3 +283,4 @@ fn r244_unknown_task_and_empty_clip() {
         Err(planrs_automation::clip::ClipError::Unrecognized)
     );
 }
+

@@ -107,6 +107,10 @@ pub struct ClipTask {
     pub fields: ClipFields,
     /// Valeurs affichées (texte tabulé seulement).
     pub shown: ClipShown,
+    /// La source porte un suivi que le collage ne recrée pas (R-244) :
+    /// avancement ou réels (feuille), ligne de base, calendrier propre ou
+    /// priorité autre que 500 (relecture finale de J8, F6).
+    pub tracking_lost: bool,
 }
 
 /// Lien interne au tampon (indices dans `tasks`).
@@ -190,6 +194,10 @@ pub struct PasteReport {
     pub assignments_dropped: u32,
     /// Ressources créées.
     pub resources_created: u32,
+    /// Tâches collées sans le suivi de leur source (`ClipTask::tracking_lost` :
+    /// avancement, réels, ligne de base, calendrier ou priorité non
+    /// recollés, R-244) ; l'interface l'affiche en avertissement.
+    pub tracking_dropped: u32,
     /// Diagnostics (aucun en J8 : les comptes ci-dessus disent tout).
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -342,6 +350,24 @@ fn shown_of(project: &Project, schedule: Option<&Schedule>, pos: usize, t: &Task
     }
 }
 
+/// Vrai si `t` porte un suivi que le collage ne recrée pas (R-244) :
+/// avancement ou réels d'une feuille (ceux d'une récapitulative se
+/// recalculent), ligne de base, calendrier propre, priorité autre que 500.
+fn tracking_lost(t: &Task, summary: bool) -> bool {
+    let p = &t.progress;
+    let progress = p.percent_complete.get() > 0
+        || p.percent_work_complete.get() > 0
+        || p.physical_percent_complete.get() > 0
+        || p.actual_start.is_some()
+        || p.actual_finish.is_some()
+        || p.actual_duration.get() > 0
+        || p.actual_work.minutes().get() > 0;
+    (progress && !summary)
+        || !t.baselines.is_empty()
+        || t.calendar.is_some()
+        || t.priority != Priority::default()
+}
+
 /// Copie des positions `picked` de `project` (descendants des
 /// récapitulatives compris, lignes vides écartées), dans l'ordre des ID.
 fn capture_positions(
@@ -355,6 +381,9 @@ fn capture_positions(
     // Parent dans la forêt copiée, par indice.
     let mut parents: Vec<Option<u32>> = Vec::new();
     let mut stack: Vec<(Ancestor, Option<u32>)> = Vec::new();
+    // Niveaux par position (récapitulative : la ligne suivante est plus
+    // profonde).
+    let levels: Vec<u16> = project.tasks.iter().map(|t| t.outline_level.get()).collect();
     for (pos, t) in project.tasks.iter().enumerate() {
         if t.is_null {
             continue;
@@ -384,10 +413,14 @@ fn capture_positions(
             },
             Some(i),
         ));
+        let summary = levels
+            .get(pos.saturating_add(1))
+            .is_some_and(|&next| next > level);
         clip.tasks.push(ClipTask {
             rel_level: depth,
             fields: fields_of(project, t),
             shown: shown_of(project, schedule, pos, t),
+            tracking_lost: tracking_lost(t, summary),
         });
     }
     // Liens : internes recréés (sauf ceux qu'un `link.add` refuserait),
@@ -865,6 +898,8 @@ pub fn paste_batch(
     let mut report = PasteReport {
         tasks: u32::try_from(c.tasks.len()).map_err(|_| ClipError::TooLarge)?,
         links_dropped: c.links_dropped,
+        tracking_dropped: u32::try_from(c.tasks.iter().filter(|t| t.tracking_lost).count())
+            .unwrap_or(u32::MAX),
         ..PasteReport::default()
     };
     let mut ops = Vec::new();

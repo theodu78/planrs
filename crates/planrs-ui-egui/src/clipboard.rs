@@ -299,8 +299,9 @@ impl App {
     }
 
     /// Compte rendu d'un collage au bandeau (titre « Collage ») :
-    /// avertissement si des liens ou des affectations n'ont pas été
-    /// recopiés, information sinon ; remplace le compte rendu précédent.
+    /// avertissement si des liens, des affectations ou le suivi (avancement,
+    /// ligne de base, calendrier, priorité ; relecture finale de J8, F6) n'ont
+    /// pas été recopiés, information sinon ; remplace le compte rendu précédent.
     fn report_paste(&mut self, report: &PasteReport) {
         let count = |n: u32| Arg::Count(i64::from(n));
         let mut parts = vec![
@@ -319,17 +320,24 @@ impl App {
                 &[("count", count(report.assignments_dropped))],
             ));
         }
+        if report.tracking_dropped > 0 {
+            parts.push(self.texts.get_args(
+                TextId::PasteReportTracking,
+                &[("count", count(report.tracking_dropped))],
+            ));
+        }
         if report.resources_created > 0 {
             parts.push(self.texts.get_args(
                 TextId::PasteReportResources,
                 &[("count", count(report.resources_created))],
             ));
         }
-        let severity = if report.links_dropped > 0 || report.assignments_dropped > 0 {
-            Severity::Warning
-        } else {
-            Severity::Info
-        };
+        let severity =
+            if report.links_dropped > 0 || report.assignments_dropped > 0 || report.tracking_dropped > 0 {
+                Severity::Warning
+            } else {
+                Severity::Info
+            };
         self.clear_titled(TextId::PasteReportTitle);
         self.push_titled(severity, Some(TextId::PasteReportTitle), parts.join(", "));
     }

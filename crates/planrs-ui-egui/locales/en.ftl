@@ -1101,3 +1101,9 @@ field-total-slack = Total slack
 field-start-finish = Start – finish
 
 # --- J8 L16 ---
+
+# --- J8 relecture finale ---
+paste-report-tracking = { $count ->
+        [one] { $count } task pasted without its progress, baseline or calendar
+       *[other] { $count } tasks pasted without their progress, baseline or calendar
+    }

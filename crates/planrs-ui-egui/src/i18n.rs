@@ -1037,6 +1037,8 @@ text_ids! {
     FieldTotalSlack => "field-total-slack",
     FieldStartFinish => "field-start-finish",
     // --- J8 L16 ---
+    // --- J8 relecture finale ---
+    PasteReportTracking => "paste-report-tracking",
 }
 
 /// Clé fluent du refus de code `code` : `error-<code>`, points changés en

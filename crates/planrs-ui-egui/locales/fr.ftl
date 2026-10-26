@@ -1100,3 +1100,9 @@ field-total-slack = Marge totale
 field-start-finish = Début – fin
 
 # --- J8 L16 ---
+
+# --- J8 relecture finale ---
+paste-report-tracking = { $count ->
+        [one] { $count } tâche collée sans son avancement, sa ligne de base ni son calendrier
+       *[other] { $count } tâches collées sans leur avancement, leur ligne de base ni leur calendrier
+    }

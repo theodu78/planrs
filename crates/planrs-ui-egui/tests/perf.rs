@@ -1280,7 +1280,10 @@ fn search_5000() {
 /// sur 6 000 tâches ; les 1 985 `link.add` et le recalcul unique pèsent
 /// peu) : coût du moteur, hors de l'interface. Publié dans le rapport, non
 /// bloquant, en attendant l'arbitrage de la session principale (ADR-0016,
-/// écarts du lot L10).
+/// écarts du lot L10). Relecture finale de J8 (perf F4) : 429 et 435 ms
+/// en release sur serveurdvp calme (2026-10-27), budget tenu mais sur une
+/// machine calme seulement ; l'arbitrage reste dû au propriétaire
+/// (ADR-0016, « Relecture finale de J8 »), la garde bloquante reste 1 s.
 const PASTE_BUDGET: Duration = Duration::from_millis(500);
 
 /// Garde bloquante du collage de 1 000 lignes (régression grossière) :

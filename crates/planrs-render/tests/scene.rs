@@ -942,3 +942,39 @@ fn h_ui_64_every_bar_labelled_in_every_template() {
         assert!(roles.iter().any(|r| r.starts_with("Milestone")), "{roles:?}");
     }
 }
+
+/// H-R3, relecture finale de J8 (F9) : impression ajustée d'un projet de
+/// deux ans sur une page A3 : la plage automatique s'allonge pour que les
+/// étiquettes des barres du bord (nom de la récapitulative à gauche, sa
+/// durée et le nom du jalon final à droite) tiennent de leur côté,
+/// entières.
+#[test]
+fn h_r3_fill_keeps_end_labels_on_the_right() {
+    use planrs_render::geometry::TextSide;
+    use planrs_render::paginate::fit_zoom;
+    use planrs_render::style::Paper;
+    let mut p = project("Deux ans", "2026-01-05T08:00");
+    add(&mut p, "TRAVAUX", 0, 1);
+    let structure = add(&mut p, "Gros œuvre", 300, 2);
+    let finishes = add(&mut p, "Second œuvre", 220, 2);
+    let handover = add(&mut p, "Réception des travaux du lot principal", 0, 2);
+    link(&mut p, structure, finishes, LinkType::FinishToStart);
+    link(&mut p, finishes, handover, LinkType::FinishToStart);
+    let s = planrs_core::schedule(&p);
+    let mut st = template(TemplateId::Sobre);
+    st.page.paper = Paper::A3;
+    st.page.landscape = true;
+    let vp = Viewport {
+        zoom: fit_zoom(&st.page).unwrap(),
+        ..Viewport::new(Variant::Print, Lang::Fr)
+    };
+    let sc = layout(&p, &s, &st, &AllTexts, &vp).0;
+    // Récapitulative : nom à gauche, durée à droite ; jalon de fin : date
+    // à gauche, nom à droite ; rien de tronqué.
+    for (i, left, right) in [(0, "Name", "DurationShort"), (3, "FinishShort", "Name")] {
+        let items = &sc.rows[i].texts.items;
+        let side = |want: &str| items.iter().find(|t| t.text == want).map(|t| t.side);
+        assert_eq!(side(left), Some(TextSide::Left), "ligne {i} : {items:?}");
+        assert_eq!(side(right), Some(TextSide::Right), "ligne {i} : {items:?}");
+    }
+}

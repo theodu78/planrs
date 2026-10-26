@@ -553,6 +553,117 @@ fn non_working_runs(p: &Project, axis: &Axis16) -> Vec<(Day, Day)> {
     runs
 }
 
+/// Jours ajoutés de chaque côté de la plage au plus par [`label_room`]
+/// (un an).
+const MAX_ROOM_DAYS: i64 = 366;
+
+/// Passes de [`label_room`] au plus (chaque allongement réduit l'échelle :
+/// la passe suivante vérifie et complète).
+const ROOM_PASSES: usize = 4;
+
+/// Impression ajustée (`Zoom::Fill`) sur la plage automatique (H-R3) :
+/// les 7 jours de marge avant le début et les 21 jours après la fin du
+/// projet ne laissent qu'une dizaine ou une trentaine de pixels à
+/// l'échelle d'un projet de deux ans, et les étiquettes des barres du
+/// bord (nom d'une récapitulative à gauche, « 17,4 mois » ou nom d'un
+/// jalon de fin à droite) basculaient de côté ou étaient tronquées
+/// (relecture finale de J8, F9). Rend l'axe dont la plage est allongée du
+/// plus petit nombre de jours qui fait tenir ces étiquettes, mesurées en
+/// Inter (H-R11) : une barre à `r` px du bord d'une plage de `D` jours sur
+/// `W` px, étiquette de `L` px (écart compris), demande
+/// `E ≥ D × (L − r) / (W − L)` jours de ce côté ; quelques passes, chaque
+/// allongement réduisant l'échelle. `None` : rien à allonger (autre zoom,
+/// plage donnée, coupe à `max_days`, aucune étiquette en défaut).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mêmes entrées que la scène, lues sans les recopier"
+)]
+fn label_room(
+    p: &Project,
+    s: &Schedule,
+    st: &PlanStyle,
+    src: &dyn BarTextSource,
+    vp: &Viewport,
+    kept: &[Kept<'_>],
+    body: FontRef,
+    metrics: &dyn TextMeasure,
+    table_w: i64,
+) -> Option<Axis16> {
+    if !matches!(vp.zoom, crate::request::Zoom::Fill { .. })
+        || !matches!(vp.range, crate::request::RangeSpec::Auto)
+    {
+        return None;
+    }
+    let mut axis = Axis16::new(p, s, vp.range, vp.zoom, vp.limits.max_days, table_w);
+    if axis.span.truncated {
+        return None;
+    }
+    // Étiquettes à gauche et à droite de chaque barre, mesurées une fois.
+    let labels: Vec<(crate::geometry::RowGeomInput, i64, i64)> = kept
+        .iter()
+        .filter_map(|k| {
+            let input = row_geom_input(k.task, s.tasks.get(&k.task.uid()))?;
+            let texts = resolve_texts(k.task, input.role, st, src, body);
+            let need = |t: Option<String>| {
+                t.map_or(0, |t| {
+                    metrics
+                        .width16(&t, body)
+                        .saturating_add(crate::geometry::TEXT_GAP)
+                })
+            };
+            Some((input, need(texts.left), need(texts.right)))
+        })
+        .collect();
+    let (mut before, mut after) = (0_i64, 0_i64);
+    let mut changed = false;
+    for _ in 0..ROOM_PASSES {
+        let w = axis.width16();
+        let d = axis.span.days();
+        let days = |need: i64, room: i64| {
+            if need <= room || need >= w {
+                return 0;
+            }
+            d.saturating_mul(need.saturating_sub(room))
+                .checked_div(w.saturating_sub(need))
+                .unwrap_or(0)
+                .saturating_add(1)
+        };
+        let (mut add_before, mut add_after) = (0_i64, 0_i64);
+        for (input, left, right) in &labels {
+            let bar = bar_geom(input, &axis, st, 0);
+            add_before = add_before.max(days(*left, bar.rect.x.saturating_sub(axis.left16())));
+            add_after = add_after.max(days(*right, axis.right16().saturating_sub(bar.rect.right())));
+        }
+        if add_before == 0 && add_after == 0 {
+            break;
+        }
+        before = before.saturating_add(add_before).min(MAX_ROOM_DAYS);
+        after = after.saturating_add(add_after).min(MAX_ROOM_DAYS);
+        let first = Axis16::new(p, s, vp.range, vp.zoom, vp.limits.max_days, table_w);
+        let last = first.span.end.checked_add_days(-1).ok()?;
+        let from = first
+            .span
+            .start
+            .checked_add_days(i32::try_from(before.saturating_neg()).ok()?)
+            .ok()?;
+        let to = last.checked_add_days(i32::try_from(after).ok()?).ok()?;
+        let wider = Axis16::new(
+            p,
+            s,
+            crate::request::RangeSpec::Span { from, to },
+            vp.zoom,
+            vp.limits.max_days,
+            table_w,
+        );
+        if wider.span.truncated {
+            break;
+        }
+        axis = wider;
+        changed = true;
+    }
+    changed.then_some(axis)
+}
+
 /// Construit la scène.
 #[allow(
     clippy::too_many_lines,
@@ -580,7 +691,6 @@ pub(crate) fn build(
     let columns = table_columns(st.page.columns.as_deref());
     let table_w = table_width16(Some(&columns));
     let axis = Axis16::new(p, s, vp.range, vp.zoom, vp.limits.max_days, table_w);
-    let width = table_w.saturating_add(axis.width16());
     // H-UI-67 : un niveau de plus en haut de l'en-tête pour les mois
     // relatifs ; les deux niveaux de l'échelle descendent d'autant.
     let tier0 = if st.scale.relative_months { TIER_H } else { 0 };
@@ -618,6 +728,11 @@ pub(crate) fn build(
     let shown = kept.len().min(max_rows);
     let cut = kept.len().saturating_sub(shown);
     let kept = kept.get(..shown).unwrap_or(&[]);
+    // H-R3 (relecture finale de J8, F9) : impression ajustée, plage
+    // automatique : la plage s'allonge pour que l'étiquette de droite des
+    // barres de fin de projet tienne à droite.
+    let axis = label_room(p, s, st, src, vp, kept, body, &metrics, table_w).unwrap_or(axis);
+    let width = table_w.saturating_add(axis.width16());
     let n_rows = i64::try_from(shown.saturating_add(usize::from(cut > 0))).unwrap_or(i64::MAX);
     let rows_bottom = header_h.saturating_add(n_rows.saturating_mul(row_h));
     let row_top =

@@ -86,6 +86,33 @@ fn geometry_bar_rect_examples() {
     );
 }
 
+/// H-UI-42 (J8, lot L16) : le SVG et les pages du PDF lisent la même
+/// scène ; la barre de 3 « Murs » (x = 7 232/16 = 452 px au zoom Semaine,
+/// voir `geometry_bar_rect_examples`) est au même endroit dans le SVG et
+/// dans la scène paginée.
+#[test]
+fn h_ui_42_svg_and_pdf_pages_share_scene_geometry() {
+    let p = project_p();
+    let s = planrs_core::schedule(&p);
+    let st = template(TemplateId::Classique);
+    let vp = Viewport {
+        zoom: Zoom::Week,
+        ..Viewport::new(Variant::Light, Lang::Fr)
+    };
+    let (sc, _) = layout(&p, &s, &st, &NoTexts, &vp);
+    let murs = sc.rows[2].bar.unwrap();
+    assert_eq!(murs.rect.x, 7_232);
+    let (svg, _) = svg_styled(&p, &s, &request(Theme::Light, Lang::Fr), &st, &NoTexts);
+    assert!(
+        svg.contains("x=\"452.0000\""),
+        "barre de 3 absente du SVG à x = 452"
+    );
+    let mut page = st.page.clone();
+    page.fit = planrs_render::style::Fit::Scale(100);
+    let pages = planrs_render::paginate::paginate(&sc, &page, &NoTexts).unwrap();
+    assert_eq!(pages.scene.rows[2].bar.unwrap().rect, murs.rect);
+}
+
 fn geom(start: &str, finish: &str, row: i64) -> BarGeom {
     let p = project("L", "2026-11-02T08:00");
     let s = planrs_core::schedule(&p);

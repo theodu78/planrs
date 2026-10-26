@@ -1,4 +1,6 @@
-//! Écouteurs de l'application sur une socket Unix, dans un fil dédié :
+//! Écouteurs de l'application, dans un fil dédié, sur une socket Unix
+//! (Linux, macOS) ou en TCP sur la boucle locale (Windows ; J8 lot L8,
+//! C-CTL-11 à C-CTL-14, [`super::tcp`]) :
 //!
 //! - [`spawn_listener_in`] (J7, lot L3, ADR-0015 D9) : relais. Chaque
 //!   requête authentifiée (`query`, `execute`, `ui_state`, `screenshot`)
@@ -10,17 +12,19 @@
 //!
 //! Chaque connexion commence par un `hello` porteur du jeton ; toute autre
 //! requête avant, ou un jeton faux, est refusée et la connexion fermée
-//! (C-CTL-01).
+//! (C-CTL-01) ; une première ligne qui n'est pas une trame (requête HTTP
+//! d'une page web, par exemple) ferme la connexion sans réponse (C-CTL-14).
 //!
-//! Windows : pas d'écouteur ([`ControlError::Unsupported`] ; règle des
-//! 24 h, ADR-0015).
+//! Transport : [`Transport::NATIVE`] par défaut ; `spawn_*_on` le choisit
+//! (tests du transport TCP sous Linux). Le service est le même octet pour
+//! octet sur les deux transports.
 
 use std::fmt;
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use super::{ControlError, RelayCall, Rendezvous, Waker, decode_token, state_dir};
+use super::{ControlError, RelayCall, Rendezvous, Transport, Waker, decode_token, state_dir};
 use crate::view::SummaryView;
 
 /// Capacité conseillée de la file des appels relayés (64) : au-delà,
@@ -54,8 +58,7 @@ impl Default for ListenerOptions {
 pub struct ListenerHandle {
     endpoint: String,
     token: String,
-    #[cfg(unix)]
-    running: unix::Running,
+    running: imp::Running,
 }
 
 impl fmt::Debug for ListenerHandle {
@@ -69,7 +72,8 @@ impl fmt::Debug for ListenerHandle {
 }
 
 impl ListenerHandle {
-    /// Adresse de l'écouteur (chemin de la socket).
+    /// Adresse de l'écouteur, sous la forme du rendez-vous : chemin de la
+    /// socket Unix, ou `tcp:127.0.0.1:<port>`.
     #[must_use]
     pub fn endpoint(&self) -> &str {
         &self.endpoint
@@ -100,26 +104,16 @@ impl ListenerHandle {
     /// # Errors
     ///
     /// [`ControlError::Io`] si le générateur du système est indisponible
-    /// (le jeton précédent reste) ; [`ControlError::Unsupported`] hors
-    /// Unix.
+    /// (le jeton précédent reste).
     pub fn rotate_token(&mut self) -> Result<(), ControlError> {
         let token = super::new_token()?;
         let bytes = decode_token(&token).ok_or(ControlError::InvalidToken)?;
-        #[cfg(unix)]
-        {
-            self.running.set_token(bytes);
-            self.token = token;
-            Ok(())
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = bytes;
-            Err(ControlError::Unsupported)
-        }
+        self.running.set_token(bytes);
+        self.token = token;
+        Ok(())
     }
 }
 
-#[cfg(unix)]
 impl Drop for ListenerHandle {
     fn drop(&mut self) {
         self.running.stop();
@@ -143,34 +137,41 @@ pub fn spawn_hello_listener(
     spawn_hello_listener_in(&dir, token, summary)
 }
 
-/// Lance l'écouteur, socket `<pid>-<n>.sock` (0600) dans `dir` (0700).
+/// Lance l'écouteur sur le transport de la plateforme : socket
+/// `<pid>-<n>.sock` (0600) dans `dir` (0700) sous Unix, `127.0.0.1:0`
+/// ailleurs.
 ///
 /// # Errors
 ///
-/// [`ControlError::InvalidToken`], [`ControlError::Invalid`] (chemin non
-/// UTF-8), [`ControlError::Io`] (dossier, socket, fil) ;
-/// [`ControlError::Unsupported`] hors Unix.
+/// Celles de [`spawn_hello_listener_on`].
 pub fn spawn_hello_listener_in(
     dir: &std::path::Path,
     token: String,
     summary: Arc<Mutex<Option<SummaryView>>>,
 ) -> Result<ListenerHandle, ControlError> {
+    spawn_hello_listener_on(dir, token, summary, Transport::NATIVE)
+}
+
+/// Lance l'écouteur J4 sur `transport` (`dir` ne sert qu'à la socket Unix).
+///
+/// # Errors
+///
+/// [`ControlError::InvalidToken`], [`ControlError::Invalid`] (chemin non
+/// UTF-8), [`ControlError::Io`] (dossier, socket, port, fil) ;
+/// [`ControlError::Unsupported`] pour une socket Unix hors Unix.
+pub fn spawn_hello_listener_on(
+    dir: &std::path::Path,
+    token: String,
+    summary: Arc<Mutex<Option<SummaryView>>>,
+    transport: Transport,
+) -> Result<ListenerHandle, ControlError> {
     let expected = decode_token(&token).ok_or(ControlError::InvalidToken)?;
-    #[cfg(unix)]
-    {
-        let (endpoint, running) = unix::spawn(dir, expected, unix::Service::Hello(summary))?;
-        Ok(ListenerHandle {
-            endpoint,
-            token,
-            running,
-        })
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (dir, expected);
-        drop((token, summary));
-        Err(ControlError::Unsupported)
-    }
+    let (endpoint, running) = imp::spawn(dir, expected, imp::Service::Hello(summary), transport)?;
+    Ok(ListenerHandle {
+        endpoint,
+        token,
+        running,
+    })
 }
 
 /// Écouteur du relais J7 (ADR-0015 D9, lot L3), réglages par défaut
@@ -188,8 +189,25 @@ pub fn spawn_listener_in(
     spawn_listener_with(dir, token, inbox, wake, ListenerOptions::default())
 }
 
-/// Lance l'écouteur du relais, socket `<pid>-<n>.sock` (0600) dans `dir`
-/// (0700) : chaque requête authentifiée devient un [`RelayCall`] poussé
+/// Lance l'écouteur du relais sur le transport de la plateforme (socket
+/// `<pid>-<n>.sock` (0600) dans `dir` (0700) sous Unix, `127.0.0.1:0`
+/// ailleurs) : voir [`spawn_listener_on`].
+///
+/// # Errors
+///
+/// Celles de [`spawn_listener_on`].
+pub fn spawn_listener_with(
+    dir: &std::path::Path,
+    token: String,
+    inbox: SyncSender<RelayCall>,
+    wake: Waker,
+    options: ListenerOptions,
+) -> Result<ListenerHandle, ControlError> {
+    spawn_listener_on(dir, token, inbox, wake, options, Transport::NATIVE)
+}
+
+/// Lance l'écouteur du relais sur `transport` (`dir` ne sert qu'à la
+/// socket Unix) : chaque requête authentifiée devient un [`RelayCall`] poussé
 /// dans `inbox` (file bornée de l'application ; pleine : `control.busy`,
 /// connexion maintenue), puis `wake` réveille l'interface. Les réponses de
 /// l'application (`pending_approval`, puis `ok` ou `err`) partent sur la
@@ -200,39 +218,34 @@ pub fn spawn_listener_in(
 /// # Errors
 ///
 /// [`ControlError::InvalidToken`], [`ControlError::Invalid`] (chemin non
-/// UTF-8), [`ControlError::Io`] (dossier, socket, fil) ;
-/// [`ControlError::Unsupported`] hors Unix.
-pub fn spawn_listener_with(
+/// UTF-8), [`ControlError::Io`] (dossier, socket, port, fil) ;
+/// [`ControlError::Unsupported`] pour une socket Unix hors Unix.
+pub fn spawn_listener_on(
     dir: &std::path::Path,
     token: String,
     inbox: SyncSender<RelayCall>,
     wake: Waker,
     options: ListenerOptions,
+    transport: Transport,
 ) -> Result<ListenerHandle, ControlError> {
     let expected = decode_token(&token).ok_or(ControlError::InvalidToken)?;
-    #[cfg(unix)]
-    {
-        let service = unix::Service::Relay { inbox, wake, options };
-        let (endpoint, running) = unix::spawn(dir, expected, service)?;
-        Ok(ListenerHandle {
-            endpoint,
-            token,
-            running,
-        })
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (dir, expected, options);
-        drop((token, inbox, wake));
-        Err(ControlError::Unsupported)
-    }
+    let service = imp::Service::Relay { inbox, wake, options };
+    let (endpoint, running) = imp::spawn(dir, expected, service, transport)?;
+    Ok(ListenerHandle {
+        endpoint,
+        token,
+        running,
+    })
 }
 
-#[cfg(unix)]
-mod unix {
+mod imp {
     use std::io::{BufRead, BufReader, ErrorKind, Write};
+    use std::net::{SocketAddr, SocketAddrV4, TcpListener};
+    #[cfg(unix)]
     use std::os::unix::net::{UnixListener, UnixStream};
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
+    #[cfg(unix)]
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::mpsc::{RecvTimeoutError, SyncSender, TrySendError, sync_channel};
     use std::sync::{Arc, Mutex, PoisonError};
@@ -241,10 +254,14 @@ mod unix {
 
     use serde_json::{Map, Value, json};
 
+    use super::super::tcp::{accept_peer, bind_loopback, local_endpoint};
     use super::super::{
-        CallState, ControlError, Frame, LineError, MAX_LINE_BYTES, Method, PROTOCOL_VERSION, RelayCall,
-        RelayKind, Reply, Waker, codes, ensure_dir, next_stem, read_line_bounded, to_line, token_matches,
+        CallState, ControlError, ControlStream, Endpoint, Frame, LineError, MAX_LINE_BYTES, Method,
+        PROTOCOL_VERSION, RelayCall, RelayKind, Reply, Transport, Waker, codes, read_line_bounded, to_line,
+        token_matches,
     };
+    #[cfg(unix)]
+    use super::super::{ensure_dir, next_stem};
     use super::ListenerOptions;
     use crate::error::codes as tool_codes;
     use crate::registry::{Kind, lookup};
@@ -290,9 +307,25 @@ mod unix {
         active: AtomicUsize,
     }
 
+    /// Écouteur lié.
+    enum Bound {
+        /// Socket Unix et son chemin.
+        #[cfg(unix)]
+        Unix(UnixListener, PathBuf),
+        /// Port en boucle locale.
+        Tcp(TcpListener, SocketAddrV4),
+    }
+
+    /// Adresse à joindre pour réveiller `accept`, et fichier à supprimer.
+    enum Wake {
+        #[cfg(unix)]
+        Unix(PathBuf),
+        Tcp(SocketAddrV4),
+    }
+
     pub(super) struct Running {
         shared: Arc<Shared>,
-        socket: PathBuf,
+        wake: Wake,
         thread: Option<JoinHandle<()>>,
     }
 
@@ -302,17 +335,64 @@ mod unix {
         }
 
         pub(super) fn stop(&mut self) {
+            /// Attente de la connexion de réveil (TCP).
+            const WAKE_TIMEOUT: Duration = Duration::from_secs(1);
             self.shared.stop.store(true, Ordering::SeqCst);
-            // Réveille `accept`. Socket injoignable (fichier supprimé,
+            // Réveille `accept`. Écouteur injoignable (socket supprimée,
             // dossier retiré) : le fil n'est pas attendu, pour ne jamais
             // bloquer la fermeture ; il reste suspendu sur `accept`.
-            let woken = UnixStream::connect(&self.socket).is_ok();
+            let woken = match &self.wake {
+                #[cfg(unix)]
+                Wake::Unix(path) => UnixStream::connect(path).is_ok(),
+                Wake::Tcp(addr) => Endpoint::Tcp(*addr).connect(WAKE_TIMEOUT).is_ok(),
+            };
             if let Some(thread) = self.thread.take()
                 && (woken || thread.is_finished())
             {
                 let _ = thread.join();
             }
-            let _ = std::fs::remove_file(&self.socket);
+            #[cfg(unix)]
+            if let Wake::Unix(path) = &self.wake {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+
+    /// Lie l'écouteur : socket `<pid>-<n>.sock` (0600) dans `dir` (0700),
+    /// ou `127.0.0.1:0` ; rend l'adresse sous la forme du rendez-vous.
+    fn bind(dir: &Path, transport: Transport) -> Result<(String, Bound), ControlError> {
+        match transport {
+            Transport::Tcp => {
+                let _ = dir;
+                let listener = bind_loopback()?;
+                let addr = local_endpoint(&listener)?;
+                Ok((Endpoint::Tcp(addr).to_rendezvous(), Bound::Tcp(listener, addr)))
+            }
+            #[cfg(unix)]
+            Transport::Unix => {
+                use std::os::unix::fs::PermissionsExt;
+
+                ensure_dir(dir)?;
+                let socket = dir.join(format!("{}.sock", next_stem()));
+                let endpoint = socket
+                    .to_str()
+                    .ok_or_else(|| ControlError::Invalid("chemin de socket non UTF-8".to_owned()))?
+                    .to_owned();
+                // Reste éventuel d'un processus mort au même pid.
+                let _ = std::fs::remove_file(&socket);
+                let listener = UnixListener::bind(&socket)
+                    .map_err(|e| ControlError::io("ouverture de la socket", &e))?;
+                if let Err(e) = std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)) {
+                    let _ = std::fs::remove_file(&socket);
+                    return Err(ControlError::io("droits de la socket", &e));
+                }
+                Ok((endpoint, Bound::Unix(listener, socket)))
+            }
+            #[cfg(not(unix))]
+            Transport::Unix => {
+                let _ = dir;
+                Err(ControlError::Unsupported)
+            }
         }
     }
 
@@ -320,25 +400,14 @@ mod unix {
         dir: &Path,
         token: [u8; 32],
         service: Service,
+        transport: Transport,
     ) -> Result<(String, Running), ControlError> {
-        use std::os::unix::fs::PermissionsExt;
-
-        ensure_dir(dir)?;
-        let socket = dir.join(format!("{}.sock", next_stem()));
-        let endpoint = socket
-            .to_str()
-            .ok_or_else(|| ControlError::Invalid("chemin de socket non UTF-8".to_owned()))?
-            .to_owned();
-        // Reste éventuel d'un processus mort au même pid.
-        let _ = std::fs::remove_file(&socket);
-        let listener =
-            UnixListener::bind(&socket).map_err(|e| ControlError::io("ouverture de la socket", &e))?;
-        let cleanup = |e: ControlError| {
-            let _ = std::fs::remove_file(&socket);
-            e
+        let (endpoint, bound) = bind(dir, transport)?;
+        let wake = match &bound {
+            #[cfg(unix)]
+            Bound::Unix(_, path) => Wake::Unix(path.clone()),
+            Bound::Tcp(_, addr) => Wake::Tcp(*addr),
         };
-        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| cleanup(ControlError::io("droits de la socket", &e)))?;
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
             token: Mutex::new(token),
@@ -348,16 +417,43 @@ mod unix {
         let worker = Arc::clone(&shared);
         let thread = thread::Builder::new()
             .name("planrs-control".to_owned())
-            .spawn(move || accept_loop(&listener, &worker))
-            .map_err(|e| cleanup(ControlError::io("fil de l'écouteur", &e)))?;
-        Ok((
-            endpoint,
-            Running {
-                shared,
-                socket,
-                thread: Some(thread),
-            },
-        ))
+            .spawn(move || accept_loop(&bound, &worker));
+        match thread {
+            Ok(thread) => Ok((
+                endpoint,
+                Running {
+                    shared,
+                    wake,
+                    thread: Some(thread),
+                },
+            )),
+            Err(e) => {
+                #[cfg(unix)]
+                if let Wake::Unix(path) = &wake {
+                    let _ = std::fs::remove_file(path);
+                }
+                Err(ControlError::io("fil de l'écouteur", &e))
+            }
+        }
+    }
+
+    /// Connexion acceptée ; `None` : pair refusé (hors boucle locale,
+    /// C-CTL-12), fermé sans lecture.
+    fn accept(bound: &Bound) -> std::io::Result<Option<ControlStream>> {
+        match bound {
+            #[cfg(unix)]
+            Bound::Unix(listener, _) => listener.accept().map(|(s, _)| Some(ControlStream::from_unix(s))),
+            Bound::Tcp(listener, _) => {
+                let (stream, peer): (_, SocketAddr) = listener.accept()?;
+                if !accept_peer(&peer) {
+                    // Fermé aussitôt : aucun octet lu, aucune réponse.
+                    drop(stream);
+                    return Ok(None);
+                }
+                let _ = stream.set_nodelay(true);
+                Ok(Some(ControlStream::from_tcp(stream)))
+            }
+        }
     }
 
     /// Décrémente le compteur de connexions à la fin du fil.
@@ -369,15 +465,20 @@ mod unix {
         }
     }
 
-    fn accept_loop(listener: &UnixListener, shared: &Arc<Shared>) {
-        for conn in listener.incoming() {
+    fn accept_loop(bound: &Bound, shared: &Arc<Shared>) {
+        loop {
+            let conn = accept(bound);
             if shared.stop.load(Ordering::SeqCst) {
                 break;
             }
-            let Ok(stream) = conn else {
-                // Descripteurs épuisés… : on laisse respirer le système.
-                thread::sleep(Duration::from_millis(20));
-                continue;
+            let stream = match conn {
+                Ok(Some(stream)) => stream,
+                Ok(None) => continue,
+                Err(_) => {
+                    // Descripteurs épuisés… : on laisse respirer le système.
+                    thread::sleep(Duration::from_millis(20));
+                    continue;
+                }
             };
             if shared.active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
                 shared.active.fetch_sub(1, Ordering::SeqCst);
@@ -392,6 +493,7 @@ mod unix {
                 if stream.set_write_timeout(Some(WRITE_TIMEOUT)).is_ok() {
                     let _ = send(&stream, &busy);
                 }
+                stream.close_gracefully();
                 continue;
             }
             let guard = ActiveGuard(Arc::clone(shared));
@@ -400,6 +502,7 @@ mod unix {
                 .name("planrs-control-conn".to_owned())
                 .spawn(move || {
                     serve(&stream, &guard.0);
+                    stream.close_gracefully();
                     drop(guard);
                 });
         }
@@ -409,12 +512,15 @@ mod unix {
     enum Step {
         /// Réponse immédiate, et si la connexion reste ouverte.
         Reply(Reply, bool),
+        /// Fermeture sans réponse (première ligne qui n'est pas une trame,
+        /// C-CTL-14).
+        Close,
         /// Appel à relayer à l'application, avec le délai de validation
         /// demandé par le client (`approval_timeout_ms`), s'il y en a un.
         Relay(u64, RelayKind, Option<Duration>),
     }
 
-    fn serve(stream: &UnixStream, shared: &Shared) {
+    fn serve(stream: &ControlStream, shared: &Shared) {
         if stream.set_read_timeout(Some(HELLO_TIMEOUT)).is_err()
             || stream.set_write_timeout(Some(WRITE_TIMEOUT)).is_err()
         {
@@ -435,6 +541,9 @@ mod unix {
             let line = match read_line_bounded(&mut reader, MAX_LINE_BYTES) {
                 Ok(Some(line)) => line,
                 Ok(None) | Err(LineError::Io(_)) => return,
+                // Avant le `hello`, rien n'est répondu à ce qui n'est pas
+                // une trame (C-CTL-14).
+                Err(LineError::TooLong) if !authenticated => return,
                 Err(LineError::TooLong) => {
                     let reply = Reply::error(
                         0,
@@ -454,6 +563,7 @@ mod unix {
                         return;
                     }
                 }
+                Step::Close => return,
                 Step::Relay(id, kind, asked) => {
                     if relay(&mut reader, shared, id, kind, asked).is_err() {
                         return;
@@ -463,7 +573,7 @@ mod unix {
         }
     }
 
-    fn send(mut stream: &UnixStream, reply: &Reply) -> std::io::Result<()> {
+    fn send(mut stream: &ControlStream, reply: &Reply) -> std::io::Result<()> {
         let line = to_line(reply).map_err(std::io::Error::other)?;
         stream.write_all(&line)
     }
@@ -472,6 +582,10 @@ mod unix {
     fn respond(line: &[u8], authenticated: &mut bool, shared: &Shared) -> Step {
         let frame = match serde_json::from_slice::<Frame>(line) {
             Ok(frame) => frame,
+            // Première ligne qui n'est pas une trame (requête HTTP d'une
+            // page web, octets quelconques) : fermée sans réponse, rien
+            // n'est dit à qui ne parle pas le protocole (C-CTL-14).
+            Err(_) if !*authenticated => return Step::Close,
             Err(e) => {
                 // L'identifiant est repris s'il se lit encore.
                 let id = serde_json::from_slice::<Value>(line)
@@ -650,7 +764,7 @@ mod unix {
     /// Pendant l'attente, la connexion est surveillée : client parti ⇒
     /// appel expiré, bandeau retiré.
     fn relay(
-        reader: &mut BufReader<&UnixStream>,
+        reader: &mut BufReader<&ControlStream>,
         shared: &Shared,
         id: u64,
         kind: RelayKind,
@@ -736,7 +850,7 @@ mod unix {
 
     /// Vrai si le client a fermé la connexion (fin de flux), lu sans
     /// attendre ; un octet reçu reste dans le tampon du lecteur.
-    fn hung_up(reader: &mut BufReader<&UnixStream>) -> bool {
+    fn hung_up(reader: &mut BufReader<&ControlStream>) -> bool {
         let stream = *reader.get_ref();
         if stream.set_nonblocking(true).is_err() {
             return false;

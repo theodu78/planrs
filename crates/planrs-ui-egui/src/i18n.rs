@@ -1756,6 +1756,66 @@ mod tests {
         }
     }
 
+    /// Pseudo-langue : accents, crochets, au moins +40 % de caractères ;
+    /// conventions de formatage intactes ; chaque message transformé.
+    #[test]
+    fn pseudo_language_transforms_messages() {
+        assert_eq!(super::pseudo("File"), "[Fílé··]");
+        assert_eq!(super::pseudo(""), "");
+        for text in ["a", "Open", "Resource usage", "Gantt de suivi"] {
+            let out = super::pseudo(text);
+            let (n, m) = (text.chars().count(), out.chars().count());
+            assert!(m.saturating_sub(2) * 5 >= n * 7, "{text} -> {out}");
+            assert!(out.starts_with('[') && out.ends_with(']'));
+        }
+        let texts = Texts::pseudo();
+        assert!(texts.is_pseudo());
+        assert_eq!(texts.language(), Language::En);
+        assert_eq!(texts.get(TextId::MenuFile), "[Fílé··]");
+        let labels = texts.format_labels();
+        assert_eq!(labels.decimal_sep, '.');
+        assert_eq!(labels.date_order, DateOrder::MonthDayYear);
+        assert_eq!(labels.plural, PluralRule::ExactlyOne);
+        for &id in TextId::ALL {
+            if !id.key().starts_with("fmt-") {
+                let text = texts.get_args(id, &sample_args());
+                assert!(text.starts_with('['), "{id:?} : {text}");
+            }
+        }
+        assert!(!Texts::new(Language::En).is_pseudo());
+    }
+
+    /// Noms des modèles et libellés des jetons : un message par valeur, dans
+    /// les deux langues ; « Chantier » s'affiche « Planning travaux ».
+    #[test]
+    fn template_and_token_names() {
+        use planrs_render::TemplateId;
+        use planrs_render::geometry::Token;
+        let fr = Texts::new(Language::Fr);
+        let en = Texts::new(Language::En);
+        let names: BTreeSet<String> = TemplateId::ALL
+            .iter()
+            .map(|t| fr.get(super::template_name(*t)))
+            .collect();
+        assert_eq!(names.len(), TemplateId::ALL.len());
+        assert_eq!(
+            fr.get(super::template_name(TemplateId::Chantier)),
+            "Planning travaux"
+        );
+        assert_eq!(en.get(super::template_name(TemplateId::Sobre)), "Clean");
+        let tokens = [
+            Token::Project,
+            Token::StatusDate,
+            Token::Page,
+            Token::Pages,
+            Token::PrintDate,
+            Token::File,
+        ];
+        let labels: BTreeSet<String> = tokens.iter().map(|t| en.get(super::token_label(*t))).collect();
+        assert_eq!(labels.len(), tokens.len());
+        assert_eq!(super::diag_key("mspdi.error.xml"), "diag-mspdi-error-xml");
+    }
+
     #[test]
     fn language_system_none_is_fr() {
         assert_eq!(Language::resolve(LanguagePref::System, None), Language::Fr);

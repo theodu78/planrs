@@ -4,10 +4,10 @@
   "description": "`style.apply` : applique un modèle, une surcharge, ou revient au modèle\npar défaut des préférences (`reset`). Une entrée d'annulation par appel.",
   "properties": {
     "patch": {
-      "description": "Surcharge (`StylePatch` de `planrs-render`, lue et bornée par\n`parse_doc_style` : au plus 64 Kio)."
+      "description": "Surcharge (`StylePatch` de `planrs-render`, lue et bornée par\n`parse_doc_style` : au plus 64 Kio). Seule : fusionnée avec les\nsurcharges du document (sections `colors`, `bars` et `texts` rôle\npar rôle, les autres remplacées en entier)."
     },
     "reset": {
-      "description": "Retire le style du document (modèle par défaut des préférences ;\nplus rien d'écrit dans le fichier).",
+      "description": "Retire le style du document (modèle par défaut des préférences ;\nplus rien d'écrit dans le fichier). Exclusif des deux autres champs.",
       "type": "boolean"
     },
     "template": {
@@ -51,7 +51,7 @@
           "type": "null"
         }
       ],
-      "description": "Modèle de base."
+      "description": "Modèle de base. Seul : remplace le style du document (surcharges\nretirées) ; avec `patch` : modèle et surcharges neufs."
     }
   },
   "title": "StyleApply",

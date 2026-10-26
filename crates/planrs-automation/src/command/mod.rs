@@ -230,6 +230,16 @@ pub enum Command {
     /// Efface une ligne de base (R-250 ; J7).
     #[serde(rename = "baseline.clear")]
     BaselineClear(BaselineClear),
+    /// Applique un modèle, une surcharge, ou retire le style du document
+    /// (J8, ADR-0016 D7, H-R12).
+    #[serde(rename = "style.apply")]
+    StyleApply(style::StyleApply),
+    /// Mise en forme directe d'un type de barre (J8, H-UI-59, H-UI-60).
+    #[serde(rename = "style.set_bar_role")]
+    StyleSetBarRole(style::StyleSetBarRole),
+    /// Retire les surcharges du style (« Revenir au modèle », J8, H-UI-61).
+    #[serde(rename = "style.reset_to_template")]
+    StyleResetToTemplate(style::StyleResetToTemplate),
 }
 
 impl Command {
@@ -267,6 +277,9 @@ impl Command {
             Self::CalendarSetWeek(_) => "calendar.set_week",
             Self::CalendarDelete(_) => "calendar.delete",
             Self::BaselineClear(_) => "baseline.clear",
+            Self::StyleApply(_) => "style.apply",
+            Self::StyleSetBarRole(_) => "style.set_bar_role",
+            Self::StyleResetToTemplate(_) => "style.reset_to_template",
         }
     }
 }

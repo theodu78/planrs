@@ -9,7 +9,8 @@
 //! au pas de 0,1 %, durée d'une récapitulative automatique (valeur
 //! calculée), chaînes (U+FFFD, troncature au `maxLength`), `Period` réécrite
 //! quotidienne (mêmes jours), `Extras` (invalides et origines étrangères
-//! retirés, ancres recalculées, ordre canonique, `CurrencyCode` ajouté),
+//! retirés, ancres recalculées, ordre canonique, `CurrencyCode` ajouté ;
+//! style du document gardé seulement s'il est écrit, H-R12),
 //! taux relus à travers l'écriture par heure ; profil strict : `GUID`,
 //! éléments hors schéma et plages des semaines datées perdus.
 
@@ -129,6 +130,11 @@ pub fn normalize(project: &Project, options: &WriteOptions) -> Project {
         });
         ex = extras_image(&ex, Parent::Project, &[], options.profile, &written);
     }
+    // H-R12 : le style du document se relit tel quel s'il est écrit.
+    let style = crate::style_pi::entry(&p.extras)
+        .map(|e| e.payload.clone())
+        .filter(|payload| options.style && crate::style_pi::writable(payload));
+    crate::style_pi::set(&mut ex, style);
     p.extras = ex;
     p
 }

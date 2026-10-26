@@ -35,6 +35,7 @@ use crate::Limits;
 use crate::diag::{ImportCode, Sink};
 use crate::error::{LineIndex, MspdiError};
 use crate::schema::{Class, Parent, sequence};
+use crate::style_pi::{self, StyleIgnoredReason};
 
 /// Élément XML retenu : nom local, texte concaténé, enfants retenus,
 /// position (octet du début de la balise ouvrante).
@@ -207,6 +208,9 @@ pub(crate) struct RawDocument<'a> {
     pub(crate) dropped_computed: BTreeMap<String, u64>,
     /// Éléments perdus (enfants non lus d'un parent sans `Extras`).
     pub(crate) not_preserved: u64,
+    /// Charge de la première instruction `<?planrs-style?>` lue avant la
+    /// racine, bornée (H-R12, [`crate::style_pi`]).
+    pub(crate) style: Option<String>,
 }
 
 /// Destination d'un sous-arbre retenu, une fois fermé.
@@ -354,6 +358,7 @@ pub(crate) fn read_document<'a>(
             Event::DocType(_) => {
                 return Err(MspdiError::DoctypeNotAllowed { at: lines.locate(at) });
             }
+            Event::PI(pi) if pi.target() == style_pi::TARGET => state.style_pi(pi.content(), at),
             Event::Comment(_) | Event::PI(_) => {}
             Event::Eof => {
                 if !state.open.is_empty() || !state.root_seen {
@@ -408,6 +413,36 @@ fn root_prefixes(e: &BytesStart<'_>) -> Vec<(String, String)> {
 }
 
 impl<'a> State<'a, '_, '_> {
+    /// Instruction `<?planrs-style?>` (H-R12) : la première lue avant la
+    /// racine et d'au plus 64 Kio est gardée ; les autres sont ignorées,
+    /// diagnostic `style.ignored`.
+    fn style_pi(&mut self, content: &str, at: u64) {
+        let payload = style_pi::payload_of(content);
+        let reason = if self.root_seen {
+            Some(StyleIgnoredReason::AfterRoot)
+        } else if self.doc.style.is_some() {
+            Some(StyleIgnoredReason::Duplicate)
+        } else if payload.len() > style_pi::MAX_BYTES {
+            Some(StyleIgnoredReason::TooLarge)
+        } else {
+            None
+        };
+        match reason {
+            None => self.doc.style = Some(payload.to_owned()),
+            Some(reason) => {
+                let shown =
+                    (reason == StyleIgnoredReason::TooLarge).then(|| format!("{} octets", payload.len()));
+                self.sink.push(
+                    ImportCode::StyleIgnored { reason },
+                    None,
+                    at,
+                    "?planrs-style",
+                    shown.as_deref(),
+                );
+            }
+        }
+    }
+
     /// Chemin des éléments ouverts sous la racine (« Tasks/Task/UID »).
     fn path(&self) -> String {
         let names: Vec<&str> = self.open.iter().skip(1).map(|f| f.name.as_ref()).collect();

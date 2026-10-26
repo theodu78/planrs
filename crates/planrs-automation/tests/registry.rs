@@ -127,24 +127,14 @@ fn registry_reserved_not_listed() {
         .filter(|s| matches!(s.available, Availability::Milestone(_)))
         .map(|s| s.id)
         .collect();
-    // Contrat J8 (lot L0, ADR-0016) : quatre entrées réservées au jalon 8,
-    // activées par les lots L6 (style) et L7 (PDF).
-    assert_eq!(
-        reserved,
-        BTreeSet::from(["project.export_pdf", "style.apply", "style.get", "style.list"])
-    );
-    for (id, name, kind) in [
-        ("project.export_pdf", "export_pdf", Kind::File),
-        ("style.apply", "apply_style", Kind::Write),
-        ("style.get", "get_style", Kind::Read),
-        ("style.list", "list_styles", Kind::Read),
-    ] {
-        let spec = lookup(id).unwrap();
-        assert_eq!(spec.available, Availability::Milestone(8), "{id}");
-        assert_eq!(spec.mcp_name, name, "{id}");
-        assert_eq!(spec.kind, kind, "{id}");
-        assert!(!spec.is_listed(), "{id}");
-    }
+    // Contrat J8 (lot L0, ADR-0016) : quatre entrées réservées au jalon 8 ;
+    // les trois `style.*` activées par le lot L6, reste le PDF (L7).
+    assert_eq!(reserved, BTreeSet::from(["project.export_pdf"]));
+    let spec = lookup("project.export_pdf").unwrap();
+    assert_eq!(spec.available, Availability::Milestone(8));
+    assert_eq!(spec.mcp_name, "export_pdf");
+    assert_eq!(spec.kind, Kind::File);
+    assert!(!spec.is_listed());
     for id in [
         "baseline.clear",
         "calendar.add",
@@ -158,7 +148,7 @@ fn registry_reserved_not_listed() {
         assert_eq!(spec.kind, Kind::Write, "{id}");
     }
     assert!(listed().all(|s| s.available == Availability::Now));
-    assert_eq!(listed().count(), REGISTRY.len() - 3 - 4);
+    assert_eq!(listed().count(), REGISTRY.len() - 3 - 1);
 }
 
 /// Contrat J7 (lot L0, ADR-0015 D11) : `app.ui_state`, `app.ui`,
@@ -206,8 +196,9 @@ fn registry_j6_tools_listed() {
         assert_eq!(spec.dry_run, kind == Kind::Write, "{name}");
         assert_eq!(spec.undoable, kind == Kind::Write, "{name}");
     }
-    // 44 en J6, 49 depuis le lot L5 de J7 (`registry_j7_tools_listed`).
-    assert_eq!(listed().count(), 49);
+    // 44 en J6, 49 depuis le lot L5 de J7, 55 depuis le lot L6 de J8
+    // (`registry_j8_style_tools_listed`).
+    assert_eq!(listed().count(), LISTED);
 }
 
 /// Lot L5 J7 (ADR-0015 D8) : les cinq écritures J7 sont listées (49 outils
@@ -226,7 +217,33 @@ fn registry_j7_tools_listed() {
         assert_eq!(spec.kind, Kind::Write, "{name}");
         assert!(spec.dry_run && spec.undoable, "{name}");
     }
-    assert_eq!(listed().count(), 49);
+    assert_eq!(listed().count(), LISTED);
+}
+
+/// Outils listés : 49 en J7, plus les six `style.*` du lot L6 de J8.
+const LISTED: usize = 55;
+
+/// Lot L6 J8 (ADR-0016 D7, H-UI-59 à H-UI-61) : les six entrées `style.*`
+/// sont listées ; trois écritures annulables avec `dry_run`, trois lectures
+/// (`save_style_as_template` ne modifie rien : l'interface garde le modèle
+/// dans ses préférences).
+#[test]
+fn registry_j8_style_tools_listed() {
+    for (id, name, kind) in [
+        ("style.apply", "apply_style", Kind::Write),
+        ("style.get", "get_style", Kind::Read),
+        ("style.list", "list_styles", Kind::Read),
+        ("style.reset_to_template", "reset_style", Kind::Write),
+        ("style.save_as_template", "save_style_as_template", Kind::Read),
+        ("style.set_bar_role", "set_bar_style", Kind::Write),
+    ] {
+        let spec = lookup(id).unwrap();
+        assert!(spec.is_listed(), "{id}");
+        assert_eq!(spec.mcp_name, name, "{id}");
+        assert_eq!(spec.kind, kind, "{id}");
+        assert_eq!(spec.dry_run && spec.undoable, kind == Kind::Write, "{id}");
+    }
+    assert_eq!(listed().count(), LISTED);
 }
 
 /// Lot L8 (ADR-0013 D9) : les huit outils J5 sont listés, 38 outils en
@@ -247,8 +264,8 @@ fn registry_j5_tools_listed() {
         assert!(spec.is_listed(), "{name}");
         assert_eq!(spec.available, Availability::Now, "{name}");
     }
-    // 38 outils en J5, 44 en J6, 49 en J7 (`registry_j7_tools_listed`).
-    assert_eq!(listed().count(), 49);
+    // 38 outils en J5, 44 en J6, 49 en J7, 55 en J8 (lot L6).
+    assert_eq!(listed().count(), LISTED);
     assert_eq!(by_mcp_name("list_resources").unwrap().kind, Kind::Read);
     assert_eq!(by_mcp_name("resource_usage").unwrap().kind, Kind::Analysis);
 }
@@ -257,7 +274,7 @@ fn registry_j5_tools_listed() {
 /// annulable.
 #[test]
 fn registry_write_commands_match_batch_ops() {
-    let json = r#"{"format_version":1,"ops":[
+    let json = r##"{"format_version":1,"ops":[
         {"op":"task.add","name":"A"},
         {"op":"task.update","uid":1},
         {"op":"task.delete","uid":1},
@@ -284,10 +301,13 @@ fn registry_write_commands_match_batch_ops() {
         {"op":"calendar.update","uid":4,"name":"C"},
         {"op":"calendar.set_week","calendar":"project","days":[]},
         {"op":"calendar.delete","uid":4},
-        {"op":"baseline.clear"}
-    ]}"#;
+        {"op":"baseline.clear"},
+        {"op":"style.apply","template":"sobre"},
+        {"op":"style.set_bar_role","role":"critical","color":"#AA0000"},
+        {"op":"style.reset_to_template"}
+    ]}"##;
     let batch = Batch::from_json_str(json).unwrap();
-    assert_eq!(batch.ops.len(), 27);
+    assert_eq!(batch.ops.len(), 30);
     for op in &batch.ops {
         let spec = lookup(op.id()).unwrap();
         assert!(spec.is_listed() && spec.undoable, "{}", op.id());

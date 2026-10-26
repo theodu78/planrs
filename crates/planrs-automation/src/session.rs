@@ -281,7 +281,11 @@ impl Session {
         now: Moment,
         lang: Language,
     ) -> Result<(Self, Vec<ImportDiagnostic>), OpenError> {
-        let doc = planrs_mspdi::read(bytes, &ReadOptions::new(now))?;
+        let mut doc = planrs_mspdi::read(bytes, &ReadOptions::new(now))?;
+        // H-R12 : style relu validé (illisible ⇒ retiré, `style.ignored`).
+        if let Some(d) = crate::command::style::check_opened(&mut doc.project) {
+            doc.diagnostics.push(d);
+        }
         let session = Self::from_parts(doc.project, Some(doc.recorded), origin, now, lang);
         Ok((session, doc.diagnostics))
     }

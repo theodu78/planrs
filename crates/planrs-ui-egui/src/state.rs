@@ -572,6 +572,65 @@ impl FieldReader<'_> {
     }
 }
 
+/// Refus d'enregistrement d'un modèle personnel (J8, H-UI-61).
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum UserTemplateError {
+    /// Nom vide ou de plus de [`MAX_USER_TEMPLATE_NAME`] caractères.
+    #[error("nom de modèle de 1 à {MAX_USER_TEMPLATE_NAME} caractères attendu")]
+    BadName,
+    /// [`MAX_USER_TEMPLATES`] modèles déjà enregistrés (un nom existant
+    /// reste remplaçable).
+    #[error("{MAX_USER_TEMPLATES} modèles personnels au plus")]
+    Full,
+}
+
+/// Style du document et modèles (J8, lot L6 ; ADR-0016 D7).
+impl UiState {
+    /// Style effectif d'un document (H-UI-43) : son style s'il en a un
+    /// lisible, sinon le modèle par défaut des préférences.
+    #[must_use]
+    pub fn effective_style(&self, project: &planrs_core::Project) -> planrs_render::style::PlanStyle {
+        planrs_automation::command::style::effective_style(project, self.default_template)
+    }
+
+    /// Options d'écriture MSPDI selon les préférences : style du document
+    /// écrit (`<?planrs-style?>`) seulement si `write_style_to_file`.
+    #[must_use]
+    pub fn write_options(&self) -> planrs_mspdi::write::WriteOptions {
+        planrs_mspdi::write::WriteOptions {
+            style: self.write_style_to_file,
+            ..planrs_mspdi::write::WriteOptions::default()
+        }
+    }
+
+    /// Enregistre un modèle personnel (« Enregistrer comme modèle »,
+    /// H-UI-61) : nom rogné, un modèle de même nom est remplacé sur place,
+    /// sinon ajouté en fin de liste.
+    ///
+    /// # Errors
+    ///
+    /// [`UserTemplateError::BadName`], [`UserTemplateError::Full`].
+    pub fn save_user_template(&mut self, name: &str, style: DocStyle) -> Result<(), UserTemplateError> {
+        let name = name.trim();
+        let n = name.chars().count();
+        if n == 0 || n > MAX_USER_TEMPLATE_NAME {
+            return Err(UserTemplateError::BadName);
+        }
+        if let Some(t) = self.user_templates.iter_mut().find(|t| t.name == name) {
+            t.style = style;
+            return Ok(());
+        }
+        if self.user_templates.len() >= MAX_USER_TEMPLATES {
+            return Err(UserTemplateError::Full);
+        }
+        self.user_templates.push(NamedStyle {
+            name: name.to_owned(),
+            style,
+        });
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -981,5 +1040,84 @@ mod tests {
         assert!(warning.is_none(), "{warning:?}");
         assert_eq!(read, state);
         assert_eq!(read.to_json().unwrap(), json);
+    }
+
+    fn project() -> planrs_core::Project {
+        let now: planrs_core::Moment = "2026-10-19T08:00".parse().unwrap();
+        planrs_core::Project::new(planrs_core::ProjectInit {
+            name: "P".to_owned(),
+            anchor: planrs_core::ScheduleAnchor::FromStart(now),
+            current_date: now,
+            calendar_names: planrs_core::BuiltinCalendarNames::default(),
+        })
+    }
+
+    /// H-UI-43 : document sans style ⇒ modèle par défaut des préférences
+    /// (Classique jusqu'au lot L15) ; document stylé ⇒ son style.
+    #[test]
+    fn h_ui_43_default_template_applied() {
+        use planrs_render::style::template;
+        let mut state = UiState::default();
+        let mut p = project();
+        assert_eq!(state.effective_style(&p), template(TemplateId::Classique));
+        state.default_template = TemplateId::Sobre;
+        assert_eq!(state.effective_style(&p), template(TemplateId::Sobre));
+        planrs_mspdi::style_pi::set(&mut p.extras, Some(r#"{"base":"chantier","v":1}"#.to_owned()));
+        assert_eq!(state.effective_style(&p), template(TemplateId::Chantier));
+        // Style illisible : modèle par défaut.
+        planrs_mspdi::style_pi::set(&mut p.extras, Some("{".to_owned()));
+        assert_eq!(state.effective_style(&p), template(TemplateId::Sobre));
+    }
+
+    #[test]
+    fn write_options_follow_preference() {
+        let mut state = UiState::default();
+        assert!(state.write_options().style);
+        state.write_style_to_file = false;
+        assert!(!state.write_options().style);
+    }
+
+    #[test]
+    fn save_user_template_bounds() {
+        use super::UserTemplateError;
+        use planrs_render::style::DocStyle;
+        let doc = |base| DocStyle {
+            v: 1,
+            base,
+            over: planrs_render::style::StylePatch::default(),
+        };
+        let mut state = UiState::default();
+        state
+            .save_user_template("  Client  ", doc(TemplateId::Sobre))
+            .unwrap();
+        state
+            .save_user_template("Client", doc(TemplateId::Chantier))
+            .unwrap();
+        assert_eq!(state.user_templates.len(), 1);
+        assert_eq!(state.user_templates[0].name, "Client");
+        assert_eq!(state.user_templates[0].style.base, TemplateId::Chantier);
+        assert_eq!(
+            state.save_user_template(" ", doc(TemplateId::Sobre)),
+            Err(UserTemplateError::BadName)
+        );
+        let long = "x".repeat(MAX_USER_TEMPLATE_NAME + 1);
+        assert_eq!(
+            state.save_user_template(&long, doc(TemplateId::Sobre)),
+            Err(UserTemplateError::BadName)
+        );
+        for i in 1..MAX_USER_TEMPLATES {
+            state
+                .save_user_template(&format!("M{i}"), doc(TemplateId::Sobre))
+                .unwrap();
+        }
+        assert_eq!(
+            state.save_user_template("Un de plus", doc(TemplateId::Sobre)),
+            Err(UserTemplateError::Full)
+        );
+        // Un nom existant reste remplaçable.
+        state
+            .save_user_template("M1", doc(TemplateId::Presentation))
+            .unwrap();
+        assert_eq!(state.user_templates.len(), MAX_USER_TEMPLATES);
     }
 }

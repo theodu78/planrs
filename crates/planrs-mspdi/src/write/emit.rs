@@ -109,12 +109,21 @@ impl Emitter {
         }
     }
 
-    /// Déclaration XML et balise ouvrante de la racine, avec ses
-    /// déclarations d'espaces de noms.
-    pub(crate) fn root(&mut self, namespaces: &[(String, String)]) {
+    /// Déclaration XML, instruction `<?planrs-style?>` si `style` est
+    /// donné (H-R12, charge déjà vérifiée par `style_pi::writable`), et
+    /// balise ouvrante de la racine, avec ses déclarations d'espaces de noms.
+    pub(crate) fn root(&mut self, namespaces: &[(String, String)], style: Option<&str>) {
         self.push(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
         let nl = self.newline;
         self.push(nl);
+        if let Some(payload) = style {
+            self.push("<?");
+            self.push(crate::style_pi::TARGET);
+            self.push(" ");
+            self.push(payload);
+            self.push("?>");
+            self.push(nl);
+        }
         self.push(r#"<Project xmlns="http://schemas.microsoft.com/project""#);
         for (prefix, uri) in namespaces {
             self.push(" xmlns:");
@@ -408,7 +417,7 @@ mod tests {
     #[test]
     fn r120_empty_elements_and_indentation() {
         let mut e = Emitter::new(Newline::Lf, Indent::Tab);
-        e.root(&[]);
+        e.root(&[], None);
         e.open("Tasks");
         e.close();
         e.open("Calendars");

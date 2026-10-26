@@ -21,7 +21,7 @@ use crate::command::params::{
     OpenProjectParams, RenderGanttParams, ResourceListParams, SaveProjectParams, TaskGetParams,
     TaskListParams, UsageParams, VarianceParams, WhatIfParams, ZoomJson,
 };
-use crate::command::{AnchorSpec, Batch, Command, parse_params};
+use crate::command::{AnchorSpec, Batch, Command, parse_params, style};
 use crate::error::{CommandError, CommandErrorKind, HistoryError, codes};
 use crate::history::EditSource;
 use crate::outcome::ApplyOutcome;
@@ -236,6 +236,21 @@ fn read(session: Option<&Session>, lang: Language, id: &str, params: Value) -> R
             let p = parse_params::<RenderGanttParams>(params).map_err(cmd)?;
             render(need(session, lang)?, lang, &p)
         }
+        "style.get" => {
+            parse_params::<NoParams>(params).map_err(cmd)?;
+            let project = need(session, lang)?.project();
+            to_value(&style::style_view(project, style::HEADLESS_DEFAULT))
+        }
+        "style.list" => {
+            parse_params::<NoParams>(params).map_err(cmd)?;
+            let project = need(session, lang)?.project();
+            to_value(&style::list_view(project, style::HEADLESS_DEFAULT))
+        }
+        "style.save_as_template" => {
+            let p = parse_params::<style::StyleSaveAsTemplate>(params).map_err(cmd)?;
+            let project = need(session, lang)?.project();
+            to_value(&style::save_as_template(project, &p, style::HEADLESS_DEFAULT).map_err(cmd)?)
+        }
         _ => Err(unknown_command(id, lang)),
     }
 }
@@ -348,12 +363,13 @@ fn render(s: &Session, lang: Language, p: &RenderGanttParams) -> Result<Value, T
             ..planrs_render::RenderLimits::default()
         },
     };
-    // Style : modèle demandé, sinon Classique (modèle par défaut de J8
-    // jusqu'au lot visible) ; textes autour des barres formatés ici (règle 3).
-    let template = p
-        .style
-        .map_or(planrs_render::style::TemplateId::Classique, Into::into);
-    let style = planrs_render::style::template(template);
+    // Style : modèle demandé, sinon celui du document (L6, H-R12), sinon
+    // Classique (modèle par défaut de J8 jusqu'au lot visible) ; textes
+    // autour des barres formatés ici (règle 3).
+    let style = p.style.map_or_else(
+        || style::effective_style(s.project(), style::HEADLESS_DEFAULT),
+        |t| planrs_render::style::template(t.into()),
+    );
     let texts = crate::render_text::SessionTexts { session: s, lang };
     let (svg, report) = planrs_render::svg_styled(s.project(), sched, &req, &style, &texts);
     to_value(&RenderView {

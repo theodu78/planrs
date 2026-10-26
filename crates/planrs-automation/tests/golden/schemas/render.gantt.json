@@ -66,7 +66,7 @@
           "type": "null"
         }
       ],
-      "description": "Modèle de mise en forme (défaut : Classique, apparence J7)."
+      "description": "Modèle de mise en forme (défaut : style du document, sinon\nClassique, apparence J7)."
     },
     "to": {
       "description": "Dernier jour affiché (défaut : fin du projet).",

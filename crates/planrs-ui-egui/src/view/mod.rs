@@ -243,18 +243,20 @@ fn displayable(text: &str) -> String {
 
 impl DiagnosticsView {
     /// Construit la vue des diagnostics d'import et de calcul d'un document
-    /// (tri stable par gravité).
+    /// (tri stable par gravité), traduits par code dans la langue de
+    /// `texts` (N5, J8 lot L14).
     #[must_use]
-    pub fn build(doc: &OpenDocument) -> Self {
+    pub fn build(doc: &OpenDocument, texts: &crate::i18n::Texts) -> Self {
+        let tr = crate::diag_text::DiagTexts::new(texts);
         let mut entries: Vec<(Severity, String)> = doc
             .import_diagnostics
             .iter()
-            .map(|diagnostic| (diagnostic.severity, displayable(&diagnostic.to_string())))
+            .map(|diagnostic| (diagnostic.severity, displayable(&tr.import(diagnostic))))
             .chain(
                 doc.schedule()
                     .diagnostics
                     .iter()
-                    .map(|diagnostic| (diagnostic.severity(), displayable(&diagnostic.to_string()))),
+                    .map(|diagnostic| (diagnostic.severity(), displayable(&tr.core(diagnostic)))),
             )
             .collect();
         entries.sort_by_key(|(severity, _)| severity_rank(*severity));

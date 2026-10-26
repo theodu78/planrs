@@ -11,7 +11,12 @@
 //!
 //! Exception : les clés `error-*` sont lues par leur code de refus
 //! (`error_text_id`, clé construite à l'exécution) ; leur couverture est
-//! vérifiée par les tests de `i18n.rs`.
+//! vérifiée par les tests de `i18n.rs`. De même, les clés `diag-<code>`
+//! (diagnostics et erreurs d'ouverture traduits par code, N5 et N9, J8
+//! lot L14) sont lues par `diag_text.rs` ; le contrôle exige en plus qu'à
+//! chaque code des fonctions `code()` du moteur et du lecteur MSPDI
+//! ([`DIAG_SOURCES`]) corresponde sa clé (un code nouveau sans message
+//! échoue ici, avant le repli sur le texte français à l'exécution).
 //!
 //! Limites : recherche textuelle (un `TextId::X` dans un commentaire ou un
 //! module de test du code livré compte comme un usage) ; un alias
@@ -36,6 +41,13 @@ const SOURCE_DIRS: [&str; 3] = [
 ];
 /// Préfixe des clés lues par leur code de refus.
 const DYNAMIC_PREFIX: &str = "error-";
+/// Fichiers dont la fonction `code()` énumère des codes de diagnostic
+/// traduits par une clé `diag-<code>` (relatifs à la racine).
+const DIAG_SOURCES: [&str; 3] = [
+    "crates/planrs-core/src/diagnostic.rs",
+    "crates/planrs-mspdi/src/diag.rs",
+    "crates/planrs-mspdi/src/error.rs",
+];
 
 pub fn run() -> ExitCode {
     match check(&repo_root()) {
@@ -82,6 +94,32 @@ fn check(root: &Path) -> Result<usize, Vec<String>> {
             problems.push(format!("{locale} : message « {key} » absent de `text_ids!`"));
         }
     }
+    let mut diag_keys = BTreeSet::new();
+    for source in DIAG_SOURCES {
+        match std::fs::read_to_string(root.join(source)) {
+            Ok(text) => {
+                let codes = diag_codes(&text);
+                if codes.is_empty() {
+                    problems.push(format!(
+                        "{source} : aucun code de diagnostic trouvé dans `fn code`"
+                    ));
+                }
+                diag_keys.extend(
+                    codes
+                        .iter()
+                        .map(|code| format!("diag-{}", code.replace('.', "-"))),
+                );
+            }
+            Err(e) => problems.push(format!("{source} illisible : {e}")),
+        }
+    }
+    for key in &diag_keys {
+        if !keys.contains(key.as_str()) {
+            problems.push(format!(
+                "clé « {key} » absente de `text_ids!` (code de diagnostic sans message)"
+            ));
+        }
+    }
     let mut used = used_variants(&outside);
     for dir in SOURCE_DIRS {
         let mut files = Vec::new();
@@ -99,7 +137,7 @@ fn check(root: &Path) -> Result<usize, Vec<String>> {
         }
     }
     for (variant, key) in &ids {
-        if !key.starts_with(DYNAMIC_PREFIX) && !used.contains(variant) {
+        if !key.starts_with(DYNAMIC_PREFIX) && !diag_keys.contains(key) && !used.contains(variant) {
             problems.push(format!("`TextId::{variant}` (« {key} ») utilisé nulle part"));
         }
     }
@@ -139,6 +177,33 @@ fn parse_text_ids(src: &str) -> Option<(Vec<(String, String)>, String)> {
         outside.push('\n');
     }
     (found && !inside).then_some((ids, outside))
+}
+
+/// Codes de diagnostic (`"calendar.unknown"`, `"mspdi.error.xml"`) écrits
+/// en chaînes littérales dans le corps des fonctions `fn code(` d'un
+/// fichier (jusqu'à la première ligne `    }` qui suit).
+fn diag_codes(src: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let mut rest = src;
+    while let Some(i) = rest.find("fn code(") {
+        let body = rest.get(i..).unwrap_or_default();
+        let end = body.find("\n    }\n").unwrap_or(body.len());
+        let body_text = body.get(..end).unwrap_or_default();
+        for literal in body_text.split('"').skip(1).step_by(2) {
+            let parts: Vec<&str> = literal.split('.').collect();
+            let well_formed = parts.len() >= 2
+                && parts.iter().all(|p| {
+                    !p.is_empty()
+                        && p.chars()
+                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                });
+            if well_formed {
+                out.insert(literal.to_owned());
+            }
+        }
+        rest = body.get(end..).unwrap_or_default();
+    }
+    out
 }
 
 /// Clés des messages d'un fichier fluent (ni termes `-x`, ni attributs,
@@ -228,6 +293,9 @@ mod tests {
 
         let ftl = "# c\na-key = x\n    .attr = y\n-term = z\nbb = { $n ->\n   *[other] n\n}\n";
         assert_eq!(ftl_keys(ftl), BTreeSet::from(["a-key", "bb"]));
+
+        let src = "impl X {\n    pub fn code(&self) -> String {\n        match self {\n            Self::A => \"a.b_c\".to_owned(),\n            Self::C(d) => format!(\"core.{}\", d),\n            Self::D => \"Pas un code\".to_owned(),\n        }\n    }\n    fn other() { \"x.y\" }\n}\n";
+        assert_eq!(diag_codes(src), BTreeSet::from(["a.b_c".to_owned()]));
 
         let used = used_variants("TextId::A TextId::AbC(x) TextId::ALL TextId::lower");
         assert_eq!(

@@ -785,6 +785,122 @@ text_ids! {
     WhyUnavailable => "why-unavailable",
     // --- J8 L13 ---
     // --- J8 L14 ---
+    DiagCalendarUnknown => "diag-calendar-unknown",
+    DiagCalendarBaseMissing => "diag-calendar-base_missing",
+    DiagCalendarBaseNotBase => "diag-calendar-base_not_base",
+    DiagCalendarInheritanceCycle => "diag-calendar-inheritance_cycle",
+    DiagCalendarNoWorkingTime => "diag-calendar-no_working_time",
+    DiagCalendarInternal => "diag-calendar-internal",
+    DiagCalendarExceptionsOverlap => "diag-calendar-exceptions_overlap",
+    DiagCalendarWorkWeeksOverlap => "diag-calendar-work_weeks_overlap",
+    DiagCalendarRecurrenceUnsupported => "diag-calendar-recurrence_unsupported",
+    DiagProjectCalendarNotBase => "diag-project-calendar_not_base",
+    DiagTaskReservedUid => "diag-task-reserved_uid",
+    DiagTaskOutlineJump => "diag-task-outline_jump",
+    DiagTaskNullWithData => "diag-task-null_with_data",
+    DiagTaskNegativeProgress => "diag-task-negative_progress",
+    DiagLinkSelf => "diag-link-self",
+    DiagLinkDuplicate => "diag-link-duplicate",
+    DiagLinkUnknownTask => "diag-link-unknown_task",
+    DiagAssignmentUnknownTask => "diag-assignment-unknown_task",
+    DiagAssignmentUnknownResource => "diag-assignment-unknown_resource",
+    DiagConversionOutOfDomain => "diag-conversion-out_of_domain",
+    DiagLinkCycle => "diag-link-cycle",
+    DiagLinkIgnoredInCycle => "diag-link-ignored_in_cycle",
+    DiagLinkSummaryDescendant => "diag-link-summary_descendant",
+    DiagLinkFinishToSummary => "diag-link-finish_to_summary",
+    DiagLinkExpansionLimit => "diag-link-expansion_limit",
+    DiagLinkStartFromSummary => "diag-link-start_from_summary",
+    DiagLinkInactive => "diag-link-inactive",
+    DiagLinkExcludedEndpoint => "diag-link-excluded_endpoint",
+    DiagLinkManualNotHonored => "diag-link-manual_not_honored",
+    DiagLinkUnschedulable => "diag-link-unschedulable",
+    DiagTaskManualUndated => "diag-task-manual_undated",
+    DiagTaskManualDatesInverted => "diag-task-manual_dates_inverted",
+    DiagTaskCalendarFallback => "diag-task-calendar_fallback",
+    DiagProjectCalendarFallback => "diag-project-calendar_fallback",
+    DiagTaskUnschedulable => "diag-task-unschedulable",
+    DiagConstraintOverride => "diag-constraint-override",
+    DiagConstraintNotHonored => "diag-constraint-not_honored",
+    DiagConstraintSummaryIgnored => "diag-constraint-summary_ignored",
+    DiagConstraintManualIgnored => "diag-constraint-manual_ignored",
+    DiagTaskDeadlineMissed => "diag-task-deadline_missed",
+    DiagResourceOverallocated => "diag-resource-overallocated",
+    DiagResourceAvailabilityIgnored => "diag-resource-availability_ignored",
+    DiagAssignmentContourUnsupported => "diag-assignment-contour_unsupported",
+    DiagAssignmentZeroUnits => "diag-assignment-zero_units",
+    DiagAssignmentDurationOutOfDomain => "diag-assignment-duration_out_of_domain",
+    DiagAssignmentCalendarEmpty => "diag-assignment-calendar_empty",
+    DiagTaskFixedWorkEffortDriven => "diag-task-fixed_work_effort_driven",
+    DiagCalendarTooManySegments => "diag-calendar-too_many_segments",
+    DiagAssignmentTooManyParts => "diag-assignment-too_many_parts",
+    DiagProgressLinkIgnored => "diag-progress-link_ignored",
+    DiagProgressLinkOverridden => "diag-progress-link_overridden",
+    DiagProgressOptionUnsupported => "diag-progress-option_unsupported",
+    DiagProgressFromFinishInProgress => "diag-progress-from_finish_in_progress",
+    DiagProgressActualStartMissing => "diag-progress-actual_start_missing",
+    DiagProgressMilestoneRounded => "diag-progress-milestone_rounded",
+    DiagConstraintIgnoredInProgress => "diag-constraint-ignored_in_progress",
+    DiagBaselineCostNotComputed => "diag-baseline-cost_not_computed",
+    DiagBaselineTaskSkipped => "diag-baseline-task_skipped",
+    DiagBaselineNothingToClear => "diag-baseline-nothing_to_clear",
+    DiagScheduleInternal => "diag-schedule-internal",
+    DiagMspdiInvalidValue => "diag-mspdi-invalid_value",
+    DiagMspdiUnknownCode => "diag-mspdi-unknown_code",
+    DiagMspdiMissingRequired => "diag-mspdi-missing_required",
+    DiagMspdiDuplicate => "diag-mspdi-duplicate",
+    DiagMspdiDanglingReference => "diag-mspdi-dangling_reference",
+    DiagMspdiLinkIgnored => "diag-mspdi-link_ignored",
+    DiagMspdiRounded => "diag-mspdi-rounded",
+    DiagMspdiUnsupported => "diag-mspdi-unsupported",
+    DiagMspdiInconsistent => "diag-mspdi-inconsistent",
+    DiagMspdiTruncated => "diag-mspdi-truncated",
+    DiagMspdiNotPreserved => "diag-mspdi-not_preserved",
+    DiagMspdiHonorConstraintsOff => "diag-mspdi-honor_constraints_off",
+    DiagMspdiProgressInconsistent => "diag-mspdi-progress_inconsistent",
+    DiagStyleIgnored => "diag-style-ignored",
+    DiagMspdiErrorEmpty => "diag-mspdi-error-empty",
+    DiagMspdiErrorTooLarge => "diag-mspdi-error-too_large",
+    DiagMspdiErrorUtf16NotSupported => "diag-mspdi-error-utf16_not_supported",
+    DiagMspdiErrorInvalidUtf8 => "diag-mspdi-error-invalid_utf8",
+    DiagMspdiErrorXml => "diag-mspdi-error-xml",
+    DiagMspdiErrorUnexpectedEof => "diag-mspdi-error-unexpected_eof",
+    DiagMspdiErrorDoctypeNotAllowed => "diag-mspdi-error-doctype_not_allowed",
+    DiagMspdiErrorTooDeep => "diag-mspdi-error-too_deep",
+    DiagMspdiErrorTooManyElements => "diag-mspdi-error-too_many_elements",
+    DiagMspdiErrorTooManyRetained => "diag-mspdi-error-too_many_retained",
+    DiagMspdiErrorTextTooLong => "diag-mspdi-error-text_too_long",
+    DiagMspdiErrorNotMspdi => "diag-mspdi-error-not_mspdi",
+    DiagLocation => "diag-location",
+    DiagSubjectProject => "diag-subject-project",
+    DiagSubjectCalendar => "diag-subject-calendar",
+    DiagSubjectTask => "diag-subject-task",
+    DiagSubjectLink => "diag-subject-link",
+    DiagSubjectResource => "diag-subject-resource",
+    DiagSubjectAssignment => "diag-subject-assignment",
+    DiagPassForward => "diag-pass-forward",
+    DiagPassBackward => "diag-pass-backward",
+    DiagBoundProjectStart => "diag-bound-project-start",
+    DiagBoundProjectFinish => "diag-bound-project-finish",
+    DiagBoundSummaryGate => "diag-bound-summary-gate",
+    DiagBoundSummaryCap => "diag-bound-summary-cap",
+    DiagBoundPredecessor => "diag-bound-predecessor",
+    DiagBoundSuccessor => "diag-bound-successor",
+    DiagWithElement => "diag-with-element",
+    DiagWithValue => "diag-with-value",
+    DiagWithDetail => "diag-with-detail",
+    TemplateClassique => "template-classique",
+    TemplateSobre => "template-sobre",
+    TemplateContrasteEleve => "template-contraste-eleve",
+    TemplatePresentation => "template-presentation",
+    TemplateChantier => "template-chantier",
+    TemplateImpressionNb => "template-impression-nb",
+    TokenProject => "token-project",
+    TokenStatusDate => "token-status-date",
+    TokenPage => "token-page",
+    TokenPages => "token-pages",
+    TokenPrintDate => "token-print-date",
+    TokenFile => "token-file",
     // --- J8 L15 ---
     // --- J8 L16 ---
 }
@@ -808,6 +924,90 @@ pub fn error_text_id(code: &str) -> TextId {
         .copied()
         .find(|id| id.key() == key)
         .unwrap_or(TextId::ErrorUnknown)
+}
+
+/// Clé fluent d'un diagnostic de code `code` (N5, N9 ; J8 lot L14) :
+/// `diag-<code>`, points changés en tirets (`link.cycle` →
+/// `diag-link-cycle`, `mspdi.error.xml` → `diag-mspdi-error-xml`).
+#[must_use]
+pub fn diag_key(code: &str) -> String {
+    format!("diag-{}", code.replace('.', "-"))
+}
+
+/// Nom affiché d'un modèle de mise en forme (galerie, préférences).
+/// « Chantier » s'affiche « Planning travaux » (retour du propriétaire du
+/// 2026-10-26, H-UI-63 à H-UI-67) ; l'identifiant stable ne change pas.
+#[must_use]
+pub const fn template_name(id: planrs_render::TemplateId) -> TextId {
+    use planrs_render::TemplateId as T;
+    match id {
+        T::Classique => TextId::TemplateClassique,
+        T::Sobre => TextId::TemplateSobre,
+        T::ContrasteEleve => TextId::TemplateContrasteEleve,
+        T::Presentation => TextId::TemplatePresentation,
+        T::Chantier => TextId::TemplateChantier,
+        T::ImpressionNb => TextId::TemplateImpressionNb,
+    }
+}
+
+/// Libellé d'un jeton d'en-tête ou de pied de page (H-UI-51), pour la
+/// fenêtre « Mise en page » ; le jeton écrit dans le style (`{projet}`…)
+/// ne se traduit pas.
+#[must_use]
+pub const fn token_label(token: planrs_render::geometry::Token) -> TextId {
+    use planrs_render::geometry::Token as T;
+    match token {
+        T::Project => TextId::TokenProject,
+        T::StatusDate => TextId::TokenStatusDate,
+        T::Page => TextId::TokenPage,
+        T::Pages => TextId::TokenPages,
+        T::PrintDate => TextId::TokenPrintDate,
+        T::File => TextId::TokenFile,
+    }
+}
+
+/// Pseudo-langue de test (J8 lot L14) : lettres accentuées, texte allongé
+/// d'au moins 40 % et encadré de crochets (« [Ƒíléé····] »), pour voir une
+/// troncature ou une chaîne restée en dur. Les espaces et la ponctuation
+/// sont gardés ; seules des lettres Latin-1 (présentes dans les polices
+/// d'egui) sont utilisées. Chaîne vide inchangée.
+#[must_use]
+pub fn pseudo(text: &str) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
+    let mut out = String::with_capacity(text.len().saturating_mul(2).saturating_add(8));
+    out.push('[');
+    let mut chars: usize = 0;
+    for c in text.chars() {
+        chars = chars.saturating_add(1);
+        out.push(match c {
+            'a' => 'á',
+            'e' => 'é',
+            'i' => 'í',
+            'o' => 'ó',
+            'u' => 'ú',
+            'y' => 'ý',
+            'c' => 'ç',
+            'n' => 'ñ',
+            'A' => 'Á',
+            'E' => 'É',
+            'I' => 'Í',
+            'O' => 'Ó',
+            'U' => 'Ú',
+            'Y' => 'Ý',
+            'C' => 'Ç',
+            'N' => 'Ñ',
+            other => other,
+        });
+    }
+    // 40 % arrondi au-dessus, au moins un caractère de remplissage.
+    let pad = chars.saturating_mul(2).saturating_add(4) / 5;
+    for _ in 0..pad.max(1) {
+        out.push('·');
+    }
+    out.push(']');
+    out
 }
 
 /// Noms longs des mois, janvier d'abord.
@@ -885,6 +1085,9 @@ pub struct Texts {
     missing: RefCell<BTreeSet<TextId>>,
     /// Libellés des formateurs, résolus une fois à la construction.
     labels: FormatLabels,
+    /// Pseudo-langue de test ([`pseudo`]) appliquée à chaque message, sauf
+    /// aux conventions de formatage (`fmt-*`).
+    pseudo: bool,
 }
 
 impl std::fmt::Debug for Texts {
@@ -923,7 +1126,33 @@ impl Texts {
     #[must_use]
     pub fn new(language: Language) -> Self {
         let fallback = (language != Language::Fr).then(|| build_bundle(Language::Fr, FTL_FR));
-        Self::assemble(language, build_bundle(language, language.source()), fallback)
+        Self::assemble(
+            language,
+            build_bundle(language, language.source()),
+            fallback,
+            false,
+        )
+    }
+
+    /// Pseudo-langue de test (J8 lot L14) : messages anglais passés par
+    /// [`pseudo`] (accents, +40 %, crochets) ; dates, nombres et saisie
+    /// comme en anglais ([`Texts::language`] rend `En`). Réservée aux tests
+    /// de troncature (`tests/ui/pseudo.rs`), jamais proposée à
+    /// l'utilisateur.
+    #[must_use]
+    pub fn pseudo() -> Self {
+        Self::assemble(
+            Language::En,
+            build_bundle(Language::En, FTL_EN),
+            Some(build_bundle(Language::Fr, FTL_FR)),
+            true,
+        )
+    }
+
+    /// Vrai pour la pseudo-langue de test.
+    #[must_use]
+    pub const fn is_pseudo(&self) -> bool {
+        self.pseudo
     }
 
     /// Recueil construit sur des sources arbitraires (tests du repli).
@@ -933,6 +1162,7 @@ impl Texts {
             language,
             build_bundle(language, source),
             fallback.map(|fr| build_bundle(Language::Fr, fr)),
+            false,
         )
     }
 
@@ -942,6 +1172,7 @@ impl Texts {
         language: Language,
         bundle: FluentBundle<FluentResource>,
         fallback: Option<FluentBundle<FluentResource>>,
+        pseudo: bool,
     ) -> Self {
         let mut texts = Self {
             language,
@@ -949,6 +1180,7 @@ impl Texts {
             fallback,
             missing: RefCell::new(BTreeSet::new()),
             labels: FormatLabels::default(),
+            pseudo,
         };
         texts.labels = texts.build_format_labels();
         texts
@@ -989,6 +1221,9 @@ impl Texts {
                 let text = bundle.format_pattern(pattern, args, &mut errors);
                 for error in errors {
                     log::warn!("traduction « {key} » : {error}");
+                }
+                if self.pseudo && !key.starts_with("fmt-") {
+                    return pseudo(&text);
                 }
                 return text.into_owned();
             }
@@ -1124,6 +1359,53 @@ mod tests {
             ("document", Arg::Str("maison.xml".into())),
             ("stem", Arg::Str("maison".into())),
             ("date", Arg::Str("02/11".into())),
+            // Diagnostics traduits par code (N5, N9 ; J8 lot L14).
+            ("calendar", Arg::Str("1".into())),
+            ("referenced_by", Arg::Str("la tâche 3".into())),
+            ("base", Arg::Str("2".into())),
+            ("chain", Arg::Str("1 -> 2 -> 1".into())),
+            ("kept", Arg::Count(1)),
+            ("ignored", Arg::Count(2)),
+            ("exception", Arg::Count(3)),
+            ("task", Arg::Str("3".into())),
+            ("predecessor", Arg::Str("2".into())),
+            ("successor", Arg::Str("3".into())),
+            ("assignment", Arg::Str("4".into())),
+            ("resource", Arg::Str("5".into())),
+            ("from", Arg::Str("lun 02/11/26".into())),
+            ("to", Arg::Str("ven 06/11/26".into())),
+            ("minutes", Arg::Count(480)),
+            ("tasks", Arg::Str("1, 2, 3".into())),
+            ("limit", Arg::Count(64)),
+            ("cause", Arg::Str("cause".into())),
+            ("pass", Arg::Str("passe avant".into())),
+            ("kind", Arg::Str("Doit commencer le".into())),
+            ("bound", Arg::Str("le début du projet".into())),
+            ("deadline", Arg::Str("lun 02/11/26".into())),
+            ("peak", Arg::Count(150)),
+            ("contour", Arg::Str("BackLoaded".into())),
+            ("task_calendar", Arg::Str("1".into())),
+            ("resource_calendar", Arg::Str("2".into())),
+            ("other", Arg::Str("2".into())),
+            ("parts", Arg::Count(70)),
+            ("option", Arg::Str("MoveCompletedEndsForward".into())),
+            ("number", Arg::Count(1)),
+            ("code", Arg::Count(7)),
+            ("reason", Arg::Str("cross_project".into())),
+            ("what", Arg::Str("leveling_delay".into())),
+            ("dropped", Arg::Count(3)),
+            ("size", Arg::Count(300)),
+            ("max", Arg::Count(200)),
+            ("message", Arg::Str("message".into())),
+            ("open", Arg::Str("Project/Tasks".into())),
+            ("depth", Arg::Count(2)),
+            ("root", Arg::Str("html".into())),
+            ("at", Arg::Str("ligne 4, colonne 9 (octet 120)".into())),
+            ("line", Arg::Count(4)),
+            ("byte", Arg::Count(120)),
+            ("head", Arg::Str("tête".into())),
+            ("element", Arg::Str("Tasks/Task/Name".into())),
+            ("summary", Arg::Str("1".into())),
         ]
     }
 

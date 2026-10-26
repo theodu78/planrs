@@ -14,6 +14,7 @@ pub mod action;
 pub mod app;
 pub mod clipboard;
 pub mod column;
+pub mod diag_text;
 pub mod dialog;
 pub mod document;
 pub mod edit;

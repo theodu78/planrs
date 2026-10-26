@@ -831,6 +831,137 @@ why-unavailable = Explication indisponible : { $detail }
 # --- J8 L13 ---
 
 # --- J8 L14 ---
+diag-calendar-unknown = calendrier { $calendar } inconnu, référencé par { $referenced_by }
+diag-calendar-base_missing = le calendrier { $calendar } hérite du calendrier { $base }, qui n'existe pas
+diag-calendar-base_not_base = le calendrier { $calendar } hérite du calendrier { $base }, qui n'est pas un calendrier de base
+diag-calendar-inheritance_cycle = boucle d'héritage entre calendriers : { $chain }
+diag-calendar-no_working_time = le calendrier { $calendar } n'a aucun temps ouvré : aucune durée ne peut y être placée
+diag-calendar-internal = le calendrier { $calendar } n'a pas pu être compilé (incohérence interne, anomalie à signaler)
+diag-calendar-exceptions_overlap = calendrier { $calendar } : les exceptions n° { $kept } et n° { $ignored } se chevauchent ; la n° { $kept } l'emporte sur les jours communs
+diag-calendar-work_weeks_overlap = calendrier { $calendar } : les semaines de travail n° { $kept } et n° { $ignored } se chevauchent ; la n° { $kept } l'emporte sur les jours communs
+diag-calendar-recurrence_unsupported = calendrier { $calendar } : la récurrence de l'exception n° { $exception } n'est pas prise en charge ; l'exception est ignorée
+diag-project-calendar_not_base = le calendrier du projet ({ $calendar }) n'est pas un calendrier de base
+diag-task-reserved_uid = une tâche porte l'UID 0, réservé à la tâche récapitulative du projet
+diag-task-outline_jump = la tâche { $task } saute un niveau hiérarchique (ou le premier niveau n'est pas 1)
+diag-task-null_with_data = la ligne vide { $task } porte des liens ou des affectations, ignorés
+diag-task-negative_progress = la tâche { $task } a une durée réelle ou restante négative
+diag-link-self = la tâche { $task } est liée à elle-même
+diag-link-duplicate = plusieurs liens de la tâche { $predecessor } vers la tâche { $successor }
+diag-link-unknown_task = la tâche { $successor } est liée à la tâche { $predecessor }, qui n'existe pas
+diag-assignment-unknown_task = l'affectation { $assignment } porte sur la tâche { $task }, qui n'existe pas
+diag-assignment-unknown_resource = l'affectation { $assignment } porte sur la ressource { $resource }, qui n'existe pas
+diag-conversion-out_of_domain = calendrier { $calendar } : { $minutes } min à partir du { $from } sortent du domaine des dates (1984-2149)
+diag-link-cycle = liens circulaires entre les tâches { $tasks }
+diag-link-ignored_in_cycle = le lien { $predecessor } -> { $successor } est ignoré pour rompre un cycle
+diag-link-summary_descendant = le lien { $predecessor } -> { $successor } relie une récapitulative à l'une de ses sous-tâches : ignoré
+diag-link-finish_to_summary = le lien { $predecessor } -> { $successor } (fin à fin ou début à fin) vers une récapitulative s'applique à chacune de ses sous-tâches
+diag-link-expansion_limit = { $ignored ->
+        [one] { $ignored } lien fin à fin ou début à fin vers une récapitulative ignoré
+       *[other] { $ignored } liens fin à fin ou début à fin vers une récapitulative ignorés
+    } : leur report sur les sous-tâches dépasserait { $limit } arcs
+diag-link-start_from_summary = le lien { $predecessor } -> { $successor } (début à début ou début à fin) depuis une récapitulative plafonne le début de chacune de ses sous-tâches (planification à rebours)
+diag-link-inactive = le lien { $predecessor } -> { $successor } part d'une tâche inactive : sans effet
+diag-link-excluded_endpoint = le lien { $predecessor } -> { $successor } touche une tâche non planifiée : ignoré
+diag-link-manual_not_honored = la tâche manuelle { $successor } ne respecte pas son lien avec la tâche { $predecessor }
+diag-link-unschedulable = le lien { $predecessor } -> { $successor } vers une récapitulative ne peut pas être appliqué ({ $cause }) : ignoré
+diag-task-manual_undated = la tâche manuelle { $task } n'a ni début ni fin : non planifiée
+diag-task-manual_dates_inverted = la tâche manuelle { $task } finit avant de commencer : fin ramenée au début
+diag-task-calendar_fallback = le calendrier { $calendar } de la tâche { $task } est inutilisable : calendrier du projet utilisé
+diag-project-calendar_fallback = le calendrier du projet ({ $calendar }) est inutilisable : calendrier Standard intégré utilisé
+diag-task-unschedulable = la tâche { $task } ne peut pas être planifiée ({ $pass } : { $cause })
+diag-constraint-override = la contrainte « { $kind } » de la tâche { $task } est respectée malgré { $bound }
+diag-constraint-not_honored = la contrainte « { $kind } » du { $date } de la tâche { $task } n'est pas respectée : les liens l'emportent
+diag-constraint-summary_ignored = la contrainte « { $kind } » de la récapitulative { $task } est ignorée
+diag-constraint-manual_ignored = la contrainte « { $kind } » de la tâche manuelle { $task } est ignorée par le calcul
+diag-task-deadline_missed = la tâche { $task } finit le { $finish }, après son échéance du { $deadline }
+diag-resource-overallocated = la ressource { $resource } est surutilisée du { $from } au { $to } (pic { $peak } %)
+diag-resource-availability_ignored = les disponibilités datées de la ressource { $resource } sont ignorées : capacité constante
+diag-assignment-contour_unsupported = le profil { $contour } de l'affectation { $assignment } est placé comme uniforme
+diag-assignment-zero_units = l'affectation { $assignment } a des unités nulles : la durée de la tâche est gardée
+diag-assignment-duration_out_of_domain = la durée de l'affectation { $assignment } sort du domaine
+diag-assignment-calendar_empty = les calendriers { $task_calendar } (tâche) et { $resource_calendar } (ressource) de l'affectation { $assignment } n'ont aucun temps ouvré commun
+diag-task-fixed_work_effort_driven = la tâche { $task } est à travail fixe sans être pilotée par l'effort
+diag-calendar-too_many_segments = la combinaison des calendriers { $calendar } et { $other } dépasse { $limit } segments
+diag-assignment-too_many_parts = la tâche { $task } a { $parts } affectations de travail (plus de { $limit }) : sa durée est celle de la plus longue
+diag-progress-link_ignored = le lien { $predecessor } -> { $successor } est sans effet : la tâche en cours { $successor } ne se fractionne pas
+diag-progress-link_overridden = les dates réelles de la tâche achevée { $successor } l'emportent sur son lien avec la tâche { $predecessor }
+diag-progress-option_unsupported = l'option d'avancement { $option } n'est pas suivie : calcul aux valeurs par défaut
+diag-progress-from_finish_in_progress = la tâche en cours { $task } d'un projet planifié à rebours : son reste est placé au plus tôt
+diag-progress-actual_start_missing = la tâche commencée { $task } n'a pas de début réel : son début planifié est pris
+diag-progress-milestone_rounded = le jalon { $task } est passé à 100 % achevé
+diag-constraint-ignored_in_progress = la contrainte « { $kind } » de la tâche en cours { $task } est ignorée pour ses dates
+diag-baseline-cost_not_computed = ligne de base { $number } : coûts recopiés tels quels, sans recalcul
+diag-baseline-task_skipped = { $count ->
+        [one] { $count } tâche non planifiée sans ligne de base
+       *[other] { $count } tâches non planifiées sans ligne de base
+    }
+diag-baseline-nothing_to_clear = ligne de base { $number } : rien à effacer
+diag-schedule-internal = incohérence interne du calcul (anomalie à signaler) : { $detail }
+diag-mspdi-invalid_value = valeur illisible ou hors bornes : valeur par défaut appliquée
+diag-mspdi-unknown_code = code inconnu ({ $code }) : valeur par défaut appliquée
+diag-mspdi-missing_required = élément obligatoire absent
+diag-mspdi-duplicate = élément en double : le premier est gardé
+diag-mspdi-dangling_reference = référence vers un UID inexistant
+diag-mspdi-link_ignored = lien ignoré ({ $reason })
+diag-mspdi-rounded = valeur arrondie à la minute
+diag-mspdi-unsupported = fonction non prise en charge ({ $what })
+diag-mspdi-inconsistent = incohérence tolérée
+diag-mspdi-truncated = { $dropped ->
+        [one] { $dropped } diagnostic supprimé au-delà du plafond
+       *[other] { $dropped } diagnostics supprimés au-delà du plafond
+    }
+diag-mspdi-not_preserved = contenu non lu, perdu à l'enregistrement
+diag-mspdi-honor_constraints_off = « Respecter les contraintes » désactivé : les liens l'emportent sur les contraintes
+diag-mspdi-progress_inconsistent = { $count ->
+        [one] { $count } reste relu remplacé par le calcul
+       *[other] { $count } restes relus remplacés par le calcul
+    }
+diag-style-ignored = style du document ignoré ({ $reason }) : modèle par défaut appliqué
+diag-mspdi-error-empty = document vide
+diag-mspdi-error-too_large = document trop grand : { $size } octets (limite { $max })
+diag-mspdi-error-utf16_not_supported = document en UTF-16 : seul l'UTF-8 est pris en charge
+diag-mspdi-error-invalid_utf8 = UTF-8 invalide à la { $at }
+diag-mspdi-error-xml = XML mal formé à la { $at } : { $message }
+diag-mspdi-error-unexpected_eof = fin inattendue du document à la { $at }{ $depth ->
+        [0] {""}
+       *[other] {" "}(éléments ouverts : { $open })
+    }
+diag-mspdi-error-doctype_not_allowed = déclaration DOCTYPE refusée à la { $at }
+diag-mspdi-error-too_deep = imbrication trop profonde à la { $at } (limite { $max } niveaux)
+diag-mspdi-error-too_many_elements = trop d'éléments (limite { $max })
+diag-mspdi-error-too_many_retained = trop d'éléments retenus à la { $at } (limite { $max })
+diag-mspdi-error-text_too_long = texte trop long à la { $at } (limite { $max } octets)
+diag-mspdi-error-not_mspdi = pas un document MSPDI : racine « { $root } » au lieu de « Project »
+diag-location = ligne { $line }, colonne { $column } (octet { $byte })
+diag-subject-project = le projet
+diag-subject-calendar = le calendrier { $id }
+diag-subject-task = la tâche { $id }
+diag-subject-link = le lien { $predecessor } -> { $successor }
+diag-subject-resource = la ressource { $id }
+diag-subject-assignment = l'affectation { $id }
+diag-pass-forward = passe avant
+diag-pass-backward = passe arrière
+diag-bound-project-start = le début du projet
+diag-bound-project-finish = la fin du projet
+diag-bound-summary-gate = la borne de la récapitulative { $summary }
+diag-bound-summary-cap = le plafond de la récapitulative { $summary }
+diag-bound-predecessor = le lien depuis la tâche { $predecessor }
+diag-bound-successor = le lien vers la tâche { $successor }
+diag-with-element = { $head } : { $element }
+diag-with-value = { $head } = « { $value } »
+diag-with-detail = { $head }, { $detail }
+template-classique = Classique
+template-sobre = Sobre
+template-contraste-eleve = Contraste élevé
+template-presentation = Présentation
+template-chantier = Planning travaux
+template-impression-nb = Impression noir et blanc
+token-project = Nom du projet
+token-status-date = Date d'état
+token-page = Numéro de page
+token-pages = Nombre de pages
+token-print-date = Date d'impression
+token-file = Nom du fichier
 
 # --- J8 L15 ---
 

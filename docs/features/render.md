@@ -64,6 +64,18 @@ Style dans le document (L6) : `planrs_automation::command::style`. Écritures du
 
 `planrs_render::paginate` (contrat L0, implémentation L7) : bandes de pages sans ligne coupée, en-têtes et échelle répétés, plafond `MAX_PAGES` = 1 000.
 
+Implémentation (L7) : fonction pure `paginate_with(scene, page, source, options)` (`paginate` = légende sur la dernière bande) ; la scène n'est jamais redessinée, `Pages` la porte avec le papier et les marges en points, les hauteurs d'en-tête et de pied de page, l'échelle (dix-millièmes) et les zones de troncature et de légende. Unités : 1 pt = 64/3 seizièmes de pixel (96 px par pouce), arrondi inférieur ; papier A4 595 × 842 pt, A3 842 × 1 191, Letter 612 × 792, Tabloid 792 × 1 224 ; marges `mm × 720 / 254` arrondi au plus proche (10 mm = 28 pt).
+- *Échelle (H-UI-50)* : `Scale(p)` = p % (10 à 400) ; `PagesWide(n)` : l'appelant fixe d'abord l'échelle de temps par `fit_zoom` (`Zoom::Auto` sur la largeur de `n` pages, table répétée déduite : étiquettes par H-R4 et H-R5), puis la pagination réduit sous 100 % si le Gantt dépasse encore (plus grande échelle qui tient, recherche dichotomique, 10 % au moins : au-delà, plus de colonnes) ; `PagesWideTall(n, m)` : la plus petite des échelles en largeur et en hauteur (les reports de H-UI-48 peuvent ajouter une bande).
+- *Colonnes* : tranches de la plage de dates ; la table (ID et noms) est répétée à gauche de chaque page si `repeat_table` et si la page garde au moins 32 px de Gantt (sinon tranches de toute la largeur, table sur la première colonne seulement).
+- *Bandes (H-UI-48)* : remplies ligne entière par ligne entière, au moins une ligne par page ; une récapitulative suivie d'un enfant ne finit pas une page (reportée, suites de récapitulatives emboîtées comprises) ; une bande dont la première ligne a un niveau > 1 rappelle la plus proche récapitulative précédente de niveau inférieur, sur une ligne de plus (« Lot (suite) », texte posé par le PDF) ; la dernière bande porte la ligne de troncature et la légende, sinon ses dernières lignes passent sur une bande nouvelle (jamais de page sans ligne).
+- *Ordre de lecture* : bande par bande, de gauche à droite dans une bande (`col`, `row`). Hypothèse.
+- *Répétition (H-UI-49)* : l'échelle (deux niveaux) et les titres de colonnes sont dessinés en haut de chaque page (le PDF reprend la zone d'en-tête de la scène).
+- *En-tête et pied (H-UI-51)* : trois zones, lignes séparées par `\n`, 5 lignes au plus en tête, 3 au pied (S77), interligne 12 pt et écart de 6 pt avec le planning ; hauteur réservée = zone la plus haute (rien si les trois sont vides) ; jetons `{projet}`, `{date_etat}`, `{date_impression}`, `{fichier}` par `BarTextSource::token` (contrôles et fins de ligne aplatis en espaces), `{page}` et `{pages}` par la pagination ; jeton inconnu gardé tel quel.
+- *Légende (H-UI-47)* : en bas de la dernière bande (de chaque colonne), ou de chaque page si `legend.every_page` (place réservée sur chaque page).
+- *Plafond* : nombre de pages calculé avant toute construction ; au-delà de 1 000, `PageError::TooManyPages` (`pdf.too_many_pages`).
+
+Tests : `crates/planrs-render/tests/paginate.rs` (`h_ui_48_no_split_row`, `h_ui_48_summary_not_orphaned`, `h_ui_48_continued_parent`, `h_ui_50_pages_wide_2`, `h_ui_51_tokens_and_line_limits`, `h_ui_47_legend_last_or_every_page`, `pdf_too_many_pages_paginate`, P54 `p54_every_row_on_exactly_one_band`, 1 024 cas : projets générés × papiers, orientations, marges, ajustements, modèles, échelles).
+
 ### 5.4 PDF
 
 Crate `planrs-pdf` (couche du rendu, sans egui ni `planrs-automation`) : krilla 0.8.2 sans fonctions par défaut ; essai L0 (`smoke_page`) ; `pdf(pages, fonts, meta)` en L7 (H-R13).

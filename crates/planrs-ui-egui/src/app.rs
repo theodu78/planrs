@@ -45,7 +45,7 @@ use crate::edit::TableEdit;
 use crate::geom;
 use crate::i18n::{Arg, Language, TextId, Texts, error_text_id};
 use crate::io::{
-    FileService, NoFileService, OpenEvent, PickedFile, SaveEvent, SaveRequest, SaveTarget,
+    FileService, NoFileService, OpenEvent, PickedFile, SaveEvent, SaveKind, SaveRequest, SaveTarget,
     suggested_file_name,
 };
 use crate::keymap::KeyState;
@@ -248,6 +248,8 @@ enum Pending {
     /// Restaurer un journal orphelin (reprise après plantage, J7 lot L15).
     #[cfg(not(target_arch = "wasm32"))]
     Restore(String),
+    /// Ouvrir un fichier déposé sur la fenêtre (J8, lot L13, H-UI-56).
+    OpenDropped(egui::DroppedFileHandle),
     /// Installer un document importé d'un CSV (J8, lot L10, H-UI-40), avec
     /// le nom du fichier et le nombre de remarques de l'import.
     InstallCsv(Box<(LoadedDocument, DocOrigin, (String, usize))>),
@@ -365,6 +367,12 @@ pub struct App {
     save_tx: Sender<SaveEvent>,
     /// Récepteur des résultats d'enregistrement.
     save_rx: Receiver<SaveEvent>,
+    /// Émetteur des résultats d'export (J8, lot L13), à part des
+    /// enregistrements : un export ne touche ni l'origine ni l'état
+    /// « modifié » du document.
+    export_tx: Sender<SaveEvent>,
+    /// Récepteur des résultats d'export.
+    export_rx: Receiver<SaveEvent>,
     /// Fermeture de la fenêtre acceptée (« Ne pas enregistrer », ou
     /// enregistrement réussi) : la prochaine demande n'est plus annulée.
     quit_confirmed: bool,
@@ -412,6 +420,7 @@ impl App {
         let texts = Texts::new(Language::resolve(state.language, env.system_language));
         let (tx, rx) = mpsc::channel();
         let (save_tx, save_rx) = mpsc::channel();
+        let (export_tx, export_rx) = mpsc::channel();
         let (pick_tx, pick_rx) = mpsc::channel();
         Self {
             state,
@@ -442,6 +451,8 @@ impl App {
             saving: None,
             save_tx,
             save_rx,
+            export_tx,
+            export_rx,
             quit_confirmed: false,
             open_confirmed_for: None,
             popup_open: false,
@@ -848,6 +859,7 @@ impl App {
                 self.install(loaded, origin);
             }
             Pending::OpenPath(path) => self.open_path(&path),
+            Pending::OpenDropped(file) => self.open_dropped(&file, ctx),
             #[cfg(not(target_arch = "wasm32"))]
             Pending::Restore(id) => self.restore_orphan(&id),
             Pending::InstallCsv(boxed) => {
@@ -941,10 +953,177 @@ impl App {
         });
         let request = SaveRequest {
             bytes: written.xml,
+            kind: SaveKind::Mspdi,
             target,
             language: self.texts.language(),
         };
         self.env.files.save(ctx, request, self.save_tx.clone());
+    }
+
+    /// Fichier → Exporter (J8, lot L13) : octets du document courant au
+    /// format `kind`, produits par `planrs_automation` (règle 3 : dates du
+    /// moteur), remis au [`FileService`] ; une erreur devient un message.
+    /// PDF : style du document, sinon Classique, mise en page du style
+    /// (`project.export_pdf`) ; SVG : style affiché à l'écran.
+    fn start_export(&mut self, kind: SaveKind, ctx: &egui::Context) {
+        let Some(document) = &self.document else {
+            return;
+        };
+        let lang = self.text_language();
+        let session = &document.session;
+        let bytes = match kind {
+            SaveKind::Mspdi => Ok(session.save_bytes(&self.state.write_options()).xml),
+            SaveKind::Csv => {
+                let locale = match lang {
+                    planrs_automation::text::Language::Fr => planrs_automation::csv::CsvLocale::Fr,
+                    planrs_automation::text::Language::En => planrs_automation::csv::CsvLocale::En,
+                };
+                let options = planrs_automation::csv::CsvExportOptions::new(locale);
+                Ok(planrs_automation::csv::export(
+                    session.project(),
+                    session.schedule(),
+                    &options,
+                ))
+            }
+            SaveKind::Svg => Ok(export_svg(session, &self.state, lang).into_bytes()),
+            SaveKind::Pdf => {
+                let params = planrs_automation::command::params::ExportPdfParams {
+                    path: String::new(),
+                    style: None,
+                    page: None,
+                    range: None,
+                    rows: None,
+                };
+                planrs_automation::pdf::export(session, &params, lang)
+                    .map(|export| export.bytes)
+                    .map_err(|error| error.message)
+            }
+        };
+        let bytes = match bytes {
+            Ok(bytes) => bytes,
+            Err(detail) => {
+                self.report_export_error(detail);
+                return;
+            }
+        };
+        let request = SaveRequest {
+            bytes,
+            kind,
+            target: SaveTarget::Dialog {
+                suggested_name: kind.file_name(&document.origin.name),
+                title: self.texts.get(TextId::MenuExport),
+                filter: kind.extension().to_ascii_uppercase(),
+            },
+            language: self.texts.language(),
+        };
+        self.env.files.save(ctx, request, self.export_tx.clone());
+    }
+
+    /// Message d'un export impossible.
+    fn report_export_error(&mut self, detail: String) {
+        let text = self
+            .texts
+            .get_args(TextId::ExportErrorFailed, &[("detail", Arg::Str(detail.into()))]);
+        self.push_titled(Severity::Error, Some(TextId::ExportErrorTitle), text);
+    }
+
+    /// Relève les résultats d'export arrivés depuis l'image précédente.
+    fn poll_export(&mut self) {
+        while let Ok(event) = self.export_rx.try_recv() {
+            match event {
+                SaveEvent::Cancelled => {}
+                SaveEvent::Failed(detail) => self.report_export_error(detail),
+                SaveEvent::Saved { name, .. } => {
+                    self.clear_titled(TextId::ExportErrorTitle);
+                    let text = self
+                        .texts
+                        .get_args(TextId::ExportDone, &[("name", Arg::Str(name.into()))]);
+                    self.push_message(Severity::Info, text);
+                }
+            }
+        }
+    }
+
+    /// Fichiers déposés sur la fenêtre (J8, lot L13, H-UI-56) : le premier
+    /// est ouvert comme par « Ouvrir » (bandeau de confirmation si le
+    /// document courant est modifié) ; plusieurs ⇒ message nommant celui
+    /// qui est ouvert.
+    fn take_dropped_files(&mut self, ctx: &egui::Context) {
+        let dropped = ctx.input(|input| input.raw.dropped_files.clone());
+        let Some(first) = dropped.first().cloned() else {
+            return;
+        };
+        if dropped.len() > 1 {
+            let count = i64::try_from(dropped.len()).unwrap_or(i64::MAX);
+            let text = self.texts.get_args(
+                TextId::DroppedFirstOnly,
+                &[
+                    ("count", Arg::Count(count)),
+                    ("name", Arg::Str(dropped_name(&first).into())),
+                ],
+            );
+            self.push_message(Severity::Warning, text);
+        }
+        self.request(Pending::OpenDropped(first), ctx);
+    }
+
+    /// Ouvre un fichier déposé (desktop) : chemin absolu ⇒ comme un fichier
+    /// récent (lié au chemin, ajouté aux fichiers récents) ; sinon octets
+    /// lus par egui. Une erreur de lecture devient un message.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_dropped(&mut self, file: &egui::DroppedFileHandle, _ctx: &egui::Context) {
+        let path = file.path();
+        if path.is_absolute()
+            && let Some(path) = path.to_str()
+        {
+            self.open_path(path);
+            return;
+        }
+        let name = dropped_name(file);
+        match file.bytes() {
+            Ok(bytes) => {
+                let origin = DocOrigin {
+                    name,
+                    path: None,
+                    demo: false,
+                };
+                self.open_bytes(&bytes, origin);
+            }
+            Err(detail) => self.report_open_error(&OpenError::Read(detail), &name),
+        }
+    }
+
+    /// Ouvre un fichier déposé (web) : lecture asynchrone du navigateur,
+    /// résultat relevé comme celui du sélecteur ([`Self::poll_io`] : une
+    /// modification arrivée entre-temps redemande confirmation).
+    #[cfg(target_arch = "wasm32")]
+    fn open_dropped(&mut self, file: &egui::DroppedFileHandle, ctx: &egui::Context) {
+        self.open_confirmed_for = self.document.as_ref().map(OpenDocument::cache_key);
+        if self.opening {
+            let (tx, rx) = mpsc::channel();
+            self.tx = tx;
+            self.rx = rx;
+        }
+        self.opening = true;
+        let now = (self.env.now)();
+        let tx = self.tx.clone();
+        let ctx = ctx.clone();
+        let origin = DocOrigin {
+            name: dropped_name(file),
+            path: None,
+            demo: false,
+        };
+        let file = std::sync::Arc::clone(file);
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = match file.bytes_async().await {
+                Ok(bytes) => document::load(&bytes, now),
+                Err(detail) => Err(OpenError::Read(detail)),
+            };
+            if tx.send(OpenEvent::Opened { origin, result }).is_err() {
+                log::warn!("fichier déposé : demande abandonnée");
+            }
+            ctx.request_repaint();
+        });
     }
 
     /// Relève les résultats d'enregistrement arrivés depuis l'image
@@ -1625,6 +1804,7 @@ impl App {
             // J8, lot L10 : presse-papiers et import CSV.
             Action::Clipboard(op) => self.clipboard_op(op, ctx),
             Action::ImportCsv => self.start_csv_import(ctx),
+            Action::Export(kind) => self.start_export(kind, ctx),
             // J8, lot L12 : volet latéral.
             Action::SidePanel(op) => self.side.apply(op),
             Action::ShowDialog(DialogKind::PasteSpecial) => self.open_paste_special(),
@@ -2384,6 +2564,8 @@ impl App {
         self.drain_relay(&ctx);
         self.poll_io();
         self.poll_save(&ctx);
+        self.poll_export();
+        self.take_dropped_files(&ctx);
         self.guard_close(&ctx);
         self.apply_theme(&ctx);
         self.apply_language();
@@ -2735,6 +2917,37 @@ fn recovered_name(texts: &Texts, name: &str) -> String {
     };
     let stem = texts.get_args(TextId::RecoveredFileName, &[("stem", Arg::Str(stem.into()))]);
     format!("{stem}{ext}")
+}
+
+/// Nom affiché d'un fichier déposé : dernier composant de son chemin (le
+/// web ne donne que le nom).
+fn dropped_name(file: &egui::DroppedFileHandle) -> String {
+    file.path()
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// SVG du planning de `session` (J8, lot L13) : style affiché à l'écran
+/// (`UiState::effective_style`), plage du projet, largeur automatique,
+/// textes formatés par `SessionTexts` (règle 3).
+fn export_svg(session: &Session, state: &UiState, lang: planrs_automation::text::Language) -> String {
+    let style = state.effective_style(session.project());
+    let req = planrs_render::GanttRequest {
+        range: planrs_render::RangeSpec::Auto,
+        zoom: planrs_render::Zoom::Auto { width_px: 1_200 },
+        filter: planrs_render::RowFilter::default(),
+        language: match lang {
+            planrs_automation::text::Language::Fr => planrs_render::Lang::Fr,
+            planrs_automation::text::Language::En => planrs_render::Lang::En,
+        },
+        theme: planrs_render::Theme::Light,
+        limits: planrs_render::RenderLimits::default(),
+    };
+    let texts = planrs_automation::render_text::SessionTexts { session, lang };
+    let (svg, _report) =
+        planrs_render::svg_styled(session.project(), session.schedule(), &req, &style, &texts);
+    svg
 }
 
 /// Titre de la fenêtre pour `document` (voir [`App::window_title`]). Le web

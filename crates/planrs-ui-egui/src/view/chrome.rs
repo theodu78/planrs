@@ -12,6 +12,7 @@ use crate::action::{ConfirmChoice, DialogKind};
 use crate::app::{MAX_MESSAGES, UserMessage};
 use crate::format::format_date;
 use crate::i18n::{Arg, Language, TextId};
+use crate::io::SaveKind;
 use crate::keymap::{Binding, UiBinding, shortcut_for_os, shortcut_text};
 use crate::state::{GanttStyle, LanguagePref, ThemePref, ViewKind};
 use crate::theme::Palette;
@@ -121,6 +122,20 @@ fn file_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     // est un nouveau document).
     menu_item(ui, fc, TextId::MenuImportCsv, None, true, Action::ImportCsv);
     // --- J8 L13 ---
+    // Fichier → Exporter (PDF, SVG, CSV) : téléchargement sur le web,
+    // boîte « Enregistrer sous » sur le desktop.
+    let texts = fc.texts;
+    ui.add_enabled_ui(has_doc, |ui| {
+        ui.menu_button(texts.get(TextId::MenuExport), |ui| {
+            for (id, kind) in [
+                (TextId::MenuExportPdf, SaveKind::Pdf),
+                (TextId::MenuExportSvg, SaveKind::Svg),
+                (TextId::MenuExportCsv, SaveKind::Csv),
+            ] {
+                menu_item(ui, fc, id, None, true, Action::Export(kind));
+            }
+        });
+    });
     ui.separator();
     menu_item(ui, fc, TextId::MenuClose, None, has_doc, Action::CloseDocument);
     // Quitter : le navigateur ne laisse pas une page fermer son onglet.

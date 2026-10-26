@@ -831,6 +831,14 @@ why-unavailable = No explanation: { $detail }
 
 # --- J8 L13 ---
 web-start-failed = { $product } cannot start in this browser (WebGL2 or WebGPU unavailable?). Try a recent browser or the desktop version. Detail: { $detail }
+dropped-first-only = { $count } files dropped: only "{ $name }" is opened.
+menu-export = Export
+menu-export-pdf = PDF…
+menu-export-svg = SVG…
+menu-export-csv = Tasks CSV…
+export-done = Exported: { $name }
+export-error-title = Cannot export
+export-error-failed = The export failed: { $detail }
 
 # --- J8 L14 ---
 

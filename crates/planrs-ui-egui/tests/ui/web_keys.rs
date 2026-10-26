@@ -6,11 +6,22 @@
 //! [`web_intercepts`], testée ici sur [`KEYMAP`] et sur le périmètre rendu
 //! par l'application ([`planrs_ui_egui::App::key_scope`]).
 
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
 use egui::{Key, Modifiers};
+use egui_kittest::Harness;
+use planrs_core::Severity;
+use planrs_ui_egui::action::ConfirmChoice;
+use planrs_ui_egui::i18n::{Arg, Language, TextId, Texts};
+use planrs_ui_egui::io::{SaveKind, SaveTarget};
 use planrs_ui_egui::keymap::{
     Binding, KEYMAP, KeyScope, KeyState, Shortcut, UiBinding, WEB_NEVER, web_interceptable, web_intercepts,
 };
 
+use planrs_ui_egui::{Action, App, DEMO_MSPDI};
+
+use crate::files::{SaveReply, edit_first_leaf, sim};
 use crate::{harness, open_demo};
 
 /// Document ouvert, table focalisée.
@@ -144,4 +155,158 @@ fn h_ui_55_scope_from_app() {
     harness.run();
     assert!(harness.state().search().is_some(), "barre de recherche ouverte");
     assert_eq!(harness.state().key_scope(&harness.ctx), KeyScope::Nothing);
+}
+
+/// Fichier déposé simulé : chemin relatif (comme sur le web) et octets.
+#[derive(Debug)]
+struct Dropped {
+    path: PathBuf,
+    bytes: Result<Vec<u8>, String>,
+}
+
+impl egui::DroppedFile for Dropped {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        self.bytes.clone()
+    }
+}
+
+/// Dépose `files` (nom, octets) sur la fenêtre à la prochaine image.
+fn drop_files(harness: &mut Harness<'static, App>, files: &[(&str, Result<Vec<u8>, String>)]) {
+    for (name, bytes) in files {
+        harness.input_mut().dropped_files.push(Arc::new(Dropped {
+            path: PathBuf::from(name),
+            bytes: bytes.clone(),
+        }));
+    }
+    harness.run();
+}
+
+/// Nom du document ouvert.
+fn doc_name(harness: &Harness<'static, App>) -> Option<String> {
+    harness
+        .state()
+        .document
+        .as_ref()
+        .map(|document| document.origin.name.clone())
+}
+
+/// H-UI-56 : un fichier déposé sur l'accueil est ouvert comme par
+/// « Ouvrir » ; plusieurs ⇒ le premier, message ; illisible ⇒ message
+/// d'ouverture, document courant gardé.
+#[test]
+fn h_ui_56_dropped_file_opens() {
+    let mut harness = harness();
+    harness.run();
+    drop_files(&mut harness, &[("maison.xml", Ok(DEMO_MSPDI.to_vec()))]);
+    assert_eq!(doc_name(&harness).as_deref(), Some("maison.xml"));
+    let document = harness.state().document.as_ref().unwrap();
+    assert!(document.origin.path.is_none() && !document.origin.demo);
+    assert!(!document.is_dirty());
+
+    drop_files(
+        &mut harness,
+        &[
+            ("b.xml", Ok(DEMO_MSPDI.to_vec())),
+            ("c.xml", Ok(DEMO_MSPDI.to_vec())),
+        ],
+    );
+    assert_eq!(doc_name(&harness).as_deref(), Some("b.xml"));
+    let warned = Texts::new(Language::Fr).get_args(
+        TextId::DroppedFirstOnly,
+        &[("count", Arg::Count(2)), ("name", Arg::Str("b.xml".into()))],
+    );
+    assert!(
+        harness.state().messages().iter().any(|m| m.text == warned),
+        "message « seul le premier »"
+    );
+
+    drop_files(&mut harness, &[("vide.xml", Err("lecture refusée".to_owned()))]);
+    assert_eq!(doc_name(&harness).as_deref(), Some("b.xml"));
+    assert!(
+        harness
+            .state()
+            .messages()
+            .iter()
+            .any(|m| m.severity == Severity::Error && m.text.contains("lecture refusée")),
+        "erreur de lecture affichée"
+    );
+}
+
+/// H-UI-56 : document modifié ⇒ bandeau de confirmation d'abord ; Annuler
+/// garde le document, Ne pas enregistrer ouvre le fichier déposé.
+#[test]
+fn h_ui_56_dropped_file_unsaved_guard() {
+    let mut harness = harness();
+    open_demo(&mut harness);
+    let demo = doc_name(&harness);
+    edit_first_leaf(&mut harness, "3j");
+    assert!(harness.state().document.as_ref().unwrap().is_dirty());
+
+    drop_files(&mut harness, &[("autre.xml", Ok(DEMO_MSPDI.to_vec()))]);
+    assert!(harness.state().confirmation_pending());
+    assert_eq!(doc_name(&harness), demo);
+    harness
+        .state_mut()
+        .dispatch(Action::Confirm(ConfirmChoice::Cancel));
+    harness.run();
+    assert!(!harness.state().confirmation_pending());
+    assert_eq!(doc_name(&harness), demo);
+    assert!(harness.state().document.as_ref().unwrap().is_dirty());
+
+    drop_files(&mut harness, &[("autre.xml", Ok(DEMO_MSPDI.to_vec()))]);
+    assert!(harness.state().confirmation_pending());
+    harness
+        .state_mut()
+        .dispatch(Action::Confirm(ConfirmChoice::Discard));
+    harness.run();
+    assert_eq!(doc_name(&harness).as_deref(), Some("autre.xml"));
+    assert!(!harness.state().document.as_ref().unwrap().is_dirty());
+}
+
+/// Fichier → Exporter (J8, lot L13) : PDF, SVG et CSV remis au
+/// `FileService` avec leur genre et un nom proposé à la bonne extension ;
+/// message « Exporté » ; le document reste lié à son origine et non
+/// modifié (un export n'est pas un enregistrement).
+#[test]
+fn save_kind_export_requests() {
+    let mut sim = sim(SaveReply::Ok);
+    open_demo(&mut sim.harness);
+    let origin = sim.harness.state().document.as_ref().unwrap().origin.clone();
+    for (kind, magic) in [
+        (SaveKind::Pdf, &b"%PDF-"[..]),
+        (SaveKind::Svg, &b"<svg"[..]),
+        (SaveKind::Csv, &b"\xEF\xBB\xBF"[..]),
+    ] {
+        sim.harness.state_mut().dispatch(Action::Export(kind));
+        sim.harness.run();
+        let requests = sim.requests.borrow();
+        let request = requests.last().unwrap();
+        assert_eq!(request.kind, kind);
+        assert!(
+            request.bytes.windows(magic.len()).take(64).any(|w| w == magic),
+            "{kind:?}"
+        );
+        let SaveTarget::Dialog { suggested_name, .. } = &request.target else {
+            panic!("export vers un chemin connu : {:?}", request.target);
+        };
+        assert!(
+            suggested_name.ends_with(&format!(".{}", kind.extension())),
+            "{suggested_name}"
+        );
+        let done = Texts::new(Language::Fr).get_args(
+            TextId::ExportDone,
+            &[("name", Arg::Str(suggested_name.clone().into()))],
+        );
+        assert!(
+            sim.harness.state().messages().iter().any(|m| m.text == done),
+            "message « Exporté » pour {kind:?}"
+        );
+    }
+    let document = sim.harness.state().document.as_ref().unwrap();
+    assert_eq!(document.origin, origin);
+    assert!(!document.is_dirty());
 }

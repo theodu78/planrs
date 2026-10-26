@@ -69,8 +69,12 @@ pub enum SaveTarget {
 /// Demande d'enregistrement : octets à écrire et destination.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SaveRequest {
-    /// Octets MSPDI (`Session::save_bytes`), écrits tels quels.
+    /// Octets du fichier (MSPDI de `Session::save_bytes`, ou export),
+    /// écrits tels quels.
     pub bytes: Vec<u8>,
+    /// Genre du fichier : extension du filtre de la boîte (desktop), type
+    /// MIME du téléchargement (web) ; J8, lot L13.
+    pub kind: SaveKind,
     /// Destination.
     pub target: SaveTarget,
     /// Langue des messages d'erreur d'écriture.
@@ -310,6 +314,7 @@ impl FileService for RfdFileService {
     fn save(&mut self, ctx: &egui::Context, request: SaveRequest, tx: Sender<SaveEvent>) {
         let SaveRequest {
             bytes,
+            kind,
             target,
             language,
         } = request;
@@ -358,7 +363,7 @@ impl FileService for RfdFileService {
         let picked = rfd::AsyncFileDialog::new()
             .set_title(title)
             .set_file_name(suggested_name)
-            .add_filter(filter, &["xml"])
+            .add_filter(filter, &[kind.extension()])
             .save_file();
         if dialog_tx.send(Box::pin(picked)).is_err() {
             log::error!("enregistrement : le fil d'attente du sélecteur s'est arrêté");
@@ -446,7 +451,9 @@ impl FileService for RfdFileService {
 
     #[cfg(target_arch = "wasm32")]
     fn save(&mut self, ctx: &egui::Context, request: SaveRequest, tx: Sender<SaveEvent>) {
-        let SaveRequest { bytes, target, .. } = request;
+        let SaveRequest {
+            bytes, kind, target, ..
+        } = request;
         // Pas de chemin sur le web : un chemin connu (impossible ici) est
         // traité comme un téléchargement sous son nom.
         let name = match target {
@@ -457,7 +464,7 @@ impl FileService for RfdFileService {
         // J4, F3) : rfd 0.17 affichait sa propre fenêtre, dont « Ok » et
         // « Annuler » rendaient tous deux `Ok` sans rien télécharger, et le
         // document passait à tort à « enregistré ».
-        let event = match download(&name, &bytes) {
+        let event = match download(&name, kind.mime(), &bytes) {
             Ok(()) => SaveEvent::Saved { name, path: None },
             Err(detail) => SaveEvent::Failed(detail),
         };
@@ -466,12 +473,12 @@ impl FileService for RfdFileService {
 }
 
 /// Remet `bytes` au navigateur comme téléchargement nommé `name` : `Blob`
-/// MSPDI, URL d'objet, clic sur une ancre `download` (rien n'est ajouté à
+/// de type `mime` (MSPDI, CSV, SVG ou PDF, [`SaveKind::mime`]), URL d'objet, clic sur une ancre `download` (rien n'est ajouté à
 /// la page), URL révoquée une minute plus tard. Aucun JavaScript écrit à la
 /// main (règle 8) : tout passe par `web_sys`. Une exception du navigateur
 /// devient le détail de l'erreur.
 #[cfg(target_arch = "wasm32")]
-fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
+fn download(name: &str, mime: &str, bytes: &[u8]) -> Result<(), String> {
     use wasm_bindgen_futures::wasm_bindgen::JsCast as _;
     use wasm_bindgen_futures::wasm_bindgen::closure::Closure;
 
@@ -481,7 +488,7 @@ fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
         .ok_or_else(|| "document introuvable".to_owned())?;
     let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
     let options = web_sys::BlobPropertyBag::new();
-    options.set_type("application/xml");
+    options.set_type(mime);
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options)
         .map_err(|error| js_error_text(&error))?;
     let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(|error| js_error_text(&error))?;
@@ -539,6 +546,12 @@ fn write_path(path: &std::path::Path, bytes: &[u8], language: crate::i18n::Langu
 /// « planrs.xml » si rien ne reste.
 #[must_use]
 pub fn suggested_file_name(name: &str) -> String {
+    SaveKind::Mspdi.file_name(name)
+}
+
+/// Nom assaini (voir [`suggested_file_name`]) suffixé de `extension`
+/// (sans le point), sauf s'il l'est déjà (casse ignorée).
+fn file_name_with(name: &str, extension: &str) -> String {
     let cleaned: String = name
         .chars()
         .map(|c| {
@@ -555,10 +568,11 @@ pub fn suggested_file_name(name: &str) -> String {
     } else {
         cleaned
     };
-    if stem.to_ascii_lowercase().ends_with(".xml") {
+    let suffix = format!(".{extension}");
+    if stem.to_ascii_lowercase().ends_with(&suffix) {
         stem.to_owned()
     } else {
-        format!("{stem}.xml")
+        format!("{stem}{suffix}")
     }
 }
 
@@ -740,9 +754,10 @@ mod tests {
 
 /// Genre d'un enregistrement (J8, ADR-0016 D13 ; sur le web, chacun est un
 /// téléchargement). Contrat posé par le lot L0, câblé en L13.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SaveKind {
     /// Projet MSPDI (`.xml`).
+    #[default]
     Mspdi,
     /// Tâches en CSV.
     Csv,
@@ -750,4 +765,85 @@ pub enum SaveKind {
     Svg,
     /// Planning en PDF.
     Pdf,
+}
+
+impl SaveKind {
+    /// Les quatre genres.
+    pub const ALL: [Self; 4] = [Self::Mspdi, Self::Csv, Self::Svg, Self::Pdf];
+
+    /// Extension du fichier, sans le point.
+    #[must_use]
+    pub const fn extension(self) -> &'static str {
+        match self {
+            Self::Mspdi => "xml",
+            Self::Csv => "csv",
+            Self::Svg => "svg",
+            Self::Pdf => "pdf",
+        }
+    }
+
+    /// Type MIME du téléchargement (web) : le navigateur en déduit
+    /// l'application qui ouvre le fichier.
+    #[must_use]
+    pub const fn mime(self) -> &'static str {
+        match self {
+            Self::Mspdi => "application/xml",
+            Self::Csv => "text/csv;charset=utf-8",
+            Self::Svg => "image/svg+xml",
+            Self::Pdf => "application/pdf",
+        }
+    }
+
+    /// Nom de fichier proposé pour le document `name` : caractères refusés
+    /// remplacés (comme [`suggested_file_name`]), extension MSPDI d'origine
+    /// retirée pour un export (« maison.xml » ⇒ « maison.pdf »).
+    #[must_use]
+    pub fn file_name(self, name: &str) -> String {
+        let trimmed = name.trim();
+        let stem = match self {
+            Self::Mspdi => trimmed,
+            Self::Csv | Self::Svg | Self::Pdf => trimmed
+                .len()
+                .checked_sub(4)
+                .and_then(|cut| trimmed.split_at_checked(cut))
+                .filter(|(_, ext)| ext.eq_ignore_ascii_case(".xml"))
+                .map_or(trimmed, |(stem, _)| stem),
+        };
+        file_name_with(stem, self.extension())
+    }
+}
+
+#[cfg(test)]
+mod save_kind_tests {
+    use super::SaveKind;
+
+    /// Noms, extensions et types MIME des quatre genres (J8, lot L13).
+    #[test]
+    fn save_kind_names_and_mime() {
+        let ext: Vec<&str> = SaveKind::ALL.iter().map(|k| k.extension()).collect();
+        assert_eq!(ext, ["xml", "csv", "svg", "pdf"]);
+        let mime: Vec<&str> = SaveKind::ALL.iter().map(|k| k.mime()).collect();
+        assert_eq!(
+            mime,
+            [
+                "application/xml",
+                "text/csv;charset=utf-8",
+                "image/svg+xml",
+                "application/pdf"
+            ]
+        );
+        assert_eq!(SaveKind::Mspdi.file_name("maison"), "maison.xml");
+        assert_eq!(SaveKind::Mspdi.file_name("maison.XML"), "maison.XML");
+        assert_eq!(SaveKind::Pdf.file_name("maison.xml"), "maison.pdf");
+        assert_eq!(SaveKind::Svg.file_name("Maison.XML"), "Maison.svg");
+        assert_eq!(SaveKind::Csv.file_name("a/b : c"), "a_b _ c.csv");
+        assert_eq!(SaveKind::Pdf.file_name("plan.pdf"), "plan.pdf");
+        assert_eq!(SaveKind::Pdf.file_name("été"), "été.pdf");
+        assert_eq!(SaveKind::Pdf.file_name("é"), "é.pdf");
+        assert_eq!(
+            SaveKind::Pdf.file_name(".xml"),
+            format!("{}.pdf", planrs_core::PRODUCT_NAME)
+        );
+        assert_eq!(SaveKind::default(), SaveKind::Mspdi);
+    }
 }

@@ -36,6 +36,7 @@ impl BarTextSource for Tokens {
             Token::StatusDate => "02/11/2026".to_owned(),
             Token::PrintDate => "26/10/2026".to_owned(),
             Token::File => "p.xml".to_owned(),
+            Token::ScheduleTitle => "Planning prévisionnel".to_owned(),
             Token::Page | Token::Pages => String::new(),
         }
     }
@@ -444,6 +445,34 @@ proptest! {
                     prop_assert!(cols <= usize::from(n) || pages.scale == 1_000);
                 }
             }
+        }
+    }
+}
+
+/// H-UI-66, relecture finale de J8 : les en-têtes et pieds des modèles
+/// intégrés sont neutres (jetons seulement, et « Page », mot des deux
+/// langues) : ni texte français en dur dans une interface anglaise, ni
+/// hypothèse contractuelle (« Aléas 10 % ») que le projet ne porte pas.
+#[test]
+fn h_ui_66_template_slots_language_neutral() {
+    for id in TemplateId::ALL {
+        let page = template(id).page;
+        for Slot(text) in page.header.iter().chain(page.footer.iter()) {
+            let mut rest = String::new();
+            let mut depth = 0;
+            for c in text.chars() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ if depth == 0 => rest.push(c),
+                    _ => {}
+                }
+            }
+            let rest = rest.replace("Page", "");
+            assert!(
+                !rest.chars().any(char::is_alphabetic),
+                "{id:?} : texte en dur « {text} »"
+            );
         }
     }
 }

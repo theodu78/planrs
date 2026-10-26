@@ -533,7 +533,8 @@ pub enum Fit {
 }
 
 /// Zone d'en-tête ou de pied de page (≤ 256 caractères ; jetons `{projet}`,
-/// `{date_etat}`, `{page}`, `{pages}`, `{date_impression}`, `{fichier}`).
+/// `{date_etat}`, `{page}`, `{pages}`, `{date_impression}`, `{fichier}`,
+/// `{planning}`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Slot(pub String);

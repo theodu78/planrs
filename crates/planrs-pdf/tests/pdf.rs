@@ -227,27 +227,48 @@ proptest! {
     }
 }
 
-/// H-UI-66 : cartouche du modèle « Planning travaux » (titre, sous-titre,
-/// projet à droite, indice et page au pied), en-tête agrandi d'une ligne
-/// de titre ; les autres modèles n'en ont pas.
+/// H-UI-66 : cartouche du modèle « Planning travaux » (titre par le jeton
+/// `{planning}`, projet à droite, date d'état et page au pied), en-tête
+/// agrandi de la ligne de titre ; les autres modèles n'en ont pas. Relecture
+/// finale de J8 : aucun texte en dur ni hypothèse contractuelle (« Aléas
+/// 10 % ») dans le modèle, le titre suit la langue du rendu.
 #[test]
 fn h_ui_66_title_block_pdf() {
-    use planrs_render::paginate::{SLOT_LINE_PT, TITLE_LINE_PT};
-    let pages = pages_of(&project_p(), TemplateId::Chantier);
+    use planrs_render::geometry::{BarTextSource, Token};
+    use planrs_render::paginate::{SLOT_LINE_PT, TITLE_LINE_PT, paginate};
+    use planrs_render::style::{BarField, template};
+    /// Jetons d'une session française.
+    struct Fr;
+    impl BarTextSource for Fr {
+        fn bar_text(&self, _uid: TaskUid, _f: BarField) -> Option<String> {
+            None
+        }
+        fn token(&self, t: Token) -> String {
+            match t {
+                Token::ScheduleTitle => "Planning prévisionnel".to_owned(),
+                Token::Project => "Résidence Beaujeu".to_owned(),
+                _ => String::new(),
+            }
+        }
+    }
+    let p = project_p();
+    let pages = paginate(
+        &common::scene_of(&p, TemplateId::Chantier),
+        &template(TemplateId::Chantier).page,
+        &Fr,
+    )
+    .unwrap();
     assert!(pages.title_block);
-    assert_eq!(pages.header_pt, 2 * SLOT_LINE_PT + TITLE_LINE_PT - SLOT_LINE_PT);
+    assert_eq!(pages.header_pt, SLOT_LINE_PT + TITLE_LINE_PT - SLOT_LINE_PT);
     let (bytes, report) = write(&pages);
     assert!(report.missing_glyphs.is_empty(), "{:?}", report.missing_glyphs);
     let texts = page_texts(&bytes);
     let first = &texts[0];
-    // Jetons vides ici (`NoTexts`) : le titre et le sous-titre sont du texte.
-    for t in [
-        "Planning prévisionnel",
-        "Compris congés / Hors intempéries / Aléas 10 %",
-    ] {
+    for t in ["Planning prévisionnel", "Résidence Beaujeu"] {
         assert!(first.iter().any(|x| x == t), "« {t} » absent : {first:?}");
     }
     assert!(first.iter().any(|x| x.starts_with("Page 1/")), "{first:?}");
+    assert!(!first.iter().any(|x| x.contains("Aléas")), "{first:?}");
     let sobre = pages_of(&project_p(), TemplateId::Sobre);
     assert!(!sobre.title_block);
     assert_eq!(sobre.header_pt, SLOT_LINE_PT);

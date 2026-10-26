@@ -1106,3 +1106,4 @@ paste-report-tracking = { $count ->
         [one] { $count } tâche collée sans son avancement, sa ligne de base ni son calendrier
        *[other] { $count } tâches collées sans leur avancement, leur ligne de base ni leur calendrier
     }
+token-schedule-title = Titre « Planning prévisionnel »

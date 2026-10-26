@@ -333,6 +333,10 @@ impl BarTextSource for SessionTexts<'_> {
                     .filter(|n| !n.is_empty())
                     .map_or_else(|| origin.name.clone(), str::to_owned)
             }
+            Token::ScheduleTitle => match self.lang {
+                Language::Fr => "Planning prévisionnel".to_owned(),
+                Language::En => "Provisional schedule".to_owned(),
+            },
             // Numéros de page : remplacés par la pagination (L7).
             Token::Page | Token::Pages => String::new(),
         }
@@ -407,6 +411,9 @@ mod tests {
         assert_eq!(fr.token(Token::PrintDate), "25/10/2026");
         assert_eq!(fr.token(Token::StatusDate), "19/10/2026");
         assert_eq!(fr.token(Token::Page), "");
+        // Relecture finale de J8 : titre neutre traduit (cartouche).
+        assert_eq!(fr.token(Token::ScheduleTitle), "Planning prévisionnel");
+        assert_eq!(en.token(Token::ScheduleTitle), "Provisional schedule");
     }
 
     /// H-UI-63 : étiquettes courtes (durée après le nom, durée courte,

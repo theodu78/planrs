@@ -718,6 +718,10 @@ pub enum Token {
     PrintDate,
     /// `{fichier}`.
     File,
+    /// `{planning}` : titre de planning neutre dans la langue du rendu
+    /// (« Planning prévisionnel », « Provisional schedule »), cartouche de
+    /// « Planning travaux » (relecture finale de J8).
+    ScheduleTitle,
 }
 
 /// Source des textes affichés autour des barres et dans l'en-tête (règle

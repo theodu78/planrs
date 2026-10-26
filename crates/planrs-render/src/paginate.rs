@@ -583,8 +583,8 @@ pub fn paginate(scene: &Scene, page: &PageStyle, src: &dyn BarTextSource) -> Res
 ///   la légende est en bas de la dernière bande (de chaque colonne), ou de
 ///   chaque page si `legend_every_page` ;
 /// - en-tête (5 lignes au plus) et pied de page (3 lignes au plus) :
-///   jetons `{projet}`, `{date_etat}`, `{date_impression}`, `{fichier}`
-///   (par `src`), `{page}` et `{pages}` (numéros de 1 à N) ; jeton inconnu
+///   jetons `{projet}`, `{date_etat}`, `{date_impression}`, `{fichier}`,
+///   `{planning}` (par `src`), `{page}` et `{pages}` (numéros de 1 à N) ; jeton inconnu
 ///   gardé tel quel.
 ///
 /// # Errors
@@ -644,6 +644,7 @@ pub fn paginate_with(
             "date_etat" => Token::StatusDate,
             "date_impression" => Token::PrintDate,
             "fichier" => Token::File,
+            "planning" => Token::ScheduleTitle,
             _ => return None,
         };
         Some(one_line(&src.token(t)))

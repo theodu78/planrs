@@ -42,13 +42,14 @@ use crate::i18n::{Arg, TextId, Texts, token_label};
 const MAX_ROWS: u32 = 20_000;
 
 /// Jetons proposés à l'insertion.
-const TOKENS: [(Token, &str); 6] = [
+const TOKENS: [(Token, &str); 7] = [
     (Token::Project, "{projet}"),
     (Token::StatusDate, "{date_etat}"),
     (Token::Page, "{page}"),
     (Token::Pages, "{pages}"),
     (Token::PrintDate, "{date_impression}"),
     (Token::File, "{fichier}"),
+    (Token::ScheduleTitle, "{planning}"),
 ];
 
 /// Formats de papier proposés.

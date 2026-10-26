@@ -1107,3 +1107,4 @@ paste-report-tracking = { $count ->
         [one] { $count } task pasted without its progress, baseline or calendar
        *[other] { $count } tasks pasted without their progress, baseline or calendar
     }
+token-schedule-title = Title “Provisional schedule”

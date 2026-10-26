@@ -987,9 +987,15 @@ impl App {
             }
             SaveKind::Svg => Ok(export_svg(session, &self.state, lang).into_bytes()),
             SaveKind::Pdf => {
+                // Document sans style : modèle par défaut des préférences
+                // (H-UI-43 ; Sobre depuis J8 lot L15), comme l'écran, et non
+                // le Classique de la CLI.
+                let style = planrs_automation::command::style::doc_style(session.project())
+                    .is_none()
+                    .then(|| self.state.default_template.into());
                 let params = planrs_automation::command::params::ExportPdfParams {
                     path: String::new(),
-                    style: None,
+                    style,
                     page: None,
                     range: None,
                     rows: None,

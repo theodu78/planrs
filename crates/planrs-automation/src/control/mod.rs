@@ -34,7 +34,7 @@ pub use client::{RELAY_MARGIN, RelayClient, RelayError};
 pub use endpoint::{ControlStream, Endpoint, Transport};
 pub use frame::{
     Frame, LineError, MAX_LINE_BYTES, Method, PROTOCOL_VERSION, Reply, WireError, codes, read_line_bounded,
-    to_line,
+    read_line_bounded_with, to_line,
 };
 pub use listener::{
     APPROVAL_TIMEOUT, ListenerHandle, ListenerOptions, RELAY_QUEUE, spawn_hello_listener,

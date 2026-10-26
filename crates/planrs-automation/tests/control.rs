@@ -231,6 +231,13 @@ on_both_transports! {
     /// Relecture finale J7, relais F4 : connexions pleines ⇒ `control.busy`
     /// dit au client, qui ne se détache pas (pas `control.app_gone`).
     relay_connections_full_busy, relay_connections_full_busy_tcp => live::relay_connections_full_busy;
+    /// Relecture finale J8 (sécurité F1) : les connexions sans `hello` sont
+    /// quatre au plus (la plus ancienne évincée) ; un client muni du jeton
+    /// est servi quoi qu'elles fassent.
+    relay_silent_connections_never_block, relay_silent_connections_never_block_tcp => live::relay_silent_connections_never_block;
+    /// Relecture finale J8 (sécurité F1) : échéance absolue du `hello`, une
+    /// ligne envoyée octet par octet ne la repousse pas.
+    hello_drip_deadline_absolute, hello_drip_deadline_absolute_tcp => live::hello_drip_deadline_absolute;
     /// Relecture finale J7, relais F2 : jeton remplacé (document neuf) ⇒ un
     /// client du jeton précédent reçoit `control.document_changed` (et se
     /// détache) ; le nouveau rendez-vous sert normalement.
@@ -545,9 +552,17 @@ mod live {
         let tmp = TempDir::new("busy");
         let dir = tmp.path().join("control");
         let file = project_file(tmp.path(), "plan.xml");
-        let (handle, _token) = listener(&dir, t);
+        let (handle, token) = listener(&dir, t);
         let _guard = publish_in(&dir, &handle.rendezvous(canonical_project(&file))).unwrap();
-        let idle: Vec<Client> = (0..8).map(|_| Client::connect(handle.endpoint())).collect();
+        // Huit connexions authentifiées (des connexions sans `hello` ne
+        // peuvent plus prendre toutes les places : relecture finale J8).
+        let idle: Vec<Client> = (0..8)
+            .map(|_| {
+                let mut c = Client::connect(handle.endpoint());
+                assert!(matches!(c.hello(&token), Reply::Ok { .. }));
+                c
+            })
+            .collect();
         // La neuvième reçoit `control.busy` puis est fermée : le plafond
         // est atteint (relecture finale J7, relais F4).
         let mut ninth = Client::connect(handle.endpoint());
@@ -918,10 +933,14 @@ mod live {
         let (handle, token, _rx, _) = relay_listener(tmp.path(), 4, Duration::from_secs(5), t);
         let rendezvous = handle.rendezvous(None);
         let mut agent = RelayClient::connect(&rendezvous, Duration::from_secs(2)).unwrap();
-        // Huit connexions muettes (sans hello) occupent toutes les places.
+        // Huit connexions authentifiées occupent toutes les places (des
+        // connexions muettes ne le peuvent plus : relecture finale J8,
+        // `relay_silent_connections_never_block`).
         let mut held = Vec::new();
         for _ in 0..8 {
-            held.push(Client::connect(handle.endpoint()));
+            let mut c = Client::connect(handle.endpoint());
+            assert!(matches!(c.hello(&token), Reply::Ok { .. }));
+            held.push(c);
         }
         std::thread::sleep(Duration::from_millis(100));
         let mut ninth = Client::connect(handle.endpoint());
@@ -934,7 +953,49 @@ mod live {
         assert_eq!(err.code(), tool_codes::CONTROL_BUSY);
         assert!(!err.detaches(), "application vivante : rattachement gardé");
         drop(held);
-        let _ = token;
+    }
+
+    pub(super) fn relay_silent_connections_never_block(t: Transport) {
+        // Relecture finale J8 (sécurité F1) : douze connexions sans `hello`
+        // (un autre compte de la machine, sous TCP) n'en gardent que quatre,
+        // les plus récentes ; un client muni du jeton est toujours servi.
+        // Les évincées reçoivent `control.busy` avant la coupure.
+        let tmp = TempDir::new("rsilent");
+        let (handle, token, rx, _) = relay_listener(tmp.path(), 4, Duration::from_secs(5), t);
+        let mut silent: Vec<Client> = (0..12).map(|_| Client::connect(handle.endpoint())).collect();
+        std::thread::sleep(Duration::from_millis(200));
+        let mut client = Client::connect(handle.endpoint());
+        assert!(matches!(client.hello(&token), Reply::Ok { .. }));
+        // Les plus anciennes ont reçu `control.busy` (un client légitime
+        // évincé ne se détache pas) puis ont été coupées.
+        for evicted in &mut silent[..2] {
+            assert_eq!(err_code(&evicted.reply()), codes::BUSY);
+            assert!(evicted.is_closed());
+        }
+        drop(silent);
+        drop(rx);
+    }
+
+    pub(super) fn hello_drip_deadline_absolute(t: Transport) {
+        // Relecture finale J8 (sécurité F1) : un octet toutes les 2 s sans
+        // fin de ligne ne garde pas la connexion au-delà de l'échéance du
+        // `hello` (5 s depuis l'acceptation).
+        let tmp = TempDir::new("drip");
+        let (handle, _token) = listener(tmp.path(), t);
+        let mut client = Client::connect(handle.endpoint());
+        let start = std::time::Instant::now();
+        let mut closed = false;
+        for _ in 0..6 {
+            if client.stream.write_all(b"{").is_err() {
+                closed = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(2));
+        }
+        // Fermée par l'écouteur : lecture en fin de flux.
+        closed = closed || client.is_closed();
+        assert!(closed, "connexion gardée par le goutte-à-goutte");
+        assert!(start.elapsed() < Duration::from_secs(13));
     }
 
     pub(super) fn relay_rotated_token_refuses_previous_document(t: Transport) {

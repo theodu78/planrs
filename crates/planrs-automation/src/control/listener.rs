@@ -239,6 +239,7 @@ pub fn spawn_listener_on(
 }
 
 mod imp {
+    use std::collections::VecDeque;
     use std::io::{BufRead, BufReader, ErrorKind, Write};
     use std::net::{SocketAddr, SocketAddrV4, TcpListener};
     #[cfg(unix)]
@@ -246,7 +247,7 @@ mod imp {
     use std::path::Path;
     #[cfg(unix)]
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use std::sync::mpsc::{RecvTimeoutError, SyncSender, TrySendError, sync_channel};
     use std::sync::{Arc, Mutex, PoisonError};
     use std::thread::{self, JoinHandle};
@@ -257,8 +258,8 @@ mod imp {
     use super::super::tcp::{accept_peer, bind_loopback, local_endpoint};
     use super::super::{
         CallState, ControlError, ControlStream, Endpoint, Frame, LineError, MAX_LINE_BYTES, Method,
-        PROTOCOL_VERSION, RelayCall, RelayKind, Reply, Transport, Waker, codes, read_line_bounded, to_line,
-        token_matches,
+        PROTOCOL_VERSION, RelayCall, RelayKind, Reply, Transport, Waker, codes, read_line_bounded,
+        read_line_bounded_with, to_line, token_matches,
     };
     #[cfg(unix)]
     use super::super::{ensure_dir, next_stem};
@@ -273,8 +274,21 @@ mod imp {
     /// Connexion authentifiée sans requête fermée après ce délai.
     const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
     /// Connexion fermée si son `hello` n'arrive pas dans ce délai (une place
-    /// sur huit n'est pas tenue 30 s par une connexion muette).
+    /// sur huit n'est pas tenue 30 s par une connexion muette). Échéance
+    /// absolue depuis l'acceptation (relecture finale de J8, sécurité F1) :
+    /// une ligne envoyée octet par octet ne la repousse pas.
     const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
+    /// Octets d'une ligne avant le `hello` accepté (un `hello` fait moins
+    /// de 200 octets) : une connexion sans jeton ne retient pas 8 Mio.
+    const MAX_HELLO_BYTES: usize = 16 * 1024;
+    /// Connexions sans `hello` accepté au plus ; au-delà, la plus ancienne
+    /// est évincée : elles ne peuvent jamais prendre toutes les places
+    /// (relecture finale de J8, sécurité F1 : sous TCP, un autre compte de
+    /// la machine pouvait bloquer le relais par 8 connexions muettes).
+    const MAX_PENDING: usize = 4;
+    /// Délai d'écriture du refus d'une connexion évincée (le fil
+    /// d'acceptation ne s'y attarde pas).
+    const EVICT_WRITE_TIMEOUT: Duration = Duration::from_millis(200);
     /// Pas de la surveillance de la connexion d'un appel en attente : un
     /// client parti (délai écoulé, processus mort) est vu en au plus ce
     /// délai, et son appel expiré.
@@ -305,6 +319,48 @@ mod imp {
         token: Mutex<[u8; 32]>,
         service: Service,
         active: AtomicUsize,
+        /// Connexions sans `hello` accepté, de la plus ancienne à la plus
+        /// récente (numéro et second descripteur pour l'éviction).
+        pending: Mutex<VecDeque<(u64, ControlStream)>>,
+        /// Numéro de la prochaine connexion.
+        next_conn: AtomicU64,
+    }
+
+    impl Shared {
+        /// Inscrit la connexion `id` parmi celles sans `hello` ; au-delà de
+        /// [`MAX_PENDING`], la plus ancienne est coupée (sa lecture se
+        /// termine, son fil rend la place).
+        fn add_pending(&self, id: u64, stream: &ControlStream) {
+            let Ok(clone) = stream.try_clone() else {
+                return;
+            };
+            let evicted = {
+                let mut pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
+                pending.push_back((id, clone));
+                if pending.len() > MAX_PENDING {
+                    pending.pop_front()
+                } else {
+                    None
+                }
+            };
+            if let Some((_, old)) = evicted {
+                // Refus dit comme pour des connexions pleines : un client
+                // légitime évincé avant son `hello` lit `control.busy` et
+                // ne se détache pas ; puis coupure, qui termine la lecture
+                // du fil de la connexion.
+                let busy = Reply::error(0, codes::BUSY, "trop de connexions sans hello : réessayer");
+                if old.set_write_timeout(Some(EVICT_WRITE_TIMEOUT)).is_ok() {
+                    let _ = send(&old, &busy);
+                }
+                old.shutdown();
+            }
+        }
+
+        /// Retire la connexion `id` des connexions sans `hello`.
+        fn drop_pending(&self, id: u64) {
+            let mut pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
+            pending.retain(|(other, _)| *other != id);
+        }
     }
 
     /// Écouteur lié.
@@ -413,6 +469,8 @@ mod imp {
             token: Mutex::new(token),
             service,
             active: AtomicUsize::new(0),
+            pending: Mutex::new(VecDeque::new()),
+            next_conn: AtomicU64::new(0),
         });
         let worker = Arc::clone(&shared);
         let thread = thread::Builder::new()
@@ -496,15 +554,21 @@ mod imp {
                 stream.close_gracefully();
                 continue;
             }
+            let id = shared.next_conn.fetch_add(1, Ordering::SeqCst);
+            shared.add_pending(id, &stream);
             let guard = ActiveGuard(Arc::clone(shared));
             // Échec du fil : la fermeture de `guard` rend la place.
-            let _ = thread::Builder::new()
+            let spawned = thread::Builder::new()
                 .name("planrs-control-conn".to_owned())
                 .spawn(move || {
-                    serve(&stream, &guard.0);
+                    serve(&stream, &guard.0, id);
+                    guard.0.drop_pending(id);
                     stream.close_gracefully();
                     drop(guard);
                 });
+            if spawned.is_err() {
+                shared.drop_pending(id);
+            }
         }
     }
 
@@ -520,25 +584,36 @@ mod imp {
         Relay(u64, RelayKind, Option<Duration>),
     }
 
-    fn serve(stream: &ControlStream, shared: &Shared) {
+    fn serve(stream: &ControlStream, shared: &Shared, id: u64) {
         if stream.set_read_timeout(Some(HELLO_TIMEOUT)).is_err()
             || stream.set_write_timeout(Some(WRITE_TIMEOUT)).is_err()
         {
             return;
         }
+        let hello_deadline = Instant::now()
+            .checked_add(HELLO_TIMEOUT)
+            .unwrap_or_else(Instant::now);
         let mut reader = BufReader::new(stream);
         let mut authenticated = false;
         loop {
-            // `hello` accepté : délai d'une connexion inactive.
-            let timeout = if authenticated {
-                IDLE_TIMEOUT
+            let read = if authenticated {
+                // `hello` accepté : délai d'une connexion inactive.
+                if stream.set_read_timeout(Some(IDLE_TIMEOUT)).is_err() {
+                    return;
+                }
+                read_line_bounded(&mut reader, MAX_LINE_BYTES)
             } else {
-                HELLO_TIMEOUT
+                // Avant le `hello` : échéance absolue, ligne courte.
+                let mut before_fill = || {
+                    let left = hello_deadline.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        return Err(std::io::Error::from(ErrorKind::TimedOut));
+                    }
+                    stream.set_read_timeout(Some(left))
+                };
+                read_line_bounded_with(&mut reader, MAX_HELLO_BYTES, &mut before_fill)
             };
-            if stream.set_read_timeout(Some(timeout)).is_err() {
-                return;
-            }
-            let line = match read_line_bounded(&mut reader, MAX_LINE_BYTES) {
+            let line = match read {
                 Ok(Some(line)) => line,
                 Ok(None) | Err(LineError::Io(_)) => return,
                 // Avant le `hello`, rien n'est répondu à ce qui n'est pas
@@ -557,7 +632,12 @@ mod imp {
             if shared.stop.load(Ordering::SeqCst) {
                 return;
             }
-            match respond(&line, &mut authenticated, shared) {
+            let was_authenticated = authenticated;
+            let step = respond(&line, &mut authenticated, shared);
+            if authenticated && !was_authenticated {
+                shared.drop_pending(id);
+            }
+            match step {
                 Step::Reply(reply, keep_open) => {
                     if send(stream, &reply).is_err() || !keep_open {
                         return;

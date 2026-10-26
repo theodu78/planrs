@@ -218,6 +218,16 @@ impl ControlStream {
         }))
     }
 
+    /// Coupe le flux dans les deux sens (connexion évincée par
+    /// l'écouteur) : la lecture en cours d'un autre fil se termine.
+    pub(super) fn shutdown(&self) {
+        let _ = match &self.0 {
+            #[cfg(unix)]
+            Inner::Unix(s) => s.shutdown(Shutdown::Both),
+            Inner::Tcp(s) => s.shutdown(Shutdown::Both),
+        };
+    }
+
     /// Fin de connexion côté application. TCP : fin d'émission (`FIN`)
     /// puis lecture, 100 ms et 64 Kio au plus, de ce que le pair a déjà
     /// envoyé : fermer avec des octets non lus enverrait un `RST`, qui peut

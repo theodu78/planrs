@@ -212,8 +212,26 @@ pub enum LineError {
 /// [`LineError::TooLong`] dès que la ligne dépasse `max` ;
 /// [`LineError::Io`] sur une erreur du flux.
 pub fn read_line_bounded<R: BufRead>(reader: &mut R, max: usize) -> Result<Option<Vec<u8>>, LineError> {
+    read_line_bounded_with(reader, max, &mut || Ok(()))
+}
+
+/// Comme [`read_line_bounded`], `before_fill` appelé avant chaque
+/// remplissage du tampon (l'écouteur y pose le délai qui reste avant l'échéance du
+/// `hello` : une ligne envoyée octet par octet ne la repousse pas) ; son
+/// erreur arrête la lecture.
+///
+/// # Errors
+///
+/// Celles de [`read_line_bounded`], et celle de `before_fill`
+/// ([`LineError::Io`]).
+pub fn read_line_bounded_with<R: BufRead>(
+    reader: &mut R,
+    max: usize,
+    before_fill: &mut dyn FnMut() -> io::Result<()>,
+) -> Result<Option<Vec<u8>>, LineError> {
     let mut line = Vec::new();
     loop {
+        before_fill().map_err(LineError::Io)?;
         let buf = match reader.fill_buf() {
             Ok(buf) => buf,
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,

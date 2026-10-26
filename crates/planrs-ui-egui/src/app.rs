@@ -854,9 +854,7 @@ impl App {
         let Some(document) = &self.document else {
             return;
         };
-        let written = document
-            .session
-            .save_bytes(&planrs_mspdi::write::WriteOptions::default());
+        let written = document.session.save_bytes(&self.state.write_options());
         let target = match (&document.origin.path, save_as) {
             (Some(path), false) => SaveTarget::Path(path.clone()),
             _ => SaveTarget::Dialog {

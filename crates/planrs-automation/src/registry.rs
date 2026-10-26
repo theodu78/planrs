@@ -7,7 +7,7 @@
 //! les cinq écritures J7 (`calendar.add`, `calendar.update`,
 //! `calendar.set_week`, `calendar.delete`, `baseline.clear`, contrat J7 L0,
 //! activées par le lot L5), puis les entrées J8 : `project.export_pdf`,
-//! réservée au jalon 8 par le contrat L0 (activée par le lot L7), et les six
+//! réservée au jalon 8 par le contrat L0, activée par le lot L7, et les six
 //! entrées `style.*` du lot L6 (`style.apply`, `style.get`, `style.list`,
 //! posées par L0, plus `style.set_bar_role`, `style.reset_to_template`,
 //! `style.save_as_template`). Une entrée réservée à un jalon futur
@@ -148,7 +148,12 @@ const fn now(
 }
 
 /// Entrée réservée au jalon `milestone` (non listée, refusée
-/// `command.not_yet_available`).
+/// `command.not_yet_available`). Aucune depuis le lot L7 de J8 ; gardée
+/// pour réserver une entrée d'un jalon futur.
+#[allow(
+    dead_code,
+    reason = "aucune entrée réservée aujourd'hui ; forme gardée pour les jalons futurs"
+)]
 const fn reserved(
     milestone: u8,
     id: &'static str,
@@ -408,8 +413,7 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Écrit une copie du projet au format MSPDI (XML de MS Project).",
         "Write a copy of the project as MSPDI (MS Project XML).",
     ),
-    reserved(
-        8,
+    now(
         "project.export_pdf",
         "export_pdf",
         Kind::File,

@@ -13,6 +13,8 @@ csv.workspace = true
 encoding_rs.workspace = true
 planrs-core.workspace = true
 planrs-mspdi.workspace = true
+# Export PDF (`project.export_pdf`, J8 lot L7) : couche du rendu, sans egui.
+planrs-pdf.workspace = true
 planrs-render.workspace = true
 schemars.workspace = true
 serde.workspace = true

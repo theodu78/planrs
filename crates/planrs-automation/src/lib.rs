@@ -21,7 +21,8 @@
 //! J8 (ADR-0016, contrat L0) : [`filter`] (filtre partagé, R-251),
 //! [`helpers`] (raccourcis d'édition, R-252, R-253, R-255), [`clip`]
 //! (presse-papiers de lignes, R-244, R-256), [`render_text`] (textes du
-//! rendu, règle 3), [`command::style`] (style du document).
+//! rendu, règle 3), [`command::style`] (style du document), [`pdf`] (export
+//! PDF, lot L7).
 //!
 //! Aucune entrée/sortie hors de `files` et `control` (absents en wasm) : du
 //! texte ou des octets en entrée, une valeur du modèle en sortie.
@@ -46,6 +47,7 @@ pub mod history;
 pub mod journal;
 pub mod json;
 pub mod outcome;
+pub mod pdf;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod recovery;
 pub mod registry;

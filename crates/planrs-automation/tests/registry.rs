@@ -128,13 +128,13 @@ fn registry_reserved_not_listed() {
         .map(|s| s.id)
         .collect();
     // Contrat J8 (lot L0, ADR-0016) : quatre entrées réservées au jalon 8 ;
-    // les trois `style.*` activées par le lot L6, reste le PDF (L7).
-    assert_eq!(reserved, BTreeSet::from(["project.export_pdf"]));
+    // les trois `style.*` activées par le lot L6, le PDF par le lot L7.
+    assert!(reserved.is_empty(), "{reserved:?}");
     let spec = lookup("project.export_pdf").unwrap();
-    assert_eq!(spec.available, Availability::Milestone(8));
+    assert_eq!(spec.available, Availability::Now);
     assert_eq!(spec.mcp_name, "export_pdf");
     assert_eq!(spec.kind, Kind::File);
-    assert!(!spec.is_listed());
+    assert!(spec.is_listed());
     for id in [
         "baseline.clear",
         "calendar.add",
@@ -148,7 +148,8 @@ fn registry_reserved_not_listed() {
         assert_eq!(spec.kind, Kind::Write, "{id}");
     }
     assert!(listed().all(|s| s.available == Availability::Now));
-    assert_eq!(listed().count(), REGISTRY.len() - 3 - 1);
+    // Trois entrées `app.*` hors liste, aucune réservée depuis le lot L7.
+    assert_eq!(listed().count(), REGISTRY.len() - 3);
 }
 
 /// Contrat J7 (lot L0, ADR-0015 D11) : `app.ui_state`, `app.ui`,
@@ -197,7 +198,7 @@ fn registry_j6_tools_listed() {
         assert_eq!(spec.undoable, kind == Kind::Write, "{name}");
     }
     // 44 en J6, 49 depuis le lot L5 de J7, 55 depuis le lot L6 de J8
-    // (`registry_j8_style_tools_listed`).
+    // (`registry_j8_style_tools_listed`), 56 depuis le lot L7.
     assert_eq!(listed().count(), LISTED);
 }
 
@@ -220,8 +221,9 @@ fn registry_j7_tools_listed() {
     assert_eq!(listed().count(), LISTED);
 }
 
-/// Outils listés : 49 en J7, plus les six `style.*` du lot L6 de J8.
-const LISTED: usize = 55;
+/// Outils listés : 49 en J7, plus les six `style.*` du lot L6 de J8 et
+/// `export_pdf` (lot L7).
+const LISTED: usize = 56;
 
 /// Lot L6 J8 (ADR-0016 D7, H-UI-59 à H-UI-61) : les six entrées `style.*`
 /// sont listées ; trois écritures annulables avec `dry_run`, trois lectures
@@ -264,7 +266,7 @@ fn registry_j5_tools_listed() {
         assert!(spec.is_listed(), "{name}");
         assert_eq!(spec.available, Availability::Now, "{name}");
     }
-    // 38 outils en J5, 44 en J6, 49 en J7, 55 en J8 (lot L6).
+    // 38 outils en J5, 44 en J6, 49 en J7, 55 en J8 (lot L6), 56 (lot L7).
     assert_eq!(listed().count(), LISTED);
     assert_eq!(by_mcp_name("list_resources").unwrap().kind, Kind::Read);
     assert_eq!(by_mcp_name("resource_usage").unwrap().kind, Kind::Analysis);

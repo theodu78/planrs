@@ -371,21 +371,54 @@ fn on_task_scale<R>(
     f(TimeScale::Working(&c)).map_err(out_of_domain)
 }
 
+/// Vrai si `op` ne fait que passer la tâche en manuel (R-253) : aucune
+/// autre valeur. Une suite de tels passages lit un seul planning
+/// (`Ctx::freeze_schedule`) : figer une tâche à ses dates courantes ne
+/// déplace aucune autre tâche (relecture finale de J8 : « Mode » sur
+/// toute la sélection d'un grand projet ne recalcule plus une fois par
+/// tâche).
+pub(super) fn is_pure_freeze(op: &TaskUpdate) -> bool {
+    op.mode == Patch::Set(ModeJson::Manual)
+        && op.name.is_keep()
+        && op.duration.is_keep()
+        && op.milestone.is_keep()
+        && op.notes.is_keep()
+        && op.start.is_keep()
+        && op.finish.is_keep()
+        && op.active.is_keep()
+        && op.task_type.is_keep()
+        && op.effort_driven.is_keep()
+        && op.work.is_keep()
+}
+
 /// R-253 : valeurs manuelles d'une tâche qui passe en manuel : ses dates
 /// planifiées courantes (planning du clone, O49 : `ManualStart` = `Start`,
 /// `ManualFinish` = `Finish`) et sa durée ; tâche exclue : son placement
 /// d'affichage (R-062) s'il existe, sinon aucune date (le moteur la signale
-/// `task.manual_undated`).
-fn frozen_manual(ctx: &mut Ctx<'_>, uid: TaskUid) -> Result<SchedulingMode, CommandError> {
-    ctx.ensure_schedule()?;
-    let Some(task) = ctx.project.tasks.get(uid) else {
+/// `task.manual_undated`). `pure` : passage en manuel seul
+/// ([`is_pure_freeze`]) : planning de référence de la suite s'il existe,
+/// sinon le planning courant, gardé comme référence.
+fn frozen_manual(ctx: &mut Ctx<'_>, uid: TaskUid, pure: bool) -> Result<SchedulingMode, CommandError> {
+    let Some(d) = ctx.project.tasks.get(uid).map(|t| t.duration) else {
         return Err(CommandError::new(
             codes::TASK_NOT_FOUND,
             CommandErrorKind::UnknownTask(uid),
         ));
     };
-    let d = task.duration;
-    Ok(match ctx.schedule().get(uid) {
+    if pure && let Some(s) = ctx.freeze_schedule() {
+        return Ok(freeze_values(d, s.get(uid)));
+    }
+    ctx.ensure_schedule()?;
+    if pure {
+        ctx.keep_freeze_schedule();
+    }
+    Ok(freeze_values(d, ctx.schedule().get(uid)))
+}
+
+/// Valeurs manuelles figées d'une tâche de durée `d` selon son résultat
+/// du planning (R-253).
+fn freeze_values(d: Duration, outcome: Option<&TaskOutcome>) -> SchedulingMode {
+    match outcome {
         Some(TaskOutcome::Scheduled(s)) => {
             // Récapitulative : durée calculée, ouvrée (R-054).
             let duration = if s.role == TaskRole::Summary {
@@ -411,7 +444,7 @@ fn frozen_manual(ctx: &mut Ctx<'_>, uid: TaskUid) -> Result<SchedulingMode, Comm
             finish: None,
             duration: Some(d),
         },
-    })
+    }
 }
 
 /// Début planifié de `uid` dans le planning du clone, s'il est planifié.
@@ -563,7 +596,19 @@ fn plan_dates(
     // retour en automatique ⇒ valeurs manuelles retirées (contrainte et
     // échéance gardées, recalcul par le moteur).
     let new_mode = match target {
-        Some(ModeJson::Manual) if !manual => Some(frozen_manual(ctx, uid)?),
+        // Feuille dont l'opération donne le début (collage R-244) : les
+        // dates figées seraient aussitôt remplacées (R-254 part du début
+        // saisi et de la durée de la tâche) ; pas de recalcul du planning
+        // (relecture finale de J8).
+        Some(ModeJson::Manual) if !manual && !summary && matches!(op.start, Patch::Set(_)) => {
+            let d = ctx.project.tasks.get(uid).map(|t| t.duration);
+            Some(SchedulingMode::Manual {
+                start: None,
+                finish: None,
+                duration: d,
+            })
+        }
+        Some(ModeJson::Manual) if !manual => Some(frozen_manual(ctx, uid, is_pure_freeze(op))?),
         Some(ModeJson::Auto) if manual => Some(SchedulingMode::Auto),
         _ => None,
     };

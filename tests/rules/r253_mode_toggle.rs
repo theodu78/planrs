@@ -169,3 +169,84 @@ fn r253_toggle_mode_helper() {
     assert_eq!(b.ops.len(), 1);
     assert_eq!(helpers::toggle_mode(&s, &[]), Ok(None));
 }
+
+/// Relecture finale de J8 : une suite de passages en manuel purs dans un
+/// lot lit un seul planning de référence (figer une tâche à ses dates ne
+/// déplace aucune autre tâche). Le résultat est celui de passages faits
+/// un par un, chacun dans son lot (planning recalculé à chaque fois) :
+/// récapitulatives, feuilles liées, contrainte, avancement et tâche
+/// inactive compris.
+#[test]
+fn r253_freeze_batch_matches_one_by_one() {
+    use planrs_automation::{ApplyMode, Batch, helpers};
+    use planrs_tests::generate::ui_network;
+    use planrs_tests::session::session;
+    let mut p = ui_network(6, 7, 60);
+    // Quelques cas de plus : avancement, inactive, contrainte.
+    let mut base = session(p.clone());
+    apply(
+        &mut base,
+        json!([
+            { "op": "progress.update", "task": 3, "percent_complete": { "text": "40%" } },
+            { "op": "task.update", "uid": 12, "active": false },
+            { "op": "task.set_constraint", "uid": 20, "kind": "snet", "date": "2026-02-02T08:00" }
+        ]),
+    );
+    p = base.project().clone();
+    let all: Vec<_> = p
+        .tasks
+        .iter()
+        .filter(|t| !t.is_null)
+        .map(planrs_core::HasUid::uid)
+        .collect();
+    let batch = helpers::toggle_mode(&base, &all).unwrap().unwrap();
+    assert!(batch.ops.len() > 40);
+    let mut at_once = session(p.clone());
+    at_once.apply(&batch, ApplyMode::Commit).unwrap();
+    let mut one_by_one = session(p);
+    for op in &batch.ops {
+        let single = Batch {
+            ops: vec![op.clone()],
+            ..batch.clone()
+        };
+        one_by_one.apply(&single, ApplyMode::Commit).unwrap();
+    }
+    for (a, b) in at_once
+        .project()
+        .tasks
+        .iter()
+        .zip(one_by_one.project().tasks.iter())
+    {
+        assert_eq!(a.mode, b.mode, "tâche {} « {} »", a.uid().get(), a.name);
+        assert!(matches!(a.mode, SchedulingMode::Manual { .. }) || a.is_null);
+    }
+    assert_eq!(at_once.schedule(), one_by_one.schedule());
+}
+
+/// Relecture finale de J8 : « Mode » sur toute la sélection d'un projet de
+/// 5 000 tâches passe en un lot (un seul recalcul au lieu d'un par tâche :
+/// le budget `schedule_recomputes` refusait le lot au-delà d'environ 200
+/// tâches).
+#[test]
+fn r253_toggle_mode_5000_within_budget() {
+    use planrs_automation::{ApplyMode, helpers};
+    use planrs_tests::generate::large_network;
+    use planrs_tests::session::session;
+    let p = large_network(7);
+    let all: Vec<_> = p
+        .tasks
+        .iter()
+        .filter(|t| !t.is_null)
+        .map(planrs_core::HasUid::uid)
+        .collect();
+    let mut s = session(p);
+    let batch = helpers::toggle_mode(&s, &all).unwrap().unwrap();
+    assert!(batch.ops.len() > 4_000);
+    s.apply(&batch, ApplyMode::Commit).unwrap();
+    assert!(
+        s.project()
+            .tasks
+            .iter()
+            .all(|t| t.is_null || matches!(t.mode, SchedulingMode::Manual { .. }))
+    );
+}

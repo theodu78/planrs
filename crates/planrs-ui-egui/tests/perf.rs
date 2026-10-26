@@ -1483,6 +1483,7 @@ fn styled_counts_equal_at_1000_and_5000_tasks() {
             "{name} : galleys {small:?} / {large:?}"
         );
     }
+}
 
 /// J8 L12 : volet d'opérations IA ouvert sur une proposition de 250 tâches
 /// décalées (diff affiché de 200 lignes, H-UI-41), 5 000 tâches,

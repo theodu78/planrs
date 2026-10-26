@@ -829,15 +829,15 @@ why-drivers = Pilotes (cliquer pour sélectionner)
 why-unavailable = Explication indisponible : { $detail }
 
 # --- J8 L13 ---
-web-start-failed = { $product } ne peut pas démarrer dans ce navigateur (WebGL2 ou WebGPU indisponible ?). Essayez un navigateur récent ou la version de bureau. Détail : { $detail }
-dropped-first-only = { $count } fichiers déposés : seul « { $name } » est ouvert.
+web-start-failed = { $product } ne peut pas démarrer dans ce navigateur (WebGL2 ou WebGPU indisponible ?). Essayez un navigateur récent ou la version de bureau. Détail : { $detail }
+dropped-first-only = { $count } fichiers déposés : seul « { $name } » est ouvert.
 menu-export = Exporter
 menu-export-pdf = PDF…
 menu-export-svg = SVG…
 menu-export-csv = CSV des tâches…
-export-done = Exporté : { $name }
+export-done = Exporté : { $name }
 export-error-title = Export impossible
-export-error-failed = L'export a échoué : { $detail }
+export-error-failed = L'export a échoué : { $detail }
 
 # --- J8 L14 ---
 

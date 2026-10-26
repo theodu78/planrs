@@ -16,6 +16,7 @@ use crate::state::{GanttStyle, LanguagePref, ThemePref, ViewKind};
 use crate::structure::StructureOp;
 use crate::timescale::TimeScaleZoom;
 use crate::view::Pane;
+use crate::view::side_panel::SideOp;
 use crate::view::task_view::TaskViewOp;
 
 /// Intention de l'utilisateur, appliquée en fin d'image. Pas `Copy` :
@@ -173,6 +174,9 @@ pub enum Action {
     Clipboard(ClipboardOp),
     /// Fichier → Importer CSV… : sélecteur de fichiers, puis aperçu.
     ImportCsv,
+    // --- J8 L12 : volet latéral (H-UI-41, H-UI-58).
+    /// Ouvre, referme ou change d'onglet le volet latéral.
+    SidePanel(SideOp),
 }
 
 /// Fenêtre à ouvrir (J7, ADR-0015 D6 ; `Action::OpenDialog` reste le

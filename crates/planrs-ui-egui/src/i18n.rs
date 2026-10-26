@@ -756,6 +756,29 @@ text_ids! {
     ErrorCsvErrorNotYetAvailable => "error-csv-error-not_yet_available",
     // --- J8 L11 ---
     // --- J8 L12 ---
+    MenuAiPanel => "menu-ai-panel",
+    SideTabAi => "side-tab-ai",
+    SideTabWhy => "side-tab-why",
+    SideClose => "side-close",
+    AiNoPending => "ai-no-pending",
+    AiMore => "ai-more",
+    AiCriticalEntered => "ai-critical-entered",
+    AiCriticalLeft => "ai-critical-left",
+    AiAdded => "ai-added",
+    AiRemoved => "ai-removed",
+    AiNoPreview => "ai-no-preview",
+    AiHistory => "ai-history",
+    AiHistoryEmpty => "ai-history-empty",
+    AiHistoryLine => "ai-history-line",
+    AiOutcomeAccepted => "ai-outcome-accepted",
+    AiOutcomeRejected => "ai-outcome-rejected",
+    AiOutcomeExpired => "ai-outcome-expired",
+    AiOutcomeStale => "ai-outcome-stale",
+    AiOutcomeFailed => "ai-outcome-failed",
+    AiUndoEntry => "ai-undo-entry",
+    WhyNoTask => "why-no-task",
+    WhyDrivers => "why-drivers",
+    WhyUnavailable => "why-unavailable",
     // --- J8 L13 ---
     // --- J8 L14 ---
     // --- J8 L15 ---

@@ -16,6 +16,7 @@ use crate::keymap::{Binding, UiBinding, shortcut_for_os, shortcut_text};
 use crate::state::{GanttStyle, LanguagePref, ThemePref, ViewKind};
 use crate::theme::Palette;
 use crate::timescale::TimeScaleZoom;
+use crate::view::side_panel::SideOp;
 
 use super::FrameCtx;
 
@@ -39,8 +40,9 @@ const GANTT_STYLE_CHOICES: [(GanttStyle, TextId); 2] = [
     (GanttStyle::Tracking, TextId::MenuGanttTracking),
 ];
 
-/// Barre de menus (Fichier, Édition, Affichage).
-pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+/// Barre de menus (Fichier, Édition, Affichage) ; `side_open` : volet
+/// latéral ouvert (case du menu Affichage, J8 lot L12).
+pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, side_open: bool) {
     let texts = fc.texts;
     let has_doc = fc.doc.is_some();
     egui::Panel::top("planrs_menu_bar").show(ui, |ui| {
@@ -65,6 +67,15 @@ pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
                 super::task_view::view_menu(ui, fc);
                 // --- J8 L11 : surbrillance du critique ---
                 // --- J8 L12 : volet IA, « Pourquoi cette date ? » ---
+                // Bascule du volet latéral (H-UI-41) : sans document aussi
+                // (l'historique de session reste lisible).
+                let mut side_open = side_open;
+                if ui
+                    .checkbox(&mut side_open, texts.get(TextId::MenuAiPanel))
+                    .changed()
+                {
+                    fc.actions.push(Action::SidePanel(SideOp::Toggle));
+                }
                 // --- J8 L15 : galerie, mise en page ---
                 ui.separator();
                 // Bascule du panneau des diagnostics : les compteurs de la

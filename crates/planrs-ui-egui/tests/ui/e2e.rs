@@ -547,7 +547,7 @@ fn e2e_daily_use() {
 /// `tests/ui/`.
 #[cfg(unix)]
 #[path = "../../../planrs-mcp/tests/common/replay.rs"]
-mod replay;
+pub(crate) mod replay;
 
 #[cfg(unix)]
 #[allow(
@@ -555,7 +555,7 @@ mod replay;
     clippy::arithmetic_side_effects,
     reason = "test natif : processus fils, fils et attentes, comme `planrs mcp` en vrai ; compteurs d'identifiants et de générations bornés par le scénario"
 )]
-mod relay_app {
+pub(crate) mod relay_app {
     use std::io::{BufRead, BufReader, Write};
     use std::path::PathBuf;
     use std::process::{Child, Command, Stdio};
@@ -583,10 +583,10 @@ mod relay_app {
     const SCENARIO: &str = "relay_j7";
 
     /// Attente de la validation côté serveur (`--approval-timeout`).
-    const APPROVAL_SECS: u64 = 30;
+    pub(crate) const APPROVAL_SECS: u64 = 30;
 
     /// Images d'interface au plus par appel (5 ms chacune : ~60 s).
-    const MAX_FRAMES: usize = 12_000;
+    pub(crate) const MAX_FRAMES: usize = 12_000;
 
     /// Ce que l'utilisateur fait pendant un appel relayé.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -623,7 +623,7 @@ mod relay_app {
     }
 
     /// Binaire `planrs` : `PLANRS_MCP_BIN`, sinon à côté de `deps/`.
-    fn mcp_binary() -> Option<PathBuf> {
+    pub(crate) fn mcp_binary() -> Option<PathBuf> {
         if let Some(path) = std::env::var_os("PLANRS_MCP_BIN") {
             return Some(PathBuf::from(path));
         }
@@ -635,7 +635,7 @@ mod relay_app {
     /// Client JSON-RPC stdio minimal (`initialize`, `tools/call`) dans un
     /// fil : les appels arrivent par `calls`, chaque résultat repart par
     /// `results` sous la forme du journal (`{"ok": …}` / `{"error": …}`).
-    fn client_thread(
+    pub(crate) fn client_thread(
         child: &mut Child,
         calls: Receiver<Option<(String, Value)>>,
         results: SyncSender<Value>,
@@ -703,7 +703,7 @@ mod relay_app {
     /// `maison.xml` (l'exemple) tenu dans `tmp`, rendez-vous publié dans
     /// `tmp/control` ; écouteur sur `transport` (J8 lot L8 : socket Unix
     /// ou TCP en boucle locale).
-    fn wired(
+    pub(crate) fn wired(
         tmp: &TempDir,
         now: Moment,
         transport: Transport,

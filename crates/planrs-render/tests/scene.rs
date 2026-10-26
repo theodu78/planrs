@@ -768,3 +768,95 @@ proptest! {
         }
     }
 }
+
+/// Relecture finale de J8 (F3) : dans la table imprimée (colonnes N°, Nom,
+/// Durée, Début, Fin), aucun texte ne déborde de sa colonne, nom long en
+/// retrait ou en gras (récapitulative) compris : le nom est coupé à la
+/// largeur de sa colonne, retrait déduit.
+fn assert_table_texts_in_columns(names: &[(String, u16)], id: TemplateId) {
+    use planrs_render::style::TableColumn;
+    let mut p = project("T", "2026-10-19T08:00");
+    for (name, level) in names {
+        add(&mut p, name, 3, *level);
+    }
+    let s = planrs_core::schedule(&p);
+    let mut st = template(id);
+    st.page.columns = Some(TableColumn::PRINT_DEFAULT.to_vec());
+    let sc = layout(&p, &s, &st, &NoTexts, &Viewport::new(Variant::Print, Lang::Fr)).0;
+    // Bords des colonnes (N° 40 px, Nom 240 px, dates 64 px).
+    let mut edges = Vec::new();
+    let mut x = 0;
+    for w in [40, 240, 64, 64, 64] {
+        edges.push((x * 16, (x + w) * 16));
+        x += w;
+    }
+    let mut seen_name = false;
+    for item in sc.items.iter().filter(|i| i.clip == Clip::Table) {
+        let Prim::Text {
+            x16,
+            text,
+            font,
+            anchor,
+            ..
+        } = &item.prim
+        else {
+            continue;
+        };
+        if !matches!(item.part, Part::Row(_)) {
+            continue;
+        }
+        let w = InterMetrics.width16(text, *font);
+        let (left, right) = match anchor {
+            planrs_render::geometry::Anchor::End => (x16 - w, *x16),
+            planrs_render::geometry::Anchor::Start => (*x16, x16 + w),
+        };
+        let (c0, c1) = *edges
+            .iter()
+            .find(|(a, b)| *x16 >= *a && *x16 <= *b)
+            .expect("texte hors de la table");
+        if c0 == 40 * 16 {
+            seen_name = true;
+        }
+        assert!(
+            left >= c0 && right <= c1,
+            "« {text} » ({left}..{right}) déborde de la colonne {c0}..{c1}"
+        );
+    }
+    assert!(seen_name || names.iter().all(|(n, _)| n.is_empty()));
+}
+
+#[test]
+fn table_texts_fit_columns_vaulx_example() {
+    let names = vec![
+        ("TRAVAUX".to_owned(), 1),
+        ("Bâtiment A".to_owned(), 2),
+        (
+            "Travaux en cycle (48 logements, 1 commencé tous les 2 jours)".to_owned(),
+            3,
+        ),
+        ("Cloisons".to_owned(), 4),
+    ];
+    for id in TemplateId::ALL {
+        assert_table_texts_in_columns(&names, id);
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(48))]
+
+    #[test]
+    fn table_texts_fit_columns(
+        names in proptest::collection::vec(("[A-Za-zéÉW (),0-9]{0,90}", 1_u16..8), 1..12)
+    ) {
+        // Niveaux plausibles : chaque ligne au plus un cran sous la précédente.
+        let mut level = 0_u16;
+        let names: Vec<(String, u16)> = names
+            .into_iter()
+            .map(|(n, l)| {
+                level = l.min(level + 1);
+                (n, level)
+            })
+            .collect();
+        assert_table_texts_in_columns(&names, TemplateId::Sobre);
+    }
+}

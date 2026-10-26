@@ -1093,7 +1093,10 @@ pub(crate) fn build(
                 x = x.saturating_add(indent);
                 room = room.saturating_sub(indent);
             }
-            let text = if c == TableColumn::Name || c == TableColumn::Id {
+            // Nom compris (relecture finale de J8, F3) : coupé à la largeur
+            // de sa colonne, retrait déduit, au lieu de déborder sur la
+            // colonne suivante (le clip est la table entière).
+            let text = if c == TableColumn::Id {
                 text
             } else {
                 fit_chars(&text, room, font, &metrics)
@@ -1224,26 +1227,40 @@ const fn column_title(c: TableColumn, l: &Labels, lang: Lang) -> &'static str {
 }
 
 /// Texte coupé avec « … » pour tenir dans `room` (1/16 px), mesuré en
-/// Inter (H-R11) ; vide si même « … » ne tient pas.
+/// Inter (H-R11) ; vide si même « … » ne tient pas. Plus long préfixe
+/// qui tient, par dichotomie sur les frontières de caractères (la largeur
+/// d'un préfixe croît avec sa longueur) : O(n log n) pour un nom long.
 fn fit_chars(text: &str, room: i64, font: FontRef, m: &dyn TextMeasure) -> String {
     if m.width16(text, font) <= room {
         return text.to_owned();
     }
-    let mut out = String::new();
-    for c in text.chars() {
-        let mut candidate = out.clone();
-        candidate.push(c);
+    let ends: Vec<usize> = text.char_indices().map(|(i, _)| i).skip(1).collect();
+    let fits = |k: usize| {
+        let end = if k == 0 {
+            0
+        } else {
+            ends.get(k.saturating_sub(1)).copied().unwrap_or(text.len())
+        };
+        let mut candidate = text.get(..end).unwrap_or_default().to_owned();
         candidate.push('…');
-        if m.width16(&candidate, font) > room {
-            break;
-        }
-        out.push(c);
-    }
-    if out.is_empty() && m.width16("…", font) > room {
+        (m.width16(&candidate, font) <= room).then_some(candidate)
+    };
+    // Plus grand k (caractères gardés) dont « préfixe… » tient.
+    let (mut lo, mut hi) = (0_usize, text.chars().count());
+    let Some(mut best) = fits(0) else {
         return String::new();
+    };
+    while lo < hi {
+        let mid = lo.saturating_add(hi.saturating_sub(lo).saturating_add(1) / 2);
+        match fits(mid) {
+            Some(candidate) => {
+                best = candidate;
+                lo = mid;
+            }
+            None => hi = mid.saturating_sub(1),
+        }
     }
-    out.push('…');
-    out
+    best
 }
 
 /// Séparateurs de la table (un par bord de colonne) et bas de l'en-tête.

@@ -67,7 +67,8 @@ pub enum TemplateArg {
 }
 
 impl TemplateArg {
-    const fn as_str(self) -> &'static str {
+    /// Nom du modèle dans le registre.
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Classique => "classique",
             Self::Sobre => "sobre",

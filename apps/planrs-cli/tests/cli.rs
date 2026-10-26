@@ -815,3 +815,75 @@ fn cli_style_list_get_apply() {
     assert_eq!(code(&o), 0, "{}", String::from_utf8_lossy(&o.stderr));
     assert!(!std::fs::read_to_string(&house).unwrap().contains("planrs-style"));
 }
+
+/// `planrs export-pdf` (J8, lot L7) : PDF écrit, plan inchangé, mêmes
+/// octets à deux lancements ; A3 paysage sur 2 pages en largeur ; sortie
+/// JSON = vue du MCP ; refus `param.invalid` (code 1).
+#[test]
+fn cli_export_pdf() {
+    let dir = TempDir::new("pdf");
+    let plan = house_copy(&dir);
+    let before = std::fs::read(&plan).unwrap();
+    let first = dir.join("a.pdf");
+    let o = run(&[
+        "--now",
+        NOW,
+        "export-pdf",
+        s(&plan),
+        s(&first),
+        "--style",
+        "sobre",
+    ]);
+    assert_eq!(code(&o), 0, "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(String::from_utf8_lossy(&o.stdout).contains("page(s)"));
+    let bytes = std::fs::read(&first).unwrap();
+    assert!(bytes.starts_with(b"%PDF-"));
+    assert_eq!(std::fs::read(&plan).unwrap(), before, "plan inchangé");
+    let second = dir.join("b.pdf");
+    let o = run(&[
+        "--now",
+        NOW,
+        "export-pdf",
+        s(&plan),
+        s(&second),
+        "--style",
+        "sobre",
+    ]);
+    assert_eq!(code(&o), 0);
+    assert_eq!(std::fs::read(&second).unwrap(), bytes, "H-R13 : mêmes octets");
+    let a3 = dir.join("c.pdf");
+    let o = run(&[
+        "--now",
+        NOW,
+        "export-pdf",
+        s(&plan),
+        s(&a3),
+        "--paper",
+        "A3",
+        "--landscape",
+        "--pages-wide",
+        "2",
+        "--json",
+    ]);
+    assert_eq!(code(&o), 0, "{}", String::from_utf8_lossy(&o.stderr));
+    let view = stdout_json(&o);
+    assert!(view["pages"].as_u64().unwrap() >= 1);
+    assert_eq!(view["path"], json!(s(&a3)));
+    let text = String::from_utf8_lossy(&std::fs::read(&a3).unwrap()).into_owned();
+    assert!(text.contains("/MediaBox[0 0 1191 842]"));
+    let o = run(&[
+        "--now",
+        NOW,
+        "export-pdf",
+        s(&plan),
+        s(&dir.join("d.pdf")),
+        "--from",
+        "2027-01-01",
+        "--to",
+        "2026-01-01",
+    ]);
+    assert_eq!(code(&o), 1);
+    assert!(String::from_utf8_lossy(&o.stderr).contains("param.invalid"));
+    let o = run(&["export-pdf", s(&plan), s(&dir.join("e.pdf")), "--pages-wide", "0"]);
+    assert_eq!(code(&o), 2, "usage");
+}

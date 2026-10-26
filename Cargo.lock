@@ -3429,6 +3429,7 @@ dependencies = [
  "getrandom 0.3.4",
  "planrs-core",
  "planrs-mspdi",
+ "planrs-pdf",
  "planrs-render",
  "proptest",
  "schemars",

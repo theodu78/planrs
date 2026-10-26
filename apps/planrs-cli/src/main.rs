@@ -2,7 +2,7 @@
 //!
 //! Il expose les mêmes opérations que le serveur MCP (`summary`, `tasks`,
 //! `resources`, `usage`, `apply`, `render`, `import-csv`, `mcp`,
-//! `explain`, `style`), toutes via le
+//! `explain`, `style`, `export-pdf`), toutes via le
 //! `Workspace` de `planrs-automation` : mêmes JSON que le MCP (ADR-0012 D1).
 //! Codes de sortie (C-MCP-08) dans [`exit`] ; « maintenant » et langue dans
 //! [`now`] (seule lecture de l'horloge). Détail : `docs/features/cli.md`.
@@ -67,6 +67,8 @@ enum Command {
     Explain(cmd::explain::ExplainArgs),
     /// Style du document : modèles, style effectif, application (J8).
     Style(cmd::style::StyleArgs),
+    /// Planning en PDF (style, papier, pages en largeur ; J8).
+    ExportPdf(cmd::export_pdf::ExportPdfArgs),
 }
 
 fn main() -> ExitCode {
@@ -100,5 +102,6 @@ fn main() -> ExitCode {
         Command::Mcp(a) => cmd::mcp::run(&ctx, a),
         Command::Explain(a) => cmd::explain::run(&ctx, &a),
         Command::Style(a) => cmd::style::run(&ctx, &a),
+        Command::ExportPdf(a) => cmd::export_pdf::run(&ctx, &a),
     }
 }

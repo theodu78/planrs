@@ -114,7 +114,8 @@ async fn mcp_guard_open_in_app_refused() {
         args(&json!({ "name": "P", "start": "2026-11-02T08:00" })),
     )
     .unwrap();
-    for tool in ["save_project", "export_mspdi"] {
+    // J8 (L7) : un export PDF ne doit pas écraser un plan tenu non plus.
+    for tool in ["save_project", "export_mspdi", "export_pdf"] {
         let r = s.dispatch(tool, args(&json!({ "path": path }))).unwrap();
         assert_eq!(code(&r).as_deref(), Some("file.open_in_app"), "{tool}");
     }

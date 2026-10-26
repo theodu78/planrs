@@ -59,10 +59,11 @@ use crate::timescale::TimeScaleZoom;
 use crate::view::{self, ApprovalBanner, ApprovalSummary};
 
 /// Écritures qui demandent une validation sans être du genre `Write`.
-const APPROVED_TOOLS: [&str; 4] = [
+const APPROVED_TOOLS: [&str; 5] = [
     "history.redo",
     "history.undo",
     "project.export_mspdi",
+    "project.export_pdf",
     "project.save",
 ];
 
@@ -561,7 +562,10 @@ impl App {
     /// Garde ADR-0002 d'un enregistrement relayé vers un chemin choisi par
     /// l'agent : refus si une autre application tient ce fichier.
     fn guard_save_path(&self, tool: &str, params: &Value) -> Result<(), ToolError> {
-        if !matches!(tool, "project.save" | "project.export_mspdi") {
+        if !matches!(
+            tool,
+            "project.save" | "project.export_mspdi" | "project.export_pdf"
+        ) {
             return Ok(());
         }
         let Some(path) = params.get("path").and_then(Value::as_str) else {

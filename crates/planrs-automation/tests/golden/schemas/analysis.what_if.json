@@ -3571,6 +3571,26 @@
                         "const": "start_finish",
                         "description": "Début – fin.",
                         "type": "string"
+                      },
+                      {
+                        "const": "name_duration",
+                        "description": "Nom et durée courte, « Pose (4 sem.) » (H-UI-63).",
+                        "type": "string"
+                      },
+                      {
+                        "const": "duration_short",
+                        "description": "Durée courte (« 13 j », « 17,4 mois »).",
+                        "type": "string"
+                      },
+                      {
+                        "const": "start_short",
+                        "description": "Début court (`JJ/MM/AA`).",
+                        "type": "string"
+                      },
+                      {
+                        "const": "finish_short",
+                        "description": "Fin courte (`JJ/MM/AA`).",
+                        "type": "string"
                       }
                     ]
                   },
@@ -3624,6 +3644,26 @@
                         "const": "start_finish",
                         "description": "Début – fin.",
                         "type": "string"
+                      },
+                      {
+                        "const": "name_duration",
+                        "description": "Nom et durée courte, « Pose (4 sem.) » (H-UI-63).",
+                        "type": "string"
+                      },
+                      {
+                        "const": "duration_short",
+                        "description": "Durée courte (« 13 j », « 17,4 mois »).",
+                        "type": "string"
+                      },
+                      {
+                        "const": "start_short",
+                        "description": "Début court (`JJ/MM/AA`).",
+                        "type": "string"
+                      },
+                      {
+                        "const": "finish_short",
+                        "description": "Fin courte (`JJ/MM/AA`).",
+                        "type": "string"
                       }
                     ]
                   },
@@ -3676,6 +3716,26 @@
                       {
                         "const": "start_finish",
                         "description": "Début – fin.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "name_duration",
+                        "description": "Nom et durée courte, « Pose (4 sem.) » (H-UI-63).",
+                        "type": "string"
+                      },
+                      {
+                        "const": "duration_short",
+                        "description": "Durée courte (« 13 j », « 17,4 mois »).",
+                        "type": "string"
+                      },
+                      {
+                        "const": "start_short",
+                        "description": "Début court (`JJ/MM/AA`).",
+                        "type": "string"
+                      },
+                      {
+                        "const": "finish_short",
+                        "description": "Fin courte (`JJ/MM/AA`).",
                         "type": "string"
                       }
                     ]

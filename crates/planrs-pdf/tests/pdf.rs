@@ -226,3 +226,29 @@ proptest! {
         }
     }
 }
+
+/// H-UI-66 : cartouche du modèle « Planning travaux » (titre, sous-titre,
+/// projet à droite, indice et page au pied), en-tête agrandi d'une ligne
+/// de titre ; les autres modèles n'en ont pas.
+#[test]
+fn h_ui_66_title_block_pdf() {
+    use planrs_render::paginate::{SLOT_LINE_PT, TITLE_LINE_PT};
+    let pages = pages_of(&project_p(), TemplateId::Chantier);
+    assert!(pages.title_block);
+    assert_eq!(pages.header_pt, 2 * SLOT_LINE_PT + TITLE_LINE_PT - SLOT_LINE_PT);
+    let (bytes, report) = write(&pages);
+    assert!(report.missing_glyphs.is_empty(), "{:?}", report.missing_glyphs);
+    let texts = page_texts(&bytes);
+    let first = &texts[0];
+    // Jetons vides ici (`NoTexts`) : le titre et le sous-titre sont du texte.
+    for t in [
+        "Planning prévisionnel",
+        "Compris congés / Hors intempéries / Aléas 10 %",
+    ] {
+        assert!(first.iter().any(|x| x == t), "« {t} » absent : {first:?}");
+    }
+    assert!(first.iter().any(|x| x.starts_with("Page 1/")), "{first:?}");
+    let sobre = pages_of(&project_p(), TemplateId::Sobre);
+    assert!(!sobre.title_block);
+    assert_eq!(sobre.header_pt, SLOT_LINE_PT);
+}

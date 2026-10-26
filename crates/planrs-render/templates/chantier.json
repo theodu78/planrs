@@ -1,6 +1,6 @@
 {
   "v": 1,
-  "name": "Chantier",
+  "name": "Planning travaux",
   "base": "chantier",
   "colors": {
     "light": {
@@ -18,35 +18,36 @@
       "non_working": "#ECECE8",
       "status_line": "#6B3FA0",
       "today_line": "#0B7A55",
-      "link": "#4D4D4D",
-      "link_critical": "#A3201A",
+      "link": "#2E6DB4",
+      "link_critical": "#C00000",
       "selection": "#DDE6F2",
       "cursor": "#1F5FBF",
       "message_error_bg": "#FDECEA",
       "message_warning_bg": "#FFF4D6",
       "bars": {
         "task": {
-          "fill": "#B85600"
+          "fill": "#7A7A7A"
         },
         "critical": {
-          "fill": "#A3201A",
-          "outline": "#000000"
+          "fill": "#D04A4A",
+          "outline": "#7A1712"
         },
         "summary": {
           "fill": "#2E2E2E"
         },
         "summary_critical": {
-          "fill": "#7A1712"
+          "fill": "#7A1712",
+          "outline": "#D04A4A"
         },
         "milestone": {
-          "fill": "#1C1C1C"
+          "fill": "#C00000"
         },
         "milestone_critical": {
-          "fill": "#A3201A",
+          "fill": "#C00000",
           "outline": "#000000"
         },
         "progress": {
-          "fill": "#FFE0B8"
+          "fill": "#000000"
         },
         "baseline": {
           "fill": "#7A7A74"
@@ -57,13 +58,13 @@
         },
         "manual": {
           "fill": "#FFFFFF",
-          "outline": "#B85600"
+          "outline": "#7A7A7A"
         },
         "slack": {
           "fill": "#7A7A74"
         },
         "deadline": {
-          "fill": "#A3201A"
+          "fill": "#C00000"
         }
       }
     },
@@ -221,21 +222,28 @@
   },
   "texts": {
     "task": {
-      "right": "resources"
+      "right": "name_duration"
     },
     "critical": {
-      "right": "resources"
+      "right": "name_duration"
     },
-    "milestone": {
-      "right": "finish"
-    },
-    "milestone_critical": {
-      "right": "finish"
+    "manual": {
+      "right": "name_duration"
     },
     "summary": {
-      "right": "name"
+      "left": "name",
+      "right": "duration_short"
     },
     "summary_critical": {
+      "left": "name",
+      "right": "duration_short"
+    },
+    "milestone": {
+      "left": "finish_short",
+      "right": "name"
+    },
+    "milestone_critical": {
+      "left": "finish_short",
       "right": "name"
     }
   },
@@ -244,10 +252,11 @@
     "week_numbers": true,
     "shade_non_working": true,
     "status_label": true,
-    "today_mark": true
+    "today_mark": true,
+    "relative_months": true
   },
   "grid": {
-    "rows": "zebra",
+    "rows": "none",
     "major_v": true,
     "minor_v": true,
     "row_lines": true
@@ -262,7 +271,7 @@
     "every_page": false
   },
   "page": {
-    "paper": "a4",
+    "paper": "a3",
     "landscape": true,
     "margins_mm": [
       10,
@@ -275,15 +284,23 @@
     },
     "repeat_table": true,
     "header": [
-      "{projet}",
       "",
-      "{date_etat}"
+      "Planning prévisionnel\nCompris congés / Hors intempéries / Aléas 10 %",
+      "{projet}"
     ],
     "footer": [
-      "{fichier}",
-      "",
-      "Page {page}/{pages}"
+      "État au {date_etat} – indice 0",
+      "Page {page}/{pages}",
+      "{fichier}"
     ],
-    "logo": null
+    "logo": null,
+    "columns": [
+      "id",
+      "name",
+      "duration",
+      "start",
+      "finish"
+    ],
+    "title_block": true
   }
 }

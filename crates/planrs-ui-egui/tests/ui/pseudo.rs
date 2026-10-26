@@ -21,6 +21,7 @@ use egui::epaint::{ClippedShape, Shape};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable as _;
 use planrs_core::Moment;
+use planrs_ui_egui::action::DialogKind;
 use planrs_ui_egui::column::Column;
 use planrs_ui_egui::diag_text::DiagTexts;
 use planrs_ui_egui::dialog::filter::FilterDialogMode;
@@ -211,9 +212,12 @@ fn pseudo_main_view_no_truncation() {
     check_menu(&mut harness, &labels, TextId::MenuFile, 8);
     check_menu(&mut harness, &labels, TextId::MenuEdit, 8);
     check_menu(&mut harness, &labels, TextId::MenuView, 6);
+    // Menus de la barre ajoutés par le lot L15 de J8.
+    check_menu(&mut harness, &labels, TextId::MenuTask, 4);
+    check_menu(&mut harness, &labels, TextId::MenuProject, 4);
+    check_menu(&mut harness, &labels, TextId::MenuFormat, 3);
     // Sous-menus : ouverts par un clic sur leur entrée.
     for (menu, sub, at_least) in [
-        (TextId::MenuEdit, TextId::MenuProject, 4),
         (TextId::MenuView, TextId::MenuZoom, 4),
         (TextId::MenuView, TextId::MenuTheme, 3),
         (TextId::MenuView, TextId::MenuLanguage, 3),
@@ -253,9 +257,8 @@ fn pseudo_main_view_no_truncation() {
 }
 
 /// Fenêtres Trier, Filtre personnalisé, Filtre par ressource, Filtre par
-/// dates et Importer CSV (aperçu) : aucun texte coupé. La galerie des
-/// modèles et la mise en page n'existent pas encore (lot L15, qui les
-/// ajoute à ce test).
+/// dates, Importer CSV (aperçu), galerie des modèles, mise en page et
+/// mode impression (J8 lot L15) : aucun texte coupé.
 #[test]
 fn pseudo_dialogs_no_truncation() {
     let labels = pseudo_labels();
@@ -296,6 +299,23 @@ fn pseudo_dialogs_no_truncation() {
         "aperçu de l'import CSV non ouvert"
     );
     assert_not_cut(&harness, &labels, "Importer CSV", 8);
+    harness.key_press(egui::Key::Escape);
+    harness.run();
+    for (what, kind, at_least) in [
+        ("galerie", DialogKind::Gallery, 6),
+        ("mise en page", DialogKind::PageSetup { print_mode: false }, 12),
+        ("mode impression", DialogKind::PageSetup { print_mode: true }, 12),
+    ] {
+        harness.state_mut().dispatch(Action::ShowDialog(kind));
+        harness.run();
+        assert_not_cut(&harness, &labels, what, at_least);
+        harness.key_press(egui::Key::Escape);
+        harness.run();
+        assert!(
+            harness.state().view().dialog.is_none(),
+            "{what} : Échap ne ferme pas"
+        );
+    }
 }
 
 /// Application anglaise, aucun sélecteur.

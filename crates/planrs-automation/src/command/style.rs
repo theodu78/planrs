@@ -162,6 +162,14 @@ pub enum BarFieldJson {
     TotalSlack,
     /// Début – fin.
     StartFinish,
+    /// Nom et durée courte, « Pose (4 sem.) » (H-UI-63).
+    NameDuration,
+    /// Durée courte (« 13 j », « 17,4 mois »).
+    DurationShort,
+    /// Début court (`JJ/MM/AA`).
+    StartShort,
+    /// Fin courte (`JJ/MM/AA`).
+    FinishShort,
 }
 
 impl From<BarFieldJson> for BarField {
@@ -175,6 +183,10 @@ impl From<BarFieldJson> for BarField {
             BarFieldJson::Percent => Self::Percent,
             BarFieldJson::TotalSlack => Self::TotalSlack,
             BarFieldJson::StartFinish => Self::StartFinish,
+            BarFieldJson::NameDuration => Self::NameDuration,
+            BarFieldJson::DurationShort => Self::DurationShort,
+            BarFieldJson::StartShort => Self::StartShort,
+            BarFieldJson::FinishShort => Self::FinishShort,
         }
     }
 }
@@ -856,11 +868,26 @@ mod tests {
             assert_eq!(BarRole::from(json), role);
             assert_eq!(serde_json::to_value(json).ok(), serde_json::to_value(role).ok());
         }
-        let field = BarFieldJson::StartFinish;
-        assert_eq!(
-            serde_json::to_value(field).ok(),
-            serde_json::to_value(BarField::from(field)).ok()
-        );
+        for field in [
+            BarFieldJson::Name,
+            BarFieldJson::Resources,
+            BarFieldJson::Start,
+            BarFieldJson::Finish,
+            BarFieldJson::Duration,
+            BarFieldJson::Percent,
+            BarFieldJson::TotalSlack,
+            BarFieldJson::StartFinish,
+            BarFieldJson::NameDuration,
+            BarFieldJson::DurationShort,
+            BarFieldJson::StartShort,
+            BarFieldJson::FinishShort,
+        ] {
+            assert_eq!(
+                serde_json::to_value(field).ok(),
+                serde_json::to_value(BarField::from(field)).ok()
+            );
+        }
+        assert_eq!(BarField::ALL.len(), 12);
     }
 
     #[test]

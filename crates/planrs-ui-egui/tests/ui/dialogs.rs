@@ -679,19 +679,23 @@ fn dialogs_enter_validates() {
     }
 }
 
-/// Sous-menu Édition → Projet : chaque entrée ouvre sa fenêtre ; sans
-/// document, rien ne s'ouvre.
+/// Menu Projet de la barre (J8 lot L15 ; sous-menu Édition → Projet
+/// jusque-là) : chaque entrée ouvre sa fenêtre ; sans document, rien ne
+/// s'ouvre ; le menu Édition ne le porte plus.
 #[test]
-fn project_menu_opens_windows() {
+fn menu_project_in_bar() {
     let mut harness = harness();
     open_demo(&mut harness);
+    click_label(&mut harness, &fr(TextId::MenuEdit));
+    assert!(harness.query_by_label(&fr(TextId::MenuProjectInfo)).is_none());
+    harness.key_press(Key::Escape);
+    harness.run();
     for (label, kind) in [
         (TextId::MenuProjectInfo, DialogKind::ProjectInformation),
         (TextId::MenuWorkingTime, DialogKind::WorkingTime),
         (TextId::MenuBaseline, DialogKind::Baseline),
         (TextId::MenuReschedule, DialogKind::Reschedule),
     ] {
-        click_label(&mut harness, &fr(TextId::MenuEdit));
         click_label(&mut harness, &fr(TextId::MenuProject));
         click_label(&mut harness, &fr(label));
         assert_eq!(harness.state().view().dialog.as_ref().map(|d| d.kind), Some(kind));

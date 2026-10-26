@@ -85,7 +85,7 @@ struct GanttInput {
 pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) {
     let avail = ui.available_rect_before_wrap();
     let metrics = *fc.metrics;
-    let layout = geom::main_layout(avail, f32::from(fc.state.table_width), &metrics);
+    let layout = geom::main_layout(avail, f32::from(fc.state.effective_table_width()), &metrics);
     let Some(doc) = fc.doc else {
         ui.advance_cursor_after_rect(avail);
         return;
@@ -221,6 +221,35 @@ struct RowsOut {
 struct ContextClick {
     /// Tâche de la ligne cliquée (`None` sous la dernière ligne).
     uid: Option<TaskUid>,
+    /// Barre cliquée : son type et sa tâche (H-UI-59, J8 lot L15).
+    bar: Option<(planrs_render::style::BarRole, TaskUid)>,
+}
+
+/// Type et tâche de la barre sous le pointeur `p` (H-UI-59) : même
+/// géométrie que le dessin et le survol (`gantt::hit_test`), type déduit
+/// de la ligne (`gantt::row_role`, surbrillance du critique comprise).
+#[must_use]
+pub fn bar_under(
+    fc: &FrameCtx<'_>,
+    axis: &TimeAxis,
+    origin: Pos2,
+    p: Pos2,
+) -> Option<(planrs_render::style::BarRole, TaskUid)> {
+    let rows = fc.visible()?;
+    let screen = fc.task_view.style.clone();
+    let geo = gantt::GanttGeo::new(fc, &screen.style);
+    let uid = match gantt::hit_test(rows, axis, origin, &geo, p) {
+        GanttHit::Bar(uid) | GanttHit::BarStart(uid) | GanttHit::BarEnd(uid) => uid,
+        GanttHit::Link(..) | GanttHit::Empty => return None,
+    };
+    let row = (0..rows.len()).find_map(|i| rows.row(DisplayRow::at(i)).filter(|r| r.uid == uid))?;
+    let role = gantt::row_role(row, geo.highlight_critical)?;
+    Some((role, uid))
+}
+
+/// Barre du dernier clic droit, gardée pendant que le menu est ouvert.
+fn context_bar_id() -> Id {
+    Id::unique("planrs.context-bar")
 }
 
 /// Réécrit les `Select(Some(uid))` poussés depuis `start` en `SelectWith`
@@ -347,6 +376,10 @@ fn paint_rows(
         let context_click = secondary_click(ui, table_clip.union(gantt_clip)).map(|p| ContextClick {
             uid: geom::row_at(p.y - origin.y, row_h, len)
                 .and_then(|i| fc.visible().and_then(|rows| rows.uid(DisplayRow::at(i)))),
+            bar: gantt_clip
+                .contains(p)
+                .then(|| bar_under(fc, axis, origin, p))
+                .flatten(),
         });
         let from_gantt = ui
             .input(|i| i.pointer.press_origin())
@@ -630,14 +663,18 @@ pub(crate) const CONTEXT_ENTRIES: [(StructureOp, TextId, &str, bool); 6] = [
 /// clic droit sur le corps ; la ligne cliquée est d'abord sélectionnée si
 /// elle ne l'est pas (la sélection multiple est gardée sinon).
 fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick>) {
-    let open = click.map(|ContextClick { uid }| {
+    let open = click.map(|ContextClick { uid, bar }| {
         if let Some(uid) = uid
             && !fc.selected.contains(uid)
         {
             fc.actions.push(Action::Select(Some(uid)));
         }
+        ui.ctx().data_mut(|d| d.insert_temp(context_bar_id(), bar));
         SetOpenCommand::Bool(true)
     });
+    let bar: Option<(planrs_render::style::BarRole, TaskUid)> =
+        ui.ctx().data(|d| d.get_temp(context_bar_id())).flatten();
+    let mut format_bar = None;
     // La sélection change à la fin de l'image : une ligne cliquée compte
     // déjà comme sélectionnée pour griser les entrées.
     let has_selection = fc.selection.is_some() || click.is_some_and(|c| c.uid.is_some());
@@ -657,6 +694,14 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
     .style(menu_style)
     .open_memory(open)
     .show(|ui| {
+        // Mise en forme directe (H-UI-59, J8 lot L15) : clic droit sur une
+        // barre ⇒ volet du type de barre.
+        if let Some((role, uid)) = bar {
+            if ui.button(texts.get(TextId::ContextFormatBars)).clicked() {
+                format_bar = Some((role, uid));
+            }
+            ui.separator();
+        }
         for (op, text, command, needs_selection) in CONTEXT_ENTRIES {
             let mut button = egui::Button::new(texts.get(text));
             if let Some(shortcut) = keymap::shortcut_for_os(Binding::Command(command), ctx.os()) {
@@ -689,6 +734,12 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
     }
     if information {
         fc.actions.push(Action::ShowTaskInformation);
+    }
+    if let Some((role, uid)) = format_bar {
+        fc.actions.push(Action::Format(crate::action::FormatOp::OpenBars {
+            role,
+            task: Some(uid),
+        }));
     }
 }
 
@@ -762,7 +813,9 @@ pub(crate) fn paint_splitter(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, layout: &
     };
     ui.painter().rect_filled(rect, 0.0, color);
     fc.stats.shapes = fc.stats.shapes.saturating_add(1);
-    if response.dragged() {
+    // « Graphique seul » (H-UI-64) : largeur imposée, le séparateur ne la
+    // change pas (la largeur choisie revient à la sortie du mode).
+    if response.dragged() && !fc.state.chart_only {
         let splitter_w = rect.width();
         let wanted = response.interact_pointer_pos().map_or_else(
             || layout.table_clip.width() + response.drag_delta().x,

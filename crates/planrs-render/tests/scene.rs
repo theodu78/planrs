@@ -15,9 +15,9 @@ mod common;
 use common::{add, at, link, project, project_p, uid, xml_texts};
 use planrs_core::{BaselineNumber, LinkType, Moment, Project, Schedule, TaskBaseline};
 use planrs_render::geometry::{
-    ArrowDir, Axis16, BarGeom, Class, FontRef, FontWeight, InterMetrics, Item, NoTexts, Part, Prim, Rect16,
-    ResolvedTexts, RowGeomInput, Scene, TEXT_GAP, TextMeasure, TextSide, Viewport, arrow_dir, bar_geom,
-    layout, link_path, place_texts, row_geom_input,
+    ArrowDir, Axis16, BarGeom, Class, Clip, FontRef, FontWeight, InterMetrics, Item, NoTexts, Part, Prim,
+    Rect16, ResolvedTexts, RowGeomInput, Scene, TEXT_GAP, TextMeasure, TextSide, Viewport, arrow_dir,
+    bar_geom, layout, link_path, place_texts, row_geom_input,
 };
 use planrs_render::style::{BarRole, PlanStyle, TemplateId, Variant, template};
 use planrs_render::{GanttRequest, Lang, RangeSpec, RenderLimits, RowFilter, Theme, Zoom, svg_styled};
@@ -191,6 +191,27 @@ fn h_ui_46_text_flips_left() {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
+    /// H-UI-64 (J8 L15) : deux étiquettes d'une même barre (gauche et
+    /// droite, l'une basculée du côté de l'autre) ne se recouvrent jamais.
+    #[test]
+    fn h_ui_64_labels_never_overlap(
+        x in -200_i64..1_200,
+        w in 0_i64..600,
+        left in "[A-Za-z ]{1,30}",
+        right in "[A-Za-z ]{1,30}",
+        clip_w in 0_i64..1_000,
+    ) {
+        let clip = (0, clip_w * 16);
+        let bar = bar_at(x * 16, w * 16);
+        let placed = place_texts(&bar, &texts(Some(&right), Some(&left), None), &InterMetrics, clip).items;
+        for (i, a) in placed.iter().enumerate() {
+            for b in placed.iter().skip(i + 1) {
+                let disjoint = a.x16 + a.width16 <= b.x16 || b.x16 + b.width16 <= a.x16;
+                prop_assert!(disjoint, "{a:?} recouvre {b:?}");
+            }
+        }
+    }
+
     /// H-UI-46 : un texte placé tient toujours dans la zone (jamais rogné) ;
     /// il est entier ou tronqué avec « … », et sa largeur est mesurée.
     #[test]
@@ -311,19 +332,243 @@ fn band_rows(sc: &Scene, class: Class) -> Vec<u32> {
 }
 
 /// H-UI-53 : Présentation, bandes de phase (1 et ses enfants sur la bande
-/// A, 5 et les siens sur la bande B) ; Sobre, zébrage.
+/// A, 5 et les siens sur la bande B), dans la table seulement (H-UI-62) ;
+/// Sobre retouché en L15 : plus de zébrage.
 #[test]
 fn h_ui_53_phase_bands() {
     let p = project_p();
     let s = planrs_core::schedule(&p);
     let pres = scene(&p, &s, TemplateId::Presentation, Variant::Light, Lang::Fr);
     assert_eq!(band_rows(&pres, Class::Band(1)), [4, 5, 6]);
+    for it in pres.items.iter().filter(|i| i.class == Class::Band(1)) {
+        assert_eq!(it.clip, Clip::Table);
+        let Prim::Rect { r, .. } = &it.prim else {
+            panic!("bande non rectangulaire");
+        };
+        assert_eq!((r.x, r.right()), (0, pres.table16));
+    }
     // Bande A = fond : rien à peindre.
     assert_eq!(band_rows(&pres, Class::Band(0)), Vec::<u32>::new());
     let sobre = scene(&p, &s, TemplateId::Sobre, Variant::Light, Lang::Fr);
-    assert_eq!(band_rows(&sobre, Class::Band(1)), [1, 3, 5]);
+    assert_eq!(band_rows(&sobre, Class::Band(1)), Vec::<u32>::new());
     let classique = scene(&p, &s, TemplateId::Classique, Variant::Light, Lang::Fr);
     assert_eq!(band_rows(&classique, Class::Band(1)), Vec::<u32>::new());
+}
+
+/// Segments horizontaux d'une primitive (`y0 == y1`), avec leur ordonnée.
+fn horizontal_segments(it: &Item) -> Vec<(i64, i64, i64)> {
+    match &it.prim {
+        Prim::Segments { segs } => segs
+            .iter()
+            .filter(|(_, y0, _, y1)| y0 == y1)
+            .map(|&(x0, y, x1, _)| (x0, x1, y))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// H-UI-62 (scène, tous les modèles) : aucun fond de ligne ni trait
+/// horizontal dans la zone graphique sous l'en-tête ; seules les verticales
+/// de l'échelle et les jours chômés y sont peints.
+#[test]
+fn h_ui_62_scene_vertical_grid_only() {
+    let p = project_p();
+    let s = planrs_core::schedule(&p);
+    for id in TemplateId::ALL {
+        let sc = scene(&p, &s, id, Variant::Light, Lang::Fr);
+        for it in &sc.items {
+            if matches!(it.class, Class::Band(_) | Class::RowLine | Class::PhaseRow(_)) {
+                assert_ne!(it.clip, Clip::Gantt, "{id:?} {it:?}");
+                if let Prim::Rect { r, .. } = &it.prim {
+                    assert!(r.right() <= sc.table16, "{id:?} {it:?}");
+                }
+            }
+            for (x0, x1, y) in horizontal_segments(it) {
+                let in_body = y > sc.header16;
+                let in_gantt = x1 > sc.table16;
+                assert!(
+                    !(in_body && in_gantt),
+                    "{id:?} : trait horizontal {x0}..{x1} à {y} dans le Gantt"
+                );
+            }
+        }
+    }
+}
+
+/// H-UI-62 : aux échelles larges, une fermeture (au moins 3 jours chômés de
+/// suite) est grisée, une fin de semaine seule non.
+#[test]
+fn h_ui_62_long_closures_shaded_at_month_zoom() {
+    use planrs_core::calendar::{CalendarException, DaySetting, Recurrence};
+    use planrs_core::{Day, DayRange};
+    let month = |p: &Project| {
+        let s = planrs_core::schedule(p);
+        let vp = Viewport {
+            zoom: Zoom::Month,
+            ..Viewport::new(Variant::Light, Lang::Fr)
+        };
+        let sc = layout(p, &s, &template(TemplateId::Sobre), &NoTexts, &vp).0;
+        sc.items.iter().filter(|i| i.class == Class::NonWorking).count()
+    };
+    let mut p = project_p();
+    assert_eq!(month(&p), 0, "fins de semaine seules : rien à l'échelle Mois");
+    let day = |s: &str| s.parse::<Day>().unwrap();
+    let closure = CalendarException {
+        name: "Fermeture".to_owned(),
+        period: DayRange::new(day("2026-11-02"), day("2026-11-06")).unwrap(),
+        setting: DaySetting::NonWorking,
+        recurrence: Recurrence::Period,
+        occurrences: None,
+    };
+    let cal = p.calendar;
+    p.calendars.get_mut(cal).unwrap().add_exception(closure).unwrap();
+    // Sam 31/10 au dim 08/11 : une seule période grisée.
+    assert_eq!(month(&p), 1);
+}
+
+/// H-UI-64 : les liens sont dessinés avant les étiquettes des barres
+/// (étiquettes au-dessus des traits).
+#[test]
+fn h_ui_64_scene_labels_after_links() {
+    let p = project_p();
+    let s = planrs_core::schedule(&p);
+    let sc = layout(
+        &p,
+        &s,
+        &template(TemplateId::Sobre),
+        &NoTexts,
+        &Viewport::new(Variant::Light, Lang::Fr),
+    )
+    .0;
+    let last_link = sc
+        .items
+        .iter()
+        .rposition(|i| {
+            matches!(
+                i.class,
+                Class::Link | Class::LinkCritical | Class::Arrow | Class::ArrowCritical
+            )
+        })
+        .unwrap();
+    let first_label = sc
+        .items
+        .iter()
+        .position(|i| {
+            i.clip == Clip::Gantt && matches!(i.part, Part::Row(_)) && matches!(i.prim, Prim::Text { .. })
+        })
+        .unwrap();
+    assert!(last_link < first_label, "{last_link} ≥ {first_label}");
+}
+
+/// H-UI-65 : une récapitulative colorée peint sa barre, celles de ses
+/// sous-tâches (option) et le fond de sa ligne dans la table, en teinte
+/// lisible.
+#[test]
+fn h_ui_65_scene_phase_row_and_bars() {
+    use planrs_render::style::{PhaseColor, Rgb, contrast_ratio};
+    let p = project_p();
+    let s = planrs_core::schedule(&p);
+    let mut st = template(TemplateId::Sobre);
+    st.phases.insert(
+        5,
+        PhaseColor {
+            fill: Rgb(0xE0, 0x10, 0x10),
+            children: true,
+        },
+    );
+    let sc = layout(&p, &s, &st, &NoTexts, &Viewport::new(Variant::Light, Lang::Fr)).0;
+    // Ligne 5 (indice 4) : fond de phase dans la table.
+    assert_eq!(band_rows(&sc, Class::PhaseRow(0)), [4]);
+    // Barres : 5 (récapitulative), 6 et 7 (sous-tâches) à la couleur.
+    let phased: Vec<u32> = sc
+        .items
+        .iter()
+        .filter(|i| matches!(i.class, Class::Phase(0, _)))
+        .filter_map(|i| match i.part {
+            Part::Row(r) => Some(r),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(phased, [4, 5, 6]);
+    let row_fill = sc.paints[&Class::PhaseRow(0)].fill.unwrap();
+    let text = st.tokens(Variant::Light).text_strong;
+    assert!(contrast_ratio(text, row_fill) >= 4_500);
+    // Sans `children` : la récapitulative seule.
+    st.phases.insert(
+        5,
+        PhaseColor {
+            fill: Rgb(0xE0, 0x10, 0x10),
+            children: false,
+        },
+    );
+    let sc = layout(&p, &s, &st, &NoTexts, &Viewport::new(Variant::Light, Lang::Fr)).0;
+    assert_eq!(
+        sc.items
+            .iter()
+            .filter(|i| matches!(i.class, Class::Phase(0, _)))
+            .count(),
+        1
+    );
+}
+
+/// H-UI-67 : niveau des mois relatifs (M1 = mois du démarrage) au-dessus
+/// des deux niveaux de l'échelle ; en-tête plus haut d'un niveau.
+#[test]
+fn h_ui_67_scene_relative_months() {
+    let p = project_p();
+    let s = planrs_core::schedule(&p);
+    let mut st = template(TemplateId::Sobre);
+    let plain = layout(&p, &s, &st, &NoTexts, &Viewport::new(Variant::Light, Lang::Fr)).0;
+    st.scale.relative_months = true;
+    let sc = layout(&p, &s, &st, &NoTexts, &Viewport::new(Variant::Light, Lang::Fr)).0;
+    assert_eq!(sc.header16, plain.header16 + 22 * 16);
+    let labels = texts_of(&sc, Class::Title);
+    // Plage du 12/10/2026 à fin novembre : octobre = M1, novembre = M2.
+    assert_eq!(labels.first().copied(), Some("M1"), "{labels:?}");
+    assert!(labels.contains(&"M2"), "{labels:?}");
+    assert_eq!(planrs_render::geometry::relative_month_label(-3), "M-3");
+    let d = |s: &str| s.parse::<planrs_core::Day>().unwrap();
+    assert_eq!(
+        planrs_render::geometry::relative_month(d("2026-01-15"), d("2026-01-05")),
+        1
+    );
+    assert_eq!(
+        planrs_render::geometry::relative_month(d("2025-10-01"), d("2026-01-05")),
+        -3
+    );
+    assert_eq!(
+        planrs_render::geometry::relative_month(d("2027-11-30"), d("2026-01-05")),
+        23
+    );
+}
+
+/// H-UI-68 et H-UI-64 : colonnes de la table tirées du style (N°, Nom,
+/// Durée, Début, Fin), table masquée pour « graphique seul ».
+#[test]
+fn h_ui_68_scene_print_columns() {
+    use planrs_render::style::TableColumn;
+    let p = project_p();
+    let s = planrs_core::schedule(&p);
+    let mut st = template(TemplateId::Sobre);
+    let plain = layout(&p, &s, &st, &NoTexts, &Viewport::new(Variant::Light, Lang::Fr)).0;
+    assert_eq!(plain.table16, 280 * 16);
+    st.page.columns = Some(TableColumn::PRINT_DEFAULT.to_vec());
+    let sc = layout(&p, &s, &st, &NoTexts, &Viewport::new(Variant::Light, Lang::Fr)).0;
+    assert_eq!(sc.table16, (280 + 64 * 3) * 16);
+    let titles = texts_of(&sc, Class::TextStrong);
+    for t in ["N°", "Nom de la tâche", "Durée", "Début", "Fin"] {
+        assert!(titles.contains(&t), "{t} absent : {titles:?}");
+    }
+    st.page.columns = Some(Vec::new());
+    let chart = layout(&p, &s, &st, &NoTexts, &Viewport::new(Variant::Light, Lang::Fr)).0;
+    assert_eq!(chart.table16, 0);
+    assert!(
+        !chart
+            .items
+            .iter()
+            .any(|i| i.clip == Clip::Table && matches!(i.prim, Prim::Text { .. })),
+        "table masquée"
+    );
 }
 
 /// H-UI-54 : date d'état 02/11 ⇒ « État 02/11 » dans l'échelle, aujourd'hui

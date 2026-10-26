@@ -26,6 +26,10 @@ const LABEL_PAD: f32 = 2.0;
 const MIN_LABEL_W: f32 = 24.0;
 
 /// Dessine les deux niveaux de l'en-tête dans `rect`, selon `axis`.
+#[allow(
+    clippy::too_many_lines,
+    reason = "niveaux de l'échelle, étiquettes et date d'état, dans l'ordre du tracé"
+)]
 pub fn paint_header(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, axis: &TimeAxis, rect: Rect) {
     if !rect.is_finite() || rect.width() <= 0.0 || rect.height() <= 0.0 {
         return;
@@ -37,11 +41,49 @@ pub fn paint_header(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, axis: &TimeAxis, r
         .map_or(Weekday::Monday, |doc| doc.project().options.week_start_day);
     let (top_unit, bottom_unit) = fc.state.zoom.tiers();
     let labels = fc.texts.format_labels();
-    let mid_y = rect.center().y;
-    let top = Rect::from_min_max(rect.min, pos2(rect.right(), mid_y));
-    let bottom = Rect::from_min_max(pos2(rect.left(), mid_y), rect.max);
+    // Mois relatifs au démarrage (H-UI-67, J8 lot L15) : un niveau de plus
+    // en haut, les trois niveaux se partagent l'en-tête.
+    let relative = fc.task_view.style.style.scale.relative_months;
+    let (rel_band, rect_two) = if relative {
+        let cut = rect.top() + rect.height() / 3.0;
+        (
+            Some(Rect::from_min_max(rect.min, pos2(rect.right(), cut))),
+            Rect::from_min_max(pos2(rect.left(), cut), rect.max),
+        )
+    } else {
+        (None, rect)
+    };
+    let mid_y = rect_two.center().y;
+    let top = Rect::from_min_max(rect_two.min, pos2(rect_two.right(), mid_y));
+    let bottom = Rect::from_min_max(pos2(rect_two.left(), mid_y), rect_two.max);
 
     let mut shapes = vec![Shape::rect_filled(rect, 0.0, palette.header_bg)];
+    let mut rel_texts = Vec::new();
+    if let (Some(band), Some(doc)) = (rel_band, fc.doc) {
+        let start = doc.schedule().project_start.day();
+        let cells: Vec<TierCell> = crate::timescale::tier_spans(
+            axis,
+            crate::timescale::TierUnit::Month,
+            week_start,
+            (band.left(), band.right()),
+        )
+        .into_iter()
+        .map(|(day, x0, x1)| TierCell {
+            x0,
+            x1,
+            label: planrs_render::geometry::relative_month_label(planrs_render::geometry::relative_month(
+                day, start,
+            )),
+        })
+        .collect();
+        band_shapes(band, &cells, palette.grid_major, &mut shapes);
+        collect_labels(band, cells, &mut rel_texts);
+        let y = band.bottom() - 0.5;
+        shapes.push(Shape::line_segment(
+            [pos2(band.left(), y), pos2(band.right(), y)],
+            Stroke::new(1.0, palette.grid_major),
+        ));
+    }
     let bands = [
         (top, top_unit, palette.grid_major),
         (bottom, bottom_unit, palette.grid),
@@ -79,7 +121,16 @@ pub fn paint_header(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, axis: &TimeAxis, r
     ));
 
     let text_color = palette.text;
-    for (band, x0, x1, label) in texts {
+    // Mois relatifs en couleur d'accent (`cursor` du style), comme la scène.
+    let accent = {
+        let c = fc.task_view.style.style.tokens(fc.task_view.style.variant).cursor;
+        Color32::from_rgb(c.0, c.1, c.2)
+    };
+    let colored = rel_texts
+        .into_iter()
+        .map(|t| (t, accent))
+        .chain(texts.into_iter().map(|t| (t, text_color)));
+    for ((band, x0, x1, label), text_color) in colored {
         let width = x1 - x0 - 2.0 * LABEL_PAD;
         if !width.is_finite() || width < MIN_LABEL_W {
             continue;

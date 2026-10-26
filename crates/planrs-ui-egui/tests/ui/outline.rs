@@ -18,21 +18,22 @@ fn triangle(id: TextId, name: &str) -> String {
 }
 
 /// H-UI-34 : triangle de « Gros œuvre » : clic ⇒ 2, 3, 4 masquées et
-/// libellé « Déplier » ; nouveau clic ⇒ dépliée. Sans le drapeau, aucun
-/// triangle (table J7 inchangée).
+/// libellé « Déplier » ; nouveau clic ⇒ dépliée. Triangles affichés par
+/// défaut depuis le lot L15 ; sans le drapeau, aucun triangle.
 #[test]
 fn h_ui_34_triangle() {
-    let harness = harness_p();
     let collapse = triangle(TextId::OutlineCollapseRow, "Gros œuvre");
+    let mut off = new_app();
+    off.set_outline_triangles(false);
+    open_p_in(&mut off);
+    let mut plain = harness_for(off);
+    plain.run();
     assert!(
-        harness.query_by_label(&collapse).is_none(),
+        plain.query_by_label(&collapse).is_none(),
         "drapeau faux : aucun triangle"
     );
-    let mut app = new_app();
-    app.set_outline_triangles(true);
-    open_p_in(&mut app);
-    let mut harness = harness_for(app);
-    harness.run();
+    let mut harness = harness_p();
+    assert!(harness.state().outline_triangles(), "triangles par défaut (L15)");
     click(&mut harness, &collapse);
     assert_eq!(shown(harness.state()), [1, 5, 6, 7]);
     let expand = triangle(TextId::OutlineExpandRow, "Gros œuvre");

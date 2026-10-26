@@ -21,9 +21,20 @@ use crate::geometry::{
 use crate::request::{GanttRequest, RenderReport, Theme};
 use crate::style::{BarRole, FontChoice, PlanStyle, TemplateId, Variant, template};
 
-/// Nom CSS d'une classe (vide : texte courant, sans attribut).
-const fn class_name(c: Class) -> &'static str {
+/// Nom CSS d'une classe (vide : texte courant, sans attribut) ; phases
+/// numérotées (`ph0b`, `pr0`, H-UI-65).
+fn class_name(c: Class) -> std::borrow::Cow<'static, str> {
     match c {
+        Class::Phase(i, r) => format!("ph{i}{}", bar_name(r)).into(),
+        Class::PhaseRow(i) => format!("pr{i}").into(),
+        other => fixed_class_name(other).into(),
+    }
+}
+
+/// Nom CSS des classes fixes.
+const fn fixed_class_name(c: Class) -> &'static str {
+    match c {
+        Class::Title => "tt",
         Class::Bg => "bg",
         Class::HeaderBg => "hd",
         Class::Band(0) => "z0",
@@ -42,7 +53,7 @@ const fn class_name(c: Class) -> &'static str {
         Class::LinkCritical => "lc",
         Class::Arrow => "la",
         Class::ArrowCritical => "lac",
-        Class::Text => "",
+        Class::Text | Class::Phase(..) | Class::PhaseRow(_) => "",
         Class::TextStrong => "ts",
         Class::TextMuted => "tw",
         Class::TextCut => "tc",
@@ -186,7 +197,7 @@ fn style(out: &mut String, scene: &Scene) {
         }
         let _ = write!(out, ".{name}{{");
         match class {
-            Class::TextStrong | Class::TextMuted | Class::TextCut | Class::StatusLabel => {
+            Class::TextStrong | Class::TextMuted | Class::TextCut | Class::StatusLabel | Class::Title => {
                 out.push_str("fill:");
                 out.push_str(&paint.fill.map_or_else(|| text.clone(), crate::style::Rgb::hex));
                 if *class == Class::TextStrong {

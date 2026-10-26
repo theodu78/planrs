@@ -335,6 +335,33 @@ pub enum BarField {
     TotalSlack,
     /// Début – fin.
     StartFinish,
+    /// Nom suivi de la durée courte entre parenthèses, « Arche préfa PH
+    /// RDC (13 j) » (J8 L15, H-UI-63 : case « durée après le nom »).
+    NameDuration,
+    /// Durée courte (« 13 j », « 4 sem. », « 17,4 mois » ; H-UI-63).
+    DurationShort,
+    /// Début court, `JJ/MM/AA` (H-UI-63, colonnes d'impression).
+    StartShort,
+    /// Fin courte, `JJ/MM/AA` (date d'un jalon, H-UI-63).
+    FinishShort,
+}
+
+impl BarField {
+    /// Tous les champs, dans l'ordre des listes de choix.
+    pub const ALL: [Self; 12] = [
+        Self::Name,
+        Self::NameDuration,
+        Self::Resources,
+        Self::Start,
+        Self::Finish,
+        Self::StartShort,
+        Self::FinishShort,
+        Self::Duration,
+        Self::DurationShort,
+        Self::Percent,
+        Self::TotalSlack,
+        Self::StartFinish,
+    ];
 }
 
 /// Textes autour d'une barre.
@@ -410,6 +437,17 @@ pub struct ScaleStyle {
     pub status_label: bool,
     /// Aujourd'hui marqué (H-UI-54).
     pub today_mark: bool,
+    /// Niveau des mois relatifs au démarrage (M-3 … M1 … Mn) au-dessus des
+    /// autres (J8 L15, H-UI-67) ; absent du JSON s'il est faux.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub relative_months: bool,
+}
+
+/// Faux (champ omis à l'écriture : un style écrit avant L15 garde ses
+/// octets).
+#[allow(clippy::trivially_copy_pass_by_ref, reason = "signature imposée par serde")]
+const fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Fond des lignes.
@@ -528,6 +566,73 @@ pub struct PageStyle {
     pub footer: [Slot; 3],
     /// Logo.
     pub logo: Option<LogoRef>,
+    /// Colonnes de la table du SVG et du PDF (J8 L15, H-UI-64, H-UI-68) ;
+    /// `None` : N° et Nom (sortie de L7) ; liste vide : table masquée
+    /// (« graphique seul »). Au plus [`MAX_TABLE_COLUMNS`], sans doublon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub columns: Option<Vec<TableColumn>>,
+    /// Cartouche (H-UI-66) : première ligne de la zone centrale de
+    /// l'en-tête en titre, première ligne de la zone droite appuyée.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub title_block: bool,
+}
+
+/// Colonnes au plus dans la table du SVG et du PDF.
+pub const MAX_TABLE_COLUMNS: usize = 8;
+
+/// Couleurs de phase au plus dans un style (H-UI-65).
+pub const MAX_PHASES: usize = 512;
+
+/// Colonne de la table du SVG et du PDF (H-UI-68) ; textes venus de
+/// `BarTextSource` (règle 3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TableColumn {
+    /// N° (ID).
+    Id,
+    /// Nom de la tâche.
+    Name,
+    /// Durée courte.
+    Duration,
+    /// Début court.
+    Start,
+    /// Fin courte.
+    Finish,
+    /// % achevé.
+    Percent,
+    /// Ressources.
+    Resources,
+}
+
+impl TableColumn {
+    /// Toutes les colonnes, dans l'ordre des listes de choix.
+    pub const ALL: [Self; 7] = [
+        Self::Id,
+        Self::Name,
+        Self::Duration,
+        Self::Start,
+        Self::Finish,
+        Self::Percent,
+        Self::Resources,
+    ];
+
+    /// Colonnes d'impression par défaut (H-UI-68) : N°, Nom, Durée, Début,
+    /// Fin.
+    pub const PRINT_DEFAULT: [Self; 5] = [Self::Id, Self::Name, Self::Duration, Self::Start, Self::Finish];
+
+    /// « Graphique seul », table réduite (H-UI-64) : N° et Nom.
+    pub const CHART_ONLY: [Self; 2] = [Self::Id, Self::Name];
+}
+
+/// Couleur d'une phase (récapitulative, H-UI-65).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PhaseColor {
+    /// Couleur de la barre et du fond de la ligne dans la table.
+    pub fill: Rgb,
+    /// Reprise par les barres des sous-tâches.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub children: bool,
 }
 
 /// Style complet du planning.
@@ -558,6 +663,10 @@ pub struct PlanStyle {
     pub legend: LegendStyle,
     /// Mise en page.
     pub page: PageStyle,
+    /// Couleurs de phase par UID de récapitulative (H-UI-65), au plus
+    /// [`MAX_PHASES`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub phases: BTreeMap<u32, PhaseColor>,
 }
 
 /// Surcharge partielle des couleurs d'une variante.
@@ -687,6 +796,9 @@ pub struct StylePatch {
     /// Mise en page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page: Option<PageStyle>,
+    /// Couleurs de phase (H-UI-65), remplacées en entier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phases: Option<BTreeMap<u32, PhaseColor>>,
 }
 
 impl StylePatch {
@@ -850,6 +962,14 @@ impl PlanStyle {
         if let Some(logo) = &page.logo {
             check(logo.path.chars().count() <= MAX_LOGO_REF_CHARS, "page.logo")?;
         }
+        if let Some(columns) = &page.columns {
+            let distinct = columns.iter().collect::<std::collections::BTreeSet<_>>().len();
+            check(
+                columns.len() <= MAX_TABLE_COLUMNS && distinct == columns.len(),
+                "page.columns",
+            )?;
+        }
+        check(self.phases.len() <= MAX_PHASES, "phases")?;
         Ok(())
     }
 
@@ -924,6 +1044,7 @@ impl PlanStyle {
                 shade_non_working: false,
                 status_label: false,
                 today_mark: false,
+                relative_months: false,
             },
             grid: GridStyle {
                 rows: RowBanding::None,
@@ -949,7 +1070,10 @@ impl PlanStyle {
                 header: Default::default(),
                 footer: Default::default(),
                 logo: None,
+                columns: None,
+                title_block: false,
             },
+            phases: BTreeMap::new(),
         }
     }
 
@@ -998,6 +1122,9 @@ impl PlanStyle {
         }
         if let Some(v) = &over.page {
             self.page = v.clone();
+        }
+        if let Some(v) = &over.phases {
+            self.phases.clone_from(v);
         }
     }
 }
@@ -1136,6 +1263,32 @@ pub fn contrast_ratio(a: Rgb, b: Rgb) -> u32 {
         .checked_div(lo.saturating_add(50_000))
         .unwrap_or(1000);
     u32::try_from(ratio).unwrap_or(u32::MAX)
+}
+
+/// Mélange de `a` vers `b` à `t` % (0 : `a`, 100 : `b`), entier.
+#[must_use]
+pub fn blend(a: Rgb, b: Rgb, t: u8) -> Rgb {
+    let t = u16::from(t.min(100));
+    let mix = |x: u8, y: u8| {
+        let v = u16::from(x)
+            .saturating_mul(100_u16.saturating_sub(t))
+            .saturating_add(u16::from(y).saturating_mul(t))
+            .saturating_add(50)
+            / 100;
+        u8::try_from(v).unwrap_or(u8::MAX)
+    };
+    Rgb(mix(a.0, b.0), mix(a.1, b.1), mix(a.2, b.2))
+}
+
+/// Fond lisible d'une ligne de phase dans la table (H-UI-65, H-UI-45) :
+/// la couleur de la phase, éclaircie vers `bg` par pas de 5 % jusqu'à ce
+/// que chaque encre de `inks` atteigne 4,5:1 dessus ; `bg` au pire.
+#[must_use]
+pub fn readable_tint(fill: Rgb, bg: Rgb, inks: &[Rgb]) -> Rgb {
+    (0..=20_u8)
+        .map(|step| blend(fill, bg, step.saturating_mul(5)))
+        .find(|c| inks.iter().all(|ink| contrast_ratio(*ink, *c) >= 4_500))
+        .unwrap_or(bg)
 }
 
 #[cfg(test)]
@@ -1392,6 +1545,79 @@ mod tests {
             ..StylePatch::default()
         };
         assert_eq!(resolve(TemplateId::Sobre, &bad), template(TemplateId::Sobre));
+    }
+
+    /// Champs de L15 : absents du JSON quand ils valent leur défaut (un
+    /// style écrit avant L15 garde ses octets), relus, bornés.
+    #[test]
+    fn l15_fields_roundtrip_and_bounds() {
+        let plain = r#"{"base":"sobre","over":{"density":"compact"},"v":1}"#;
+        assert_eq!(parse_doc_style(plain).unwrap().to_json(), plain);
+        let mut page = template(TemplateId::Sobre).page;
+        page.columns = Some(TableColumn::PRINT_DEFAULT.to_vec());
+        page.title_block = true;
+        let mut phases = BTreeMap::new();
+        phases.insert(
+            7,
+            PhaseColor {
+                fill: Rgb(0xE0, 0x30, 0x20),
+                children: true,
+            },
+        );
+        let doc = DocStyle {
+            v: STYLE_VERSION,
+            base: TemplateId::Sobre,
+            over: StylePatch {
+                page: Some(page),
+                phases: Some(phases.clone()),
+                ..StylePatch::default()
+            },
+        };
+        let json = doc.to_json();
+        assert!(
+            json.contains(r#""columns":["id","name","duration","start","finish"]"#),
+            "{json}"
+        );
+        assert!(
+            json.contains(r##""phases":{"7":{"children":true,"fill":"#E03020"}}"##),
+            "{json}"
+        );
+        let back = parse_doc_style(&json).unwrap();
+        assert_eq!(back, doc);
+        assert_eq!(back.resolve().phases, phases);
+        // Doublon de colonne : hors bornes.
+        let mut bad = template(TemplateId::Sobre);
+        bad.page.columns = Some(vec![TableColumn::Id, TableColumn::Id]);
+        assert_eq!(bad.validate(), Err(StyleError::OutOfBounds("page.columns")));
+        let mut many = template(TemplateId::Sobre);
+        many.phases = (0..=u32::try_from(MAX_PHASES).unwrap())
+            .map(|i| {
+                (
+                    i,
+                    PhaseColor {
+                        fill: Rgb(0, 0, 0),
+                        children: false,
+                    },
+                )
+            })
+            .collect();
+        assert_eq!(many.validate(), Err(StyleError::OutOfBounds("phases")));
+    }
+
+    /// H-UI-65 : le fond d'une ligne de phase garde le texte lisible.
+    #[test]
+    fn h_ui_65_readable_tint() {
+        let white = Rgb(0xFF, 0xFF, 0xFF);
+        let text = Rgb(0x1F, 0x29, 0x33);
+        let red = Rgb(0xFF, 0, 0);
+        let tint = readable_tint(red, white, &[text]);
+        assert!(contrast_ratio(text, tint) >= 4_500);
+        assert_ne!(tint, white, "le rouge reste visible");
+        // Couleur déjà lisible : gardée telle quelle.
+        let pale = Rgb(0xFF, 0xF0, 0xC0);
+        assert_eq!(readable_tint(pale, white, &[text]), pale);
+        assert_eq!(blend(red, white, 0), red);
+        assert_eq!(blend(red, white, 100), white);
     }
 
     #[test]

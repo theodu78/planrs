@@ -58,6 +58,7 @@ mod styled;
 mod task_info;
 mod tracking;
 mod usage;
+mod visible;
 mod web_keys;
 
 use std::cell::RefCell;
@@ -81,11 +82,14 @@ fn now() -> Moment {
     "2027-01-15T08:00".parse().unwrap()
 }
 
-/// Préférences de test : français, thème clair.
+/// Préférences de test : français, thème clair, modèle Classique (les
+/// tests J7 lisent la palette de J7, `Palette::LIGHT` ; Sobre, défaut
+/// depuis J8 lot L15, est vérifié par les captures et `visible.rs`).
 fn fr_light() -> UiState {
     UiState {
         language: LanguagePref::Fr,
         theme: ThemePref::Light,
+        default_template: planrs_render::style::TemplateId::Classique,
         ..UiState::default()
     }
 }

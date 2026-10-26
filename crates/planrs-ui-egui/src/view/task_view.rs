@@ -221,8 +221,8 @@ impl App {
         }
     }
 
-    /// Triangles de repli dessinés dans la colonne Nom (H-UI-34) : faux
-    /// jusqu'au lot L15 (la table des captures J7 ne change pas).
+    /// Triangles de repli dessinés dans la colonne Nom (H-UI-34) : vrais
+    /// depuis le lot L15.
     #[must_use]
     pub const fn outline_triangles(&self) -> bool {
         self.outline_triangles
@@ -671,7 +671,7 @@ impl App {
 }
 
 /// Filtres prédéfinis sans paramètre du menu, avec leur libellé.
-const PRESETS: [(FilterPreset, TextId); 6] = [
+pub(crate) const PRESETS: [(FilterPreset, TextId); 6] = [
     (FilterPreset::All, TextId::FilterAll),
     (FilterPreset::Critical, TextId::FilterCritical),
     (FilterPreset::Late, TextId::FilterLate),

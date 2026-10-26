@@ -105,6 +105,10 @@ pub enum DialogBody {
     PasteSpecial(Box<paste::PasteSpecialState>),
     /// Aperçu de l'import CSV (J8, lot L10, H-UI-40).
     CsvImport(Box<csv_import::CsvImportState>),
+    /// Galerie des modèles (J8, lot L15, H-UI-52).
+    Gallery(Box<gallery::GalleryState>),
+    /// « Mise en page » et mode impression (J8, lot L15, H-UI-68).
+    PageSetup(Box<page_setup::PageSetupState>),
 }
 
 impl DialogBody {
@@ -134,7 +138,9 @@ impl DialogBody {
             | Self::Link(_)
             | Self::Assign(_)
             | Self::PasteSpecial(_)
-            | Self::CsvImport(_) => None,
+            | Self::CsvImport(_)
+            | Self::Gallery(_)
+            | Self::PageSetup(_) => None,
         }
     }
 }
@@ -226,7 +232,9 @@ impl App {
             DialogKind::TaskInformation(_)
             | DialogKind::Link { .. }
             | DialogKind::PasteSpecial
-            | DialogKind::CsvImport => return,
+            | DialogKind::CsvImport
+            | DialogKind::Gallery
+            | DialogKind::PageSetup { .. } => return,
         };
         self.view.edit.editing = None;
         self.view.drag = None;
@@ -419,7 +427,9 @@ impl App {
             | DialogBody::Link(_)
             | DialogBody::Assign(_)
             | DialogBody::PasteSpecial(_)
-            | DialogBody::CsvImport(_) => {}
+            | DialogBody::CsvImport(_)
+            | DialogBody::Gallery(_)
+            | DialogBody::PageSetup(_) => {}
         }
         true
     }
@@ -472,7 +482,9 @@ impl App {
             | DialogBody::Link(_)
             | DialogBody::Assign(_)
             | DialogBody::PasteSpecial(_)
-            | DialogBody::CsvImport(_) => {
+            | DialogBody::CsvImport(_)
+            | DialogBody::Gallery(_)
+            | DialogBody::PageSetup(_) => {
                 return;
             }
         };
@@ -515,7 +527,9 @@ impl App {
                     | DialogBody::Link(_)
                     | DialogBody::Assign(_)
                     | DialogBody::PasteSpecial(_)
-                    | DialogBody::CsvImport(_) => {}
+                    | DialogBody::CsvImport(_)
+                    | DialogBody::Gallery(_)
+                    | DialogBody::PageSetup(_) => {}
                 }
             }
         }

@@ -612,14 +612,21 @@ fn bracket_outline(r: Rect) -> Vec<Pos2> {
 /// couleur de contour (sa couleur de remplissage à défaut), au moins 1 px,
 /// comme J7 ; motif « contour seul » : le trait seul (tâche manuelle,
 /// inactive) ; losange : rempli, ou contour seul.
-fn bar_shapes(b: &ScreenBar, geo: &GanttGeo<'_>, out: &mut Vec<Shape>) {
+fn bar_shapes(b: &ScreenBar, geo: &GanttGeo<'_>, phase: Option<Rgb>, out: &mut Vec<Shape>) {
     let c = geo.tokens();
     let role = b.g.role;
     let st = geo.style.bars.get(&role).copied();
     let paint = c.bars.get(&role).copied();
-    let fill_rgb = paint.map_or(c.text, |p| p.fill);
+    // Couleur de phase (H-UI-65) : remplissage seulement, forme et contour
+    // du rôle gardés (comme la scène).
+    let phase = phase.filter(|_| planrs_render::geometry::phase_painted(role));
+    let fill_rgb = phase.unwrap_or_else(|| paint.map_or(c.text, |p| p.fill));
     let fill = color(fill_rgb);
-    let outline = color(paint.and_then(|p| p.outline).unwrap_or(fill_rgb));
+    let outline = color(paint.and_then(|p| p.outline).unwrap_or(if phase.is_some() {
+        c.text_strong
+    } else {
+        fill_rgb
+    }));
     let pattern = st.map_or(Pattern::Solid, |s| s.pattern);
     let outline16 = st.map_or(0, |s| i64::from(s.outline16));
     let stroke = Stroke::new(i64_to_f32(outline16.max(16)) / 16.0, outline);
@@ -766,13 +773,22 @@ fn text_shapes(tc: &TextCtx<'_>, bar: &ScreenBar, uid: TaskUid, geo: &GanttGeo<'
         planrs_render::style::FontChoice::Interface => FontFamily::Proportional,
     };
     let size = f32::from(font.size16) / 16.0;
+    let bg = color(tokens.bg);
     for item in placed.items {
+        let halo = item.side != planrs_render::geometry::TextSide::Inside;
         let galley = tc
             .painter
             .layout_no_wrap(item.text, FontId::new(size, family.clone()), ink);
         let left = tc.axis.x_of16(item.x16);
         let top = bar.yc - galley.size().y / 2.0;
         if left.is_finite() && top.is_finite() {
+            // H-UI-64 : fond sous l'étiquette, au-dessus des liens et de la
+            // grille (même boîte que la scène, `label_halo`).
+            if halo {
+                let size = galley.size();
+                let r = Rect::from_min_size(pos2(left - 1.0, top), egui::vec2(size.x + 2.0, size.y));
+                out.push(Shape::rect_filled(r, 0.0, bg));
+            }
             out.push(Shape::galley(pos2(left, top), galley, ink));
         }
     }
@@ -878,7 +894,11 @@ fn non_working_shapes(
     clip: Rect,
     out: &mut Vec<Shape>,
 ) -> usize {
-    if !matches!(fc.state.zoom, TimeScaleZoom::Day | TimeScaleZoom::Week) {
+    let fine = matches!(fc.state.zoom, TimeScaleZoom::Day | TimeScaleZoom::Week);
+    // Échelles larges (H-UI-62, J8 lot L15) : périodes chômées d'au moins
+    // `LONG_OFF_DAYS` jours, si le style grise les jours chômés.
+    let long_only = !fine && fc.task_view.style.style.scale.shade_non_working;
+    if !fine && !long_only {
         return 0;
     }
     let Some(doc) = fc.doc else {
@@ -899,17 +919,35 @@ fn non_working_shapes(
             count = count.saturating_add(1);
         }
     };
-    let mut run: Option<(f32, f32)> = None;
-    for (day, x0, x1) in tier_spans(axis, TierUnit::Day, week_start, (clip.left(), clip.right())) {
+    // Période en cours : abscisses et nombre de jours.
+    let mut run: Option<(f32, f32, i64)> = None;
+    let min_days = if long_only {
+        planrs_render::geometry::LONG_OFF_DAYS
+    } else {
+        1
+    };
+    // Aux échelles larges, une période commencée avant la zone visible
+    // compte ses jours depuis le début : la zone est élargie d'autant.
+    let margin = if long_only { axis.px_per_day() * 40.0 } else { 0.0 };
+    for (day, x0, x1) in tier_spans(
+        axis,
+        TierUnit::Day,
+        week_start,
+        (clip.left() - margin, clip.right() + margin),
+    ) {
         let off = calendar.day_ranges(day).is_ok_and(<[_]>::is_empty);
         if off {
-            run = Some(run.map_or((x0, x1), |(a, _)| (a, x1)));
-        } else if let Some(span) = run.take() {
-            push(span, out);
+            run = Some(run.map_or((x0, x1, 1), |(a, _, n)| (a, x1, n.saturating_add(1))));
+        } else if let Some((a, b, n)) = run.take()
+            && n >= min_days
+        {
+            push((a, b), out);
         }
     }
-    if let Some(span) = run {
-        push(span, out);
+    if let Some((a, b, n)) = run
+        && n >= min_days
+    {
+        push((a, b), out);
     }
     count
 }
@@ -935,19 +973,9 @@ fn background_shapes(
         let top = origin.y + index_to_f32(i) * row_h;
         Rect::from_min_max(pos2(clip.left(), top), pos2(clip.right(), top + row_h))
     };
-    if let Some(rows) = fc.visible().filter(|_| geo.style.grid.rows != RowBanding::None) {
-        let phases = &fc.task_view.style.phases;
-        for i in range.clone().filter(|&i| i < rows.len()) {
-            let Some(band) = band_of(geo.style.grid.rows, rows, i, phases) else {
-                continue;
-            };
-            let rgb = if band == 0 { c.band[0] } else { c.band[1] };
-            let rect = row_rect(i);
-            if rgb != c.bg && rect.is_finite() {
-                out.push(Shape::rect_filled(rect, 0.0, color(rgb)));
-            }
-        }
-    }
+    // H-UI-62 (J8 lot L15) : ni bandes ni traits de lignes dans la zone
+    // graphique (table seulement) ; quadrillage vertical seul.
+    let _ = c;
     let week_start = fc
         .doc
         .map_or(Weekday::Monday, |doc| doc.project().options.week_start_day);
@@ -967,18 +995,6 @@ fn background_shapes(
             if x.is_finite() && x > clip.left() && x < clip.right() {
                 out.push(Shape::line_segment(
                     [pos2(x, clip.top()), pos2(x, clip.bottom())],
-                    stroke,
-                ));
-            }
-        }
-    }
-    if grid.row_lines {
-        let stroke = Stroke::new(1.0, palette.grid);
-        for i in range.clone() {
-            let y = row_rect(i).bottom() - 0.5;
-            if y.is_finite() {
-                out.push(Shape::line_segment(
-                    [pos2(clip.left(), y), pos2(clip.right(), y)],
                     stroke,
                 ));
             }
@@ -1256,7 +1272,8 @@ pub fn paint_body(
             if bar.culled(clip) {
                 continue;
             }
-            bar_shapes(&bar, &geo, &mut shapes);
+            let phase = screen.phase_colors.get(&row.uid).map(|(rgb, _)| *rgb);
+            bar_shapes(&bar, &geo, phase, &mut shapes);
             hatch_shapes(&bar, &geo, clip, &mut shapes);
             if geo.tracking
                 && let Some(shape) = progress_shape(row, &bar, axis, fill(BarRole::Progress))

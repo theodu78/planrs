@@ -30,7 +30,8 @@ pub struct TaskFilter {
     pub summary: Option<bool>,
     /// Active.
     pub active: Option<bool>,
-    /// Affectée à la ressource de ce nom (comparaison exacte).
+    /// Affectée à la ressource de ce nom (comparaison exacte, espaces de
+    /// bord ignorés des deux côtés).
     pub resource: Option<String>,
     /// Dates planifiées touchant ce jour ou un jour suivant.
     pub from: Option<Day>,
@@ -240,11 +241,15 @@ impl Prepared {
     fn new(f: &TaskFilter, ctx: &FilterCtx<'_>) -> Self {
         let mut with_resource = BTreeSet::new();
         if let Some(name) = &f.resource {
+            // Espaces de bord ignorés (relecture finale de J8, F5 du lot
+            // règles) : la fenêtre « Utilisant la ressource… » propose les
+            // noms sans eux, un nom relu d'un MSPDI peut en porter.
+            let name = name.trim();
             let wanted: BTreeSet<_> = ctx
                 .project
                 .resources
                 .iter()
-                .filter(|r| r.name == *name)
+                .filter(|r| r.name.trim() == name)
                 .map(planrs_core::HasUid::uid)
                 .collect();
             if !wanted.is_empty() {

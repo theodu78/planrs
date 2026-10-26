@@ -170,3 +170,44 @@ fn p56_size_bound() {
         parse_doc_style(VALID).unwrap().resolve()
     );
 }
+
+/// H-UI-45 et H-UI-65, relecture finale de J8 : le fond d'une ligne de
+/// phase garde lisibles les trois encres de la table (texte, appuyé,
+/// atténué d'une ligne exclue ou inactive), au seuil du modèle (7:1 en
+/// Contraste élevé), pour chaque modèle, variante et couleur du nuancier.
+#[test]
+fn h_ui_45_phase_row_tint_all_inks() {
+    use planrs_render::style::{Rgb, Variant, contrast_ratio, min_text_contrast, phase_row_tint};
+    let swatches = [
+        Rgb(0xE6, 0x9F, 0x00),
+        Rgb(0x56, 0xB4, 0xE9),
+        Rgb(0x00, 0x9E, 0x73),
+        Rgb(0xF0, 0xE4, 0x42),
+        Rgb(0x00, 0x72, 0xB2),
+        Rgb(0xD5, 0x5E, 0x00),
+        Rgb(0xCC, 0x79, 0xA7),
+        Rgb(0xE0, 0x30, 0x20),
+        Rgb(0x00, 0x00, 0x00),
+        Rgb(0xFF, 0xFF, 0xFF),
+    ];
+    for id in TemplateId::ALL {
+        let st = template(id);
+        let min = min_text_contrast(&st);
+        for v in [Variant::Light, Variant::Dark, Variant::Print] {
+            let c = st.tokens(v);
+            for fill in swatches {
+                let tint = phase_row_tint(&st, v, fill);
+                for ink in [c.text, c.text_strong, c.text_muted] {
+                    let ratio = contrast_ratio(ink, tint);
+                    assert!(
+                        ratio >= min,
+                        "{id:?} {v:?} phase {} : encre {} sur {} = {ratio}",
+                        fill.hex(),
+                        ink.hex(),
+                        tint.hex()
+                    );
+                }
+            }
+        }
+    }
+}

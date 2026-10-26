@@ -694,14 +694,7 @@ fn h_ui_65_phase_color_row_and_bar() {
         .filter(|s| matches!(s, Shape::Rect(r) if r.fill == rgb(red) && r.rect.left() > zone.left()))
         .count();
     assert!(bars >= 2, "sous-barres de la couleur : {bars}");
-    let tint = planrs_render::style::readable_tint(
-        red,
-        st.tokens(Variant::Light).bg,
-        &[
-            st.tokens(Variant::Light).text,
-            st.tokens(Variant::Light).text_strong,
-        ],
-    );
+    let tint = planrs_render::style::phase_row_tint(&st, Variant::Light, red);
     let row = row_rect(&harness, 5, "Second œuvre");
     let filled = all
         .iter()

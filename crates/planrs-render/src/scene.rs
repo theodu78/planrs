@@ -19,9 +19,7 @@ use crate::geometry::{
     link_path, place_texts, row_geom_input, row_h16,
 };
 use crate::request::{Lang, RenderReport};
-use crate::style::{
-    BarField, BarRole, BarShape, Pattern, PlanStyle, Rgb, RowBanding, TableColumn, readable_tint,
-};
+use crate::style::{BarField, BarRole, BarShape, Pattern, PlanStyle, Rgb, RowBanding, TableColumn};
 
 /// Hauteur d'un niveau de l'en-tête (22 px).
 pub(crate) const TIER_H: i64 = 22 * SUB;
@@ -353,7 +351,7 @@ fn paints_of(st: &PlanStyle, v: crate::style::Variant) -> impl Fn(Class) -> Pain
                 }
             }
             Class::PhaseRow(i) => {
-                fill(phase_fill(i).map_or(c.bg, |rgb| readable_tint(rgb, c.bg, &[c.text, c.text_strong])))
+                fill(phase_fill(i).map_or(c.bg, |rgb| crate::style::phase_row_tint(st, v, rgb)))
             }
             Class::Title => fill(c.cursor),
         }

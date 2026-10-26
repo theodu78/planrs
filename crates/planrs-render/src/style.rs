@@ -1283,13 +1283,41 @@ pub fn blend(a: Rgb, b: Rgb, t: u8) -> Rgb {
 
 /// Fond lisible d'une ligne de phase dans la table (H-UI-65, H-UI-45) :
 /// la couleur de la phase, éclaircie vers `bg` par pas de 5 % jusqu'à ce
-/// que chaque encre de `inks` atteigne 4,5:1 dessus ; `bg` au pire.
+/// que chaque encre de `inks` atteigne `min` (millièmes : 4 500 = 4,5:1)
+/// dessus ; `bg` au pire.
 #[must_use]
-pub fn readable_tint(fill: Rgb, bg: Rgb, inks: &[Rgb]) -> Rgb {
+pub fn readable_tint(fill: Rgb, bg: Rgb, inks: &[Rgb], min: u32) -> Rgb {
     (0..=20_u8)
         .map(|step| blend(fill, bg, step.saturating_mul(5)))
-        .find(|c| inks.iter().all(|ink| contrast_ratio(*ink, *c) >= 4_500))
+        .find(|c| inks.iter().all(|ink| contrast_ratio(*ink, *c) >= min))
         .unwrap_or(bg)
+}
+
+/// Contraste minimal du texte d'un style (H-UI-45) : 7:1 pour Contraste
+/// élevé, 4,5:1 sinon (millièmes).
+#[must_use]
+pub fn min_text_contrast(st: &PlanStyle) -> u32 {
+    if st.base == Some(TemplateId::ContrasteEleve) {
+        7_000
+    } else {
+        4_500
+    }
+}
+
+/// Fond d'une ligne de phase de couleur `fill` dans la table, variante
+/// `v` (H-UI-65) : teinte lisible pour les trois encres de la table
+/// (texte, appuyé, atténué d'une ligne exclue ou inactive) au seuil du
+/// style (relecture finale de J8 : le texte atténué et le 7:1 de
+/// Contraste élevé n'étaient pas pris en compte).
+#[must_use]
+pub fn phase_row_tint(st: &PlanStyle, v: Variant, fill: Rgb) -> Rgb {
+    let c = st.tokens(v);
+    readable_tint(
+        fill,
+        c.bg,
+        &[c.text, c.text_strong, c.text_muted],
+        min_text_contrast(st),
+    )
 }
 
 #[cfg(test)]
@@ -1611,12 +1639,12 @@ mod tests {
         let white = Rgb(0xFF, 0xFF, 0xFF);
         let text = Rgb(0x1F, 0x29, 0x33);
         let red = Rgb(0xFF, 0, 0);
-        let tint = readable_tint(red, white, &[text]);
+        let tint = readable_tint(red, white, &[text], 4_500);
         assert!(contrast_ratio(text, tint) >= 4_500);
         assert_ne!(tint, white, "le rouge reste visible");
         // Couleur déjà lisible : gardée telle quelle.
         let pale = Rgb(0xFF, 0xF0, 0xC0);
-        assert_eq!(readable_tint(pale, white, &[text]), pale);
+        assert_eq!(readable_tint(pale, white, &[text], 4_500), pale);
         assert_eq!(blend(red, white, 0), red);
         assert_eq!(blend(red, white, 100), white);
     }

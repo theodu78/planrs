@@ -26,10 +26,12 @@ use crate::theme::Palette;
 pub mod approval;
 pub mod chrome;
 pub mod diagnostics;
+pub mod format_panel;
 pub mod gantt;
 pub mod main_view;
 pub mod recovery;
 pub mod resource_sheet;
+pub mod scene_paint;
 pub mod search;
 pub mod side_panel;
 pub mod table;
@@ -161,6 +163,8 @@ pub struct ViewTransient {
     pub sort_dialog: Option<crate::dialog::sort::SortDialog>,
     /// Fenêtre « Filtre » ouverte (J8, lot L9, H-UI-30).
     pub filter_dialog: Option<crate::dialog::filter::FilterDialog>,
+    /// Volet de mise en forme des barres ouvert (J8, lot L15, H-UI-59).
+    pub format_panel: Option<format_panel::FormatPanelState>,
 }
 
 /// Volet de la vue principale (J7).

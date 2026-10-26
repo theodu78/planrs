@@ -332,8 +332,8 @@ pub struct App {
     row_view_key: Option<RowViewKey>,
     /// État transitoire de la vue.
     pub(crate) view: ViewTransient,
-    /// Triangles de repli dans la colonne Nom (J8, lot L9, H-UI-34) : faux
-    /// jusqu'au lot L15, voir [`App::set_outline_triangles`].
+    /// Triangles de repli dans la colonne Nom (J8, lot L9, H-UI-34) : vrais
+    /// depuis le lot L15, voir [`App::set_outline_triangles`].
     pub(crate) outline_triangles: bool,
     /// Style effectif du planning et ses palettes (J8, lot L11).
     pub(crate) style_cache: crate::theme::StyleCache,
@@ -435,7 +435,7 @@ impl App {
             row_view: RowView::default(),
             row_view_key: None,
             view: ViewTransient::default(),
-            outline_triangles: false,
+            outline_triangles: true,
             style_cache: crate::theme::StyleCache::default(),
             actions: Vec::new(),
             messages: Vec::new(),
@@ -1006,6 +1006,16 @@ impl App {
                 return;
             }
         };
+        self.deliver_export(kind, bytes, ctx);
+    }
+
+    /// Remet les octets d'un export au `FileService` (boîte « Enregistrer
+    /// sous » sur le desktop, téléchargement sur le web) ; partagé avec
+    /// l'aperçu du mode impression (J8 lot L15).
+    pub(crate) fn deliver_export(&mut self, kind: SaveKind, bytes: Vec<u8>, ctx: &egui::Context) {
+        let Some(document) = &self.document else {
+            return;
+        };
         let request = SaveRequest {
             bytes,
             kind,
@@ -1345,6 +1355,14 @@ impl App {
         &self.view
     }
 
+    /// État transitoire de la vue, modifiable (tests de kittest : brouillon
+    /// d'une fenêtre ouverte ; J8 lot L15). Jamais appelé par les
+    /// applications.
+    #[doc(hidden)]
+    pub const fn view_mut(&mut self) -> &mut ViewTransient {
+        &mut self.view
+    }
+
     /// Volet latéral (J8 lot L12).
     #[must_use]
     pub const fn side_panel(&self) -> &crate::view::side_panel::SidePanelState {
@@ -1367,7 +1385,7 @@ impl App {
 
     /// Ajoute un message au bandeau : un texte déjà affiché n'est pas
     /// répété, et seuls les [`MAX_MESSAGES`] plus récents sont gardés.
-    fn push_message(&mut self, severity: Severity, text: String) {
+    pub(crate) fn push_message(&mut self, severity: Severity, text: String) {
         self.push_titled(severity, None, text);
     }
 
@@ -1828,6 +1846,26 @@ impl App {
             // J8, lot L12 : volet latéral.
             Action::SidePanel(op) => self.side.apply(op),
             Action::ShowDialog(DialogKind::PasteSpecial) => self.open_paste_special(),
+            // J8, lot L15 : galerie, mise en page, menu Tâche, mise en forme.
+            Action::ShowDialog(DialogKind::Gallery) => self.open_gallery(),
+            Action::ShowDialog(DialogKind::PageSetup { print_mode }) => self.open_page_setup(print_mode),
+            Action::TaskCmd(cmd) => self.task_cmd(cmd),
+            Action::Format(op) => self.format_op(op),
+            Action::SetChartOnly(on) => self.state.chart_only = on,
+            Action::SetHighlightCritical(on) => {
+                self.state.task_view.highlight_critical = on;
+                self.view.task_view.highlight_critical = on;
+            }
+            Action::About => {
+                let text = self.texts.get_args(
+                    TextId::AboutText,
+                    &[
+                        ("product", Arg::Str(PRODUCT_NAME.into())),
+                        ("version", Arg::Str(planrs_core::PRODUCT_VERSION.into())),
+                    ],
+                );
+                self.push_message(Severity::Info, text);
+            }
             // L'aperçu s'ouvre à l'arrivée des octets du fichier choisi.
             Action::ShowDialog(DialogKind::CsvImport) => self.start_csv_import(ctx),
         }
@@ -2299,6 +2337,38 @@ impl App {
     }
 
     /// Ferme la fenêtre ouverte ; la table reprend le focus clavier.
+    /// Commande du menu Tâche ou de la barre d'outils sur la sélection (J8
+    /// lot L15) : un seul lot par `planrs_automation::helpers` (R-252,
+    /// R-253, R-255), une entrée d'annulation ; rien à faire ou pas de
+    /// sélection : message au bandeau.
+    pub(crate) fn task_cmd(&mut self, cmd: crate::action::TaskCmd) {
+        use crate::action::TaskCmd;
+        use planrs_automation::helpers;
+        let Some(document) = &self.document else {
+            return;
+        };
+        let uids: Vec<TaskUid> = self.selected.uids().iter().copied().collect();
+        if uids.is_empty() {
+            let text = self.texts.get(TextId::TaskCmdNoSelection);
+            self.push_message(Severity::Info, text);
+            return;
+        }
+        let session = &document.session;
+        let result = match cmd {
+            TaskCmd::MarkPercent(step) => helpers::mark_percent(session, &uids, step),
+            TaskCmd::ToggleMode => helpers::toggle_mode(session, &uids),
+            TaskCmd::ToggleActive => helpers::toggle_active(session, &uids),
+        };
+        match result {
+            Ok(Some(batch)) => drop(self.execute(&batch, EditOrigin::User)),
+            Ok(None) => {
+                let text = self.texts.get(TextId::TaskCmdNothing);
+                self.push_message(Severity::Info, text);
+            }
+            Err(error) => self.push_message(Severity::Error, error.to_string()),
+        }
+    }
+
     pub(crate) fn close_dialog(&mut self) {
         if self.view.dialog.take().is_some() && self.document.is_some() {
             self.view.focus_table_pending = true;
@@ -2315,8 +2385,19 @@ impl App {
             /// Boîte d'un lien.
             Link(LinkOutcome),
         }
-        // Fenêtres du lot L10 de J8 (collage spécial, import CSV).
+        // Fenêtres du lot L10 de J8 (collage spécial, import CSV) et du lot
+        // L15 (galerie, mise en page).
         match self.view.dialog.as_ref().map(|d| &d.body) {
+            Some(DialogBody::Gallery(_)) => {
+                self.show_gallery(ctx);
+                strip_keys(ctx);
+                return;
+            }
+            Some(DialogBody::PageSetup(_)) => {
+                self.show_page_setup(ctx);
+                strip_keys(ctx);
+                return;
+            }
             Some(DialogBody::PasteSpecial(_)) => {
                 self.show_paste_special(ctx);
                 strip_keys(ctx);
@@ -2346,7 +2427,9 @@ impl App {
                 | DialogBody::Reschedule(_)
                 | DialogBody::Assign(_)
                 | DialogBody::PasteSpecial(_)
-                | DialogBody::CsvImport(_),
+                | DialogBody::CsvImport(_)
+                | DialogBody::Gallery(_)
+                | DialogBody::PageSetup(_),
             )
             | None => Shown::TaskInfo(task_info::Outcome::Cancel),
         };
@@ -2560,6 +2643,16 @@ impl App {
                 .style_cache
                 .phases(doc_key, || rows.map(view::gantt::phases).unwrap_or_default());
         }
+        // Couleurs de phase (H-UI-65, J8 lot L15) : une fois par génération.
+        if !screen.style.phases.is_empty() {
+            let style = std::sync::Arc::clone(&screen.style);
+            let document = self.document.as_ref();
+            screen.phase_colors = self.style_cache.phase_colors(doc_key, || {
+                document.map_or_else(crate::theme::PhaseColors::new, |d| {
+                    crate::theme::phase_colors(d.project(), &style)
+                })
+            });
+        }
         (screen, palette)
     }
 
@@ -2703,6 +2796,8 @@ impl App {
             }
         }
         self.show_confirmations(&ctx, &palette, &mut actions);
+        // Volet de mise en forme des barres (J8 lot L15, H-UI-59), non modal.
+        self.show_format_panel(&ctx, &mut actions);
         self.last_frame = stats;
         self.popup_open = ctx.any_popup_open();
         // Les actions sont appliquées après le dessin : une image de plus

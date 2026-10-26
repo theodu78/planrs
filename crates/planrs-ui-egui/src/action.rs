@@ -182,6 +182,57 @@ pub enum Action {
     // --- J8 L12 : volet latéral (H-UI-41, H-UI-58).
     /// Ouvre, referme ou change d'onglet le volet latéral.
     SidePanel(SideOp),
+    // --- J8 L15 : menu Tâche, barre d'outils, mise en forme.
+    /// Commande de tâche sur la sélection (menu Tâche, barre d'outils) :
+    /// un seul lot, une entrée d'annulation (R-252, R-253, R-255).
+    TaskCmd(TaskCmd),
+    /// Mise en forme : volet des barres, modèles personnels (H-UI-52,
+    /// H-UI-59 à H-UI-61, H-UI-65).
+    Format(FormatOp),
+    /// Affichage → « Graphique seul » (H-UI-64) : table réduite au N° et
+    /// au Nom à l'écran.
+    SetChartOnly(bool),
+    /// Affichage → surbrillance du chemin critique (H-UI-38).
+    SetHighlightCritical(bool),
+    /// Aide → À propos : nom et version au bandeau.
+    About,
+}
+
+/// Commande de tâche du menu Tâche et de la barre d'outils (J8 lot L15).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaskCmd {
+    /// Marquer n % (H-UI-35, R-252).
+    MarkPercent(planrs_automation::helpers::PercentStep),
+    /// Basculer manuel ↔ automatique (H-UI-36, R-253).
+    ToggleMode,
+    /// Activer ou désactiver (R-255).
+    ToggleActive,
+}
+
+/// Opération de mise en forme (J8 lot L15).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FormatOp {
+    /// Ouvre le volet de mise en forme des barres d'un type (H-UI-59) ;
+    /// `task` : tâche cliquée (couleur de phase d'une récapitulative,
+    /// H-UI-65).
+    OpenBars {
+        /// Type de barre.
+        role: planrs_render::style::BarRole,
+        /// Tâche de la barre cliquée.
+        task: Option<TaskUid>,
+    },
+    /// Referme le volet.
+    CloseBars,
+    /// Change le type de barre du volet.
+    SetRole(planrs_render::style::BarRole),
+    /// « Enregistrer comme modèle personnel » : style du document sous ce
+    /// nom (H-UI-52, H-UI-61).
+    SaveUserTemplate(String),
+    /// Applique le modèle personnel d'indice donné (une entrée
+    /// d'annulation).
+    ApplyUserTemplate(usize),
+    /// Modèle des documents sans style (H-UI-43).
+    SetDefaultTemplate(planrs_render::style::TemplateId),
 }
 
 /// Fenêtre à ouvrir (J7, ADR-0015 D6 ; `Action::OpenDialog` reste le
@@ -213,6 +264,14 @@ pub enum DialogKind {
     /// Aperçu de l'import CSV (J8, lot L10, H-UI-40), ouvert à l'arrivée
     /// du fichier choisi.
     CsvImport,
+    /// Galerie des modèles de mise en forme (J8, lot L15, H-UI-52).
+    Gallery,
+    /// « Mise en page » ; `print_mode` : ouverte en mode impression
+    /// (H-UI-68), colonnes d'impression appliquées à l'aperçu.
+    PageSetup {
+        /// Mode impression.
+        print_mode: bool,
+    },
 }
 
 /// Action d'interface d'un agent (`app.ui`, J7) : sans historique, sans

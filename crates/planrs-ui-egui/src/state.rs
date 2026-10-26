@@ -86,13 +86,16 @@ pub struct UiState {
     /// Préférences de la vue des tâches (J8).
     pub task_view: TaskViewPrefs,
     /// Modèle des documents sans style (J8, H-UI-43 : Classique jusqu'au
-    /// lot L15).
+    /// lot L15, Sobre ensuite).
     pub default_template: TemplateId,
     /// Modèles personnels, [`MAX_USER_TEMPLATES`] au plus (J8).
     pub user_templates: Vec<NamedStyle>,
     /// Écrire le style choisi dans le fichier (`<?planrs-style?>`, J8,
     /// H-R12) ; faux : jamais.
     pub write_style_to_file: bool,
+    /// « Graphique seul » à l'écran (J8 lot L15, H-UI-64) : la table est
+    /// réduite au N° et au Nom, les colonnes choisies sont gardées.
+    pub chart_only: bool,
 }
 
 /// Préférences persistées de la vue des tâches (J8, ADR-0016 D2) : seul
@@ -363,9 +366,12 @@ impl Default for UiState {
             gantt_style: GanttStyle::default(),
             recent: Vec::new(),
             task_view: TaskViewPrefs::default(),
-            default_template: TemplateId::Classique,
+            // Sobre retouché (H-UI-62 à H-UI-64) après les retours du
+            // propriétaire du 2026-10-26 (J8 lot L15, H-UI-43).
+            default_template: TemplateId::Sobre,
             user_templates: Vec::new(),
             write_style_to_file: true,
+            chart_only: false,
         }
     }
 }
@@ -425,6 +431,7 @@ impl UiState {
             default_template: reader.field("default_template", defaults.default_template),
             user_templates: reader.list("user_templates", defaults.user_templates),
             write_style_to_file: reader.field("write_style_to_file", defaults.write_style_to_file),
+            chart_only: reader.field("chart_only", defaults.chart_only),
         };
         let warning = (!reader.bad.is_empty()).then_some(StateLoadError::Fields(reader.bad));
         (state.normalized(), warning)
@@ -518,7 +525,26 @@ impl UiState {
 
     /// Colonnes visibles, dans l'ordre d'affichage.
     pub fn visible_columns(&self) -> impl Iterator<Item = ColumnState> + '_ {
-        self.columns.iter().copied().filter(|state| state.visible)
+        let chart_only = self.chart_only;
+        self.columns
+            .iter()
+            .copied()
+            .filter(move |state| state.visible && (!chart_only || !state.column.hideable()))
+    }
+
+    /// Largeur de la table à l'écran : celle choisie, ou la somme des
+    /// colonnes N° et Nom en « graphique seul » (H-UI-64), séparateurs
+    /// compris.
+    #[must_use]
+    pub fn effective_table_width(&self) -> u16 {
+        if self.chart_only {
+            let sum: u32 = self.visible_columns().map(|c| u32::from(c.width)).sum();
+            u16::try_from(sum.saturating_add(2))
+                .unwrap_or(u16::MAX)
+                .clamp(TABLE_WIDTH_MIN, TABLE_WIDTH_MAX)
+        } else {
+            self.table_width
+        }
     }
 
     /// Affiche ou masque `column` (J7, lot L6) ; l'ID et le Nom restent
@@ -635,7 +661,7 @@ impl FieldReader<'_> {
 }
 
 /// Refus d'enregistrement d'un modèle personnel (J8, H-UI-61).
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum UserTemplateError {
     /// Nom vide ou de plus de [`MAX_USER_TEMPLATE_NAME`] caractères.
     #[error("nom de modèle de 1 à {MAX_USER_TEMPLATE_NAME} caractères attendu")]
@@ -783,8 +809,10 @@ mod tests {
         let (state, warning) = UiState::from_json_lenient(J7);
         assert!(warning.is_none(), "{warning:?}");
         assert_eq!(state, UiState::default());
-        assert_eq!(state.default_template, TemplateId::Classique);
+        // J8 lot L15 : Sobre devient le modèle par défaut (H-UI-43).
+        assert_eq!(state.default_template, TemplateId::Sobre);
         assert!(state.task_view.highlight_critical && state.write_style_to_file);
+        assert!(!state.chart_only);
     }
 
     /// Champs J8 relus à l'identique ; bornes appliquées ; une entrée de
@@ -838,6 +866,25 @@ mod tests {
             TaskViewState::default().filter,
             FilterChoice::Preset(FilterPreset::All)
         );
+    }
+
+    /// H-UI-64 : « graphique seul » réduit la table au N° et au Nom sans
+    /// toucher aux colonnes choisies ; relu à l'identique.
+    #[test]
+    fn h_ui_64_chart_only_keeps_columns() {
+        let mut state = UiState::default();
+        let before: Vec<ColumnState> = state.columns.clone();
+        state.chart_only = true;
+        let shown: Vec<Column> = state.visible_columns().map(|c| c.column).collect();
+        assert_eq!(shown, [Column::Id, Column::Name]);
+        assert_eq!(state.effective_table_width(), 40 + 220 + 2);
+        assert_eq!(state.columns, before);
+        let (read, warning) = UiState::from_json_lenient(&state.to_json().unwrap());
+        assert!(warning.is_none(), "{warning:?}");
+        assert!(read.chart_only);
+        state.chart_only = false;
+        assert_eq!(state.visible_columns().count(), 6);
+        assert_eq!(state.effective_table_width(), TABLE_WIDTH_DEFAULT);
     }
 
     #[test]
@@ -1116,12 +1163,14 @@ mod tests {
     }
 
     /// H-UI-43 : document sans style ⇒ modèle par défaut des préférences
-    /// (Classique jusqu'au lot L15) ; document stylé ⇒ son style.
+    /// (Sobre depuis le lot L15) ; document stylé ⇒ son style.
     #[test]
     fn h_ui_43_default_template_applied() {
         use planrs_render::style::template;
         let mut state = UiState::default();
         let mut p = project();
+        assert_eq!(state.effective_style(&p), template(TemplateId::Sobre));
+        state.default_template = TemplateId::Classique;
         assert_eq!(state.effective_style(&p), template(TemplateId::Classique));
         state.default_template = TemplateId::Sobre;
         assert_eq!(state.effective_style(&p), template(TemplateId::Sobre));

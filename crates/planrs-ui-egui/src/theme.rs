@@ -219,6 +219,30 @@ pub struct ScreenStyle {
     /// (H-UI-53) ; vide sans bandes de phase. Calculée une fois par
     /// génération du document, jamais pendant une image.
     pub phases: Arc<Vec<u8>>,
+    /// Couleur de phase par tâche (H-UI-65, J8 lot L15) : `(couleur, la
+    /// tâche porte elle-même la couleur)` ; vide sans couleur de phase.
+    /// Calculée une fois par génération du document.
+    pub phase_colors: Arc<PhaseColors>,
+}
+
+/// Couleurs de phase des tâches (H-UI-65) : UID → (couleur, couleur
+/// propre).
+pub type PhaseColors = std::collections::BTreeMap<planrs_core::TaskUid, (Rgb, bool)>;
+
+/// Couleurs de phase de chaque tâche d'un projet (même règle que la scène :
+/// `planrs_render::geometry::task_phases`).
+#[must_use]
+pub fn phase_colors(p: &planrs_core::Project, style: &PlanStyle) -> PhaseColors {
+    let fills: Vec<Rgb> = style.phases.values().map(|c| c.fill).collect();
+    planrs_render::geometry::task_phases(p, &style.phases)
+        .into_iter()
+        .zip(p.tasks.iter())
+        .filter_map(|(phase, task)| {
+            let (rank, own) = phase?;
+            let fill = fills.get(usize::from(rank)).copied()?;
+            Some((task.uid(), (fill, own)))
+        })
+        .collect()
 }
 
 impl Default for ScreenStyle {
@@ -228,6 +252,7 @@ impl Default for ScreenStyle {
             style: Arc::new(template(TemplateId::Classique)),
             variant: Variant::Light,
             phases: Arc::new(Vec::new()),
+            phase_colors: Arc::new(PhaseColors::new()),
         }
     }
 }
@@ -260,6 +285,8 @@ pub struct StyleCache {
     palettes: Option<(Palette, Palette)>,
     /// Phases gardées et leur clé (document).
     phases: (Option<(u64, u64)>, Arc<Vec<u8>>),
+    /// Couleurs de phase gardées et leur clé (document, H-UI-65).
+    phase_colors: (Option<(u64, u64)>, Arc<PhaseColors>),
     /// Lectures faites (tests).
     builds: u64,
 }
@@ -271,6 +298,7 @@ impl Default for StyleCache {
             style: ScreenStyle::default().style,
             palettes: None,
             phases: (None, Arc::new(Vec::new())),
+            phase_colors: (None, Arc::new(PhaseColors::new())),
             builds: 0,
         }
     }
@@ -306,8 +334,22 @@ impl StyleCache {
             style: Arc::clone(&self.style),
             variant: variant_for(theme),
             phases: Arc::new(Vec::new()),
+            phase_colors: Arc::new(PhaseColors::new()),
         };
         (screen, palette)
+    }
+
+    /// Couleurs de phase du document `doc_key` (H-UI-65), calculées par
+    /// `compute` seulement si le document a changé.
+    pub fn phase_colors(
+        &mut self,
+        doc_key: Option<(u64, u64)>,
+        compute: impl FnOnce() -> PhaseColors,
+    ) -> Arc<PhaseColors> {
+        if self.phase_colors.0 != doc_key || doc_key.is_none() {
+            self.phase_colors = (doc_key, Arc::new(compute()));
+        }
+        Arc::clone(&self.phase_colors.1)
     }
 
     /// Phases des lignes du document `doc_key`, calculées par `compute`

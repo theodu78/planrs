@@ -744,6 +744,55 @@ impl BarTextSource for NoTexts {
     }
 }
 
+/// Couleur de phase de chaque tâche du projet, par position (H-UI-65) :
+/// `(rang de la phase, la tâche porte elle-même la couleur)`. Une tâche
+/// sans couleur propre prend celle de l'ancêtre le plus proche qui en a une
+/// avec `children`.
+#[must_use]
+pub fn task_phases(
+    p: &planrs_core::Project,
+    phases: &std::collections::BTreeMap<u32, crate::style::PhaseColor>,
+) -> Vec<Option<(u16, bool)>> {
+    if phases.is_empty() {
+        return vec![None; p.tasks.len()];
+    }
+    let rank = |uid: u32| {
+        phases
+            .keys()
+            .position(|k| *k == uid)
+            .and_then(|i| u16::try_from(i).ok())
+    };
+    // Pile des ancêtres : (niveau, phase transmise aux descendants).
+    let mut stack: Vec<(u16, Option<u16>)> = Vec::new();
+    let mut out = Vec::with_capacity(p.tasks.len());
+    for task in &p.tasks {
+        let level = task.outline_level.get();
+        while stack.last().is_some_and(|(l, _)| *l >= level) {
+            stack.pop();
+        }
+        let inherited = stack.iter().rev().find_map(|(_, ph)| *ph);
+        let own = rank(task.uid().get()).filter(|_| !task.is_null);
+        let passed = own.filter(|_| phases.get(&task.uid().get()).is_some_and(|c| c.children));
+        out.push(match own {
+            Some(i) => Some((i, true)),
+            None => inherited.map(|i| (i, false)),
+        });
+        stack.push((level, passed.or(inherited)));
+    }
+    out
+}
+
+/// Rôles peints à la couleur d'une phase (H-UI-65) : barres de tâches et
+/// de récapitulatives ; jalons, inactives et repères gardent la leur.
+#[must_use]
+pub const fn phase_painted(role: crate::style::BarRole) -> bool {
+    use crate::style::BarRole;
+    matches!(
+        role,
+        BarRole::Task | BarRole::Critical | BarRole::Summary | BarRole::SummaryCritical | BarRole::Manual
+    )
+}
+
 /// Jours chômés consécutifs à partir desquels une période est grisée aux
 /// échelles larges (H-UI-62 : fériés accolés, fermetures, congés) ; une
 /// fin de semaine seule (2 jours) ne l'est pas.

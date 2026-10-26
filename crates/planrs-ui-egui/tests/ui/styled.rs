@@ -136,7 +136,9 @@ fn classique_screen_identical_to_j7() {
             assert!(pos.x < table_right, "« {text} » hors de la table : {pos:?}");
         }
     }
-    snapshot(&mut harness, "main_fr_light");
+    // J8 lot L15 : « main_fr_light » est passée à Sobre (défaut) ; la
+    // référence de Classique, identique à celle de J7, a son propre nom.
+    snapshot(&mut harness, "classique_main_fr_light");
 }
 
 /// H-UI-43 à l'écran : un document sans style prend le modèle par défaut
@@ -317,22 +319,22 @@ fn styled_hatch_inside_bar() {
     }
 }
 
-/// H-UI-53 : zébrage (Sobre) et bandes de phase (Présentation) dans le
-/// Gantt et la table, de la couleur de bande du style.
+/// H-UI-53 : bandes de phase (Présentation) dans la table, de la couleur
+/// de bande du style ; jamais dans le Gantt (H-UI-62, J8 lot L15 :
+/// quadrillage vertical seul).
 #[test]
 fn h_ui_53_bands_on_screen() {
-    for id in [TemplateId::Sobre, TemplateId::Presentation] {
-        let mut harness = demo(id);
-        week(&mut harness);
-        let band = rgb(template(id).tokens(Variant::Light).band[1]);
-        let rects = filled(&harness, band);
-        let table_right = f32::from(harness.state().state.table_width);
-        assert!(rects.iter().any(|r| r.left() < table_right), "{id:?} : table");
-        assert!(
-            rects.iter().any(|r| r.right() > table_right + 10.0),
-            "{id:?} : Gantt"
-        );
-    }
+    let id = TemplateId::Presentation;
+    let mut harness = demo(id);
+    week(&mut harness);
+    let band = rgb(template(id).tokens(Variant::Light).band[1]);
+    let rects = filled(&harness, band);
+    let table_right = f32::from(harness.state().state.table_width);
+    assert!(rects.iter().any(|r| r.left() < table_right), "{id:?} : table");
+    assert!(
+        !rects.iter().any(|r| r.right() > table_right + 10.0),
+        "{id:?} : bande dans le Gantt"
+    );
 }
 
 /// H-UI-54 : étiquette « État JJ/MM » dans l'échelle et trait d'aujourd'hui

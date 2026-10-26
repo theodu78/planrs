@@ -542,6 +542,11 @@ struct RowFill {
     zebra: egui::Color32,
     /// Phases du modèle (bandes de phase).
     phases: std::sync::Arc<Vec<u8>>,
+    /// Couleurs de phase des tâches (H-UI-65, J8 lot L15).
+    phase_colors: std::sync::Arc<crate::theme::PhaseColors>,
+    /// Encres du texte (texte, texte appuyé) : la teinte d'une ligne de
+    /// phase les garde lisibles.
+    inks: [planrs_render::style::Rgb; 2],
 }
 
 impl RowFill {
@@ -560,12 +565,22 @@ impl RowFill {
             bg: tokens.bg,
             zebra: fc.palette.background.lerp_to_gamma(fc.palette.header_bg, 0.6),
             phases: std::sync::Arc::clone(&screen.phases),
+            phase_colors: std::sync::Arc::clone(&screen.phase_colors),
+            inks: [tokens.text, tokens.text_strong],
         };
         (font, fill)
     }
 
     /// Fond de la ligne affichée `i` (`None` : fond de la table).
     fn fill(&self, rows: VisibleRows<'_>, i: usize) -> Option<egui::Color32> {
+        // Ligne d'une tâche colorée (H-UI-65) : teinte lisible de sa couleur.
+        if !self.phase_colors.is_empty()
+            && let Some(row) = rows.row(crate::row_view::DisplayRow::at(i))
+            && let Some((rgb, true)) = self.phase_colors.get(&row.uid).copied()
+        {
+            let tint = planrs_render::style::readable_tint(rgb, self.bg, &self.inks);
+            return Some(egui::Color32::from_rgb(tint.0, tint.1, tint.2));
+        }
         if self.banding == RowBanding::None {
             return (!i.is_multiple_of(2)).then_some(self.zebra);
         }

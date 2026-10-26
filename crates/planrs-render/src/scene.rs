@@ -20,7 +20,7 @@ use crate::geometry::{
 };
 use crate::request::{Lang, RenderReport};
 use crate::style::{
-    BarField, BarRole, BarShape, Pattern, PhaseColor, PlanStyle, Rgb, RowBanding, TableColumn, readable_tint,
+    BarField, BarRole, BarShape, Pattern, PlanStyle, Rgb, RowBanding, TableColumn, readable_tint,
 };
 
 /// Hauteur d'un niveau de l'en-tête (22 px).
@@ -58,48 +58,12 @@ pub(crate) fn table_width16(columns: Option<&[TableColumn]>) -> i64 {
         .fold(0, i64::saturating_add)
 }
 
-/// Couleur de phase de chaque tâche du projet, par position (H-UI-65) :
-/// `(rang de la phase, la tâche porte elle-même la couleur)`. Une tâche
-/// sans couleur propre prend celle de l'ancêtre le plus proche qui en a une
-/// avec `children`.
-fn phase_of_tasks(p: &Project, phases: &BTreeMap<u32, PhaseColor>) -> Vec<Option<(u16, bool)>> {
-    if phases.is_empty() {
-        return vec![None; p.tasks.len()];
-    }
-    let rank = |uid: u32| {
-        phases
-            .keys()
-            .position(|k| *k == uid)
-            .and_then(|i| u16::try_from(i).ok())
-    };
-    // Pile des ancêtres : (niveau, phase transmise aux descendants).
-    let mut stack: Vec<(u16, Option<u16>)> = Vec::new();
-    let mut out = Vec::with_capacity(p.tasks.len());
-    for task in &p.tasks {
-        let level = task.outline_level.get();
-        while stack.last().is_some_and(|(l, _)| *l >= level) {
-            stack.pop();
-        }
-        let inherited = stack.iter().rev().find_map(|(_, ph)| *ph);
-        let own = rank(task.uid().get()).filter(|_| !task.is_null);
-        let passed = own.filter(|_| phases.get(&task.uid().get()).is_some_and(|c| c.children));
-        out.push(match own {
-            Some(i) => Some((i, true)),
-            None => inherited.map(|i| (i, false)),
-        });
-        stack.push((level, passed.or(inherited)));
-    }
-    out
+/// Rôles peints à la couleur d'une phase : voir
+/// [`crate::geometry::phase_painted`].
+const fn phase_painted(role: BarRole) -> bool {
+    crate::geometry::phase_painted(role)
 }
 
-/// Rôles peints à la couleur d'une phase (barres de tâches et de
-/// récapitulatives ; jalons, inactives et repères gardent la leur).
-const fn phase_painted(role: BarRole) -> bool {
-    matches!(
-        role,
-        BarRole::Task | BarRole::Critical | BarRole::Summary | BarRole::SummaryCritical | BarRole::Manual
-    )
-}
 /// Retrait par niveau hiérarchique (12 px), plafonné à [`MAX_INDENT`].
 const INDENT: i64 = 12 * SUB;
 /// Retrait maximal d'un nom (120 px).
@@ -621,7 +585,7 @@ pub(crate) fn build(
     // relatifs ; les deux niveaux de l'échelle descendent d'autant.
     let tier0 = if st.scale.relative_months { TIER_H } else { 0 };
     let header_h = HEADER_H.saturating_add(tier0);
-    let phase_by_pos = phase_of_tasks(p, &st.phases);
+    let phase_by_pos = crate::geometry::task_phases(p, &st.phases);
     let name_chars = usize::from(vp.limits.name_chars);
     let baseline_dy = (row_h / 2).saturating_add(i64::from(body.size16) / 3);
 

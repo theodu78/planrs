@@ -146,6 +146,37 @@ pub fn export(s: &Session, p: &ExportPdfParams, lang: Language) -> Result<PdfExp
     })
 }
 
+/// PDF de pages déjà paginées (aperçu du mode impression de l'interface,
+/// J8 lot L15, H-UI-68) : mêmes métadonnées que [`export`] (titre du
+/// projet, « maintenant » de la session, H-R13), polices Inter.
+///
+/// # Errors
+///
+/// Texte du refus de `planrs-pdf` (plus de 1 000 pages, écriture).
+pub fn pages_pdf(
+    s: &Session,
+    pages: &planrs_render::paginate::Pages,
+    lang: Language,
+) -> Result<Vec<u8>, String> {
+    let project = s.project();
+    let title = if project.info.name.is_empty() {
+        s.origin().name.clone()
+    } else {
+        project.info.name.clone()
+    };
+    let meta = PdfMeta {
+        title,
+        created: s.now(),
+        lang: match lang {
+            Language::Fr => Lang::Fr,
+            Language::En => Lang::En,
+        },
+    };
+    planrs_pdf::pdf(pages, &FontSet::inter(), &meta)
+        .map(|(bytes, _)| bytes)
+        .map_err(|e| e.to_string())
+}
+
 /// Papier, orientation et « N pages en largeur » de la requête.
 fn page_overrides(st: &mut PageStyle, p: &ExportPdfParams, lang: Language) -> Result<(), ToolError> {
     if let Some(page) = &p.page {

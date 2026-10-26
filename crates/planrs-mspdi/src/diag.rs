@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use planrs_core::{Diagnostic, Severity, Subject};
+use planrs_core::{DiagArg, Diagnostic, Severity, Subject};
 
 use crate::error::{LineIndex, Location};
 
@@ -324,6 +324,63 @@ impl<'a> Sink<'a> {
     }
 }
 
+/// Traduction par code (N5, J8 lot L14) : arguments neutres, en plus du
+/// `Display` français qui ne change pas.
+impl ImportCode {
+    /// Arguments nommés propres au code (sans les champs communs de
+    /// [`ImportDiagnostic`] : élément, valeur, sujet, position). Pour
+    /// [`ImportCode::Core`], ceux du diagnostic du cœur.
+    #[must_use]
+    pub fn args(&self) -> Vec<(&'static str, DiagArg)> {
+        match self {
+            Self::UnknownCode { code } => vec![("code", DiagArg::Int(*code))],
+            Self::LinkIgnored { reason } => vec![("reason", DiagArg::Text(reason.as_str().to_owned()))],
+            Self::Unsupported { what } => vec![("what", DiagArg::Text(what.clone()))],
+            Self::Truncated { dropped } => vec![("dropped", DiagArg::count64(*dropped))],
+            Self::ProgressInconsistent { count } => vec![("count", DiagArg::Int(i64::from(*count)))],
+            Self::StyleIgnored { reason } => vec![("reason", DiagArg::Text(reason.as_str().to_owned()))],
+            Self::Core(d) => d.args(),
+            Self::InvalidValue
+            | Self::MissingRequired
+            | Self::Duplicate
+            | Self::DanglingReference
+            | Self::Rounded
+            | Self::Inconsistent
+            | Self::NotPreserved
+            | Self::HonorConstraintsOff => Vec::new(),
+        }
+    }
+
+    /// Un exemple de chaque variante hors [`ImportCode::Core`] (couverte par
+    /// `Diagnostic::examples`), pour les contrôles de couverture des
+    /// traductions.
+    #[must_use]
+    pub fn examples() -> Vec<Self> {
+        vec![
+            Self::InvalidValue,
+            Self::UnknownCode { code: 7 },
+            Self::MissingRequired,
+            Self::Duplicate,
+            Self::DanglingReference,
+            Self::LinkIgnored {
+                reason: LinkIgnoredReason::CrossProject,
+            },
+            Self::Rounded,
+            Self::Unsupported {
+                what: "leveling_delay".to_owned(),
+            },
+            Self::Inconsistent,
+            Self::Truncated { dropped: 3 },
+            Self::NotPreserved,
+            Self::HonorConstraintsOff,
+            Self::ProgressInconsistent { count: 2 },
+            Self::StyleIgnored {
+                reason: crate::style_pi::StyleIgnoredReason::TooLarge,
+            },
+        ]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -333,7 +390,7 @@ mod tests {
 
     use planrs_core::{Diagnostic, Severity, Subject, TaskUid};
 
-    use super::{ImportCode, ImportDiagnostic, LinkIgnoredReason};
+    use super::{DiagArg, ImportCode, ImportDiagnostic, LinkIgnoredReason};
 
     #[test]
     fn codes_and_severities() {
@@ -419,5 +476,27 @@ mod tests {
             text.starts_with("mspdi.unknown_code (42) : Tasks/Task/Type"),
             "{text}"
         );
+    }
+
+    /// Un exemple par variante non enveloppée, codes distincts, arguments
+    /// nommés distincts (N5).
+    #[test]
+    fn n5_import_examples_cover_every_variant() {
+        let examples = ImportCode::examples();
+        let ranks: Vec<usize> = examples.iter().map(ImportCode::rank).collect();
+        let mut expected: Vec<usize> = (0..15).collect();
+        expected.retain(|r| *r != ImportCode::Core(planrs_core::Diagnostic::TaskReservedUid).rank());
+        assert_eq!(ranks, expected);
+        let codes: std::collections::BTreeSet<String> = examples.iter().map(ImportCode::code).collect();
+        assert_eq!(codes.len(), examples.len());
+        for code in &examples {
+            let args = code.args();
+            let names: std::collections::BTreeSet<&str> = args.iter().map(|(n, _)| *n).collect();
+            assert_eq!(names.len(), args.len());
+        }
+        let core = ImportCode::Core(planrs_core::Diagnostic::LinkSelf {
+            task: planrs_core::TaskUid::new(3),
+        });
+        assert_eq!(core.args(), vec![("task", DiagArg::Uid(3))]);
     }
 }

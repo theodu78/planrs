@@ -36,6 +36,8 @@
 //! - [`baseline`] : capture des lignes de base et écarts (R-220 à R-225,
 //!   J6) ;
 //! - [`diagnostic`] : diagnostics typés, gravité et sujet déduits ;
+//! - [`diagnostic_args`] : arguments neutres des diagnostics, pour leur
+//!   traduction par code (N5, J8) ;
 //! - [`error`] : erreurs typées, codes stables.
 
 #![deny(
@@ -49,6 +51,7 @@ pub mod arena;
 pub mod baseline;
 pub mod calendar;
 pub mod diagnostic;
+pub mod diagnostic_args;
 pub mod duration;
 pub mod error;
 pub mod fixed;
@@ -64,6 +67,7 @@ pub mod time;
 pub use arena::{Arena, HasUid};
 pub use calendar::{BuiltinCalendarNames, CalendarSet, CompiledCalendar, Direction, Span, TimeScale};
 pub use diagnostic::{Diagnostic, Diagnostics, OverriddenBound, Pass, Severity, Subject};
+pub use diagnostic_args::DiagArg;
 pub use duration::{
     ConversionFactors, Duration, DurationUnit, Lag, LagValue, Minutes, TimeBasis, Work, percent_of,
 };

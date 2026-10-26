@@ -978,3 +978,49 @@ fn h_r3_fill_keeps_end_labels_on_the_right() {
         assert_eq!(side(right), Some(TextSide::Right), "ligne {i} : {items:?}");
     }
 }
+
+/// H-UI-61, relecture finale de J8 : un texte dans la barre prend l'encre
+/// (texte ou fond) la plus contrastée sur le remplissage : en Impression
+/// N&B, plus de texte noir sur la barre critique noire.
+#[test]
+fn h_ui_61_inside_text_ink_on_bar() {
+    use planrs_render::style::{BarField, BarTexts, contrast_ratio, ink_on};
+    let p = project_p();
+    let s = planrs_core::schedule(&p);
+    for id in TemplateId::ALL {
+        let mut st = template(id);
+        for role in [BarRole::Task, BarRole::Critical] {
+            st.texts.insert(
+                role,
+                BarTexts {
+                    inside: Some(BarField::Name),
+                    ..BarTexts::default()
+                },
+            );
+        }
+        for v in [Variant::Light, Variant::Dark, Variant::Print] {
+            let sc = layout(&p, &s, &st, &NoTexts, &Viewport::new(v, Lang::Fr)).0;
+            let c = st.tokens(v);
+            let mut seen = 0;
+            for item in &sc.items {
+                let Class::TextOnBar(role, None) = item.class else {
+                    continue;
+                };
+                seen += 1;
+                let fill = c.bars[&role].fill;
+                let ink = sc.paints[&item.class].fill.unwrap();
+                assert_eq!(ink, ink_on(fill, c.text, c.bg), "{id:?} {v:?} {role:?}");
+                assert!(
+                    contrast_ratio(ink, fill) >= contrast_ratio(c.text, fill),
+                    "{id:?} {v:?} {role:?}"
+                );
+            }
+            assert!(seen > 0, "{id:?} {v:?} : aucun texte dans une barre");
+        }
+    }
+    // Impression N&B : barre critique noire, texte noir ⇒ encre du fond.
+    let st = template(TemplateId::ImpressionNb);
+    let c = st.tokens(Variant::Print);
+    let fill = c.bars[&BarRole::Critical].fill;
+    assert!(contrast_ratio(ink_on(fill, c.text, c.bg), fill) >= 4_500);
+}

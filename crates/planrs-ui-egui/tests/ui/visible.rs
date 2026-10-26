@@ -702,6 +702,56 @@ fn h_ui_65_phase_color_row_and_bar() {
     assert!(filled, "fond de ligne de phase absent");
 }
 
+/// H-UI-61 et H-UI-65, relecture finale de J8 : une couleur de phase
+/// trop pâle sur le fond (jaune sur blanc, 1,3:1) est signalée dans le
+/// volet, avec une couleur conforme sur les fonds des trois variantes ;
+/// `style.get` (`contrast_issues`) la signale aussi.
+#[test]
+fn h_ui_61_phase_color_contrast_warned() {
+    let (mut harness, _) = sobre_p();
+    open_panel(&mut harness, BarRole::Summary, Some(5));
+    let yellow = Rgb(0xF0, 0xE4, 0x42);
+    click(
+        &mut harness,
+        &label(TextId::FpPhaseSwatch, &[("color", Arg::Str(yellow.hex().into()))]),
+    );
+    harness.run();
+    let warned = |h: &Harness<'static, App>| {
+        texts(h)
+            .iter()
+            .any(|(_, t)| t.starts_with("Contraste insuffisant"))
+    };
+    assert!(warned(&harness), "aucun avertissement pour la phase");
+    let st = effective(harness.state());
+    let issues = planrs_automation::command::style::contrast_issues(&st);
+    assert!(
+        issues.iter().any(|i| i.phase == Some(5) && i.color == yellow),
+        "{issues:?}"
+    );
+    let bgs = [Variant::Light, Variant::Dark, Variant::Print].map(|v| st.tokens(v).bg);
+    let worst = *bgs
+        .iter()
+        .min_by_key(|bg| planrs_render::style::contrast_ratio(yellow, **bg))
+        .unwrap();
+    let better = planrs_automation::command::style::nearest_compliant(yellow, worst, 3_000)
+        .filter(|b| {
+            bgs.iter()
+                .all(|bg| planrs_render::style::contrast_ratio(*b, *bg) >= 3_000)
+        })
+        .expect("couleur conforme sur les trois fonds");
+    click(
+        &mut harness,
+        &label(
+            TextId::FpUseSuggestion,
+            &[("color", Arg::Str(better.hex().into()))],
+        ),
+    );
+    harness.run();
+    let st = effective(harness.state());
+    assert_eq!(st.phases.get(&5).map(|p| p.fill), Some(better));
+    assert!(!warned(&harness));
+}
+
 /// H-UI-67 : « Planning travaux » ⇒ niveau des mois relatifs (« M1 ») en
 /// haut de l'échelle.
 #[test]

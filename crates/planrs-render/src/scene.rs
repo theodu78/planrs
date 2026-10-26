@@ -354,6 +354,14 @@ fn paints_of(st: &PlanStyle, v: crate::style::Variant) -> impl Fn(Class) -> Pain
                 fill(phase_fill(i).map_or(c.bg, |rgb| crate::style::phase_row_tint(st, v, rgb)))
             }
             Class::Title => fill(c.cursor),
+            Class::TextOnBar(role, phase) => {
+                let bar = phase
+                    .filter(|_| phase_painted(role))
+                    .and_then(phase_fill)
+                    .or_else(|| c.bars.get(&role).map(|p| p.fill))
+                    .unwrap_or(c.bg);
+                fill(crate::style::ink_on(bar, c.text, c.bg))
+            }
         }
     }
 }
@@ -1151,17 +1159,24 @@ pub(crate) fn build(
             bar_items(&mut items, part_of(i), b, st, phase);
         }
     }
-    for (i, r) in rows.iter().enumerate() {
+    for (i, (r, k)) in rows.iter().zip(kept).enumerate() {
+        let phase = phase_by_pos.get(k.position).copied().flatten().map(|(pi, _)| pi);
         for t in &r.texts.items {
             // H-UI-64 : fond sous une étiquette hors de la barre, au-dessus
-            // des liens et de la grille (lisible sans la table).
-            if t.side != crate::geometry::TextSide::Inside {
+            // des liens et de la grille (lisible sans la table) ; dedans,
+            // encre la plus contrastée sur la barre (H-UI-61).
+            let class = if t.side == crate::geometry::TextSide::Inside {
+                r.bar
+                    .as_ref()
+                    .map_or(Class::Text, |b| Class::TextOnBar(b.role, phase))
+            } else {
                 items.rect(Clip::Gantt, part_of(i), Class::Bg, label_halo(t));
-            }
+                Class::Text
+            };
             items.text(
                 Clip::Gantt,
                 part_of(i),
-                Class::Text,
+                class,
                 t.x16,
                 t.y16,
                 t.text.clone(),

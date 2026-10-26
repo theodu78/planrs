@@ -1293,6 +1293,19 @@ pub fn readable_tint(fill: Rgb, bg: Rgb, inks: &[Rgb], min: u32) -> Rgb {
         .unwrap_or(bg)
 }
 
+/// Encre d'un texte dessiné **dans** une barre de remplissage `fill`
+/// (H-UI-46 « dedans », H-UI-61) : l'encre du texte ou le fond, la plus
+/// contrastée sur le remplissage (relecture finale de J8 : texte noir sur
+/// barre noire en Impression N&B, 2,8:1 sur la barre bleue de Sobre).
+#[must_use]
+pub fn ink_on(fill: Rgb, text: Rgb, bg: Rgb) -> Rgb {
+    if contrast_ratio(text, fill) >= contrast_ratio(bg, fill) {
+        text
+    } else {
+        bg
+    }
+}
+
 /// Contraste minimal du texte d'un style (H-UI-45) : 7:1 pour Contraste
 /// élevé, 4,5:1 sinon (millièmes).
 #[must_use]

@@ -727,8 +727,13 @@ pub fn save_as_template(
 pub struct ContrastIssue {
     /// Variante.
     pub variant: VariantJson,
-    /// Type de barre (`None` : texte courant).
+    /// Type de barre (`None` : texte courant, ou couleur de phase si
+    /// `phase` est posé).
     pub role: Option<BarRoleJson>,
+    /// UID de la récapitulative dont la couleur de phase (H-UI-65) est en
+    /// cause, sur le fond (3:1 comme une barre ; relecture finale de J8).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<u32>,
     /// Couleur en cause.
     pub color: Rgb,
     /// Fond.
@@ -760,7 +765,8 @@ const ROLES: [BarRoleJson; 12] = [
 
 /// Contrastes insuffisants du style (H-UI-45, H-UI-61) : texte sur le
 /// fond (4,5:1, 7:1 pour Contraste élevé) et chaque barre sur le fond
-/// (3:1 ; couleur du contour si la barre est en contour seul), par
+/// (3:1 ; couleur du contour si la barre est en contour seul), chaque
+/// couleur de phase sur le fond (3:1, `phase`), par
 /// variante (impression seulement si elle a ses couleurs). La bande d'avancement, dessinée dans la barre, n'est pas
 /// mesurée sur le fond.
 #[must_use]
@@ -784,6 +790,7 @@ pub fn contrast_issues(style: &PlanStyle) -> Vec<ContrastIssue> {
                 out.push(ContrastIssue {
                     variant,
                     role,
+                    phase: None,
                     color,
                     background: bg,
                     ratio,
@@ -810,6 +817,23 @@ pub fn contrast_issues(style: &PlanStyle) -> Vec<ContrastIssue> {
                 _ => paint.fill,
             };
             check(Some(role_json), color, MIN_BAR_CONTRAST);
+        }
+        // Couleurs de phase : une seule couleur pour toutes les variantes,
+        // mesurée sur le fond de chacune (relecture finale de J8).
+        for (uid, phase) in &style.phases {
+            let ratio = contrast_ratio(phase.fill, bg);
+            if ratio < MIN_BAR_CONTRAST {
+                out.push(ContrastIssue {
+                    variant,
+                    role: None,
+                    phase: Some(*uid),
+                    color: phase.fill,
+                    background: bg,
+                    ratio,
+                    min: MIN_BAR_CONTRAST,
+                    suggestion: nearest_compliant(phase.fill, bg, MIN_BAR_CONTRAST),
+                });
+            }
         }
     }
     out

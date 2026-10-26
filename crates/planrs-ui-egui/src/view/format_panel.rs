@@ -536,6 +536,43 @@ pub fn show(
                         }
                     }
                 });
+                // Contraste de la couleur de phase (H-UI-61, relecture finale
+                // de J8) : une couleur pour toutes les variantes, mesurée sur
+                // le fond de chacune ; proposition sur le fond le plus
+                // exigeant si elle convient aux trois.
+                if let Some(p) = own {
+                    let bgs = [Variant::Light, Variant::Dark, Variant::Print].map(|v| style.tokens(v).bg);
+                    let (ratio, worst) = bgs
+                        .iter()
+                        .map(|bg| (contrast_ratio(p.fill, *bg), *bg))
+                        .min_by_key(|(r, _)| *r)
+                        .unwrap_or((u32::MAX, tokens.bg));
+                    if ratio < MIN_BAR {
+                        let shown = format!("{},{}", ratio / 1000, (ratio % 1000) / 100);
+                        let shown = if matches!(input.lang, Language::En) {
+                            shown.replace(',', ".")
+                        } else {
+                            shown
+                        };
+                        ui.colored_label(
+                            ui.visuals().warn_fg_color,
+                            texts.get_args(TextId::FpContrastLow, &[("ratio", Arg::Str(shown.into()))]),
+                        );
+                        let better = nearest_compliant(p.fill, worst, MIN_BAR)
+                            .filter(|b| bgs.iter().all(|bg| contrast_ratio(*b, *bg) >= MIN_BAR));
+                        if let Some(better) = better {
+                            let label = texts.get_args(
+                                TextId::FpUseSuggestion,
+                                &[("color", Arg::Str(better.hex().into()))],
+                            );
+                            if ui.button(label).clicked() {
+                                let mut phases = style.phases.clone();
+                                phases.insert(key, PhaseColor { fill: better, ..p });
+                                effects.push(FormatEffect::Exec(phases_batch(&phases, input)));
+                            }
+                        }
+                    }
+                }
                 if let Some(p) = own {
                     let mut children = p.children;
                     if ui

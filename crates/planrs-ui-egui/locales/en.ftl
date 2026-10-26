@@ -841,6 +841,137 @@ export-error-title = Cannot export
 export-error-failed = The export failed: { $detail }
 
 # --- J8 L14 ---
+diag-calendar-unknown = unknown calendar { $calendar }, referenced by { $referenced_by }
+diag-calendar-base_missing = calendar { $calendar } inherits from calendar { $base }, which does not exist
+diag-calendar-base_not_base = calendar { $calendar } inherits from calendar { $base }, which is not a base calendar
+diag-calendar-inheritance_cycle = inheritance loop between calendars: { $chain }
+diag-calendar-no_working_time = calendar { $calendar } has no working time: no duration can be placed on it
+diag-calendar-internal = calendar { $calendar } could not be compiled (internal inconsistency, please report)
+diag-calendar-exceptions_overlap = calendar { $calendar }: exceptions #{ $kept } and #{ $ignored } overlap; #{ $kept } wins on the shared days
+diag-calendar-work_weeks_overlap = calendar { $calendar }: work weeks #{ $kept } and #{ $ignored } overlap; #{ $kept } wins on the shared days
+diag-calendar-recurrence_unsupported = calendar { $calendar }: the recurrence of exception #{ $exception } is not supported; the exception is ignored
+diag-project-calendar_not_base = the project calendar ({ $calendar }) is not a base calendar
+diag-task-reserved_uid = a task has UID 0, reserved for the project summary task
+diag-task-outline_jump = task { $task } skips an outline level (or the first level is not 1)
+diag-task-null_with_data = blank row { $task } carries links or assignments, ignored
+diag-task-negative_progress = task { $task } has a negative actual or remaining duration
+diag-link-self = task { $task } is linked to itself
+diag-link-duplicate = several links from task { $predecessor } to task { $successor }
+diag-link-unknown_task = task { $successor } is linked to task { $predecessor }, which does not exist
+diag-assignment-unknown_task = assignment { $assignment } refers to task { $task }, which does not exist
+diag-assignment-unknown_resource = assignment { $assignment } refers to resource { $resource }, which does not exist
+diag-conversion-out_of_domain = calendar { $calendar }: { $minutes } min from { $from } fall outside the date range (1984-2149)
+diag-link-cycle = circular links between tasks { $tasks }
+diag-link-ignored_in_cycle = the link { $predecessor } -> { $successor } is ignored to break a cycle
+diag-link-summary_descendant = the link { $predecessor } -> { $successor } joins a summary task to one of its subtasks: ignored
+diag-link-finish_to_summary = the link { $predecessor } -> { $successor } (finish-to-finish or start-to-finish) to a summary task applies to each of its subtasks
+diag-link-expansion_limit = { $ignored ->
+        [one] { $ignored } finish-to-finish or start-to-finish link to a summary task ignored
+       *[other] { $ignored } finish-to-finish or start-to-finish links to a summary task ignored
+    }: expanding them to the subtasks would exceed { $limit } arcs
+diag-link-start_from_summary = the link { $predecessor } -> { $successor } (start-to-start or start-to-finish) from a summary task caps the start of each of its subtasks (scheduled from finish)
+diag-link-inactive = the link { $predecessor } -> { $successor } starts from an inactive task: no effect
+diag-link-excluded_endpoint = the link { $predecessor } -> { $successor } touches an unscheduled task: ignored
+diag-link-manual_not_honored = manual task { $successor } does not honor its link with task { $predecessor }
+diag-link-unschedulable = the link { $predecessor } -> { $successor } to a summary task cannot be applied ({ $cause }): ignored
+diag-task-manual_undated = manual task { $task } has neither start nor finish: not scheduled
+diag-task-manual_dates_inverted = manual task { $task } finishes before it starts: finish moved to the start
+diag-task-calendar_fallback = calendar { $calendar } of task { $task } is unusable: project calendar used
+diag-project-calendar_fallback = the project calendar ({ $calendar }) is unusable: built-in Standard calendar used
+diag-task-unschedulable = task { $task } cannot be scheduled ({ $pass }: { $cause })
+diag-constraint-override = the "{ $kind }" constraint of task { $task } is honored despite { $bound }
+diag-constraint-not_honored = the "{ $kind }" constraint on { $date } of task { $task } is not honored: links take precedence
+diag-constraint-summary_ignored = the "{ $kind }" constraint of summary task { $task } is ignored
+diag-constraint-manual_ignored = the "{ $kind }" constraint of manual task { $task } is ignored by scheduling
+diag-task-deadline_missed = task { $task } finishes on { $finish }, after its deadline of { $deadline }
+diag-resource-overallocated = resource { $resource } is overallocated from { $from } to { $to } (peak { $peak }%)
+diag-resource-availability_ignored = dated availability of resource { $resource } is ignored: constant capacity
+diag-assignment-contour_unsupported = contour { $contour } of assignment { $assignment } is placed as flat
+diag-assignment-zero_units = assignment { $assignment } has zero units: the task duration is kept
+diag-assignment-duration_out_of_domain = the duration of assignment { $assignment } is out of range
+diag-assignment-calendar_empty = calendars { $task_calendar } (task) and { $resource_calendar } (resource) of assignment { $assignment } share no working time
+diag-task-fixed_work_effort_driven = task { $task } is fixed work without being effort driven
+diag-calendar-too_many_segments = the combination of calendars { $calendar } and { $other } exceeds { $limit } segments
+diag-assignment-too_many_parts = task { $task } has { $parts } work assignments (more than { $limit }): its duration is that of the longest
+diag-progress-link_ignored = the link { $predecessor } -> { $successor } has no effect: in-progress task { $successor } is not split
+diag-progress-link_overridden = the actual dates of completed task { $successor } override its link with task { $predecessor }
+diag-progress-option_unsupported = progress option { $option } is not followed: default values used
+diag-progress-from_finish_in_progress = in-progress task { $task } in a project scheduled from finish: its remaining work is placed as soon as possible
+diag-progress-actual_start_missing = started task { $task } has no actual start: its scheduled start is used
+diag-progress-milestone_rounded = milestone { $task } is set to 100% complete
+diag-constraint-ignored_in_progress = the "{ $kind }" constraint of in-progress task { $task } is ignored for its dates
+diag-baseline-cost_not_computed = baseline { $number }: costs copied as is, not recalculated
+diag-baseline-task_skipped = { $count ->
+        [one] { $count } unscheduled task without a baseline
+       *[other] { $count } unscheduled tasks without a baseline
+    }
+diag-baseline-nothing_to_clear = baseline { $number }: nothing to clear
+diag-schedule-internal = internal scheduling inconsistency (please report): { $detail }
+diag-mspdi-invalid_value = unreadable or out-of-range value: default applied
+diag-mspdi-unknown_code = unknown code ({ $code }): default applied
+diag-mspdi-missing_required = required element missing
+diag-mspdi-duplicate = duplicate element: the first one is kept
+diag-mspdi-dangling_reference = reference to a missing UID
+diag-mspdi-link_ignored = link ignored ({ $reason })
+diag-mspdi-rounded = value rounded to the minute
+diag-mspdi-unsupported = unsupported feature ({ $what })
+diag-mspdi-inconsistent = tolerated inconsistency
+diag-mspdi-truncated = { $dropped ->
+        [one] { $dropped } diagnostic dropped beyond the limit
+       *[other] { $dropped } diagnostics dropped beyond the limit
+    }
+diag-mspdi-not_preserved = content not read, lost on save
+diag-mspdi-honor_constraints_off = "Honor constraints" turned off: links take precedence over constraints
+diag-mspdi-progress_inconsistent = { $count ->
+        [one] { $count } remaining value read from the file replaced by the calculation
+       *[other] { $count } remaining values read from the file replaced by the calculation
+    }
+diag-style-ignored = document style ignored ({ $reason }): default template applied
+diag-mspdi-error-empty = empty document
+diag-mspdi-error-too_large = document too large: { $size } bytes (limit { $max })
+diag-mspdi-error-utf16_not_supported = UTF-16 document: only UTF-8 is supported
+diag-mspdi-error-invalid_utf8 = invalid UTF-8 at { $at }
+diag-mspdi-error-xml = malformed XML at { $at }: { $message }
+diag-mspdi-error-unexpected_eof = unexpected end of document at { $at }{ $depth ->
+        [0] {""}
+       *[other] {" "}(open elements: { $open })
+    }
+diag-mspdi-error-doctype_not_allowed = DOCTYPE declaration refused at { $at }
+diag-mspdi-error-too_deep = nesting too deep at { $at } (limit { $max } levels)
+diag-mspdi-error-too_many_elements = too many elements (limit { $max })
+diag-mspdi-error-too_many_retained = too many retained elements at { $at } (limit { $max })
+diag-mspdi-error-text_too_long = text too long at { $at } (limit { $max } bytes)
+diag-mspdi-error-not_mspdi = not an MSPDI document: root "{ $root }" instead of "Project"
+diag-location = line { $line }, column { $column } (byte { $byte })
+diag-subject-project = the project
+diag-subject-calendar = calendar { $id }
+diag-subject-task = task { $id }
+diag-subject-link = link { $predecessor } -> { $successor }
+diag-subject-resource = resource { $id }
+diag-subject-assignment = assignment { $id }
+diag-pass-forward = forward pass
+diag-pass-backward = backward pass
+diag-bound-project-start = the project start
+diag-bound-project-finish = the project finish
+diag-bound-summary-gate = the bound of summary task { $summary }
+diag-bound-summary-cap = the cap of summary task { $summary }
+diag-bound-predecessor = the link from task { $predecessor }
+diag-bound-successor = the link to task { $successor }
+diag-with-element = { $head }: { $element }
+diag-with-value = { $head } = "{ $value }"
+diag-with-detail = { $head }, { $detail }
+template-classique = Classic
+template-sobre = Clean
+template-contraste-eleve = High contrast
+template-presentation = Presentation
+template-chantier = Works schedule
+template-impression-nb = Black and white print
+token-project = Project name
+token-status-date = Status date
+token-page = Page number
+token-pages = Page count
+token-print-date = Print date
+token-file = File name
 
 # --- J8 L15 ---
 

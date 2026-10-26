@@ -7,6 +7,8 @@
 use std::cell::OnceCell;
 use std::fmt;
 
+use planrs_core::DiagArg;
+
 /// Position dans l'entrée : octet (depuis 0), ligne et colonne (depuis 1,
 /// colonne comptée en caractères). Calculée à la construction de l'erreur ou
 /// du diagnostic.
@@ -135,6 +137,80 @@ impl MspdiError {
     }
 }
 
+impl Location {
+    /// Position en argument neutre de diagnostic.
+    #[must_use]
+    pub const fn arg(&self) -> DiagArg {
+        DiagArg::Position {
+            line: self.line,
+            column: self.column,
+            byte: self.byte,
+        }
+    }
+}
+
+/// Traduction par code (N9, J8 lot L14) : arguments neutres, en plus du
+/// `Display` français qui ne change pas.
+impl MspdiError {
+    /// Arguments nommés : `at` (position), `size`, `max`, `message`
+    /// (message de l'analyseur XML, non traduit), `open` (éléments ouverts,
+    /// « a/b ») et `depth` (leur nombre), `root`.
+    #[must_use]
+    pub fn args(&self) -> Vec<(&'static str, DiagArg)> {
+        match self {
+            Self::Empty | Self::Utf16NotSupported => Vec::new(),
+            Self::TooLarge { size, max } => {
+                vec![("size", DiagArg::count64(*size)), ("max", DiagArg::count64(*max))]
+            }
+            Self::InvalidUtf8 { at } | Self::DoctypeNotAllowed { at } => vec![("at", at.arg())],
+            Self::Xml { at, message } => vec![("at", at.arg()), ("message", DiagArg::Text(message.clone()))],
+            Self::UnexpectedEof { at, open } => vec![
+                ("at", at.arg()),
+                ("open", DiagArg::Text(open.join("/"))),
+                ("depth", DiagArg::count(open.len())),
+            ],
+            Self::TooDeep { at, max } => vec![("at", at.arg()), ("max", DiagArg::Int(i64::from(*max)))],
+            Self::TooManyElements { max } => vec![("max", DiagArg::count64(*max))],
+            Self::TooManyRetained { at, max } => vec![("at", at.arg()), ("max", DiagArg::count64(*max))],
+            Self::TextTooLong { at, max } => vec![("at", at.arg()), ("max", DiagArg::count(*max))],
+            Self::NotMspdi { root } => vec![("root", DiagArg::Text(root.clone()))],
+        }
+    }
+
+    /// Un exemple de chaque variante, dans l'ordre de déclaration, pour les
+    /// contrôles de couverture des traductions.
+    #[must_use]
+    pub fn examples() -> Vec<Self> {
+        let at = Location {
+            byte: 120,
+            line: 4,
+            column: 9,
+        };
+        vec![
+            Self::Empty,
+            Self::TooLarge { size: 300, max: 200 },
+            Self::Utf16NotSupported,
+            Self::InvalidUtf8 { at },
+            Self::Xml {
+                at,
+                message: "x".to_owned(),
+            },
+            Self::UnexpectedEof {
+                at,
+                open: vec!["Project".to_owned(), "Tasks".to_owned()],
+            },
+            Self::DoctypeNotAllowed { at },
+            Self::TooDeep { at, max: 64 },
+            Self::TooManyElements { max: 1_000 },
+            Self::TooManyRetained { at, max: 1_000 },
+            Self::TextTooLong { at, max: 1_000 },
+            Self::NotMspdi {
+                root: "html".to_owned(),
+            },
+        ]
+    }
+}
+
 /// Suffixe « (éléments ouverts : a/b) » du message de fin inattendue ; vide
 /// si aucun élément n'est ouvert (N10, `docs/ui-needs.md`).
 fn open_elements(open: &[String]) -> String {
@@ -247,7 +323,7 @@ pub(crate) fn locate_in_bytes(bytes: &[u8], valid_up_to: usize) -> Location {
 
 #[cfg(test)]
 mod tests {
-    use super::{LineIndex, Location, MspdiError, locate_in_bytes};
+    use super::{DiagArg, LineIndex, Location, MspdiError, locate_in_bytes};
 
     #[test]
     fn line_index() {
@@ -352,5 +428,30 @@ mod tests {
             "fin inattendue du document à la ligne 1, colonne 1 (octet 0)"
         );
         assert!(!text.contains("()") && !text.contains(": )"), "{text}");
+    }
+
+    /// Un exemple par variante, codes distincts ; fin inattendue : éléments
+    /// ouverts et leur nombre (N9).
+    #[test]
+    fn n9_examples_cover_every_variant() {
+        let examples = MspdiError::examples();
+        let codes: std::collections::BTreeSet<&str> = examples.iter().map(MspdiError::code).collect();
+        assert_eq!(codes.len(), 12);
+        assert_eq!(examples.len(), 12);
+        assert_eq!(
+            examples.get(5).map(MspdiError::args),
+            Some(vec![
+                (
+                    "at",
+                    DiagArg::Position {
+                        line: 4,
+                        column: 9,
+                        byte: 120
+                    }
+                ),
+                ("open", DiagArg::Text("Project/Tasks".to_owned())),
+                ("depth", DiagArg::Int(2)),
+            ])
+        );
     }
 }

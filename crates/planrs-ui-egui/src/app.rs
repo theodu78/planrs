@@ -614,7 +614,7 @@ impl App {
             });
         }
         self.rows = Some(rows);
-        self.diagnostics = DiagnosticsView::build(document);
+        self.diagnostics = DiagnosticsView::build(document, &self.texts);
         self.selected.retain(|uid| document.project().tasks.contains(uid));
         self.row_view_key = None;
         self.ensure_row_view();
@@ -1438,7 +1438,7 @@ impl App {
         let range_truncated = loaded.range_truncated;
         let document = OpenDocument::new(loaded, origin, opening);
         self.rows = Some(RowModel::build(&document, self.texts.format_labels()));
-        self.diagnostics = DiagnosticsView::build(&document);
+        self.diagnostics = DiagnosticsView::build(&document, &self.texts);
         if let Some(path) = &document.origin.path {
             self.state.remember_recent(path, &document.origin.name);
         }
@@ -1469,10 +1469,11 @@ impl App {
     pub(crate) fn report_open_error(&mut self, error: &OpenError, name: &str) {
         let (id, named, detail) = match error {
             OpenError::Read(detail) => (TextId::OpenErrorRead, TextId::OpenErrorReadFile, detail.clone()),
+            // Détail traduit par code (N9, J8 lot L14).
             OpenError::Mspdi(error) => (
                 TextId::OpenErrorMspdi,
                 TextId::OpenErrorMspdiFile,
-                error.to_string(),
+                crate::diag_text::DiagTexts::new(&self.texts).mspdi_error(error),
             ),
         };
         let text = if name.is_empty() {
@@ -1541,6 +1542,25 @@ impl App {
             return;
         }
         self.texts = Texts::new(language);
+        self.texts_changed();
+    }
+
+    /// Pseudo-langue de test (J8 lot L14, `tests/ui/pseudo.rs`) : messages
+    /// anglais accentués, allongés de 40 % et encadrés de crochets
+    /// ([`crate::i18n::pseudo`]), pour vérifier qu'aucun texte n'est coupé.
+    /// La préférence passe à l'anglais (dates, nombres et saisie) ; un
+    /// changement de langue rend les vrais messages. Jamais appelée par les
+    /// applications.
+    #[doc(hidden)]
+    pub fn use_pseudo_texts(&mut self) {
+        self.state.language = crate::state::LanguagePref::En;
+        self.texts = Texts::pseudo();
+        self.texts_changed();
+    }
+
+    /// Recrée ce qui dépend des messages (nom de l'exemple, modèle de
+    /// lignes, diagnostics) après un changement de [`Texts`].
+    fn texts_changed(&mut self) {
         if let Some(document) = &mut self.document {
             if document.origin.demo {
                 let mut origin = document.origin.clone();
@@ -1548,7 +1568,7 @@ impl App {
                 document.set_origin(origin);
             }
             self.rows = Some(RowModel::build(document, self.texts.format_labels()));
-            self.diagnostics = DiagnosticsView::build(document);
+            self.diagnostics = DiagnosticsView::build(document, &self.texts);
             self.row_view_key = None;
             self.ensure_row_view();
         }

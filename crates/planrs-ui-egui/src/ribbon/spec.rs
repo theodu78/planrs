@@ -8,8 +8,10 @@
 //! menus (libellé [`RibbonCmd::menu_label`]) ; aucune fonction n'est
 //! dupliquée, chaque commande pousse une [`Action`] existante.
 //!
-//! Lot L0 : table, actions et prédicats posés ; le lot L2 dessine, ajoute
-//! les jumeaux manquants aux menus et y branche ces fonctions.
+//! Lot L0 : table, actions et prédicats posés. Lot L2 : `view::ribbon`
+//! dessine la table ; les menus de `view::chrome` dessinent leurs entrées
+//! jumelles avec ces mêmes fonctions ([`RibbonCmd::menu_path`] : chemin du
+//! jumeau ; [`RibbonCmd::checked`] lit la tâche active).
 
 use planrs_automation::helpers::PercentStep;
 use planrs_render::style::BarRole;
@@ -295,12 +297,16 @@ impl RibbonCmd {
     pub fn enabled(self, fc: &FrameCtx<'_>) -> Enabled {
         let history = fc.doc.map(|doc| doc.session.history());
         match self {
+            // Préférences d'affichage : actives sans document, comme leurs
+            // cases du menu Affichage (J8).
             Self::ThemeMenu
             | Self::LanguageMenu
             | Self::CollapseRibbon
             | Self::AiPanel
             | Self::Diagnostics
-            | Self::TimelineVisible => return Enabled::YES,
+            | Self::TimelineVisible
+            | Self::CriticalTasks
+            | Self::ChartOnly => return Enabled::YES,
             Self::Undo if history.as_ref().is_none_or(|h| h.entries.is_empty()) => {
                 return Enabled::no(TextId::RibbonReasonNothingToUndo);
             }
@@ -350,12 +356,21 @@ impl RibbonCmd {
 
     /// État d'une case ou d'une bascule (H-UI-74) ; `None` pour un bouton.
     /// Les bascules de tâche (Désactiver, Planifier manuellement, Ajouter à
-    /// la chronologie) lisent la tâche active : lot L2.
+    /// la chronologie) lisent la **tâche active** (sélection mixte : son
+    /// état). Volet Opérations IA : l'état du volet n'est pas dans
+    /// [`FrameCtx`] ; `view::chrome::item_checked` le substitue (`false`
+    /// ici).
     #[must_use]
     pub fn checked(self, fc: &FrameCtx<'_>) -> Option<bool> {
         match self {
             Self::TimelineVisible => Some(fc.state.timeline_visible),
-            Self::AiPanel | Self::Inactivate | Self::ManualSchedule | Self::AddToTimeline => Some(false),
+            Self::AiPanel => Some(false),
+            Self::Inactivate => Some(active_task(fc).is_some_and(|task| !task.active)),
+            Self::ManualSchedule => Some(
+                active_task(fc)
+                    .is_some_and(|task| matches!(task.mode, planrs_core::SchedulingMode::Manual { .. })),
+            ),
+            Self::AddToTimeline => Some(on_timeline(fc)),
             Self::Diagnostics => Some(fc.state.diagnostics_open),
             Self::CollapseRibbon => Some(fc.state.ribbon.collapsed),
             Self::CriticalTasks => Some(fc.task_view.state.highlight_critical),
@@ -406,9 +421,11 @@ impl RibbonCmd {
             Self::PrintMode => TextId::MenuPrintMode,
             Self::PageSetup => TextId::MenuPageSetup,
             Self::ExportPdf => TextId::MenuExportPdf,
-            Self::SortMenu => TextId::RibbonSort,
-            Self::OutlineMenu => TextId::RibbonOutline,
-            Self::FilterMenu => TextId::RibbonFilter,
+            // Listes de l'onglet Affichage : entrées à plat du menu
+            // Affichage (`task_view::view_menu`) ; libellé de la première.
+            Self::SortMenu => TextId::MenuSort,
+            Self::OutlineMenu => TextId::MenuOutlineLevel,
+            Self::FilterMenu => TextId::MenuFilter,
             Self::TimescaleMenu => TextId::MenuZoom,
             Self::ZoomIn => TextId::RibbonZoomIn,
             Self::ZoomOut => TextId::RibbonZoomOut,
@@ -425,6 +442,115 @@ impl RibbonCmd {
             Self::ChartOnly => TextId::MenuChartOnly,
         }
     }
+
+    /// Chemin de l'entrée jumelle dans la barre de menus : menu, puis
+    /// sous-menus éventuels (H-UI-70, colonne « Jumeau » du § 2.2).
+    #[must_use]
+    pub const fn menu_path(self) -> &'static [TextId] {
+        match self {
+            Self::Save | Self::PrintMode | Self::PageSetup => &[TextId::MenuFile],
+            Self::ExportPdf => &[TextId::MenuFile, TextId::MenuExport],
+            Self::Undo
+            | Self::Redo
+            | Self::Paste
+            | Self::Cut
+            | Self::Copy
+            | Self::PasteSpecial
+            | Self::Indent
+            | Self::Outdent
+            | Self::InsertTask
+            | Self::Find
+            | Self::ScrollToTask
+            | Self::AssignResources => &[TextId::MenuEdit],
+            Self::ZoomIn | Self::ZoomOut | Self::EntireProject => &[TextId::MenuView, TextId::MenuZoom],
+            // Listes : leur jumeau est le sous-menu (Zoom, Thème, Langue,
+            // Colonnes) ou la première entrée à plat du menu.
+            Self::TimescaleMenu
+            | Self::ViewMenu
+            | Self::GanttChart
+            | Self::TrackingGantt
+            | Self::ResourceSheet
+            | Self::ResourceUsage
+            | Self::SortMenu
+            | Self::OutlineMenu
+            | Self::FilterMenu
+            | Self::TimelineVisible
+            | Self::AiPanel
+            | Self::Diagnostics
+            | Self::ThemeMenu
+            | Self::LanguageMenu
+            | Self::CollapseRibbon
+            | Self::CriticalTasks
+            | Self::ChartOnly => &[TextId::MenuView],
+            Self::MarkPercent(_)
+            | Self::InsertSummary
+            | Self::InsertMilestone
+            | Self::Link
+            | Self::Unlink
+            | Self::Inactivate
+            | Self::ManualSchedule
+            | Self::TaskInformation
+            | Self::TaskNotes
+            | Self::AddToTimeline => &[TextId::MenuTask],
+            Self::ProjectInformation | Self::WorkingTime | Self::SetBaseline | Self::UpdateProject => {
+                &[TextId::MenuProject]
+            }
+            Self::FormatBars | Self::Gallery | Self::RelativeMonths | Self::ColumnsMenu => {
+                &[TextId::MenuFormat]
+            }
+        }
+    }
+
+    /// Case à cocher dans la barre de menus (préférences d'affichage) ;
+    /// les bascules de tâche y restent des commandes (« Activer /
+    /// désactiver », « Basculer manuelle / automatique »).
+    #[must_use]
+    pub const fn menu_is_check(self) -> bool {
+        matches!(
+            self,
+            Self::TimelineVisible
+                | Self::AiPanel
+                | Self::Diagnostics
+                | Self::CollapseRibbon
+                | Self::CriticalTasks
+                | Self::RelativeMonths
+                | Self::ChartOnly
+        )
+    }
+
+    /// Vue courante (choix exclusif du menu Affichage et de la liste
+    /// « Diagramme de Gantt ▾ ») ; faux sans document.
+    #[must_use]
+    pub fn view_selected(self, fc: &FrameCtx<'_>) -> bool {
+        let view = fc.state.view;
+        fc.doc.is_some()
+            && match self {
+                Self::GanttChart | Self::TrackingGantt => {
+                    view == ViewKind::Gantt && self.gantt_style() == Some(fc.state.gantt_style)
+                }
+                Self::ResourceSheet => view == ViewKind::ResourceSheet,
+                Self::ResourceUsage => view == ViewKind::ResourceUsage,
+                _ => false,
+            }
+    }
+}
+
+/// Tâche active du document (H-UI-74), si elle existe encore.
+fn active_task<'a>(fc: &FrameCtx<'a>) -> Option<&'a planrs_core::Task> {
+    let uid = fc.selection?;
+    fc.doc?.project().tasks.get(uid)
+}
+
+/// La tâche active est sur la chronologie (liste du style du document).
+fn on_timeline(fc: &FrameCtx<'_>) -> bool {
+    let (Some(doc), Some(uid)) = (fc.doc, fc.selection) else {
+        return false;
+    };
+    fc.state
+        .effective_style(doc.project())
+        .timeline
+        .tasks
+        .contains(&uid.get())
 }
 
 /// « Mois relatifs » du style effectif du document (faux sans document).

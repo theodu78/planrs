@@ -9,9 +9,10 @@
 //!
 //! Lot L0 (contrat) : types, réducteur de l'état du ruban ([`reduce`]),
 //! icônes ([`icon_data`], généré par `cargo xtask icons` ; [`icons`],
-//! tracé) et table ; le moteur de dessin vient en L2, derrière
-//! [`Chrome::Ribbon`] (non persistant, [`Chrome::Toolbar`] par défaut
-//! jusqu'à L5 : aucun changement visible avant).
+//! tracé) et table. Lot L2 : moteur de dessin (`view::ribbon`) et menus
+//! jumeaux (`view::chrome`), derrière [`Chrome::Ribbon`] (non persistant,
+//! [`Chrome::Toolbar`] par défaut jusqu'à L5 : aucun changement visible
+//! avant).
 
 #[rustfmt::skip]
 pub mod icon_data;

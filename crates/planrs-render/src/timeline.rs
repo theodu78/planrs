@@ -76,6 +76,10 @@ pub const BOUND_BASE16: i64 = 65 * SUB;
 /// Marge autour des étiquettes d'extrémité.
 pub const PAD16: i64 = 4 * SUB;
 
+/// Écart entre une étiquette d'extrémité et le bout de l'axe : un losange
+/// posé au bout de l'axe (demi-diagonale 5 px) ne la touche pas.
+pub const AXIS_GAP16: i64 = 8 * SUB;
+
 /// Écart minimal entre deux barres d'une rangée.
 pub const BAR_GAP16: i64 = 4 * SUB;
 
@@ -338,7 +342,7 @@ pub fn layout(input: &TimelineInput, width16: i64) -> TimelineLayout {
 
     // Étiquettes d'extrémité et marges de l'axe.
     let room = w
-        .saturating_sub(PAD16.saturating_mul(4))
+        .saturating_sub(PAD16.saturating_add(AXIS_GAP16).saturating_mul(2))
         .saturating_sub(MIN_AXIS16)
         .max(0)
         / 2;
@@ -352,8 +356,9 @@ pub fn layout(input: &TimelineInput, width16: i64) -> TimelineLayout {
     let start_label = bound(&input.start_label);
     let finish_label = bound(&input.finish_label);
     let margin = |l: &Option<(String, i64)>| {
-        l.as_ref()
-            .map_or(PAD16, |(_, lw)| PAD16.saturating_mul(2).saturating_add(*lw))
+        l.as_ref().map_or(PAD16, |(_, lw)| {
+            PAD16.saturating_add(AXIS_GAP16).saturating_add(*lw)
+        })
     };
     let x0 = margin(&start_label).min(w);
     let x1 = w.saturating_sub(margin(&finish_label)).max(x0);

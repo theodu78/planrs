@@ -7,6 +7,10 @@
 //! - `pdf_captures_six_templates` (toujours exécuté) : un PDF par modèle,
 //!   au moins une page, aucun glyphe manquant, aucune ligne masquée ;
 //!   deux exports égaux octet pour octet (H-R13).
+//! - `pdf_captures_timeline` (toujours exécuté, ADR-0017 lot L1, H-UI-82) :
+//!   style du document avec chronologie (récapitulative, tâches, deux
+//!   jalons) et case « Chronologie » de la mise en page ; PDF déterministe,
+//!   différent de l'export sans frise, aucun glyphe manquant.
 //! - `pdf_captures_network_5000` (ignoré, release) : 5 000 tâches, Sobre,
 //!   A3 paysage, 1 page en largeur ; au plus `MAX_PAGES` pages.
 //!
@@ -25,11 +29,11 @@
 
 use std::path::PathBuf;
 
-use planrs_automation::Session;
 use planrs_automation::command::params::ExportPdfParams;
 use planrs_automation::pdf::{PdfExport, export};
 use planrs_automation::session::DocOrigin;
 use planrs_automation::text::Language;
+use planrs_automation::{CallEnv, Session, call_with};
 use planrs_tests::generate::ui_network;
 use planrs_tests::{moment, tests_path};
 use serde_json::json;
@@ -88,6 +92,47 @@ fn pdf_captures_six_templates() {
         eprintln!("{key} : {} page(s)", first.report.pages);
         keep(&format!("tracking_j6_{key}.pdf"), &first.bytes);
     }
+}
+
+/// H-UI-82 : `project.export_pdf` imprime la chronologie du style du
+/// document quand sa mise en page la demande (même chemin que la CLI et le
+/// MCP) ; PDF gardé sous `tracking_j6_timeline.pdf` pour la relecture.
+#[test]
+fn pdf_captures_timeline() {
+    let xml = std::fs::read(tests_path("mcp/expected/tracking_j6.xml")).unwrap();
+    let origin = DocOrigin {
+        name: "tracking_j6.xml".to_owned(),
+        path: None,
+    };
+    let now = moment("2026-10-26T08:00");
+    let (mut session, _) = Session::open_bytes(&xml, origin, now, Language::Fr).unwrap();
+    let page = json!({
+        "paper": "a4", "landscape": true, "margins_mm": [10, 10, 10, 10],
+        "fit": { "scale": 100 }, "repeat_table": true,
+        "header": ["{projet}", "", ""], "footer": ["", "", "{page}/{pages}"], "logo": null,
+        "timeline": true
+    });
+    let patch = json!({
+        "template": "sobre",
+        "patch": { "page": page, "timeline": { "tasks": [1, 3, 6, 8, 11, 16, 20] } }
+    });
+    call_with(
+        &mut session,
+        &CallEnv::new(now, Language::Fr),
+        "style.apply",
+        patch,
+    )
+    .unwrap();
+    let with = pdf_of(&session, &json!({ "path": "timeline.pdf" }));
+    assert!(with.bytes.starts_with(b"%PDF-"));
+    assert_ne!(with.report.pages, 0);
+    assert_eq!(with.report.missing_glyphs, "", "glyphes manquants");
+    let again = pdf_of(&session, &json!({ "path": "timeline.pdf" }));
+    assert_eq!(with.bytes, again.bytes, "PDF non déterministe (H-R13)");
+    let without = pdf_of(&session, &json!({ "path": "plain.pdf", "style": "sobre" }));
+    assert_ne!(with.bytes, without.bytes);
+    eprintln!("chronologie : {} page(s)", with.report.pages);
+    keep("tracking_j6_timeline.pdf", &with.bytes);
 }
 
 #[test]

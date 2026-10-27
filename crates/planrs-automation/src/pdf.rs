@@ -6,13 +6,15 @@
 //! (`HEADLESS_DEFAULT`) ; mise en page du style, papier, orientation et
 //! « N pages en largeur » remplaçables par la requête ; variante
 //! d'impression toujours. Textes autour des barres, en-tête et pied de page
-//! formatés par `SessionTexts` (règle 3). Les octets sont rendus à
+//! formatés par `SessionTexts` (règle 3). Chronologie en tête de la
+//! première page si le style la demande (`page.timeline`, H-UI-82,
+//! `timeline::print_input`). Les octets sont rendus à
 //! l'appelant (le routeur les écrit) : aucune entrée/sortie ici, wasm
 //! compris.
 
 use planrs_pdf::{FontSet, PdfError, PdfMeta};
 use planrs_render::geometry::Viewport;
-use planrs_render::paginate::{PageError, PaginateOptions, fit_zoom, layout_pages};
+use planrs_render::paginate::{PageError, PaginateOptions, fit_zoom, layout_pages_timeline};
 use planrs_render::style::{Fit, PageStyle, Paper, Variant, template};
 use planrs_render::{Lang, RangeSpec, RenderLimits, RowFilter, Zoom};
 use serde::Serialize;
@@ -119,7 +121,10 @@ pub fn export_rows(
     let options = PaginateOptions {
         legend_every_page: st.legend.every_page,
     };
-    let (pages, render) = layout_pages(project, sched, &st, &texts, &vp, options);
+    // Chronologie en tête de la première page si la mise en page la
+    // demande (H-UI-82) ; dates et textes du moteur (règle 3).
+    let timeline = crate::timeline::print_input(s, &st, lang);
+    let (pages, render) = layout_pages_timeline(project, sched, &st, &texts, &vp, options, timeline.as_ref());
     let pages = pages.map_err(|e| match e {
         PageError::TooManyPages { needed } => too_many(lang, needed),
         PageError::NotYetAvailable => ToolError::simple(codes::FILE_WRITE, e.to_string()),

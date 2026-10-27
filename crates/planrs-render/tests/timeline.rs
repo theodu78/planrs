@@ -21,8 +21,9 @@ use planrs_render::paginate::{
 };
 use planrs_render::style::{BarField, Fit, Paper, TemplateId, Variant, template};
 use planrs_render::timeline::{
-    AXIS_Y16, BOTTOM_BASE16, PAD16, TIMELINE_FONT, TIMELINE_FONT_STRONG, TIMELINE_HEIGHT16, TOP_BASE16,
-    TimelineInput, TimelineItem, TimelineKind, TimelineLayout, TimelineShape, TimelineText, layout,
+    AXIS_GAP16, AXIS_Y16, BOTTOM_BASE16, PAD16, TIMELINE_FONT, TIMELINE_FONT_STRONG, TIMELINE_HEIGHT16,
+    TOP_BASE16, TimelineInput, TimelineItem, TimelineKind, TimelineLayout, TimelineShape, TimelineText,
+    layout,
 };
 use planrs_render::{
     GanttRequest, InterMetrics, Lang, RangeSpec, RenderLimits, RowFilter, TextMeasure, Theme, Zoom,
@@ -110,7 +111,7 @@ fn milestone(u: u32, when: &str, name: &str, date: &str) -> TimelineItem {
 
 /// Marge d'une étiquette d'extrémité (H-R16).
 fn margin(label: &str) -> i64 {
-    2 * PAD16 + InterMetrics.width16(label, TIMELINE_FONT_STRONG)
+    PAD16 + AXIS_GAP16 + InterMetrics.width16(label, TIMELINE_FONT_STRONG)
 }
 
 fn axis(l: &TimelineLayout) -> (i64, i64) {
@@ -180,7 +181,7 @@ fn h_r16_axis_maps_bounds() {
 fn h_r16_example_p_wall_bar() {
     let input = p_input(&[2, 3, 4, 6]);
     let (m0, m1) = (margin(START_LABEL), margin(FINISH_LABEL));
-    assert_eq!((m0, m1), (1_566, 1_352));
+    assert_eq!((m0, m1), (1_630, 1_416));
     let l = layout(&input, 16_000 + m0 + m1);
     let (x0, x1) = axis(&l);
     assert_eq!((x0, x1 - x0), (m0, 16_000));
@@ -365,7 +366,10 @@ fn text_box(x: i64, y: i64, s: &str, role: TimelineText) -> (i64, i64, i64, i64)
 }
 
 /// Propriétés P58 d'une disposition.
-#[allow(clippy::many_single_char_names, reason = "géométrie : largeur, hauteur, boîtes")]
+#[allow(
+    clippy::many_single_char_names,
+    reason = "géométrie : largeur, hauteur, boîtes"
+)]
 fn check_props(input: &TimelineInput, l: &TimelineLayout, width16: i64) -> Result<(), String> {
     let w = width16.clamp(0, 1 << 40);
     let h = TIMELINE_HEIGHT16;

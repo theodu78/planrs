@@ -28,6 +28,7 @@ pub mod nav;
 pub mod query;
 pub mod relay;
 pub mod resource_rows;
+pub mod ribbon;
 pub mod row_view;
 pub mod rows;
 pub mod selection;

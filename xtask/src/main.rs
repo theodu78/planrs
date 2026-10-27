@@ -18,6 +18,8 @@
 //!   en anglais et utilisé dans le code livré (ADR-0016 D14).
 //! - `icon [--check]` : écrit (ou vérifie) l'icône de l'application en PNG
 //!   (`assets/icon/`, 16 à 1 024 px), dessin déterministe.
+//! - `icons [--check]` : écrit (ou vérifie) les polylignes des icônes du
+//!   ruban depuis les SVG Lucide de `assets/icons/lucide/` (H-UI-77).
 //! - `release-check <tag>` : tag = version du workspace = première section
 //!   de `CHANGELOG.md` (C-REL-01) ; `release-notes <tag>` : notes de la
 //!   release (section du CHANGELOG et lien vers le guide d'installation).
@@ -28,6 +30,7 @@
 mod corpus;
 mod fonts;
 mod icon;
+mod icons;
 mod layers;
 mod panics;
 mod release;
@@ -46,6 +49,8 @@ tâches :
            écrit (ou vérifie) la table des avances d'Inter (H-R11)
   icon [--check]
            écrit (ou vérifie) l'icône de l'application (assets/icon, PNG)
+  icons [--check]
+           écrit (ou vérifie) les icônes du ruban (SVG Lucide → polylignes)
   text-ids vérifie que chaque texte de l'interface est traduit (FR, EN) et utilisé
   rules    vérifie que chaque règle R-xxx a ses tests (règle 4)
   release-check <tag>
@@ -65,6 +70,7 @@ fn main() -> ExitCode {
         Some("rules") => rules::run(),
         Some("text-ids") => text_ids::run(),
         Some("icon") => icon::run(args.get(1..).unwrap_or_default()),
+        Some("icons") => icons::run(args.get(1..).unwrap_or_default()),
         Some("release-check") => release::run_check(args.get(1..).unwrap_or_default()),
         Some("release-notes") => release::run_notes(args.get(1..).unwrap_or_default()),
         Some("fonts") => fonts::run(args.get(1..).unwrap_or_default()),

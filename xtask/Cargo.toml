@@ -23,6 +23,11 @@ toml.workspace = true
 # `cargo xtask fonts` : avances d'Inter ; version tirée par egui (déjà au
 # lock), distincte de la 0.42 de krilla.
 skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
+# `cargo xtask icons` (ADR-0017 D6) : lecture des SVG Lucide et
+# aplatissement des courbes en polylignes. Versions déjà au lock (tirées par
+# l'écosystème egui) ; aucune crate nouvelle, xtask seulement.
+roxmltree = "0.21.1"
+kurbo = "0.13.1"
 
 [lints]
 workspace = true

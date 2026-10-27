@@ -23,3 +23,15 @@ Police Inter (assets/fonts/Inter-Regular.ttf, assets/fonts/Inter-SemiBold.ttf)
       U+2248,U+2260,U+2264,U+2265,U+25A0-25FF,U+FFFD" --no-hinting
       --layout-features='' --no-layout-closure --name-IDs='*'
       --name-languages='*'
+
+Icônes Lucide (assets/icons/lucide/*.svg, 47 fichiers)
+  Copyright (c) 2026 Lucide Icons and Contributors (https://lucide.dev)
+  Licence : ISC (assets/icons/lucide/LICENSE, recopié tel quel du paquet).
+  Icônes dérivées de Feather (link, info, search, zoom-in, zoom-out,
+  maximize) : Copyright (c) 2013-present Cole Bemis, licence MIT (même
+  fichier).
+  Source : paquet npm lucide-static 1.55.0
+  (https://registry.npmjs.org/lucide-static/-/lucide-static-1.55.0.tgz,
+  sha1 12e5674d15cb258ca10e5ec8ff039ed602886d44), fichiers icons/<nom>.svg
+  copiés sans modification. Convertis en polylignes au build par
+  `cargo xtask icons` (crates/planrs-ui-egui/src/ribbon/icon_data.rs).

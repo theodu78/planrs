@@ -18,10 +18,11 @@
 use std::ops::Range;
 
 use crate::axis::SUB;
-use crate::geometry::{BarTextSource, Part, Scene, Token};
+use crate::geometry::{BarTextSource, Item, Part, Scene, Token};
 use crate::request::Zoom;
 use crate::scene::table_width16;
-use crate::style::{Fit, PageStyle, Paper, Slot};
+use crate::style::{Fit, PageStyle, Paper, PlanStyle, Slot, Variant};
+use crate::timeline::{TIMELINE_HEIGHT16, TimelineInput, TimelineLayout};
 
 /// Plafond du nombre de pages d'un export (règle 10 : entrée bornée).
 pub const MAX_PAGES: usize = 1_000;
@@ -49,12 +50,20 @@ const MIN_SCALE: u32 = 1_000;
 /// Échelle maximale admise (400 %).
 const MAX_SCALE: u32 = 40_000;
 
+/// Écart entre la chronologie imprimée et l'échelle du planning (8 px,
+/// H-UI-82).
+pub const TIMELINE_GAP16: i64 = 8 * SUB;
+
 /// Largeur de Gantt minimale d'une page à table répétée (32 px) : en
 /// dessous, la table n'est pas répétée (elle mangerait la page).
 const MIN_SLICE16: i64 = 32 * SUB;
 
 /// Une page : bande de lignes et tranche d'abscisses de la scène.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "drapeaux indépendants d'une page (table, légende, troncature, chronologie)"
+)]
 pub struct Page {
     /// Rang en largeur (0 = première colonne de pages).
     pub col: u16,
@@ -81,6 +90,33 @@ pub struct Page {
     pub legend: bool,
     /// Ligne de troncature dessinée après la dernière ligne.
     pub cut: bool,
+    /// Chronologie dessinée en tête de la page (première page seulement,
+    /// H-UI-82).
+    pub timeline: bool,
+}
+
+/// Chronologie imprimée (H-UI-82, H-R16) : disposition sur la largeur
+/// imprimable, et ses primitives (`timeline::items`), origine en haut à
+/// gauche de la frise.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrintTimeline {
+    /// Largeur de la frise (largeur imprimable à l'échelle des pages).
+    pub width16: i64,
+    /// Disposition (H-R16).
+    pub layout: TimelineLayout,
+    /// Primitives, peintures dans `Pages::scene.paints`.
+    pub items: Vec<Item>,
+}
+
+/// Chronologie à imprimer : données du moteur et style de ses peintures.
+#[derive(Clone, Copy, Debug)]
+pub struct TimelineSource<'a> {
+    /// Données de la frise (`planrs_automation::timeline::input`).
+    pub input: &'a TimelineInput,
+    /// Style (peintures des jetons existants).
+    pub style: &'a PlanStyle,
+    /// Variante du style.
+    pub variant: Variant,
 }
 
 /// Pages d'un export, dans l'ordre de lecture : bande par bande, de gauche
@@ -110,6 +146,28 @@ pub struct Pages {
     /// l'en-tête en titre sur [`TITLE_LINE_PT`], première ligne de la zone
     /// droite appuyée.
     pub title_block: bool,
+    /// Chronologie en tête de la première page : haut (0, sous l'en-tête
+    /// et le cartouche) et hauteur ([`TIMELINE_HEIGHT16`]) dans l'espace de
+    /// la scène ; `(0, 0)` sans chronologie. Le planning de la première
+    /// page commence [`TIMELINE_GAP16`] plus bas.
+    pub timeline16: (i64, i64),
+    /// Chronologie imprimée (`page.timeline` et données fournies).
+    pub timeline: Option<PrintTimeline>,
+}
+
+impl Pages {
+    /// Hauteur réservée en tête de la page `index` (chronologie et son
+    /// écart), en 1/16 px de scène : non nulle sur la première page
+    /// seulement.
+    #[must_use]
+    pub fn lead16(&self, index: usize) -> i64 {
+        let first = self.pages.get(index).is_some_and(|p| p.timeline);
+        if first && self.timeline16.1 > 0 {
+            self.timeline16.1.saturating_add(TIMELINE_GAP16)
+        } else {
+            0
+        }
+    }
 }
 
 /// Erreur de pagination.
@@ -258,8 +316,32 @@ pub fn layout_pages(
     vp: &crate::geometry::Viewport,
     opts: PaginateOptions,
 ) -> (Result<Pages, PageError>, crate::request::RenderReport) {
+    layout_pages_timeline(project, schedule, st, src, vp, opts, None)
+}
+
+/// Comme [`layout_pages`], avec la chronologie `timeline` en tête de la
+/// première page si la mise en page la demande (`page.timeline`, H-UI-82 ;
+/// `None` : aucune). Chemin commun de l'export PDF et de l'aperçu.
+///
+/// # Errors
+///
+/// Ceux de [`paginate_timeline`] (première passe).
+pub fn layout_pages_timeline(
+    project: &planrs_core::Project,
+    schedule: &planrs_core::Schedule,
+    st: &crate::style::PlanStyle,
+    src: &dyn BarTextSource,
+    vp: &crate::geometry::Viewport,
+    opts: PaginateOptions,
+    timeline: Option<&TimelineInput>,
+) -> (Result<Pages, PageError>, crate::request::RenderReport) {
+    let tl = timeline.map(|input| TimelineSource {
+        input,
+        style: st,
+        variant: vp.variant,
+    });
     let (scene, report) = crate::geometry::layout(project, schedule, st, src, vp);
-    let first = paginate_with(&scene, &st.page, src, opts);
+    let first = paginate_timeline(&scene, &st.page, src, opts, tl);
     drop(scene);
     let refit = match (&first, st.page.fit, vp.zoom) {
         (Ok(pages), Fit::PagesWideTall(..), Zoom::Fill { .. }) if pages.scale < FULL_SCALE => {
@@ -275,7 +357,7 @@ pub fn layout_pages(
     };
     let wide = crate::geometry::Viewport { zoom, ..vp.clone() };
     let (scene, report2) = crate::geometry::layout(project, schedule, st, src, &wide);
-    match paginate_with(&scene, &st.page, src, opts) {
+    match paginate_timeline(&scene, &st.page, src, opts, tl) {
         Ok(pages) if pages.scale.saturating_add(REFIT_SLACK) >= scale => (Ok(pages), report2),
         _ => (first, report),
     }
@@ -428,7 +510,9 @@ fn orphan_summary(scene: &Scene, end: usize) -> bool {
 /// Découpe les lignes en bandes de hauteur `cap16` au plus (au moins une
 /// ligne par bande), la dernière portant `tail16` en plus (troncature et
 /// légende).
-fn bands(scene: &Scene, cap16: i64, row_extra16: i64, tail16: i64) -> Vec<Band> {
+/// La première bande porte en plus `first16` en tête (chronologie,
+/// H-UI-82).
+fn bands(scene: &Scene, cap16: i64, row_extra16: i64, tail16: i64, first16: i64) -> Vec<Band> {
     let n = scene.rows.len();
     let h = |i: usize| scene.rows.get(i).map_or(0, |r| r.h16);
     let row_h = h(0);
@@ -439,7 +523,8 @@ fn bands(scene: &Scene, cap16: i64, row_extra16: i64, tail16: i64) -> Vec<Band> 
         let parent = continued_parent(scene, start);
         let avail = cap16
             .saturating_sub(row_extra16)
-            .saturating_sub(if parent.is_some() { row_h } else { 0 });
+            .saturating_sub(if parent.is_some() { row_h } else { 0 })
+            .saturating_sub(if start == 0 { first16 } else { 0 });
         let mut used = 0_i64;
         while i < n && (i == start || used.saturating_add(h(i)) <= avail) {
             used = used.saturating_add(h(i));
@@ -461,8 +546,10 @@ fn bands(scene: &Scene, cap16: i64, row_extra16: i64, tail16: i64) -> Vec<Band> 
     let fits = |band: &Band, tail: i64| {
         let band_h: i64 = band.0.clone().map(h).fold(0, i64::saturating_add);
         let parent_h = if band.1.is_some() { row_h } else { 0 };
+        let lead = if band.0.start == 0 { first16 } else { 0 };
         band_h
             .saturating_add(parent_h)
+            .saturating_add(lead)
             .saturating_add(row_extra16)
             .saturating_add(tail)
             <= cap16
@@ -500,13 +587,20 @@ fn bands(scene: &Scene, cap16: i64, row_extra16: i64, tail16: i64) -> Vec<Band> 
 }
 
 /// Échelle de `fit` (dix-millièmes), bornée de 10 % à 400 %.
-fn scale_for(scene: &Scene, page: &PageStyle, cap: &dyn Fn(u32) -> i64, tail16: i64, extra16: i64) -> u32 {
+fn scale_for(
+    scene: &Scene,
+    page: &PageStyle,
+    cap: &dyn Fn(u32) -> i64,
+    tail16: i64,
+    extra16: i64,
+    first16: i64,
+) -> u32 {
     match page.fit {
         Fit::Scale(pct) => u32::from(pct).saturating_mul(100).clamp(MIN_SCALE, MAX_SCALE),
         Fit::PagesWide(n) => wide_scale(scene, page, usize::from(n.clamp(1, 20))),
         Fit::PagesWideTall(n, m) => {
             let w = wide_scale(scene, page, usize::from(n.clamp(1, 20)));
-            let t = tall_scale(scene, cap, usize::from(m.clamp(1, 20)), tail16, extra16);
+            let t = tall_scale(scene, cap, usize::from(m.clamp(1, 20)), tail16, extra16, first16);
             w.min(t)
         }
     }
@@ -535,8 +629,15 @@ fn wide_scale(scene: &Scene, page: &PageStyle, n: usize) -> u32 {
 }
 
 /// Plus grande échelle ≤ 100 % dont les lignes tiennent en `m` bandes.
-fn tall_scale(scene: &Scene, cap: &dyn Fn(u32) -> i64, m: usize, tail16: i64, extra16: i64) -> u32 {
-    let count = |s: u32| bands(scene, cap(s), extra16, tail16).len();
+fn tall_scale(
+    scene: &Scene,
+    cap: &dyn Fn(u32) -> i64,
+    m: usize,
+    tail16: i64,
+    extra16: i64,
+    first16: i64,
+) -> u32 {
+    let count = |s: u32| bands(scene, cap(s), extra16, tail16, first16).len();
     if count(FULL_SCALE) <= m {
         return FULL_SCALE;
     }
@@ -597,6 +698,39 @@ pub fn paginate_with(
     src: &dyn BarTextSource,
     opts: PaginateOptions,
 ) -> Result<Pages, PageError> {
+    paginate_timeline(scene, page, src, opts, None)
+}
+
+/// Comme [`paginate_with`], avec la chronologie `timeline` en tête de la
+/// **première page seulement** si `page.timeline` (H-UI-82, ADR-0017 D8) :
+/// sous l'en-tête et le cartouche, sur toute la largeur imprimable à
+/// l'échelle des pages, hauteur [`TIMELINE_HEIGHT16`] suivie de
+/// [`TIMELINE_GAP16`] ; les lignes de la première bande diminuent d'autant
+/// (P54 tient : au moins une ligne par bande). Disposition par
+/// `timeline::layout` (H-R16), primitives par `timeline::items`, peintures
+/// ajoutées à celles de la scène. Sans `page.timeline` ou sans données :
+/// identique à [`paginate_with`].
+///
+/// # Errors
+///
+/// [`PageError::TooManyPages`] au-delà de [`MAX_PAGES`] pages.
+#[allow(
+    clippy::too_many_lines,
+    reason = "pagination d'un bloc : échelle, colonnes, bandes, pages, chronologie"
+)]
+pub fn paginate_timeline(
+    scene: &Scene,
+    page: &PageStyle,
+    src: &dyn BarTextSource,
+    opts: PaginateOptions,
+    timeline: Option<TimelineSource<'_>>,
+) -> Result<Pages, PageError> {
+    let timeline = timeline.filter(|_| page.timeline);
+    let first16 = if timeline.is_some() {
+        TIMELINE_HEIGHT16.saturating_add(TIMELINE_GAP16)
+    } else {
+        0
+    };
     let paper = paper_pt(page);
     let margins = margins_pt(page);
     let (_, h_pt) = printable_pt(page);
@@ -630,9 +764,9 @@ pub fn paginate_with(
     } else {
         (0, shape.cut16.saturating_add(shape.legend16))
     };
-    let scale = scale_for(scene, page, &cap, tail16, extra16);
+    let scale = scale_for(scene, page, &cap, tail16, extra16, first16);
     let cols = columns(scene, page, scale);
-    let row_bands = bands(scene, cap(scale), extra16, tail16);
+    let row_bands = bands(scene, cap(scale), extra16, tail16, first16);
     let needed = row_bands.len().saturating_mul(cols.count);
     if needed > MAX_PAGES {
         return Err(PageError::TooManyPages { needed });
@@ -682,9 +816,25 @@ pub fn paginate_with(
                 table: cols.table,
                 legend: shape.legend16 > 0 && (opts.legend_every_page || is_last),
                 cut: shape.cut16 > 0 && is_last,
+                timeline: timeline.is_some() && pages.is_empty(),
             });
         }
     }
+    let mut scene = scene.clone();
+    let print = timeline.map(|tl| {
+        let (w_pt, _) = printable_pt(page);
+        let width16 = pt_to16(w_pt, scale).max(SUB);
+        let layout = crate::timeline::layout(tl.input, width16);
+        let items = crate::timeline::items(&layout);
+        for (class, paint) in crate::timeline::paints(tl.style, tl.variant) {
+            scene.paints.entry(class).or_insert(paint);
+        }
+        PrintTimeline {
+            width16,
+            layout,
+            items,
+        }
+    });
     Ok(Pages {
         pages,
         paper_pt: paper,
@@ -694,8 +844,14 @@ pub fn paginate_with(
         scale,
         cut16: shape.cut16,
         legend16: (shape.legend_top16, shape.legend16),
-        scene: scene.clone(),
+        scene,
         title_block: title,
+        timeline16: if print.is_some() {
+            (0, TIMELINE_HEIGHT16)
+        } else {
+            (0, 0)
+        },
+        timeline: print,
     })
 }
 

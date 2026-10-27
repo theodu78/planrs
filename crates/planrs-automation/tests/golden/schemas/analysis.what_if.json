@@ -3325,7 +3325,7 @@
                 "type": "string"
               },
               "patch": {
-                "description": "Surcharge (`StylePatch` de `planrs-render`, lue et bornée par\n`parse_doc_style` : au plus 64 Kio). Seule : fusionnée avec les\nsurcharges du document (sections `colors`, `bars` et `texts` rôle\npar rôle, les autres remplacées en entier)."
+                "description": "Surcharge (`StylePatch` de `planrs-render`, lue et bornée par\n`parse_doc_style` : au plus 64 Kio). Seule : fusionnée avec les\nsurcharges du document (sections `colors`, `bars` et `texts` rôle\npar rôle, les autres remplacées en entier, dont `timeline` : UID des\ntâches de la chronologie, triés, au plus 200)."
               },
               "reset": {
                 "description": "Retire le style du document (modèle par défaut des préférences ;\nplus rien d'écrit dans le fichier). Exclusif des deux autres champs.",

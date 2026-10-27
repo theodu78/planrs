@@ -327,12 +327,15 @@ impl crate::app::App {
         // appartient au projet et non au modèle, couleurs de phase (H-UI-65)
         // et mise en page enregistrée (colonnes d'impression, en-tête et
         // pied, cartouche) ; le reste des surcharges suit le modèle.
+        // ADR-0017 (lot L6) : la liste des tâches de la chronologie
+        // (H-UI-79) appartient au projet aussi, gardée telle quelle.
         let kept = input
             .current
             .as_ref()
             .map(|d| planrs_render::style::StylePatch {
                 phases: d.over.phases.clone(),
                 page: d.over.page.clone(),
+                timeline: d.over.timeline.clone(),
                 ..planrs_render::style::StylePatch::default()
             })
             .unwrap_or_default();
@@ -361,8 +364,11 @@ impl crate::app::App {
                 if let Some(t) = self.state.user_templates.get(i) {
                     // Surcharges du modèle personnel par-dessus celles que
                     // garde le projet (les siennes l'emportent).
-                    let over = planrs_automation::command::style::merge_patch(&kept, &t.style.over)
+                    let mut over = planrs_automation::command::style::merge_patch(&kept, &t.style.over)
                         .unwrap_or_else(|| t.style.over.clone());
+                    // Chronologie : UID du projet ouvert, jamais ceux du
+                    // projet d'où vient le modèle (ADR-0017, lot L6).
+                    over.timeline.clone_from(&kept.timeline);
                     let patch = (!over.is_empty())
                         .then(|| serde_json::to_value(&over).ok())
                         .flatten();
@@ -392,11 +398,15 @@ impl crate::app::App {
         let Some(document) = &self.document else {
             return String::new();
         };
-        let style = planrs_automation::command::style::doc_style(document.project()).unwrap_or(DocStyle {
-            v: STYLE_VERSION,
-            base: self.state.default_template,
-            over: planrs_render::style::StylePatch::default(),
-        });
+        let mut style =
+            planrs_automation::command::style::doc_style(document.project()).unwrap_or(DocStyle {
+                v: STYLE_VERSION,
+                base: self.state.default_template,
+                over: planrs_render::style::StylePatch::default(),
+            });
+        // Un modèle ne porte pas la chronologie : ses UID n'ont de sens que
+        // dans ce projet (ADR-0017, lot L6).
+        style.over.timeline = None;
         let trimmed = name.trim().to_owned();
         let result = self.state.save_user_template(name, style);
         saved_message(&self.texts, result.map(|()| trimmed.as_str()))

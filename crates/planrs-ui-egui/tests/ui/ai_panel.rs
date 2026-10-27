@@ -490,7 +490,8 @@ fn relay_j8_scenario(transport: planrs_automation::control::Transport, tag: &str
     let scenario = Scenario::load(&root, "relay_j8");
     let now: Moment = replay::NOW.parse().unwrap();
     let tmp = TempDir::new(tag);
-    let (mut harness, handle, guard, control) = wired_with(&tmp, now, transport, RELAY_J8_APPROVAL_SECS);
+    let (mut harness, handle, guard, control, _sockets) =
+        wired_with(&tmp, now, transport, RELAY_J8_APPROVAL_SECS);
     assert_eq!(
         handle.endpoint().starts_with("tcp:127.0.0.1:"),
         transport == planrs_automation::control::Transport::Tcp,

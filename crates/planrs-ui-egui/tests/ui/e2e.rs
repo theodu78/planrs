@@ -560,6 +560,7 @@ pub(crate) mod relay_app {
     use std::path::PathBuf;
     use std::process::{Child, Command, Stdio};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
     use std::thread;
     use std::time::Duration;
@@ -703,22 +704,47 @@ pub(crate) mod relay_app {
     /// `maison.xml` (l'exemple) tenu dans `tmp`, rendez-vous publié dans
     /// `tmp/control` ; écouteur sur `transport` (J8 lot L8 : socket Unix
     /// ou TCP en boucle locale).
-    pub(crate) fn wired(
-        tmp: &TempDir,
-        now: Moment,
-        transport: Transport,
-    ) -> (Harness<'static, App>, ListenerHandle, RendezvousGuard, PathBuf) {
+    pub(crate) fn wired(tmp: &TempDir, now: Moment, transport: Transport) -> Wired {
         wired_with(tmp, now, transport, APPROVAL_SECS)
+    }
+
+    /// Application, écouteur, rendez-vous publié, dossier des rendez-vous
+    /// et dossier de la socket (à garder jusqu'à la fin du test).
+    pub(crate) type Wired = (
+        Harness<'static, App>,
+        ListenerHandle,
+        RendezvousGuard,
+        PathBuf,
+        SocketDir,
+    );
+
+    /// Dossier court de la socket Unix, supprimé à la fin du test. Pas dans
+    /// `tmp` : sous macOS, le dossier temporaire canonique
+    /// (`/private/var/folders/…/T/planrs-replay-<tag>-<pid>-<n>`) laissait
+    /// au chemin de la socket moins que les 104 octets de `sun_path`
+    /// (« path must be shorter than `SUN_LEN` », CI macOS de la PR #7).
+    /// `temp_dir()` non canonique et un nom court gardent ~80 octets.
+    pub(crate) struct SocketDir(PathBuf);
+
+    impl SocketDir {
+        fn new() -> Self {
+            static N: AtomicU32 = AtomicU32::new(0);
+            let n = N.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("prs-{}-{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            Self(dir)
+        }
+    }
+
+    impl Drop for SocketDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 
     /// Comme [`wired`], délai de validation `approval_secs` (J8 lot L16 :
     /// `relay_j8` laisse expirer une demande).
-    pub(crate) fn wired_with(
-        tmp: &TempDir,
-        now: Moment,
-        transport: Transport,
-        approval_secs: u64,
-    ) -> (Harness<'static, App>, ListenerHandle, RendezvousGuard, PathBuf) {
+    pub(crate) fn wired_with(tmp: &TempDir, now: Moment, transport: Transport, approval_secs: u64) -> Wired {
         let plan = tmp.path().join("maison.xml");
         std::fs::write(&plan, planrs_ui_egui::DEMO_MSPDI).unwrap();
         let state = UiState {
@@ -746,9 +772,9 @@ pub(crate) mod relay_app {
             approval_timeout: Duration::from_secs(approval_secs),
             reply_grace: Duration::from_secs(2),
         };
-        let sockets = tmp.path().join("sock");
+        let sockets = SocketDir::new();
         let handle = spawn_listener_on(
-            &sockets,
+            &sockets.0,
             new_token().unwrap(),
             tx,
             Arc::new(|| {}),
@@ -758,7 +784,7 @@ pub(crate) mod relay_app {
         .unwrap();
         let control = tmp.path().join("control");
         let guard = publish_in(&control, &handle.rendezvous(canonical_project(&plan))).unwrap();
-        (harness, handle, guard, control)
+        (harness, handle, guard, control, sockets)
     }
 
     fn generation(app: &App) -> u64 {
@@ -866,7 +892,7 @@ pub(crate) mod relay_app {
         let scenario = Scenario::load(&root, SCENARIO);
         let now: Moment = replay::NOW.parse().unwrap();
         let tmp = TempDir::new(tag);
-        let (mut harness, handle, guard, control) = wired(&tmp, now, transport);
+        let (mut harness, handle, guard, control, _sockets) = wired(&tmp, now, transport);
         assert_eq!(
             handle.endpoint().starts_with("tcp:127.0.0.1:"),
             transport == Transport::Tcp,

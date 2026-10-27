@@ -172,6 +172,36 @@ pub struct ViewTransient {
     pub ribbon_overlay: Option<crate::ribbon::RibbonTab>,
     /// Chronologie : disposition en cache (ADR-0017, H-UI-78, lot L4).
     pub timeline: timeline::TimelineView,
+    /// Glisser de sélection en cours dans la table, de l'appui au relâcher
+    /// (ADR-0018, H-UI-88 à H-UI-90 ; tenu par le lot L1).
+    pub select_drag: Option<SelectDrag>,
+    /// Déplacement de lignes en cours par leur ID (ADR-0018, H-UI-94 ;
+    /// tenu par le lot L3).
+    pub row_drag: Option<RowDrag>,
+}
+
+/// Glisser de sélection en cours (ADR-0018, contrat L0).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SelectDrag {
+    /// Cible de l'appui qui l'a commencé.
+    pub target: crate::action::PressTarget,
+    /// Dernière cellule envoyée (`SelectOp::DragTo` n'est poussé que quand
+    /// elle change).
+    pub last: (crate::nav::RowRef<TaskUid>, Column),
+}
+
+/// Déplacement de lignes en cours (ADR-0018, contrat L0, H-UI-94).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RowDrag {
+    /// Tâches déplacées (sélectionnées sans ancêtre sélectionné), dans
+    /// l'ordre des lignes.
+    pub uids: Vec<TaskUid>,
+    /// Ligne affichée devant laquelle le trait d'insertion est dessiné
+    /// (`None` : après la dernière ligne).
+    pub insert_before: Option<DisplayRow>,
+    /// Raison du refus du lâcher à cet endroit (curseur interdit,
+    /// info-bulle), `None` si le lâcher est permis.
+    pub refusal: Option<crate::i18n::TextId>,
 }
 
 /// Volet de la vue principale (J7).

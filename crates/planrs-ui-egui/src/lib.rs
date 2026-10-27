@@ -12,6 +12,8 @@
 
 pub mod action;
 pub mod app;
+pub mod block;
+pub mod cells;
 pub mod clipboard;
 pub mod column;
 pub mod diag_text;

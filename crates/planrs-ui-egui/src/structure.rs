@@ -158,8 +158,13 @@ fn top_level(project: &Project, selection: &Selection) -> Vec<(usize, TaskUid)> 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StructureRefusal {
     /// Insérer → Récapitulative sur des tâches qui ne sont pas des sœurs
-    /// voisines (H-UI-83) : rien n'est écrit.
+    /// voisines (H-UI-83) : rien n'est écrit. Aussi le déplacement de
+    /// lignes non sœurs voisines (H-UI-94, ADR-0018, lot L3).
     NotAdjacent,
+    /// Déplacement de lignes lâché dans leur propre bloc (H-UI-94).
+    InsideOwnBlock,
+    /// Déplacement de lignes sous un tri ou un filtre (H-UI-32, H-UI-94).
+    ViewReorderLocked,
 }
 
 impl StructureRefusal {
@@ -168,9 +173,26 @@ impl StructureRefusal {
     pub const fn text_id(self) -> TextId {
         match self {
             Self::NotAdjacent => TextId::InsertSummaryNotAdjacent,
+            Self::InsideOwnBlock => TextId::RowsMoveInsideBlock,
+            Self::ViewReorderLocked => TextId::RowsMoveLocked,
+        }
+    }
+
+    /// Message du refus d'un déplacement de lignes par l'ID (H-UI-94,
+    /// info-bulle du curseur interdit et bandeau).
+    #[must_use]
+    pub const fn move_text_id(self) -> TextId {
+        match self {
+            Self::NotAdjacent => TextId::RowsMoveNotAdjacent,
+            Self::InsideOwnBlock => TextId::RowsMoveInsideBlock,
+            Self::ViewReorderLocked => TextId::RowsMoveLocked,
         }
     }
 }
+
+/// Info-bulle de l'ID d'une ligne sélectionnée en lignes entières, qui se
+/// glisse pour déplacer les lignes (H-UI-94, H-UI-103 ; lot L3).
+pub const ROW_MOVE_TIP: TextId = TextId::TipRowMove;
 
 /// Étiquette de la récapitulative créée dans le lot (R-150).
 const SUMMARY_LABEL: &str = "$s";
@@ -452,6 +474,19 @@ fn plan_delete(project: &Project, selection: &Selection) -> Option<StructurePlan
 }
 
 impl App {
+    /// Déplace les lignes sélectionnées en lignes entières avant `before`
+    /// (`None` : en fin), un lot de `task.move` (`Action::MoveRows`,
+    /// ADR-0018 D6, H-UI-94 ; info-bulle du geste : [`ROW_MOVE_TIP`]).
+    /// Contrat L0 : « pas encore disponible » (lot L3).
+    pub(crate) fn move_rows(&mut self, before: Option<TaskUid>) {
+        if self.document.is_none() {
+            return;
+        }
+        log::debug!("déplacement de lignes avant {before:?} : lot L3");
+        let text = self.texts.get(TextId::UxNotAvailable);
+        self.push_message(planrs_core::Severity::Info, text);
+    }
+
     /// Applique une commande de structure à la sélection courante. Une
     /// suppression de récapitulative attend la confirmation
     /// ([`App::pending_delete`]) ; rien ne se passe tant qu'une

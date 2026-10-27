@@ -63,6 +63,15 @@ pub struct Palette {
     /// lot L7, H-UI-22) : contraste ≥ 3:1 sur la barre et sur la barre
     /// critique.
     pub progress: Color32,
+    /// Bordure de 2 px du bloc sélectionné (ADR-0018 D11, H-UI-103 : ≥ 3:1
+    /// sur le fond et les bandes). Posé en L0, dessiné à partir du lot L5.
+    pub selection_border: Color32,
+    /// Fond des ID des lignes de la sélection, en-tête « appuyé »
+    /// (H-UI-103). Posé en L0, dessiné à partir du lot L5.
+    pub header_selected: Color32,
+    /// Survol discret de la ligne sous le pointeur (H-UI-103, jamais
+    /// pendant un glisser). Posé en L0, dessiné à partir du lot L5.
+    pub hover_row: Color32,
 }
 
 impl Palette {
@@ -91,6 +100,9 @@ impl Palette {
         cursor: Color32::from_rgb(0x1F, 0x5F, 0xBF),
         baseline: Color32::from_rgb(0x80, 0x86, 0x8F),
         progress: Color32::from_rgb(0x10, 0x14, 0x1A),
+        selection_border: Color32::from_rgb(0x1F, 0x5F, 0xBF),
+        header_selected: Color32::from_rgb(0xDC, 0xE8, 0xF7),
+        hover_row: Color32::from_rgb(0xF3, 0xF4, 0xF6),
     };
 
     /// Palette sombre.
@@ -118,6 +130,9 @@ impl Palette {
         cursor: Color32::from_rgb(0x8A, 0xB4, 0xF8),
         baseline: Color32::from_rgb(0x8E, 0x94, 0x9C),
         progress: Color32::from_rgb(0x0F, 0x23, 0x40),
+        selection_border: Color32::from_rgb(0x8A, 0xB4, 0xF8),
+        header_selected: Color32::from_rgb(0x2D, 0x3F, 0x57),
+        hover_row: Color32::from_rgb(0x26, 0x28, 0x2C),
     };
 
     /// Palette tirée d'un style du planning (ADR-0016 D5) pour une variante.
@@ -154,6 +169,11 @@ impl Palette {
             cursor: rgb(c.cursor),
             baseline: fill(BarRole::Baseline),
             progress: fill(BarRole::Progress),
+            // Passe UX (L0) : jetons dérivés des jetons du style ; valeurs
+            // propres et seuils de contraste au lot L5 (H-UI-103).
+            selection_border: rgb(c.cursor),
+            header_selected: rgb(c.selection),
+            hover_row: rgb(c.header_bg),
         }
     }
 

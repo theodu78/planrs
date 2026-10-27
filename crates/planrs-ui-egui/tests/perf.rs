@@ -1761,3 +1761,9 @@ fn timeline_5000() {
     );
     assert_budget("timeline_5000", samples, bench.last);
 }
+
+// --- Passe UX (ADR-0018, contrat L0) : sections posées vides, remplies par
+// leur lot (budgets du cahier `docs/plans/ux.md` § 2.5).
+// --- UX L1 --- (`select_drag_5000`, image de Ctrl+A de `select_all_copy_5000`)
+// --- UX L2 --- (`fill_down_1000`, `paste_cells_1000`, copie de `select_all_copy_5000`)
+// --- UX L3 --- (`row_drag_5000`, `best_fit_5000`)

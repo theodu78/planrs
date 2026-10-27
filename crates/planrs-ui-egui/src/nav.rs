@@ -18,7 +18,10 @@
 //! - Page haut/bas : `page − 1` lignes, au moins une (hypothèse : une page
 //!   de 0 ou 1 ligne avance quand même d'une ligne, comme ↑/↓).
 
+use crate::column::Column;
 use crate::geom::{f32_to_index, index_to_f32};
+use crate::row_view::{DisplayRow, VisibleRows};
+use crate::selection::{SelectMode, Selection};
 
 /// Déplacement demandé (H-UI-13 à H-UI-15).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,6 +159,10 @@ pub struct CellCursor<U, C> {
     pub column: C,
     /// Ancre de l'extension de la sélection (Maj+flèches, H-UI-16).
     pub anchor: Option<U>,
+    /// Ancre de colonnes du bloc de cellules (ADR-0018, H-UI-87) : le bloc
+    /// couvre les colonnes visibles de cette colonne à `column` ; `None` :
+    /// la colonne active seule.
+    pub anchor_column: Option<C>,
 }
 
 impl<U, C: Default> Default for CellCursor<U, C> {
@@ -164,7 +171,69 @@ impl<U, C: Default> Default for CellCursor<U, C> {
             row: RowRef::Blank,
             column: C::default(),
             anchor: None,
+            anchor_column: None,
         }
+    }
+}
+
+/// Déplacement **dans** un bloc de plus d'une cellule (H-UI-93, S61 « Move
+/// within a selection … ») : Entrée, Maj+Entrée, Tab, Maj+Tab ; servi par
+/// `Block::step`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InBlockMove {
+    /// Entrée : cellule du dessous ; en bas, haut de la colonne suivante ;
+    /// à la fin, première cellule.
+    Down,
+    /// Maj+Entrée : l'inverse de `Down`.
+    Up,
+    /// Tab : cellule de droite ; en bout, début de la ligne suivante ; à la
+    /// fin, première cellule.
+    Right,
+    /// Maj+Tab : l'inverse de `Right`.
+    Left,
+}
+
+/// Vitesse plancher du défilement automatique, en lignes par seconde.
+pub const AUTOSCROLL_MIN: f32 = 4.0;
+/// Vitesse plafond du défilement automatique, en lignes par seconde.
+pub const AUTOSCROLL_MAX: f32 = 40.0;
+
+/// Vitesse du défilement automatique pendant un glisser (H-UI-91), en
+/// lignes (ou colonnes) par seconde, signée : négative vers le haut (ou la
+/// gauche), positive vers le bas (ou la droite), 0 hors des zones.
+///
+/// `pointer` : coordonnée du pointeur ; `top`, `bottom` : bords du corps ;
+/// `extent` : hauteur d'une ligne (largeur de 80 px d'une colonne pour
+/// l'horizontal). Zone : à moins d'une ligne d'un bord, ou au-delà ;
+/// `d` = distance au seuil (bord ± `extent`), vitesse
+/// `clamp(4 + 8·d / extent, 4, 40)`. Une valeur non finie, une ligne non
+/// positive ou un corps inversé ⇒ 0 (règle 10). Corps plus petit que deux
+/// lignes : le bord le plus proche décide.
+#[must_use]
+pub fn autoscroll_speed(pointer: f32, top: f32, bottom: f32, extent: f32) -> f32 {
+    if !pointer.is_finite() || !top.is_finite() || !bottom.is_finite() || !extent.is_finite() {
+        return 0.0;
+    }
+    if extent <= 0.0 || bottom < top {
+        return 0.0;
+    }
+    let speed = |d: f32| {
+        let v = AUTOSCROLL_MIN + 8.0 * d / extent;
+        if v.is_finite() {
+            v.clamp(AUTOSCROLL_MIN, AUTOSCROLL_MAX)
+        } else {
+            AUTOSCROLL_MAX
+        }
+    };
+    let upper = top + extent;
+    let lower = bottom - extent;
+    let middle = top + (bottom - top) / 2.0;
+    if pointer < upper && pointer <= middle {
+        -speed(upper - pointer)
+    } else if pointer > lower && pointer >= middle {
+        speed(pointer - lower)
+    } else {
+        0.0
     }
 }
 
@@ -222,6 +291,76 @@ pub fn scroll_for_x(x: f32, width: f32) -> Option<f32> {
 }
 
 impl crate::App {
+    /// Navigation au clavier (H-UI-13 à H-UI-17) : [`step`] sur
+    /// (ligne, colonne visible), ligne vide comprise ; la sélection suit la
+    /// ligne du curseur (`extend` : plage depuis l'ancre, sans aller sur la
+    /// ligne vide) ; le défilement vertical suit le curseur avec une ligne
+    /// de marge ([`ensure_visible`]).
+    pub(crate) fn navigate(&mut self, mv: NavMove, extend: bool) {
+        let Some(model) = &self.rows else {
+            return;
+        };
+        // Lignes affichées (J8, lot L5) : la navigation suit la vue.
+        let rows = VisibleRows::new(model, &self.row_view);
+        let len = rows.len();
+        let visible: Vec<Column> = self.state.visible_columns().map(|state| state.column).collect();
+        let row = match self.selection {
+            Some(uid) => rows.display_of(uid).map_or(0, DisplayRow::index),
+            None => len,
+        };
+        let col = visible
+            .iter()
+            .position(|column| *column == self.view.cursor.column)
+            .unwrap_or(0);
+        let shape = GridShape {
+            rows: len.saturating_add(1),
+            cols: visible.len(),
+            page: page_rows(self.view.last_body_height, self.row_h()),
+        };
+        let mut target = step(GridPos { row, col }, mv, shape);
+        let extend = extend && len > 0;
+        if extend {
+            // L'extension s'arrête à la dernière tâche.
+            target.row = target.row.min(len.saturating_sub(1));
+        }
+        if let Some(column) = visible.get(target.col) {
+            self.view.cursor.column = *column;
+        }
+        let uid = rows.uid(DisplayRow::at(target.row));
+        match uid {
+            Some(uid) if extend => {
+                let anchor = self.selected.anchor().or(self.selection).unwrap_or(uid);
+                let mut selected = Selection::single(Some(anchor));
+                selected.click(uid, SelectMode::Range, rows);
+                self.selected = selected;
+                self.selection = Some(uid);
+                self.view.cursor.anchor = Some(anchor);
+            }
+            _ => {
+                self.selection = uid;
+                self.selected = Selection::single(uid);
+                // Bloc réduit à la cellule active (ADR-0018).
+                self.view.cursor.anchor_column = None;
+            }
+        }
+        self.sync_selection();
+        if extend {
+            self.view.cursor.anchor = self.selected.anchor();
+        }
+        let view_h = self.view.last_body_height;
+        if let Some(y) = ensure_visible(
+            self.view.last_scroll_y,
+            target.row,
+            self.row_h(),
+            view_h,
+            shape.rows,
+        ) {
+            self.view.pending_scroll_y = Some(y);
+            self.view.last_scroll_y = y;
+        }
+        self.follow_cursor_x();
+    }
+
     /// « Défiler jusqu'à la tâche » active (ADR-0017, H-UI-84) : la table
     /// défile jusqu'à sa ligne (marge d'une ligne, [`ensure_visible`]) et
     /// le Gantt place le début de sa barre (jalon : son instant ; tâche
@@ -239,12 +378,10 @@ impl crate::App {
         let Some(uid) = self.selection else {
             return;
         };
-        let Some((row, len)) = self.visible_rows().map(|rows| {
-            (
-                rows.display_of(uid).map(crate::row_view::DisplayRow::index),
-                rows.len(),
-            )
-        }) else {
+        let Some((row, len)) = self
+            .visible_rows()
+            .map(|rows| (rows.display_of(uid).map(DisplayRow::index), rows.len()))
+        else {
             return;
         };
         let Some(row) = row else {
@@ -292,7 +429,8 @@ mod tests {
     use proptest::prelude::*;
 
     use super::{
-        CellCursor, GridPos, GridShape, NavMove, RowRef, ensure_visible, page_rows, scroll_for_x, step,
+        AUTOSCROLL_MAX, AUTOSCROLL_MIN, CellCursor, GridPos, GridShape, NavMove, RowRef, autoscroll_speed,
+        ensure_visible, page_rows, scroll_for_x, step,
     };
 
     const fn shape(rows: usize, cols: usize, page: usize) -> GridShape {
@@ -432,6 +570,44 @@ mod tests {
         assert_eq!(scroll_for_x(f32::NAN, 800.0), None);
         assert_eq!(scroll_for_x(10.0, 0.0), None);
         assert_eq!(scroll_for_x(10.0, f32::INFINITY), None);
+    }
+
+    /// H-UI-91 : zones d'une ligne aux bords (corps de 100 à 500, lignes de
+    /// 20) ; 4 lignes/s au seuil, + 8 par ligne au-delà, plafond 40 ; signe
+    /// selon le bord ; 0 pour toute valeur non finie ou dégénérée.
+    #[test]
+    fn nav_autoscroll_speed_bounds() {
+        let (top, bottom, h) = (100.0, 500.0, 20.0);
+        assert_eq!(autoscroll_speed(300.0, top, bottom, h), 0.0);
+        assert_eq!(autoscroll_speed(120.0, top, bottom, h), 0.0);
+        assert_eq!(autoscroll_speed(480.0, top, bottom, h), 0.0);
+        assert_eq!(autoscroll_speed(110.0, top, bottom, h), -8.0);
+        assert_eq!(autoscroll_speed(490.0, top, bottom, h), 8.0);
+        assert_eq!(autoscroll_speed(100.0, top, bottom, h), -12.0);
+        assert_eq!(autoscroll_speed(520.0, top, bottom, h), 20.0);
+        // Au-delà du bord : plafond.
+        assert_eq!(autoscroll_speed(5_000.0, top, bottom, h), AUTOSCROLL_MAX);
+        assert_eq!(autoscroll_speed(-5_000.0, top, bottom, h), -AUTOSCROLL_MAX);
+        assert_eq!(autoscroll_speed(f32::MAX, top, bottom, h), AUTOSCROLL_MAX);
+        // Juste dans la zone : plancher.
+        let v = autoscroll_speed(480.001, top, bottom, h);
+        assert!((AUTOSCROLL_MIN..AUTOSCROLL_MIN + 0.01).contains(&v), "{v}");
+        // Non fini, ligne nulle, corps inversé : 0.
+        for (p, t, b, e) in [
+            (f32::NAN, top, bottom, h),
+            (f32::INFINITY, top, bottom, h),
+            (300.0, f32::NEG_INFINITY, bottom, h),
+            (300.0, top, f32::NAN, h),
+            (300.0, top, bottom, f32::NAN),
+            (90.0, top, bottom, 0.0),
+            (90.0, top, bottom, -3.0),
+            (90.0, bottom, top, h),
+        ] {
+            assert_eq!(autoscroll_speed(p, t, b, e), 0.0, "{p} {t} {b} {e}");
+        }
+        // Corps plus petit que deux lignes : le bord le plus proche.
+        assert!(autoscroll_speed(101.0, 100.0, 120.0, h) < 0.0);
+        assert!(autoscroll_speed(119.0, 100.0, 120.0, h) > 0.0);
     }
 
     fn move_strategy() -> impl Strategy<Value = NavMove> {

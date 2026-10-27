@@ -20,7 +20,7 @@
 
 use egui::{Key, KeyboardShortcut, Modifiers};
 
-use crate::action::Action;
+use crate::action::{Action, CellOp, SelectOp};
 use crate::nav::NavMove;
 use crate::structure::StructureOp;
 use crate::view::task_view::TaskViewOp;
@@ -38,6 +38,15 @@ const fn nav(modifiers: Modifiers, key: Key, mv: NavMove, extend: bool) -> (KeyC
 const fn doc_ui(modifiers: Modifiers, key: Key, binding: UiBinding) -> (KeyContext, Shortcut, Binding) {
     (
         KeyContext::Document,
+        Shortcut::new(modifiers, key),
+        Binding::Ui(binding),
+    )
+}
+
+/// Raccourci propre à l'interface, contexte `Table` (passe UX, ADR-0018).
+const fn table_ui(modifiers: Modifiers, key: Key, binding: UiBinding) -> (KeyContext, Shortcut, Binding) {
+    (
+        KeyContext::Table,
         Shortcut::new(modifiers, key),
         Binding::Ui(binding),
     )
@@ -108,6 +117,20 @@ pub enum UiBinding {
     ShowSubtasks,
     /// Ctrl/Cmd+F1 : replie ou déplie le ruban (ADR-0017, H-UI-72, S83).
     ToggleRibbon,
+    // --- Passe UX (ADR-0018, contrat L0 ; H-UI-92, H-UI-96, H-UI-97).
+    /// Ctrl/Cmd+A, Ctrl+Maj+Espace : tout sélectionner, en lignes entières.
+    SelectAll,
+    /// Maj+Espace : lignes entières de la sélection.
+    SelectRows,
+    /// Ctrl+Espace (Ctrl aussi sur macOS) : colonnes entières de la
+    /// sélection.
+    SelectColumns,
+    /// Maj+Retour arrière : réduit la sélection à la cellule active.
+    CollapseSelection,
+    /// Ctrl/Cmd+D : remplir vers le bas (R-258).
+    FillDown,
+    /// Ctrl/Cmd+Suppr : effacer le contenu du bloc (R-259).
+    ClearCells,
 }
 
 /// Liaison d'un raccourci.
@@ -140,6 +163,9 @@ const SHIFT: Modifiers = Modifiers::SHIFT;
 
 /// Ctrl (Cmd sur macOS).
 const COMMAND: Modifiers = Modifiers::COMMAND;
+
+/// Ctrl, sur macOS aussi (Ctrl+Espace, H-UI-92).
+const CTRL: Modifiers = Modifiers::CTRL;
 
 /// Aucun modificateur.
 const NONE: Modifiers = Modifiers::NONE;
@@ -200,6 +226,12 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
         Shortcut::new(Modifiers::COMMAND, Key::I),
         Binding::Command("task.add"),
     ),
+    // Ctrl/Cmd+Suppr : effacer le contenu (ADR-0018, H-UI-97, S61 « Clear
+    // or reset the selected field. »), avant Suppr.
+    table_ui(COMMAND, Key::Delete, UiBinding::ClearCells),
+    // Suppr seul : `Action::Cells(CellOp::DeleteKey)` (`entry_action`),
+    // supprimer ou effacer selon la cible (H-UI-97) ; le raccourci reste
+    // affiché pour « Supprimer la tâche ».
     (
         KeyContext::Document,
         Shortcut::new(Modifiers::NONE, Key::Delete),
@@ -215,6 +247,9 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
         Shortcut::new(Modifiers::COMMAND, Key::Backspace),
         Binding::Command("task.delete"),
     ),
+    // Maj+Retour arrière : cellule active seule (S61 « Reduce the selection
+    // to one field. », ADR-0018).
+    table_ui(SHIFT, Key::Backspace, UiBinding::CollapseSelection),
     (
         KeyContext::Document,
         Shortcut::new(ALT_SHIFT, Key::ArrowRight),
@@ -262,20 +297,32 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
     nav(SHIFT, Key::ArrowDown, NavMove::Down, true),
     nav(NONE, Key::ArrowDown, NavMove::Down, false),
     doc_ui(ALT, Key::ArrowLeft, UiBinding::TimescaleStep(-1)),
+    // ADR-0018 (H-UI-92) : Maj+←/→ et Ctrl+Maj+←/→ étendent la sélection
+    // (en colonnes à partir du lot L1), avant ←/→ et Ctrl+←/→.
+    nav(COMMAND_SHIFT, Key::ArrowLeft, NavMove::RowStart, true),
     nav(COMMAND, Key::ArrowLeft, NavMove::RowStart, false),
+    nav(SHIFT, Key::ArrowLeft, NavMove::Left, true),
     nav(NONE, Key::ArrowLeft, NavMove::Left, false),
     doc_ui(ALT, Key::ArrowRight, UiBinding::TimescaleStep(1)),
+    nav(COMMAND_SHIFT, Key::ArrowRight, NavMove::RowEnd, true),
     nav(COMMAND, Key::ArrowRight, NavMove::RowEnd, false),
+    nav(SHIFT, Key::ArrowRight, NavMove::Right, true),
     nav(NONE, Key::ArrowRight, NavMove::Right, false),
     nav(SHIFT, Key::Tab, NavMove::Left, false),
     nav(NONE, Key::Tab, NavMove::Right, false),
     nav(SHIFT, Key::Enter, NavMove::Up, false),
     nav(NONE, Key::Enter, NavMove::Down, false),
     doc_ui(ALT, Key::Home, UiBinding::TimescaleToStart),
+    // S61 : « Extend the selection to the first field of the first row. »
+    // (Ctrl+Maj+Origine), « … to the first field in a row. » (Maj+Origine).
+    nav(COMMAND_SHIFT, Key::Home, NavMove::First, true),
     nav(COMMAND, Key::Home, NavMove::First, false),
+    nav(SHIFT, Key::Home, NavMove::RowStart, true),
     nav(NONE, Key::Home, NavMove::RowStart, false),
     doc_ui(ALT, Key::End, UiBinding::TimescaleToEnd),
+    nav(COMMAND_SHIFT, Key::End, NavMove::Last, true),
     nav(COMMAND, Key::End, NavMove::Last, false),
+    nav(SHIFT, Key::End, NavMove::RowEnd, true),
     nav(NONE, Key::End, NavMove::RowEnd, false),
     doc_ui(ALT, Key::PageUp, UiBinding::TimescalePage(-1)),
     nav(SHIFT, Key::PageUp, NavMove::PageUp, true),
@@ -311,6 +358,14 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
         Shortcut::new(COMMAND, Key::F1),
         Binding::Ui(UiBinding::ToggleRibbon),
     ),
+    // --- Passe UX (ADR-0018, contrat L0) : sélection et remplissage, table
+    // seulement. Ctrl+Maj+Espace avant Maj+Espace et Ctrl+Espace (egui
+    // ignore Maj en trop : Ctrl+Espace répondrait à Ctrl+Maj+Espace).
+    table_ui(COMMAND, Key::A, UiBinding::SelectAll),
+    table_ui(COMMAND_SHIFT, Key::Space, UiBinding::SelectAll),
+    table_ui(SHIFT, Key::Space, UiBinding::SelectRows),
+    table_ui(CTRL, Key::Space, UiBinding::SelectColumns),
+    table_ui(COMMAND, Key::D, UiBinding::FillDown),
 ];
 
 /// Raccourcis que le navigateur ne rend jamais à la page (Ctrl/Cmd+N, W,
@@ -407,12 +462,18 @@ impl KeyState {
 
 /// Action d'une entrée de [`KEYMAP`] : celle de sa liaison
 /// ([`binding_action`]), sauf `task.move` dont le sens vient de la touche
-/// (Alt+Maj+↑ monte, Alt+Maj+↓ descend, H-UI-29).
+/// (Alt+Maj+↑ monte, Alt+Maj+↓ descend, H-UI-29), et Suppr sans
+/// modificateur, qui supprime ou efface selon la cible
+/// (`Action::Cells(CellOp::DeleteKey)`, H-UI-97 ; les menus gardent
+/// `task.delete`).
 #[must_use]
 pub fn entry_action(shortcut: &Shortcut, binding: Binding) -> Option<Action> {
     match (binding, shortcut.logical_key) {
         (Binding::Command("task.move"), Key::ArrowUp) => Some(Action::Structure(StructureOp::MoveUp)),
         (Binding::Command("task.move"), Key::ArrowDown) => Some(Action::Structure(StructureOp::MoveDown)),
+        (Binding::Command("task.delete"), Key::Delete) if shortcut.modifiers == Modifiers::NONE => {
+            Some(Action::Cells(CellOp::DeleteKey))
+        }
         _ => binding_action(binding),
     }
 }
@@ -463,6 +524,12 @@ pub const fn ui_action(binding: UiBinding) -> Action {
         UiBinding::HideSubtasks => Action::TaskView(TaskViewOp::HideSubtasks),
         UiBinding::ShowSubtasks => Action::TaskView(TaskViewOp::ShowSubtasks),
         UiBinding::ToggleRibbon => Action::Ribbon(crate::ribbon::RibbonOp::ToggleCollapsed),
+        UiBinding::SelectAll => Action::SelectOp(SelectOp::All),
+        UiBinding::SelectRows => Action::SelectOp(SelectOp::EntireRows),
+        UiBinding::SelectColumns => Action::SelectOp(SelectOp::EntireColumns),
+        UiBinding::CollapseSelection => Action::SelectOp(SelectOp::Collapse),
+        UiBinding::FillDown => Action::Cells(CellOp::FillDown),
+        UiBinding::ClearCells => Action::Cells(CellOp::Clear),
     }
 }
 
@@ -777,5 +844,165 @@ mod tests {
                 && *b == delete),
             "Retour arrière seul supprime encore la tâche"
         );
+    }
+
+    /// Première entrée de [`KEYMAP`] lue pour l'appui `key` avec
+    /// `modifiers` (table focalisée, document ouvert), comme [`super::dispatch`]
+    /// (comparaison « logique » d'egui).
+    fn resolve(modifiers: egui::Modifiers, key: Key) -> Option<(KeyContext, Binding, Option<Action>)> {
+        KEYMAP
+            .iter()
+            .find(|(_, shortcut, _)| {
+                shortcut.logical_key == key && modifiers.matches_logically(shortcut.modifiers)
+            })
+            .map(|(context, shortcut, binding)| (*context, *binding, entry_action(shortcut, *binding)))
+    }
+
+    /// Ctrl seul (Linux, Windows) : `ctrl` et `command`.
+    const CTRL_PRESSED: egui::Modifiers = egui::Modifiers {
+        ctrl: true,
+        command: true,
+        ..egui::Modifiers::NONE
+    };
+
+    /// ADR-0018 (contrat L0, H-UI-92, H-UI-96, H-UI-97) : chaque nouvelle
+    /// entrée est résolue vers son action, avant les entrées moins précises
+    /// de la même touche, retenue au navigateur sur le web ; Suppr seul
+    /// passe par `CellOp::DeleteKey`, Cmd+Retour arrière garde la
+    /// suppression ; Ctrl+Espace est Ctrl sur macOS aussi.
+    #[test]
+    fn keymap_ux_bindings_resolve() {
+        use super::{SHIFT, web_interceptable};
+        use crate::action::{CellOp, SelectOp};
+
+        let shift_ctrl = egui::Modifiers {
+            shift: true,
+            ..CTRL_PRESSED
+        };
+        let cases = [
+            (
+                CTRL_PRESSED,
+                Key::A,
+                UiBinding::SelectAll,
+                Action::SelectOp(SelectOp::All),
+            ),
+            (
+                shift_ctrl,
+                Key::Space,
+                UiBinding::SelectAll,
+                Action::SelectOp(SelectOp::All),
+            ),
+            (
+                SHIFT,
+                Key::Space,
+                UiBinding::SelectRows,
+                Action::SelectOp(SelectOp::EntireRows),
+            ),
+            (
+                CTRL_PRESSED,
+                Key::Space,
+                UiBinding::SelectColumns,
+                Action::SelectOp(SelectOp::EntireColumns),
+            ),
+            (
+                SHIFT,
+                Key::Backspace,
+                UiBinding::CollapseSelection,
+                Action::SelectOp(SelectOp::Collapse),
+            ),
+            (
+                CTRL_PRESSED,
+                Key::D,
+                UiBinding::FillDown,
+                Action::Cells(CellOp::FillDown),
+            ),
+            (
+                CTRL_PRESSED,
+                Key::Delete,
+                UiBinding::ClearCells,
+                Action::Cells(CellOp::Clear),
+            ),
+        ];
+        for (modifiers, key, binding, action) in cases {
+            let (context, found, resolved) = resolve(modifiers, key).expect("entrée trouvée");
+            assert_eq!(context, KeyContext::Table, "{key:?}");
+            assert_eq!(found, Binding::Ui(binding), "{modifiers:?} {key:?}");
+            assert_eq!(resolved, Some(action.clone()));
+            assert_eq!(ui_action(binding), action);
+            assert_eq!(binding_action(Binding::Ui(binding)), Some(action));
+            let (_, shortcut, _) = KEYMAP
+                .iter()
+                .find(|(_, s, b)| *b == Binding::Ui(binding) && s.logical_key == key)
+                .expect("entrée");
+            assert!(web_interceptable(shortcut, Binding::Ui(binding)), "{key:?}");
+        }
+        // Ctrl+Espace : Ctrl, pas Cmd, sur macOS (Cmd+Espace reste au
+        // système).
+        let mac_ctrl = egui::Modifiers {
+            ctrl: true,
+            ..egui::Modifiers::NONE
+        };
+        let mac_cmd = egui::Modifiers::MAC_CMD;
+        assert_eq!(
+            resolve(mac_ctrl, Key::Space).map(|(_, b, _)| b),
+            Some(Binding::Ui(UiBinding::SelectColumns))
+        );
+        assert!(resolve(mac_cmd, Key::Space).is_none());
+        // Suppr : supprimer ou effacer selon la cible ; le menu garde
+        // `task.delete` ; Cmd+Retour arrière supprime toujours.
+        let (_, binding, action) = resolve(egui::Modifiers::NONE, Key::Delete).expect("Suppr");
+        assert_eq!(binding, Binding::Command("task.delete"));
+        assert_eq!(action, Some(Action::Cells(CellOp::DeleteKey)));
+        assert_eq!(
+            binding_action(Binding::Command("task.delete")),
+            Some(Action::Structure(StructureOp::Delete))
+        );
+        let (_, _, action) = resolve(CTRL_PRESSED, Key::Backspace).expect("Ctrl+Retour arrière");
+        assert_eq!(action, Some(Action::Structure(StructureOp::Delete)));
+        // Retour arrière seul reste à la table (saisie vide, lue après).
+        assert!(resolve(egui::Modifiers::NONE, Key::Backspace).is_none());
+        // Ordre : la plus précise d'abord.
+        let index = |m: egui::Modifiers, k: Key| {
+            KEYMAP
+                .iter()
+                .position(|(_, s, _)| s.modifiers == m && s.logical_key == k)
+                .expect("entrée")
+        };
+        assert!(index(super::COMMAND_SHIFT, Key::Space) < index(super::CTRL, Key::Space));
+        assert!(index(super::COMMAND, Key::Delete) < index(super::NONE, Key::Delete));
+    }
+
+    /// U02 (H-UI-92) : Maj+→ ne résout plus `Right` non étendu ; Maj+←,
+    /// Maj+Origine/Fin, Ctrl+Maj+Origine/Fin et Ctrl+Maj+←/→ étendent ; les
+    /// touches sans Maj sont inchangées ; Alt+Maj+← reste « Désindenter ».
+    #[test]
+    fn keymap_shift_arrow_extends() {
+        use super::SHIFT;
+
+        let nav = |mv, extend| Some(Action::Nav { mv, extend });
+        let shift_ctrl = egui::Modifiers {
+            shift: true,
+            ..CTRL_PRESSED
+        };
+        let cases = [
+            (SHIFT, Key::ArrowRight, nav(NavMove::Right, true)),
+            (SHIFT, Key::ArrowLeft, nav(NavMove::Left, true)),
+            (SHIFT, Key::Home, nav(NavMove::RowStart, true)),
+            (SHIFT, Key::End, nav(NavMove::RowEnd, true)),
+            (shift_ctrl, Key::Home, nav(NavMove::First, true)),
+            (shift_ctrl, Key::End, nav(NavMove::Last, true)),
+            (shift_ctrl, Key::ArrowLeft, nav(NavMove::RowStart, true)),
+            (shift_ctrl, Key::ArrowRight, nav(NavMove::RowEnd, true)),
+            (egui::Modifiers::NONE, Key::ArrowRight, nav(NavMove::Right, false)),
+            (CTRL_PRESSED, Key::ArrowRight, nav(NavMove::RowEnd, false)),
+            (CTRL_PRESSED, Key::Home, nav(NavMove::First, false)),
+            (egui::Modifiers::NONE, Key::Home, nav(NavMove::RowStart, false)),
+        ];
+        for (modifiers, key, want) in cases {
+            let (_, _, action) = resolve(modifiers, key).expect("entrée");
+            assert_eq!(action, want, "{modifiers:?} {key:?}");
+        }
+        let (_, binding, _) = resolve(super::ALT_SHIFT, Key::ArrowLeft).expect("Alt+Maj+←");
+        assert_eq!(binding, Binding::Command("task.outdent"));
     }
 }

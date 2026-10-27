@@ -50,6 +50,19 @@ pub struct ClipboardSlot {
     pub clip: RowClip,
     /// Empreinte FNV-1a du texte émis (`planrs_automation::clip::fingerprint`).
     pub fingerprint: u64,
+    /// Ce qui a été copié : lignes entières (tampon `clip`, H-UI-39) ou
+    /// cellules d'un bloc (texte seul, H-UI-95 ; ADR-0018 D3, lot L2).
+    pub kind: ClipKind,
+}
+
+/// Contenu de la dernière copie (ADR-0018 D3, H-UI-95).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ClipKind {
+    /// Lignes entières : le tampon se colle en lignes (R-244).
+    #[default]
+    Rows,
+    /// Cellules d'un bloc : le texte se colle en cellules (R-257).
+    Cells,
 }
 
 /// Commande du presse-papiers (menu Édition).
@@ -211,7 +224,11 @@ impl App {
                 let text = clip.to_tsv(&tsv_columns(&self.state), &text_ctx);
                 let fingerprint = clip::fingerprint(&text);
                 ctx.copy_text(text);
-                self.clipboard = Some(ClipboardSlot { clip, fingerprint });
+                self.clipboard = Some(ClipboardSlot {
+                    clip,
+                    fingerprint,
+                    kind: ClipKind::Rows,
+                });
                 true
             }
             Err(error) => {

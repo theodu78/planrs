@@ -6,9 +6,11 @@
 //! Bascule sur la sélection : si une tâche sélectionnée n'est pas sur la
 //! frise, toutes y vont ; sinon toutes en sortent. Liste écrite triée par
 //! UID, sans doublon, au plus [`MAX_TIMELINE_TASKS`] UID (au-delà : refus,
-//! rien d'écrit). Un UID d'une tâche supprimée reste dans la liste (ignoré
-//! à l'affichage, H-UI-79) : la liste n'est jamais nettoyée ici, un geste
-//! ne touche que les tâches qu'il désigne.
+//! rien d'écrit). Un UID d'une tâche supprimée reste dans la liste pendant
+//! la session (ignoré à l'affichage, H-UI-79) : la liste n'est jamais
+//! nettoyée ici, un geste ne touche que les tâches qu'il désigne. Elle
+//! l'est à l'ouverture du fichier (`style::check_opened`), avant qu'une
+//! tâche neuve puisse reprendre l'UID.
 
 use planrs_automation::command::Command;
 use planrs_automation::command::style::{StyleApply, TemplateJson, doc_style, effective_style};

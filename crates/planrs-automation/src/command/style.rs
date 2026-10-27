@@ -326,10 +326,22 @@ pub fn effective_style(project: &Project, default: TemplateId) -> PlanStyle {
 /// en JSON canonique ; illisible, version inconnue ou hors bornes ⇒
 /// retirée, diagnostic `style.ignored` (raison `invalid`, détail de
 /// l'erreur). Jamais d'erreur d'ouverture.
+///
+/// Chronologie (ADR-0017 D7, H-UI-79) : les UID absents du projet (tâches
+/// supprimées avant l'enregistrement) sont retirés de la liste, faute de
+/// quoi une tâche neuve qui réutilise leur UID (`UidAlloc` repart du plus
+/// grand UID présent) apparaîtrait d'elle-même sur la frise. Pendant la
+/// session, la liste les garde (l'annulation d'une suppression les
+/// restitue).
 pub fn check_opened(project: &mut Project) -> Option<ImportDiagnostic> {
     let payload = style_pi::entry(&project.extras)?.payload.clone();
     match parse_doc_style(&payload) {
-        Ok(doc) => {
+        Ok(mut doc) => {
+            if let Some(timeline) = doc.over.timeline.as_mut() {
+                timeline
+                    .tasks
+                    .retain(|&uid| project.tasks.contains(planrs_core::TaskUid::new(uid)));
+            }
             style_pi::set(&mut project.extras, Some(doc.to_json()));
             None
         }

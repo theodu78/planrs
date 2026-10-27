@@ -509,6 +509,43 @@ fn style_timeline_roundtrip() {
     assert_eq!(xml(&s), unstyled, "MSPDI sans style : octets inchangés");
 }
 
+/// H-UI-79 : tâche de plus grand UID sur la frise, supprimée, enregistrer,
+/// rouvrir, ajouter une tâche (qui reprend cet UID) ⇒ frise vide ; les UID
+/// des tâches présentes sont gardés.
+#[test]
+fn h_ui_79_deleted_uid_dropped_on_reopen() {
+    let mut s = session();
+    let add = Batch::from_json(json!({
+        "format_version": 1,
+        "ops": [ { "op": "task.add", "name": "Toit", "duration": { "text": "2j" } } ]
+    }))
+    .unwrap();
+    s.apply(&add, ApplyMode::Commit).unwrap();
+    let last = s.project().tasks.iter().map(|t| t.uid().get()).max().unwrap();
+    call(
+        &mut s,
+        "style.apply",
+        json!({ "patch": { "timeline": { "tasks": [1, last] } } }),
+    );
+    let delete = Batch::from_json(json!({
+        "format_version": 1,
+        "ops": [ { "op": "task.delete", "uid": last } ]
+    }))
+    .unwrap();
+    s.apply(&delete, ApplyMode::Commit).unwrap();
+    let (mut opened, _) = reopen(xml(&s).as_bytes());
+    assert_eq!(
+        style::effective_style(opened.project(), HEADLESS_DEFAULT).timeline.tasks,
+        vec![1]
+    );
+    opened.apply(&add, ApplyMode::Commit).unwrap();
+    assert!(opened.project().tasks.get(planrs_core::TaskUid::new(last)).is_some(), "UID repris");
+    assert_eq!(
+        style::effective_style(opened.project(), HEADLESS_DEFAULT).timeline.tasks,
+        vec![1]
+    );
+}
+
 /// ADR-0017 (lot L0) : 201 UID ou doublons ⇒ `style.apply` refusé
 /// (`style.invalid`), rien écrit ; charge du fichier hors bornes ⇒ style
 /// retiré, diagnostic `style.ignored` ; jamais de panique.

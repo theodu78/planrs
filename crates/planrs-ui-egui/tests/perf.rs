@@ -78,6 +78,15 @@
 //!   release) : ruban à onglets dessiné (`Chrome::Ribbon`), changement
 //!   d'onglet à chaque image (5 onglets × 12) et pointeur déplacé sur les
 //!   éléments ; mêmes seuils.
+//! - Chronologie (ADR-0017, lot L4, cahier § 2.5) : **tous** les scénarios
+//!   ouverts par `app_with` tournent ruban déplié et frise affichée, 50
+//!   tâches du réseau sur la frise (`PLANRS_PERF_CHROME=toolbar` : barre
+//!   d'outils de J8, sans frise, pour comparer). `timeline_5000` (ignoré,
+//!   release) : 200 tâches sur la frise ; `layout` seule sur 60 largeurs
+//!   (médiane < 2 ms), puis 60 images à largeur de fenêtre changée à
+//!   chaque image (une disposition par image) et 60 images de défilement
+//!   horizontal du Gantt (rectangle de la partie visible suivi) ; images
+//!   mêmes seuils.
 //!
 //! Le rendu GPU n'est pas chronométré (lavapipe en CI n'est pas
 //! représentatif). Le projet est construit directement
@@ -173,9 +182,87 @@ fn perf_template() -> TemplateId {
     }
 }
 
+/// Habillage de la mesure (`PLANRS_PERF_CHROME`) : ruban et frise par
+/// défaut (`ribbon`), barre d'outils de J8 sans frise (`toolbar`) ; une
+/// valeur inconnue fait échouer la mesure.
+fn perf_ribbon() -> bool {
+    match std::env::var("PLANRS_PERF_CHROME") {
+        Err(std::env::VarError::NotPresent) => true,
+        Ok(v) if v == "ribbon" => true,
+        Ok(v) if v == "toolbar" => false,
+        other => panic!("PLANRS_PERF_CHROME inconnu : {other:?}"),
+    }
+}
+
+/// UID de `n` feuilles réparties sur tout le réseau (premières, dernières
+/// et intermédiaires à pas constant).
+fn spread_leaves(app: &App, n: usize) -> Vec<u32> {
+    use planrs_core::TaskRole;
+    let doc = app.document.as_ref().unwrap();
+    let leaves: Vec<u32> = doc
+        .project()
+        .tasks
+        .iter()
+        .map(planrs_core::Task::uid)
+        .filter(|uid| {
+            doc.schedule()
+                .scheduled(*uid)
+                .is_some_and(|s| s.role == TaskRole::Leaf)
+        })
+        .map(planrs_core::TaskUid::get)
+        .collect();
+    let step = (leaves.len() / n.max(1)).max(1);
+    let mut picked: Vec<u32> = leaves.iter().step_by(step).take(n).copied().collect();
+    picked.sort_unstable();
+    picked
+}
+
+/// Pose `n` tâches réparties sur la frise (un lot `style.apply`, modèle
+/// par défaut de l'application gardé) ; appliqué à l'image suivante.
+fn put_on_timeline(app: &mut App, n: usize) {
+    let tasks = spread_leaves(app, n);
+    let json = serde_json::json!({
+        "format_version": 1,
+        "ops": [{
+            "op": "style.apply",
+            "template": app.state.default_template.key(),
+            "patch": { "timeline": { "tasks": tasks } }
+        }]
+    });
+    let batch = planrs_automation::Batch::from_json_str(&json.to_string()).unwrap();
+    app.dispatch(Action::Exec(batch));
+}
+
+/// Habillage de la mesure (ADR-0017, cahier § 2.5) : ruban déplié et 50
+/// tâches sur la frise, sauf `PLANRS_PERF_CHROME=toolbar`.
+fn decorate(app: &mut App) {
+    if perf_ribbon() {
+        app.set_chrome(planrs_ui_egui::ribbon::Chrome::Ribbon);
+        put_on_timeline(app, 50);
+    }
+}
+
+/// Gardes de comptage (formes, sommets, galleys égaux à ± 5 % à 1 000 et
+/// 5 000 tâches) : ruban gardé, frise masquée. Son contenu est borné (200
+/// tâches au plus) mais dépend de la durée du projet (graduations, noms
+/// tronqués ou passés à droite), qui diffère entre les deux réseaux ; la
+/// frise a sa propre garde (`timeline_cache_reused`) et sa mesure
+/// (`timeline_5000`).
+fn for_counts(mut app: App) -> App {
+    app.state.timeline_visible = false;
+    app
+}
+
 /// Application ouverte sur un réseau généré : français, thème clair, modèle
-/// de [`perf_template`].
+/// de [`perf_template`], habillage de [`decorate`].
 fn app_with(summaries: usize, leaves: usize, max_links: usize) -> App {
+    let mut app = bare_app_with(summaries, leaves, max_links);
+    decorate(&mut app);
+    app
+}
+
+/// Comme [`app_with`], sans habillage.
+fn bare_app_with(summaries: usize, leaves: usize, max_links: usize) -> App {
     let state = UiState {
         language: LanguagePref::Fr,
         theme: ThemePref::Light,
@@ -234,6 +321,8 @@ fn vertices_in(primitives: &[ClippedPrimitive]) -> usize {
 struct Bench {
     ctx: egui::Context,
     time: f64,
+    /// Largeur de la fenêtre simulée.
+    width: f32,
     /// Relevé de la dernière image.
     last: Counts,
 }
@@ -243,6 +332,7 @@ impl Bench {
         Self {
             ctx: egui::Context::default(),
             time: 0.0,
+            width: SCREEN.0,
             last: Counts::default(),
         }
     }
@@ -261,7 +351,7 @@ impl Bench {
         let mut events = events;
         events.insert(0, Event::ModifiersChanged(modifiers));
         let raw = RawInput {
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(SCREEN.0, SCREEN.1))),
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(self.width, SCREEN.1))),
             time: Some(self.time),
             events,
             ..RawInput::default()
@@ -778,7 +868,11 @@ fn frame_counts_equal_at_1000_and_5000_tasks() {
     ];
     let mut measured = Vec::new();
     for summaries in [50, SUMMARIES] {
-        let mut app = app_with(summaries, LEAVES_PER_SUMMARY, 2 * summaries * LEAVES_PER_SUMMARY);
+        let mut app = for_counts(app_with(
+            summaries,
+            LEAVES_PER_SUMMARY,
+            2 * summaries * LEAVES_PER_SUMMARY,
+        ));
         let mut bench = Bench::new();
         bench.settle(&mut app);
         app.dispatch(Action::SetZoom(TimeScaleZoom::Week));
@@ -1432,9 +1526,10 @@ const STYLED: [(TemplateId, &str); 4] = [
 /// Application ouverte sur un réseau généré, modèle par défaut `id`,
 /// thème `theme` (J8, lot L11).
 fn styled_app(summaries: usize, links: usize, id: TemplateId, theme: ThemePref) -> App {
-    let mut app = app_with(summaries, LEAVES_PER_SUMMARY, links);
+    let mut app = bare_app_with(summaries, LEAVES_PER_SUMMARY, links);
     app.state.default_template = id;
     app.state.theme = theme;
+    decorate(&mut app);
     app
 }
 
@@ -1490,12 +1585,13 @@ fn styled_counts_equal_at_1000_and_5000_tasks() {
     for (id, name) in STYLED {
         let mut measured = Vec::new();
         for summaries in [50, SUMMARIES] {
-            let mut app = styled_app(
-                summaries,
-                2 * summaries * LEAVES_PER_SUMMARY,
-                id,
-                ThemePref::Light,
-            );
+            // Barre d'outils de J8 (sans habillage) : en ruban, Chantier
+            // sort de ± 5 % (1 138 / 1 038 formes, ruban seul, frise
+            // masquée ou non ; hachures des lignes visibles, plus courtes),
+            // écart signalé au lot L5 qui retire la barre d'outils.
+            let mut app = bare_app_with(summaries, LEAVES_PER_SUMMARY, 2 * summaries * LEAVES_PER_SUMMARY);
+            app.state.default_template = id;
+            app.state.theme = ThemePref::Light;
             let mut bench = Bench::new();
             styled_middle(&mut app, &mut bench);
             measured.push(bench.last);
@@ -1608,4 +1704,73 @@ fn ribbon_tabs() {
     }
     assert_eq!(app.state.ribbon.tab, RibbonTab::Format);
     assert_budget("ribbon_tabs", samples, bench.last);
+}
+
+/// ADR-0017 (lot L4, § 2.5) : chronologie de 200 tâches sur le réseau de
+/// 5 000 tâches. `layout` seule (données du moteur lues une fois) sur 60
+/// largeurs : médiane < 2 ms. Puis 60 images à largeur de fenêtre changée
+/// à chaque image (une disposition par image), 60 images de défilement
+/// horizontal du Gantt (disposition en cache, partie visible suivie) :
+/// image médiane < 16 ms, p95 < 32 ms.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn timeline_5000() {
+    use planrs_ui_egui::ribbon::Chrome;
+
+    let (mut app, mut bench) = nav_bench();
+    app.set_chrome(Chrome::Ribbon);
+    put_on_timeline(&mut app, 200);
+    bench.settle(&mut app);
+    let doc = app.document.as_ref().unwrap();
+    let spec = app.state.effective_style(doc.project()).timeline;
+    assert_eq!(spec.tasks.len(), 200);
+    let input =
+        planrs_automation::timeline::input(&doc.session, &spec, planrs_automation::text::Language::Fr);
+    assert_eq!(input.items.len(), 200);
+    let mut layouts: Vec<Duration> = (0..60_i64)
+        .map(|i| {
+            let width16 = (1_200 + (i * 37) % 700) * 16;
+            let t0 = Instant::now();
+            black_box(planrs_render::timeline::layout(black_box(&input), width16));
+            t0.elapsed()
+        })
+        .collect();
+    layouts.sort();
+    let layout_median = percentile(&layouts, 50);
+    eprintln!(
+        "perf UI timeline_5000 layout : médiane {:.3} ms, max {:.3} ms",
+        ms(layout_median),
+        ms(*layouts.last().unwrap())
+    );
+    let before = app.view().timeline.layouts_computed;
+    for _ in 0..WARMUP {
+        bench.frame(&mut app, Vec::new());
+    }
+    let mut samples = Vec::with_capacity(120);
+    for i in 0..60_usize {
+        bench.width = 1_200.0 + ((i * 37) % 700) as f32;
+        samples.push(bench.frame(&mut app, Vec::new()));
+    }
+    let computed = app.view().timeline.layouts_computed - before;
+    assert!(computed >= 55, "{computed} dispositions pour 60 largeurs");
+    bench.width = SCREEN.0;
+    bench.settle(&mut app);
+    for i in 0..60_usize {
+        let dx = if i % 20 < 10 { 40.0 } else { -40.0 };
+        app.dispatch(Action::ScrollGanttX(dx));
+        samples.push(bench.frame(&mut app, Vec::new()));
+    }
+    let drawn = app.view().timeline.drawn.clone().unwrap();
+    assert!(drawn.window.is_some(), "partie visible du Gantt sur la frise");
+    report(
+        "timeline_5000_layout",
+        &layouts,
+        bench.last,
+        serde_json::json!({ "budget_median_ms": 2 }),
+    );
+    assert!(
+        layout_median < Duration::from_millis(2),
+        "timeline_5000 : layout médiane {layout_median:?} ≥ 2 ms"
+    );
+    assert_budget("timeline_5000", samples, bench.last);
 }

@@ -1349,6 +1349,8 @@ fn outline_5000() {
 fn search_5000() {
     use planrs_ui_egui::view::task_view::TaskViewOp;
     let (mut app, mut bench) = nav_bench();
+    // Génération de départ : la frise du ruban est posée par un lot.
+    let generation = app.document.as_ref().unwrap().generation();
     app.dispatch(Action::TaskView(TaskViewOp::OpenSearch));
     bench.settle(&mut app);
     let query = "préparatio";
@@ -1368,7 +1370,7 @@ fn search_5000() {
         seen.extend(app.selection);
     }
     assert!(seen.len() > 1, "« suivant » doit avancer");
-    assert_eq!(app.document.as_ref().unwrap().generation(), 0);
+    assert_eq!(app.document.as_ref().unwrap().generation(), generation);
     assert_budget("search_5000", samples, bench.last);
 }
 

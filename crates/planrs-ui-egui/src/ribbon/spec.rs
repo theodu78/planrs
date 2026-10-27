@@ -577,20 +577,17 @@ fn active_task<'a>(fc: &FrameCtx<'a>) -> Option<&'a planrs_core::Task> {
 
 /// La tâche active est sur la chronologie (liste du style du document).
 fn on_timeline(fc: &FrameCtx<'_>) -> bool {
-    let (Some(doc), Some(uid)) = (fc.doc, fc.selection) else {
+    let (Some(_), Some(uid)) = (fc.doc, fc.selection) else {
         return false;
     };
-    fc.state
-        .effective_style(doc.project())
-        .timeline
-        .tasks
-        .contains(&uid.get())
+    // Style résolu de l'image (comme le menu contextuel) : pas de relecture
+    // du JSON du document à chaque image.
+    fc.task_view.style.style.timeline.tasks.contains(&uid.get())
 }
 
 /// « Mois relatifs » du style effectif du document (faux sans document).
 fn relative_months(fc: &FrameCtx<'_>) -> bool {
-    fc.doc
-        .is_some_and(|doc| fc.state.effective_style(doc.project()).scale.relative_months)
+    fc.doc.is_some() && fc.task_view.style.style.scale.relative_months
 }
 
 /// « Mettre en forme les barres » : type de la barre de la tâche active,

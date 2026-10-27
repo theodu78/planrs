@@ -27,9 +27,8 @@ menu-theme = Theme
 menu-language = Language
 menu-diagnostics = Diagnostics
 
-## Barre d'outils et zoom
+## Zoom
 
-toolbar-open = Open…
 toolbar-fit = Fit
 zoom-day = Day
 zoom-week = Week
@@ -978,17 +977,8 @@ menu-task = Task
 menu-format = Format
 menu-help = Help
 menu-mark-percent = Mark { $percent }% complete
-toolbar-percent = { $percent }%
-toolbar-percent-hint = Mark the selection { $percent }% complete
 menu-toggle-mode = Toggle manual / auto scheduling
-toolbar-mode = Mode
-toolbar-mode-hint = Switch the selection between manual and auto scheduling
 menu-toggle-active = Activate / inactivate
-toolbar-active = Active
-toolbar-active-hint = Activate or inactivate the selection
-toolbar-filter = Custom filter
-toolbar-search = Find
-toolbar-print-mode = Print mode
 menu-page-setup = Page Setup…
 menu-print-mode = Print mode
 menu-gallery = Layout templates…

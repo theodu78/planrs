@@ -410,9 +410,6 @@ pub struct App {
     pub(crate) pick_tx: Sender<PickedFile>,
     /// Récepteur des fichiers choisis pour l'import CSV.
     pub(crate) pick_rx: Receiver<PickedFile>,
-    /// Habillage (ADR-0017 D9) : barre d'outils jusqu'au lot L5, ruban
-    /// et chronologie sur demande ([`App::set_chrome`]). Jamais persisté.
-    chrome: crate::ribbon::Chrome,
 }
 
 impl App {
@@ -470,20 +467,7 @@ impl App {
             menu_paste_at: None,
             pick_tx,
             pick_rx,
-            chrome: crate::ribbon::Chrome::default(),
         }
-    }
-
-    /// Habillage courant (ADR-0017 D9).
-    #[must_use]
-    pub const fn chrome(&self) -> crate::ribbon::Chrome {
-        self.chrome
-    }
-
-    /// Choisit l'habillage : ruban et chronologie, ou barre d'outils de J8
-    /// (défaut jusqu'au lot L5). Tests et exemple `snapshot` seulement.
-    pub const fn set_chrome(&mut self, chrome: crate::ribbon::Chrome) {
-        self.chrome = chrome;
     }
 
     /// Installe l'observateur du document (remplace le précédent) et lui
@@ -2856,15 +2840,9 @@ impl App {
                 stats: &mut stats,
                 window_open: self.view.dialog.is_some(),
                 task_view,
-                chrome: self.chrome,
             };
             view::chrome::menu_bar(ui, &mut fc, self.side.open);
-            match self.chrome {
-                crate::ribbon::Chrome::Toolbar => view::chrome::toolbar(ui, &mut fc),
-                crate::ribbon::Chrome::Ribbon => {
-                    view::ribbon::show(ui, &mut fc, &self.state.ribbon, self.view.ribbon_overlay);
-                }
-            }
+            view::ribbon::show(ui, &mut fc, &self.state.ribbon, self.view.ribbon_overlay);
             view::search::search_bar(ui, &mut fc);
             view::chrome::status_bar(ui, &mut fc, &self.messages);
             view::chrome::confirm_banner(ui, &mut fc, confirm_name.as_deref());

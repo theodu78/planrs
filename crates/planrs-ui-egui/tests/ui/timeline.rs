@@ -1,8 +1,8 @@
 //! Chronologie à l'écran et à l'impression (ADR-0017 D7, D8, H-UI-78 à
 //! H-UI-82) : module posé par le contrat (lot L0), rempli par le lot L4.
 //!
-//! Harnais en `Chrome::Ribbon` (la frise n'existe qu'avec le ruban jusqu'au
-//! lot L5) sur le projet « P » du cahier (UID = ID ; 1 ⊃ 2, 3, 4 ; 5 ⊃ 6,
+//! Harnais (ruban, seul habillage depuis le lot L5) sur le projet « P » du
+//! cahier (UID = ID ; 1 ⊃ 2, 3, 4 ; 5 ⊃ 6,
 //! 7), 1 440 × 900. Les tâches de la frise sont posées par un lot
 //! `style.apply { patch: { timeline } }` (même écriture que le geste
 //! « Ajouter à la chronologie »). Relevé de la frise :
@@ -26,7 +26,6 @@ use planrs_ui_egui::action::{DialogKind, TimelineOp};
 use planrs_ui_egui::dialog::DialogBody;
 use planrs_ui_egui::dialog::page_setup::PageSetupState;
 use planrs_ui_egui::i18n::{Arg, Language, TextId, Texts};
-use planrs_ui_egui::ribbon::Chrome;
 use planrs_ui_egui::view::timeline::{TIMELINE_H, TimelineDrawn};
 use planrs_ui_egui::{Action, App, DocOrigin, ViewKind};
 
@@ -69,10 +68,9 @@ const fn uid(n: u32) -> TaskUid {
     TaskUid::new(n)
 }
 
-/// Harnais `width` × 900 en `Chrome::Ribbon`, ouvert sur `project`.
+/// Harnais `width` × 900, ouvert sur `project`.
 fn open_at(project: Project, width: f32) -> Harness<'static, App> {
     let mut app = App::new(crate::fr_light(), planrs_ui_egui::Env::fixed(crate::now()));
-    app.set_chrome(Chrome::Ribbon);
     app.open_project(
         project,
         DocOrigin {
@@ -246,10 +244,22 @@ fn h_ui_78_absent_from_resource_views() {
     );
     assert!(harness.state().view().timeline.drawn.is_some(), "Gantt de suivi");
     assert!(painted(&harness));
-    harness.state_mut().set_chrome(Chrome::Toolbar);
-    harness.run();
-    assert!(harness.state().view().timeline.drawn.is_none(), "barre d'outils");
-    assert!(!painted(&harness));
+}
+
+/// H-UI-78 (lot L5) : frise affichée par défaut (préférence cochée, aucun
+/// `set_chrome`) en tête de la vue Gantt dès l'ouverture, avec les bornes
+/// du projet ; la table commence sous elle.
+#[test]
+fn h_ui_78_default_visible() {
+    let harness = p();
+    assert!(harness.state().state.timeline_visible);
+    let drawn = drawn(&harness);
+    assert!(drawn.rect.height() >= TIMELINE_H - 0.5, "{:?}", drawn.rect);
+    let texts = frise_texts(&harness);
+    assert!(texts.iter().any(|t| t.starts_with("Début")), "{texts:?}");
+    assert!(texts.iter().any(|t| t.starts_with("Fin")), "{texts:?}");
+    let row = row_rect(&harness, 2, "Fondations");
+    assert!(row.top() >= drawn.rect.bottom(), "{row:?} sous {:?}", drawn.rect);
 }
 
 /// H-UI-78 : date d'état en trait tireté étiqueté « État 06/11 ».
@@ -468,8 +478,7 @@ fn h_ui_81_right_click_removes() {
     let mut harness = p_with(&[3, 4]);
     harness.get_by_label("Murs").click_secondary();
     harness.run();
-    harness.get_by_label(&fr(TextId::TimelineRemove)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::TimelineRemove));
     assert_eq!(timeline_tasks(harness.state()), [4]);
     assert!(
         harness.query_by_label(&fr(TextId::TimelineRemove)).is_none(),
@@ -536,8 +545,7 @@ fn h_ui_82_unchecked_no_timeline() {
     assert!(!state.page.timeline);
     let pages = state.preview_pages().unwrap();
     assert!(pages.timeline.is_none() && pages.pages.iter().all(|p| !p.timeline));
-    harness.get_by_label(&fr(TextId::RibbonTimeline)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::RibbonTimeline));
     let state = page_state(harness.state());
     assert!(state.page.timeline);
     assert!(state.preview_pages().unwrap().timeline.is_some());
@@ -555,10 +563,8 @@ fn h_ui_82_saved_with_project() {
         Action::ShowDialog(DialogKind::PageSetup { print_mode: false }),
     );
     assert!(!page_state(harness.state()).page.timeline);
-    harness.get_by_label(&fr(TextId::RibbonTimeline)).click();
-    harness.run();
-    harness.get_by_label(&fr(TextId::PsSave)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::RibbonTimeline));
+    crate::click(&mut harness, &fr(TextId::PsSave));
     let app = harness.state();
     assert!(app.view().dialog.is_none());
     assert!(

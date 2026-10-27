@@ -395,10 +395,8 @@ fn paste_report_banner() {
         .dispatch(Action::Clipboard(ClipboardOp::PasteSpecial));
     harness.run();
     assert!(harness.state().view().dialog.is_some());
-    harness.get_by_label(&fr(TextId::PsLinks)).click();
-    harness.run();
-    harness.get_by_label(&fr(TextId::TaskInfoOk)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::PsLinks));
+    crate::click(&mut harness, &fr(TextId::TaskInfoOk));
     let app = harness.state();
     assert!(app.view().dialog.is_none());
     let (_, got) = titled(app, TextId::PasteReportTitle).unwrap();
@@ -426,13 +424,9 @@ fn paste_special_without_copy_and_menu_entries() {
     );
     // Menu Édition → Copier : tampon posé sans événement du système.
     select(&mut harness, 2, 2);
-    harness.get_by_label(&fr(TextId::MenuEdit)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::MenuEdit));
     let label = fr(TextId::MenuCopy);
-    harness
-        .get_by(|node| node.label().is_some_and(|text| text.starts_with(&label)))
-        .click();
-    harness.run();
+    crate::click_where(&mut harness, |text| text.starts_with(&label));
     let slot = harness.state().clipboard().unwrap();
     assert_eq!(slot.clip.tasks.len(), 1);
     assert_eq!(slot.clip.tasks[0].fields.name, "Fondations");

@@ -116,8 +116,7 @@ fn click_at(harness: &mut Harness<'static, App>, p: Pos2) {
 
 /// Clique sur l'unique widget portant `label`.
 fn click_label(harness: &mut Harness<'static, App>, label: &str) {
-    harness.get_by_label(label).click();
-    harness.run();
+    crate::click(harness, label);
 }
 
 /// Remplace le texte du champ nommé `label` par `text`.

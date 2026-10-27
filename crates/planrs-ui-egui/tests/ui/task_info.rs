@@ -286,8 +286,7 @@ fn task_info_stale_key_refused() {
 }
 
 fn click_label(harness: &mut Harness<'static, App>, label: &str) {
-    harness.get_by_label(label).click();
-    harness.run();
+    crate::click(harness, label);
 }
 
 /// Libellé d'accessibilité de la ligne `index`.
@@ -373,7 +372,7 @@ fn h_ui_19_shift_f2_opens() {
     assert!(harness.query_by_label(&title).is_some());
     // Les cinq onglets sont là.
     for tab in Tab::ALL {
-        assert!(harness.query_by_label(&fr(tab.title())).is_some(), "{tab:?}");
+        assert!(crate::shown_off_ribbon(&harness, &fr(tab.title())), "{tab:?}");
     }
     // Sans tâche active : rien.
     let mut harness = crate::harness();

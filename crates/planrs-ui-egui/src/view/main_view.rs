@@ -697,9 +697,9 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
     let mut chosen = None;
     let mut information = false;
     let mut timeline_toggle = false;
-    // Chronologie (ADR-0017, H-UI-79) : entrée de l'habillage ruban,
-    // libellé selon la tâche active (H-UI-74).
-    let timeline_label = (fc.chrome == crate::ribbon::Chrome::Ribbon).then(|| {
+    // Chronologie (ADR-0017, H-UI-79) : libellé selon la tâche active
+    // (H-UI-74).
+    let timeline_label = {
         let active = click.and_then(|c| c.uid).or(fc.selection);
         let on = active.is_some_and(|uid| {
             fc.task_view
@@ -712,7 +712,7 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
         });
         let (add, remove) = super::timeline::CONTEXT_LABELS;
         if on { remove } else { add }
-    });
+    };
     Popup::new(
         Id::unique("planrs.structure-menu"),
         ctx.clone(),
@@ -758,10 +758,9 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
         if ui.add_enabled(has_selection, button).clicked() {
             information = true;
         }
-        if let Some(label) = timeline_label
-            && ui
-                .add_enabled(has_selection, egui::Button::new(texts.get(label)))
-                .clicked()
+        if ui
+            .add_enabled(has_selection, egui::Button::new(texts.get(timeline_label)))
+            .clicked()
         {
             timeline_toggle = true;
         }
@@ -1062,7 +1061,6 @@ mod tests {
                 stats: &mut stats,
                 window_open: false,
                 task_view: crate::view::task_view::TaskViewFrame::default(),
-                chrome: crate::ribbon::Chrome::Toolbar,
             };
             super::show(ui, &mut fc, view);
         });

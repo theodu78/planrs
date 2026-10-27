@@ -316,9 +316,6 @@ pub struct FrameCtx<'a> {
     /// Vue des tâches à cette image : filtre, tri, niveau, recherche,
     /// triangles de repli (J8, lot L9).
     pub task_view: task_view::TaskViewFrame,
-    /// Habillage de l'image (ADR-0017 D9) : la chronologie ne s'affiche
-    /// qu'avec le ruban.
-    pub chrome: crate::ribbon::Chrome,
 }
 
 impl<'a> FrameCtx<'a> {

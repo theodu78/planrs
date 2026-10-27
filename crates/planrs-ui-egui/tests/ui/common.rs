@@ -84,13 +84,24 @@ pub fn harness(language: LanguagePref, theme: ThemePref) -> Harness<'static, App
 /// réseau généré ouvert par `App::open_project`) ; `theme` est celui de
 /// son `UiState`.
 pub fn harness_with(app: App, theme: ThemePref) -> Harness<'static, App> {
+    harness_sized(app, theme, egui::vec2(1280.0, 720.0), 1.0)
+}
+
+/// Comme [`harness_with`], fenêtre `size` (points) à `pixels_per_point`
+/// (ruban à 800 px et à 2 pixels par point, ADR-0017 lot L5).
+pub fn harness_sized(
+    app: App,
+    theme: ThemePref,
+    size: egui::Vec2,
+    pixels_per_point: f32,
+) -> Harness<'static, App> {
     let egui_theme = match theme {
         ThemePref::Dark => egui::Theme::Dark,
         ThemePref::Light | ThemePref::System => egui::Theme::Light,
     };
     let builder = Harness::builder()
-        .with_size(egui::vec2(1280.0, 720.0))
-        .with_pixels_per_point(1.0)
+        .with_size(size)
+        .with_pixels_per_point(pixels_per_point)
         .with_theme(egui_theme)
         .with_os(egui::os::OperatingSystem::Nix)
         // `ScrollToRow` anime le défilement : 10 images mesurées avant stabilité.

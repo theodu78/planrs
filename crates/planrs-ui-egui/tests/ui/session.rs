@@ -537,10 +537,9 @@ fn ui_edit_menu_undo_redo() {
     let mut harness = harness();
     demo_with_one_edit(&mut harness);
     for (item, expected) in [(TextId::MenuUndo, (0, 1)), (TextId::MenuRedo, (1, 0))] {
-        harness.get_by_label(&fr(TextId::MenuEdit)).click();
-        harness.run();
-        harness.get_by_label_contains(&fr(item)).click();
-        harness.run();
+        crate::click(&mut harness, &fr(TextId::MenuEdit));
+        let label = fr(item);
+        crate::click_where(&mut harness, |text| text.contains(&label));
         assert_eq!(history_len(harness.state()), expected, "{item:?}");
     }
 }

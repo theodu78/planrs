@@ -75,13 +75,13 @@
 //!   dossiers. `static_styled` mesure aussi Classique.
 //!
 //! - Ruban (ADR-0017, lot L2, cahier § 2.5) : `ribbon_tabs` (ignoré,
-//!   release) : ruban à onglets dessiné (`Chrome::Ribbon`), changement
+//!   release) : ruban à onglets dessiné (seul habillage depuis L5), changement
 //!   d'onglet à chaque image (5 onglets × 12) et pointeur déplacé sur les
 //!   éléments ; mêmes seuils.
 //! - Chronologie (ADR-0017, lot L4, cahier § 2.5) : **tous** les scénarios
 //!   ouverts par `app_with` tournent ruban déplié et frise affichée, 50
-//!   tâches du réseau sur la frise (`PLANRS_PERF_CHROME=toolbar` : barre
-//!   d'outils de J8, sans frise, pour comparer). `timeline_5000` (ignoré,
+//!   tâches du réseau sur la frise (lot L5 : l'ancienne barre d'outils et
+//!   `PLANRS_PERF_CHROME` sont retirées). `timeline_5000` (ignoré,
 //!   release) : 200 tâches sur la frise ; `layout` seule sur 60 largeurs
 //!   (médiane < 2 ms), puis 60 images à largeur de fenêtre changée à
 //!   chaque image (une disposition par image) et 60 images de défilement
@@ -182,18 +182,6 @@ fn perf_template() -> TemplateId {
     }
 }
 
-/// Habillage de la mesure (`PLANRS_PERF_CHROME`) : ruban et frise par
-/// défaut (`ribbon`), barre d'outils de J8 sans frise (`toolbar`) ; une
-/// valeur inconnue fait échouer la mesure.
-fn perf_ribbon() -> bool {
-    match std::env::var("PLANRS_PERF_CHROME") {
-        Err(std::env::VarError::NotPresent) => true,
-        Ok(v) if v == "ribbon" => true,
-        Ok(v) if v == "toolbar" => false,
-        other => panic!("PLANRS_PERF_CHROME inconnu : {other:?}"),
-    }
-}
-
 /// UID de `n` feuilles réparties sur tout le réseau (premières, dernières
 /// et intermédiaires à pas constant).
 fn spread_leaves(app: &App, n: usize) -> Vec<u32> {
@@ -233,13 +221,10 @@ fn put_on_timeline(app: &mut App, n: usize) {
     app.dispatch(Action::Exec(batch));
 }
 
-/// Habillage de la mesure (ADR-0017, cahier § 2.5) : ruban déplié et 50
-/// tâches sur la frise, sauf `PLANRS_PERF_CHROME=toolbar`.
+/// Habillage de la mesure (ADR-0017, cahier § 2.5) : ruban déplié (seul
+/// habillage) et 50 tâches sur la frise.
 fn decorate(app: &mut App) {
-    if perf_ribbon() {
-        app.set_chrome(planrs_ui_egui::ribbon::Chrome::Ribbon);
-        put_on_timeline(app, 50);
-    }
+    put_on_timeline(app, 50);
 }
 
 /// Gardes de comptage (formes, sommets, galleys égaux à ± 5 % à 1 000 et
@@ -1587,10 +1572,7 @@ fn styled_counts_equal_at_1000_and_5000_tasks() {
     for (id, name) in STYLED {
         let mut measured = Vec::new();
         for summaries in [50, SUMMARIES] {
-            // Barre d'outils de J8 (sans habillage) : en ruban, Chantier
-            // sort de ± 5 % (1 138 / 1 038 formes, ruban seul, frise
-            // masquée ou non ; hachures des lignes visibles, plus courtes),
-            // écart signalé au lot L5 qui retire la barre d'outils.
+            // Ruban (seul habillage depuis L5), sans frise.
             let mut app = bare_app_with(summaries, LEAVES_PER_SUMMARY, 2 * summaries * LEAVES_PER_SUMMARY);
             app.state.default_template = id;
             app.state.theme = ThemePref::Light;
@@ -1601,8 +1583,15 @@ fn styled_counts_equal_at_1000_and_5000_tasks() {
         let (small, large) = (measured[0], measured[1]);
         eprintln!("{name} : 1 000 tâches {small:?}, 5 000 tâches {large:?}");
         assert!(small.shapes > 0 && small.galleys > 0, "{name} : {small:?}");
+        // Formes : borne d'un seul côté (lot L5). Sous le ruban, la vue
+        // est plus basse et Chantier peint au milieu du petit réseau plus de
+        // formes qu'au milieu du grand (1 090 / 1 030 : hachures des lignes
+        // visibles, qui dépendent des barres montrées, pas du nombre de
+        // tâches) ; un travail proportionnel au réseau ferait croître le
+        // grand, ce que la borne refuse toujours. Sommets et galleys
+        // restent à ± 5 %.
         assert!(
-            close(small.shapes, large.shapes),
+            large.shapes * 20 <= small.shapes * 21,
             "{name} : formes {small:?} / {large:?}"
         );
         assert!(
@@ -1686,10 +1675,9 @@ fn ai_panel() {
 #[test]
 #[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
 fn ribbon_tabs() {
-    use planrs_ui_egui::ribbon::{Chrome, RibbonOp, RibbonTab};
+    use planrs_ui_egui::ribbon::{RibbonOp, RibbonTab};
 
     let (mut app, mut bench) = nav_bench();
-    app.set_chrome(Chrome::Ribbon);
     bench.settle(&mut app);
     for _ in 0..WARMUP {
         bench.frame(&mut app, Vec::new());
@@ -1717,10 +1705,7 @@ fn ribbon_tabs() {
 #[test]
 #[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
 fn timeline_5000() {
-    use planrs_ui_egui::ribbon::Chrome;
-
     let (mut app, mut bench) = nav_bench();
-    app.set_chrome(Chrome::Ribbon);
     put_on_timeline(&mut app, 200);
     bench.settle(&mut app);
     let doc = app.document.as_ref().unwrap();

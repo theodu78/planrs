@@ -322,8 +322,7 @@ fn column_toggle_from_header_menu() {
         .click_secondary();
     harness.run();
     let title = texts().get(Column::PercentComplete.title());
-    harness.get_by_label(&title).click();
-    harness.run();
+    crate::click(&mut harness, &title);
     assert!(visible(harness.state(), Column::PercentComplete));
     // La colonne affichée est au bout de la table, qui défile désormais :
     // son titre apparaît une fois la table défilée.
@@ -343,8 +342,7 @@ fn column_toggle_from_header_menu() {
         .get_by_label(&header_label(Column::Duration))
         .click_secondary();
     harness.run();
-    harness.get_by_label(&fr(TextId::ColumnMenuHide)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::ColumnMenuHide));
     assert!(!visible(harness.state(), Column::Duration));
     assert!(harness.query_by_label(&header_label(Column::Duration)).is_none());
 }

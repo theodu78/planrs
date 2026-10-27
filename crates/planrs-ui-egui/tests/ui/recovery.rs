@@ -102,8 +102,7 @@ fn recovery_banner_restore_marks_dirty() {
     let mut harness = recovering_app(tmp.path());
     assert_eq!(harness.state().recovery_offers().len(), 1);
     harness.get_by_label(&title("maison.xml", 2));
-    harness.get_by_label(&fr(TextId::RecoveryRestore)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::RecoveryRestore));
     let app = harness.state();
     let doc = app.document.as_ref().expect("document restauré");
     assert!(doc.is_dirty(), "document restauré non marqué modifié");
@@ -160,8 +159,7 @@ fn recovery_restore_changed_file_drops_path() {
     std::fs::write(&file, b"<Project><Name>plus recent</Name></Project>").unwrap();
     let mut harness = recovering_app(&root);
     harness.get_by_label(&fr(TextId::RecoveryFileChanged));
-    harness.get_by_label(&fr(TextId::RecoveryRestore)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::RecoveryRestore));
     let doc = harness.state().document.as_ref().expect("document restauré");
     assert_eq!(
         doc.origin.path, None,
@@ -188,11 +186,9 @@ fn recovery_restore_confirms_dirty_document() {
     let uid = harness.state().rows().unwrap().row(0).unwrap().uid;
     harness.state_mut().dispatch(Action::Exec(rename(uid, "Courant")));
     harness.run();
-    harness.get_by_label(&fr(TextId::RecoveryRestore)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::RecoveryRestore));
     assert!(harness.state().confirmation_pending());
-    harness.get_by_label(&fr(TextId::ConfirmDiscard)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::ConfirmDiscard));
     let doc = harness.state().document.as_ref().unwrap();
     assert_eq!(doc.origin.name, "maison.xml");
     assert!(doc.is_dirty());
@@ -205,16 +201,14 @@ fn recovery_discard_and_later() {
     let tmp = TempDir::new("discard");
     crashed_demo(tmp.path());
     let mut harness = recovering_app(tmp.path());
-    harness.get_by_label(&fr(TextId::RecoveryLater)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::RecoveryLater));
     assert_eq!(harness.state().recovery_offers().len(), 0);
     assert!(harness.query_by_label(&fr(TextId::RecoveryRestore)).is_none());
     assert_eq!(orphans(tmp.path()).len(), 1, "Plus tard : journal gardé");
     drop(harness);
 
     let mut harness = recovering_app(tmp.path());
-    harness.get_by_label(&fr(TextId::RecoveryDiscard)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::RecoveryDiscard));
     assert_eq!(harness.state().recovery_offers().len(), 0);
     assert!(harness.state().document.is_none());
     assert!(orphans(tmp.path()).is_empty(), "Ignorer : journal supprimé");

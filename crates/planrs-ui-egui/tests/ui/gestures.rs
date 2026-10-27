@@ -39,7 +39,7 @@ fn unstarted_leaf(app: &App) -> (usize, TaskUid) {
 /// Exemple ouvert au zoom Jour, la ligne `i` visible et le début de sa
 /// barre à 150 points du bord gauche du Gantt.
 fn show_row(harness: &mut Harness<'static, App>, i: usize) {
-    click(harness, &fr(TimeScaleZoom::Day.label()));
+    crate::ribbon_zoom(harness, TimeScaleZoom::Day);
     harness.state_mut().dispatch(Action::ScrollToRow(i));
     harness.run();
     let app = harness.state();

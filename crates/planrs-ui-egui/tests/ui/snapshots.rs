@@ -9,6 +9,12 @@
 //! « maintenant » fixe (début du réseau) ; la ligne visée est sélectionnée
 //! et le Gantt défilé au début de sa barre, comme `--row` de l'exemple.
 //!
+//! ADR-0017 lot L5 : ruban (un onglet par capture, anglais sombre, replié,
+//! surimpression, 800 px, deux pixels par point) et chronologie (« P » avec 2, 3, 4, 6
+//! et 7 sur la frise, à l'écran et en mode impression) ; toutes les autres
+//! captures montrent désormais le ruban à la place des deux rangées
+//! d'outils, et une frise (vide hors « P ») en tête des vues Gantt.
+//!
 //! Mise à jour des références (Linux, lavapipe) :
 //! `PLANRS_UI_SNAPSHOTS=1 UPDATE_SNAPSHOTS=1 WGPU_BACKEND=vulkan cargo test -p planrs-ui-egui --test ui`.
 
@@ -17,12 +23,14 @@ use egui_kittest::kittest::Queryable as _;
 use planrs_core::Moment;
 use planrs_tests::generate::ui_network;
 use planrs_ui_egui::i18n::{TextId, Texts};
+use planrs_ui_egui::ribbon::{RibbonOp, RibbonTab};
 use planrs_ui_egui::timescale::TimeAxis;
+use planrs_ui_egui::view::ribbon::drawn;
 use planrs_ui_egui::{
     Action, App, DocOrigin, Env, Language, LanguagePref, ThemePref, TimeScaleZoom, UiState,
 };
 
-use crate::common::{harness, harness_with, snapshot};
+use crate::common::{harness, harness_sized, harness_with, snapshot};
 
 /// Ouvre l'exemple et laisse le premier dessin ajuster le zoom.
 fn demo(language: LanguagePref, theme: ThemePref) -> Harness<'static, App> {
@@ -266,4 +274,230 @@ net5000_snapshots! {
     snapshot_net5000_end_week_dark: End, Week, Dark;
     snapshot_net5000_end_quarter_light: End, Quarter, Light;
     snapshot_net5000_end_quarter_dark: End, Quarter, Dark;
+}
+
+// --- ADR-0017, lot L5 : ruban et chronologie ---
+
+/// « P » ouvert (`language`, `theme`), fenêtre `size` à `ppp`, tâche 3
+/// sélectionnée (éléments de sélection actifs), tâches `timeline` sur la
+/// frise (un lot `style.apply`, le geste « Ajouter à la chronologie »).
+fn p_capture(
+    language: LanguagePref,
+    theme: ThemePref,
+    size: egui::Vec2,
+    ppp: f32,
+    timeline: &[u32],
+) -> Harness<'static, App> {
+    let state = UiState {
+        language,
+        theme,
+        ..UiState::default()
+    };
+    let mut app = App::new(state, Env::fixed(crate::now()));
+    app.open_project(
+        crate::filters::project_p(),
+        DocOrigin {
+            name: "P.xml".to_owned(),
+            path: None,
+            demo: false,
+        },
+    );
+    let mut harness = harness_sized(app, theme, size, ppp);
+    harness.run();
+    if !timeline.is_empty() {
+        let json = serde_json::json!({
+            "format_version": 1,
+            "ops": [{
+                "op": "style.apply",
+                "template": harness.state().state.default_template.key(),
+                "patch": { "timeline": { "tasks": timeline } }
+            }]
+        });
+        let batch = planrs_automation::Batch::from_json_str(&json.to_string()).unwrap();
+        harness.state_mut().dispatch(Action::Exec(batch));
+    }
+    harness
+        .state_mut()
+        .dispatch(Action::Select(Some(planrs_core::TaskUid::new(3))));
+    harness.run();
+    let app = harness.state();
+    assert!(app.document.is_some(), "{:?}", app.messages());
+    assert_eq!(app.selection, Some(planrs_core::TaskUid::new(3)));
+    harness
+}
+
+/// « P » 1 280 × 720, français, clair, frise vide.
+fn p_fr_light() -> Harness<'static, App> {
+    p_capture(
+        LanguagePref::Fr,
+        ThemePref::Light,
+        egui::vec2(1280.0, 720.0),
+        1.0,
+        &[],
+    )
+}
+
+/// Choisit l'onglet `tab` du ruban.
+fn select_tab(harness: &mut Harness<'static, App>, tab: RibbonTab) {
+    harness
+        .state_mut()
+        .dispatch(Action::Ribbon(RibbonOp::Select(tab)));
+    harness.run();
+    assert_eq!(harness.state().state.ribbon.tab, tab);
+    assert!(!drawn(&harness.ctx).items.is_empty(), "ruban vide sur {tab:?}");
+}
+
+macro_rules! ribbon_tab_snapshots {
+    ($($name:ident: $tab:ident, $file:literal;)*) => {
+        $(
+            #[test]
+            fn $name() {
+                let mut harness = p_fr_light();
+                select_tab(&mut harness, RibbonTab::$tab);
+                snapshot(&mut harness, $file);
+            }
+        )*
+    };
+}
+
+ribbon_tab_snapshots! {
+    snapshot_ribbon_task_fr_light: Task, "ribbon_task_fr_light";
+    snapshot_ribbon_resource_fr_light: Resource, "ribbon_resource_fr_light";
+    snapshot_ribbon_project_fr_light: Project, "ribbon_project_fr_light";
+    snapshot_ribbon_view_fr_light: View, "ribbon_view_fr_light";
+    snapshot_ribbon_format_fr_light: Format, "ribbon_format_fr_light";
+}
+
+#[test]
+fn snapshot_ribbon_task_en_dark() {
+    let mut harness = p_capture(
+        LanguagePref::En,
+        ThemePref::Dark,
+        egui::vec2(1280.0, 720.0),
+        1.0,
+        &[],
+    );
+    assert_eq!(harness.ctx.theme(), egui::Theme::Dark);
+    assert_eq!(harness.state().texts().language(), Language::En);
+    select_tab(&mut harness, RibbonTab::Task);
+    snapshot(&mut harness, "ribbon_task_en_dark");
+}
+
+/// H-UI-72 : replié, seule la bande d'onglets reste.
+#[test]
+fn snapshot_ribbon_collapsed_fr_light() {
+    let mut harness = p_fr_light();
+    harness
+        .state_mut()
+        .dispatch(Action::Ribbon(RibbonOp::ToggleCollapsed));
+    harness.run();
+    assert!(harness.state().state.ribbon.collapsed);
+    assert!(drawn(&harness.ctx).body.is_none());
+    snapshot(&mut harness, "ribbon_collapsed_fr_light");
+}
+
+/// H-UI-72 : replié, onglet Projet ouvert en surimpression sur la vue.
+#[test]
+fn snapshot_ribbon_overlay_fr_light() {
+    let mut harness = p_fr_light();
+    harness
+        .state_mut()
+        .dispatch(Action::Ribbon(RibbonOp::ToggleCollapsed));
+    harness
+        .state_mut()
+        .dispatch(Action::Ribbon(RibbonOp::OpenOverlay(RibbonTab::Project)));
+    harness.run();
+    assert_eq!(harness.state().view().ribbon_overlay, Some(RibbonTab::Project));
+    assert!(drawn(&harness.ctx).body.is_some());
+    // Capture sans pointeur : la surimpression reste ouverte (seuls une
+    // action, Échap ou un clic la referment).
+    harness.remove_cursor();
+    harness.run();
+    assert_eq!(harness.state().view().ribbon_overlay, Some(RibbonTab::Project));
+    snapshot(&mut harness, "ribbon_overlay_fr_light");
+}
+
+/// H-UI-75 : 800 px, groupes réduits de droite à gauche.
+#[test]
+fn snapshot_ribbon_800px_fr_light() {
+    let mut harness = p_capture(
+        LanguagePref::Fr,
+        ThemePref::Light,
+        egui::vec2(800.0, 600.0),
+        1.0,
+        &[],
+    );
+    select_tab(&mut harness, RibbonTab::Task);
+    let d = drawn(&harness.ctx);
+    assert!(
+        d.items.iter().all(|i| d.panel.contains_rect(i.rect)),
+        "débordement à 800 px"
+    );
+    snapshot(&mut harness, "ribbon_800px_fr_light");
+}
+
+/// H-UI-77 : icônes vectorielles nettes à 2 pixels par point.
+#[test]
+fn snapshot_ribbon_hidpi_fr_light() {
+    let mut harness = p_capture(
+        LanguagePref::Fr,
+        ThemePref::Light,
+        egui::vec2(1024.0, 600.0),
+        2.0,
+        &[],
+    );
+    assert!((harness.ctx.pixels_per_point() - 2.0).abs() < f32::EPSILON);
+    select_tab(&mut harness, RibbonTab::Task);
+    snapshot(&mut harness, "ribbon_hidpi_fr_light");
+}
+
+/// Tâches de la frise des captures (cahier du ruban, lot L5).
+const TIMELINE: [u32; 5] = [2, 3, 4, 6, 7];
+
+/// H-UI-78, H-UI-80 : frise de « P » avec 2, 3, 4, 6 et 7.
+fn timeline_capture(language: LanguagePref, theme: ThemePref, name: &str) {
+    let mut harness = p_capture(language, theme, egui::vec2(1280.0, 720.0), 1.0, &TIMELINE);
+    let app = harness.state();
+    let doc = app.document.as_ref().unwrap();
+    assert_eq!(
+        app.state.effective_style(doc.project()).timeline.tasks,
+        TIMELINE.to_vec()
+    );
+    let drawn = app.view().timeline.drawn.clone().expect("frise dessinée");
+    assert_eq!(drawn.elements.len(), TIMELINE.len(), "{:?}", drawn.elements);
+    snapshot(&mut harness, name);
+}
+
+#[test]
+fn snapshot_timeline_fr_light() {
+    timeline_capture(LanguagePref::Fr, ThemePref::Light, "timeline_fr_light");
+}
+
+#[test]
+fn snapshot_timeline_en_dark() {
+    timeline_capture(LanguagePref::En, ThemePref::Dark, "timeline_en_dark");
+}
+
+/// H-UI-82 : mode impression, frise affichée ⇒ case cochée d'office, frise
+/// en tête de la page 1 de l'aperçu.
+#[test]
+fn snapshot_print_timeline_fr_light() {
+    use planrs_ui_egui::action::DialogKind;
+    use planrs_ui_egui::dialog::DialogBody;
+    let mut harness = p_capture(
+        LanguagePref::Fr,
+        ThemePref::Light,
+        egui::vec2(1280.0, 720.0),
+        1.0,
+        &TIMELINE,
+    );
+    harness
+        .state_mut()
+        .dispatch(Action::ShowDialog(DialogKind::PageSetup { print_mode: true }));
+    harness.run();
+    let Some(DialogBody::PageSetup(state)) = harness.state().view().dialog.as_ref().map(|d| &d.body) else {
+        panic!("mode impression non ouvert");
+    };
+    assert!(state.page.timeline, "frise cochée d'office");
+    snapshot(&mut harness, "print_timeline_fr_light");
 }

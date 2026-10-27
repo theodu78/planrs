@@ -288,13 +288,11 @@ pub struct PageSetupInput<'a> {
     pub lang: Language,
     /// Tâches imprimées (lignes de la vue affichée ; `None` : toutes).
     pub rows: Option<&'a BTreeSet<TaskUid>>,
-    /// Case « Chronologie » proposée (habillage ruban, H-UI-82).
-    pub timeline: bool,
 }
 
 /// Réglages (colonne de gauche de la fenêtre).
 #[allow(clippy::too_many_lines, reason = "suite de réglages, un bloc chacun")]
-fn settings(ui: &mut egui::Ui, texts: &Texts, page: &mut PageStyle, timeline: bool) {
+fn settings(ui: &mut egui::Ui, texts: &Texts, page: &mut PageStyle) {
     egui::Grid::new("planrs.page-setup-grid")
         .num_columns(2)
         .spacing(egui::vec2(8.0, 6.0))
@@ -333,14 +331,10 @@ fn settings(ui: &mut egui::Ui, texts: &Texts, page: &mut PageStyle, timeline: bo
                 });
             });
             ui.end_row();
-            // Chronologie en tête de la première page (H-UI-82) ; proposée
-            // avec l'habillage ruban (ADR-0017 D9 : rien de visible ne
-            // change avant le lot L5).
-            if timeline {
-                ui.label("");
-                ui.checkbox(&mut page.timeline, texts.get(TextId::RibbonTimeline));
-                ui.end_row();
-            }
+            // Chronologie en tête de la première page (H-UI-82).
+            ui.label("");
+            ui.checkbox(&mut page.timeline, texts.get(TextId::RibbonTimeline));
+            ui.end_row();
             ui.label(texts.get(TextId::PsPaper));
             ui.horizontal(|ui| {
                 for (paper, label) in PAPERS {
@@ -503,7 +497,7 @@ pub fn show(
                 ui.set_width(480.0);
                 egui::ScrollArea::vertical()
                     .max_height(400.0)
-                    .show(ui, |ui| settings(ui, texts, &mut state.page, input.timeline));
+                    .show(ui, |ui| settings(ui, texts, &mut state.page));
             });
             ui.add_space(16.0);
             ui.vertical(|ui| {
@@ -590,7 +584,7 @@ impl crate::app::App {
             return;
         };
         let style = self.state.effective_style(document.project());
-        let timeline_shown = self.chrome() == crate::ribbon::Chrome::Ribbon && self.state.timeline_visible;
+        let timeline_shown = self.state.timeline_visible;
         let body =
             super::DialogBody::PageSetup(Box::new(PageSetupState::open(&style, print_mode, timeline_shown)));
         self.view.edit.editing = None;
@@ -609,7 +603,6 @@ impl crate::app::App {
         use planrs_automation::command::style::{StyleApply, TemplateJson, doc_style};
         let lang = self.text_language();
         let rows = self.printed_rows();
-        let ribbon = self.chrome() == crate::ribbon::Chrome::Ribbon;
         let (
             Some(document),
             Some(super::DialogState {
@@ -628,7 +621,6 @@ impl crate::app::App {
             key,
             lang,
             rows: rows.as_ref(),
-            timeline: ribbon,
         };
         let outcome = show(ctx, &self.texts, state, &input);
         match outcome {

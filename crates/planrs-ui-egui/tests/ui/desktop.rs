@@ -485,6 +485,54 @@ fn snapshot_generate_and_views() {
     }
 }
 
+/// Exemple `snapshot`, options du ruban et de la chronologie (ADR-0017,
+/// lot L5) : `--p`, `--tab`, `--ribbon-collapsed`, vues `timeline` et
+/// `print-timeline` (préparées sans rendu).
+#[test]
+fn snapshot_ribbon_and_timeline_views() {
+    use planrs_ui_egui::ribbon::RibbonTab;
+    use snapshot_example::{Source, TIMELINE_TASKS, View};
+
+    let args = snapshot_args(&["--p", "timeline", "--tab", "format", "--ribbon-collapsed"]).unwrap();
+    assert_eq!(args.source, Source::P);
+    assert_eq!(args.view, View::Timeline);
+    assert_eq!(args.tab, Some(RibbonTab::Format));
+    assert!(args.ribbon_collapsed);
+    assert!(snapshot_args(&["--p", "main", "--tab", "accueil"]).is_err());
+    assert!(snapshot_args(&["--p", "main", "--tab"]).is_err());
+    let harness = snapshot_example::prepared(&args, None).unwrap();
+    let app = harness.state();
+    assert_eq!(app.state.ribbon.tab, RibbonTab::Format);
+    assert!(app.state.ribbon.collapsed);
+    let doc = app.document.as_ref().unwrap();
+    assert_eq!(doc.project().tasks.len(), 7);
+    assert_eq!(
+        app.state.effective_style(doc.project()).timeline.tasks,
+        TIMELINE_TASKS.to_vec()
+    );
+    let drawn = app.view().timeline.drawn.clone().expect("frise dessinée");
+    assert_eq!(drawn.elements.len(), TIMELINE_TASKS.len());
+
+    let args = snapshot_args(&["--p", "print-timeline"]).unwrap();
+    let harness = snapshot_example::prepared(&args, None).unwrap();
+    let app = harness.state();
+    assert!(!app.state.ribbon.collapsed);
+    let Some(planrs_ui_egui::dialog::DialogBody::PageSetup(state)) =
+        app.view().dialog.as_ref().map(|d| &d.body)
+    else {
+        panic!("mode impression non ouvert");
+    };
+    assert!(state.page.timeline, "frise cochée d'office");
+
+    // Réseau généré : seules les tâches existantes vont sur la frise.
+    let args = snapshot_args(&["--generate", "20", "timeline"]).unwrap();
+    let harness = snapshot_example::prepared(&args, None).unwrap();
+    let app = harness.state();
+    let doc = app.document.as_ref().unwrap();
+    let on = app.state.effective_style(doc.project()).timeline.tasks;
+    assert!(on.iter().all(|n| TIMELINE_TASKS.contains(n)), "{on:?}");
+}
+
 /// Polices (ADR-0015, `ui.md` § 5) : le fournisseur de polices du système
 /// qu'eframe installe sur le desktop (feature `system_fonts`, option
 /// `system_font_fallback` par défaut, vérifiée par `apps/planrs`) trouve les

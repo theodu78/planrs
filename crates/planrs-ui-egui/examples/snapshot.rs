@@ -2,15 +2,21 @@
 //! « vérification visuelle par l'agent »).
 //!
 //! ```text
-//! cargo run -p planrs-ui-egui --example snapshot -- <fichier.xml | --generate N> <vue>
-//!     [--row N] [--zoom day|week|month|quarter] [--size LxH] [sortie.png]
+//! cargo run -p planrs-ui-egui --example snapshot -- <fichier.xml | --generate N | --p> <vue>
+//!     [--row N] [--zoom day|week|month|quarter] [--size LxH] [--style <modèle>]
+//!     [--tab task|resource|project|view|format] [--ribbon-collapsed] [sortie.png]
 //! ```
 //!
 //! Vues : `welcome` (accueil, la source est ignorée), `main` (zoom ajusté),
 //! `main-week`, `main-day` (défilée deux jours avant la date d'état),
 //! `main-dark`, `main-en`, `tracking` (Gantt de suivi), `resources`
-//! (feuille des ressources), `usage` (utilisation des ressources). Français
-//! et thème clair sauf mention. `--generate N` : réseau généré sans MSPDI
+//! (feuille des ressources), `usage` (utilisation des ressources),
+//! `timeline` (vue Gantt, tâches 2, 3, 4, 6 et 7 sur la chronologie, celles
+//! qui existent ; ADR-0017, lot L5), `print-timeline` (la même, fenêtre
+//! « Mode impression » ouverte : frise en tête de la page 1 de l'aperçu).
+//! Français et thème clair sauf mention. `--p` : projet « P » du cahier
+//! (`planrs_tests::daily::plan_p`). `--tab` : onglet du ruban montré ;
+//! `--ribbon-collapsed` : ruban replié (H-UI-72). `--generate N` : réseau généré sans MSPDI
 //! (`planrs_tests::generate::ui_network_with_resources`, N arrondi au
 //! multiple de 20 supérieur, deux liens par tâche, une ressource pour 25
 //! tâches), comme le test de fluidité. `--row N` : sélectionne la ligne de
@@ -44,6 +50,8 @@ use egui_kittest::Harness;
 use egui_kittest::wgpu::WgpuTestRenderer;
 use planrs_core::Moment;
 use planrs_render::style::TemplateId;
+use planrs_ui_egui::action::DialogKind;
+use planrs_ui_egui::ribbon::{RibbonOp, RibbonTab};
 use planrs_ui_egui::timescale::TimeAxis;
 use planrs_ui_egui::{
     Action, App, DocOrigin, Env, GanttStyle, LanguagePref, ThemePref, TimeScaleZoom, UiState, ViewKind,
@@ -51,9 +59,14 @@ use planrs_ui_egui::{
 
 /// Usage affiché en cas d'arguments invalides.
 pub const USAGE: &str = "usage : cargo run -p planrs-ui-egui --example snapshot -- \
-<fichier.xml | --generate N> <vue> [--row N] [--zoom day|week|month|quarter] [--size LxH] [--style <modèle>] [sortie.png]\n\
-vues : welcome | main | main-week | main-day | main-dark | main-en | tracking | resources | usage\n\
+<fichier.xml | --generate N | --p> <vue> [--row N] [--zoom day|week|month|quarter] [--size LxH] [--style <modèle>] \
+[--tab task|resource|project|view|format] [--ribbon-collapsed] [sortie.png]\n\
+vues : welcome | main | main-week | main-day | main-dark | main-en | tracking | resources | usage | timeline | print-timeline\n\
 modèles : classique | sobre | contraste_eleve | presentation | chantier | impression_nb";
+
+/// Tâches posées sur la chronologie par les vues `timeline` et
+/// `print-timeline` (cahier du ruban, lot L5 : « P avec {2, 3, 4, 6, 7} »).
+pub const TIMELINE_TASKS: [u32; 5] = [2, 3, 4, 6, 7];
 
 /// Taille par défaut de la fenêtre simulée (celle des captures de référence).
 pub const SIZE: (f32, f32) = (1280.0, 720.0);
@@ -91,6 +104,10 @@ pub enum View {
     Resources,
     /// Utilisation des ressources.
     Usage,
+    /// Vue Gantt, tâches [`TIMELINE_TASKS`] sur la chronologie.
+    Timeline,
+    /// Comme [`View::Timeline`], fenêtre « Mode impression » ouverte.
+    PrintTimeline,
 }
 
 impl View {
@@ -107,6 +124,8 @@ impl View {
             "tracking" => Some(Self::Tracking),
             "resources" => Some(Self::Resources),
             "usage" => Some(Self::Usage),
+            "timeline" => Some(Self::Timeline),
+            "print-timeline" => Some(Self::PrintTimeline),
             _ => None,
         }
     }
@@ -138,6 +157,8 @@ pub enum Source {
     File(PathBuf),
     /// Réseau généré d'environ N tâches.
     Generate(usize),
+    /// Projet « P » du cahier (`planrs_tests::daily::plan_p`).
+    P,
 }
 
 /// Arguments de la ligne de commande.
@@ -157,6 +178,10 @@ pub struct Args {
     pub size: (f32, f32),
     /// Modèle par défaut des préférences (`None` : Classique).
     pub style: Option<TemplateId>,
+    /// Onglet du ruban montré (`None` : celui des préférences, Tâche).
+    pub tab: Option<RibbonTab>,
+    /// Ruban replié (H-UI-72).
+    pub ribbon_collapsed: bool,
     /// PNG à écrire.
     pub output: PathBuf,
 }
@@ -195,6 +220,18 @@ fn parse_style(text: &str) -> Result<TemplateId, String> {
         .ok_or_else(|| format!("modèle inconnu : {text}"))
 }
 
+/// Onglet du ruban nommé.
+fn parse_tab(text: &str) -> Result<RibbonTab, String> {
+    match text {
+        "task" => Ok(RibbonTab::Task),
+        "resource" => Ok(RibbonTab::Resource),
+        "project" => Ok(RibbonTab::Project),
+        "view" => Ok(RibbonTab::View),
+        "format" => Ok(RibbonTab::Format),
+        other => Err(format!("onglet inconnu : {other}")),
+    }
+}
+
 /// Taille `LxH` (ou `L×H`), chaque côté dans [`SIDE`].
 fn parse_size(text: &str) -> Result<(f32, f32), String> {
     let invalid = || {
@@ -231,6 +268,8 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Stri
     let mut zoom = None;
     let mut size = SIZE;
     let mut style = None;
+    let mut tab = None;
+    let mut ribbon_collapsed = false;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--generate") => {
@@ -244,6 +283,9 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Stri
             Some("--zoom") => zoom = Some(parse_zoom(&option_value("--zoom", args.next())?)?),
             Some("--size") => size = parse_size(&option_value("--size", args.next())?)?,
             Some("--style") => style = Some(parse_style(&option_value("--style", args.next())?)?),
+            Some("--tab") => tab = Some(parse_tab(&option_value("--tab", args.next())?)?),
+            Some("--ribbon-collapsed") => ribbon_collapsed = true,
+            Some("--p") => source = Some(Source::P),
             Some(other) if other.starts_with("--") => return Err(format!("option inconnue : {other}")),
             _ => positional.push(arg),
         }
@@ -279,6 +321,8 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Stri
         zoom,
         size,
         style,
+        tab,
+        ribbon_collapsed,
         output,
     })
 }
@@ -361,7 +405,7 @@ fn settle(harness: &mut Harness<'static, App>) -> Result<(), String> {
 /// généré (celui du test de fluidité).
 fn fixed_now(source: &Source) -> Result<Moment, String> {
     let text = match source {
-        Source::File(_) => "2027-01-15T08:00",
+        Source::File(_) | Source::P => "2027-01-15T08:00",
         Source::Generate(_) => "2026-01-05T08:00",
     };
     text.parse()
@@ -400,6 +444,15 @@ fn open(app: &mut App, source: &Source) -> Result<(), String> {
             };
             app.open_project(project, origin);
         }
+        Source::P => {
+            let project = planrs_tests::daily::plan_p().project().clone();
+            let origin = DocOrigin {
+                name: "P".to_owned(),
+                path: None,
+                demo: false,
+            };
+            app.open_project(project, origin);
+        }
     }
     if app.document.is_none() {
         let detail = app
@@ -413,9 +466,50 @@ fn open(app: &mut App, source: &Source) -> Result<(), String> {
     Ok(())
 }
 
+/// Pose les tâches [`TIMELINE_TASKS`] présentes sur la chronologie (un lot
+/// `style.apply`, le geste « Ajouter à la chronologie »).
+fn put_on_timeline(app: &mut App) -> Result<(), String> {
+    let tasks: Vec<u32> = app.document.as_ref().map_or_else(Vec::new, |doc| {
+        TIMELINE_TASKS
+            .into_iter()
+            .filter(|n| doc.project().tasks.get(planrs_core::TaskUid::new(*n)).is_some())
+            .collect()
+    });
+    let json = serde_json::json!({
+        "format_version": 1,
+        "ops": [{
+            "op": "style.apply",
+            "template": app.state.default_template.key(),
+            "patch": { "timeline": { "tasks": tasks } }
+        }]
+    });
+    let batch = planrs_automation::Batch::from_json_str(&json.to_string())
+        .map_err(|error| format!("lot de la chronologie refusé : {error}"))?;
+    app.dispatch(Action::Exec(batch));
+    Ok(())
+}
+
+/// Ruban : onglet et repli demandés (`--tab`, `--ribbon-collapsed`).
+fn prepare_ribbon(harness: &mut Harness<'static, App>, args: &Args) -> Result<(), String> {
+    if let Some(tab) = args.tab {
+        harness
+            .state_mut()
+            .dispatch(Action::Ribbon(RibbonOp::Select(tab)));
+        settle(harness)?;
+    }
+    if args.ribbon_collapsed != harness.state().state.ribbon.collapsed {
+        harness
+            .state_mut()
+            .dispatch(Action::Ribbon(RibbonOp::ToggleCollapsed));
+        settle(harness)?;
+    }
+    Ok(())
+}
+
 /// Prépare la vue demandée dans le harnais.
 fn prepare(harness: &mut Harness<'static, App>, args: &Args) -> Result<(), String> {
     settle(harness)?;
+    prepare_ribbon(harness, args)?;
     if args.view == View::Welcome {
         return Ok(());
     }
@@ -445,6 +539,10 @@ fn prepare(harness: &mut Harness<'static, App>, args: &Args) -> Result<(), Strin
                 settle(harness)?;
             }
         }
+        View::Timeline | View::PrintTimeline => {
+            put_on_timeline(harness.state_mut())?;
+            settle(harness)?;
+        }
         _ => {}
     }
     if let Some(zoom) = args.zoom {
@@ -473,6 +571,12 @@ fn prepare(harness: &mut Harness<'static, App>, args: &Args) -> Result<(), Strin
             harness.state_mut().dispatch(Action::ScrollGanttX(delta));
             settle(harness)?;
         }
+    }
+    if args.view == View::PrintTimeline {
+        harness
+            .state_mut()
+            .dispatch(Action::ShowDialog(DialogKind::PageSetup { print_mode: true }));
+        settle(harness)?;
     }
     Ok(())
 }

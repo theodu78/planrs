@@ -10,9 +10,8 @@
 //! Lot L0 (contrat) : types, réducteur de l'état du ruban ([`reduce`]),
 //! icônes ([`icon_data`], généré par `cargo xtask icons` ; [`icons`],
 //! tracé) et table. Lot L2 : moteur de dessin (`view::ribbon`) et menus
-//! jumeaux (`view::chrome`), derrière [`Chrome::Ribbon`] (non persistant,
-//! [`Chrome::Toolbar`] par défaut jusqu'à L5 : aucun changement visible
-//! avant).
+//! jumeaux (`view::chrome`). Lot L5 : le ruban devient le seul habillage
+//! (l'ancienne barre d'outils de J7 et J8 est retirée).
 
 #[rustfmt::skip]
 pub mod icon_data;
@@ -75,19 +74,6 @@ pub enum RibbonOp {
     OpenOverlay(RibbonTab),
     /// Referme la surimpression (action du ruban, Échap, clic ailleurs).
     CloseOverlay,
-}
-
-/// Habillage de la fenêtre (ADR-0017 D9) : non persistant, posé par
-/// [`crate::App::set_chrome`] (tests, exemple `snapshot`) ;
-/// [`Chrome::Toolbar`] par défaut jusqu'au lot L5, qui retire l'ancienne
-/// barre d'outils.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Chrome {
-    /// Deux rangées de boutons texte (J7, J8).
-    #[default]
-    Toolbar,
-    /// Ruban à onglets et chronologie (ADR-0017).
-    Ribbon,
 }
 
 /// Activation d'un élément du ruban ou de son jumeau de menu (H-UI-70,

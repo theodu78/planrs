@@ -153,8 +153,7 @@ fn ui_delete_summary_confirms_cascade() {
     assert_eq!(harness.state().pending_delete().unwrap().count, 4);
     assert!(harness.query_by_label(&fr(TextId::ConfirmDeleteTitle)).is_some());
     // Annuler : rien ne change.
-    harness.get_by_label(&fr(TextId::ConfirmDeleteNo)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::ConfirmDeleteNo));
     assert!(harness.state().pending_delete().is_none());
     assert_eq!(generation(harness.state()), 0);
     assert!(harness.query_by_label(&fr(TextId::ConfirmDeleteTitle)).is_none());
@@ -164,8 +163,7 @@ fn ui_delete_summary_confirms_cascade() {
     let at = rows(harness.state()).index_of(uid(23)).unwrap();
     let after = rows(harness.state()).row(at + 4).unwrap().uid;
     press(&mut harness, "task.delete");
-    harness.get_by_label(&fr(TextId::ConfirmDeleteYes)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::ConfirmDeleteYes));
     let app = harness.state();
     assert_no_message(app);
     assert_eq!(generation(app), 1);
@@ -352,8 +350,7 @@ fn ui_structure_undo_exact() {
     states.push(snapshot(&harness));
     click_row(&mut harness, uid(37), Modifiers::NONE);
     press(&mut harness, "task.delete");
-    harness.get_by_label(&fr(TextId::ConfirmDeleteYes)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::ConfirmDeleteYes));
     assert_no_message(harness.state());
     assert_eq!(generation(harness.state()), 4);
 
@@ -452,8 +449,7 @@ pub fn check_keymap_entry(id: &str, shortcut: egui::KeyboardShortcut) {
 /// Ouvre le menu Édition et clique l'entrée dont le libellé commence par
 /// `item` (le raccourci affiché suit le libellé).
 fn click_edit_menu(harness: &mut Harness<'static, App>, item: TextId) {
-    harness.get_by_label(&fr(TextId::MenuEdit)).click();
-    harness.run();
+    crate::click(harness, &fr(TextId::MenuEdit));
     let label = fr(item);
     harness
         .get_by(|node| node.label().is_some_and(|text| text.starts_with(&label)))
@@ -471,8 +467,7 @@ fn ui_edit_menu_structure_entries() {
     // L'ouverture sélectionne la première ligne (J7 L1) : sans sélection.
     harness.state_mut().dispatch(Action::Select(None));
     harness.run();
-    harness.get_by_label(&fr(TextId::MenuEdit)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::MenuEdit));
     for (text, enabled) in [
         (TextId::StructureInsert, true),
         (TextId::StructureDelete, false),
@@ -499,8 +494,7 @@ fn ui_edit_menu_structure_entries() {
 fn ui_welcome_new_project_button() {
     let mut harness = harness();
     harness.run();
-    harness.get_by_label(&fr(TextId::WelcomeNewProject)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::WelcomeNewProject));
     let doc = harness.state().document.as_ref().expect("projet créé");
     assert_eq!(doc.project().tasks.len(), 0);
 }

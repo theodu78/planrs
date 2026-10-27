@@ -127,8 +127,7 @@ fn choose(harness: &mut Harness<'static, App>, name: &str, modifiers: Modifiers)
 }
 
 fn click_label(harness: &mut Harness<'static, App>, label: &str) {
-    harness.get_by_label(label).click();
-    harness.run();
+    crate::click(harness, label);
 }
 
 /// Remplace le texte du champ nommé `label` par `text`.
@@ -163,8 +162,7 @@ fn click_row(harness: &mut Harness<'static, App>, task: u32) {
             ("name", Arg::Str(rows.text(i, Column::Name).to_owned().into())),
         ],
     );
-    harness.get_by_label(&label).click();
-    harness.run();
+    crate::click(harness, &label);
 }
 
 /// Plusieurs tâches, deux ressources (Ctrl+clic), unités saisies pour

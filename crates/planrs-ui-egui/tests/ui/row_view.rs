@@ -27,7 +27,7 @@ use planrs_ui_egui::state::{FilterChoice, SortKey, SortSpec, TaskViewState};
 use planrs_ui_egui::{Action, App, TimeScaleZoom};
 use proptest::prelude::*;
 
-use crate::{click, fr, harness, new_app, open_demo, screen_axis};
+use crate::{fr, harness, new_app, open_demo, screen_axis};
 
 /// Libellé d'accessibilité de la ligne affichée `d`.
 fn row_label(app: &App, d: DisplayRow) -> String {
@@ -206,7 +206,7 @@ fn drag_under_sort_uses_model_row() {
     let other = harness.state().rows().unwrap().row(d.index()).unwrap().uid;
     assert_ne!(other, uid);
     let other_constraint = task(harness.state(), other).constraint;
-    click(&mut harness, &fr(TimeScaleZoom::Day.label()));
+    crate::ribbon_zoom(&mut harness, TimeScaleZoom::Day);
     harness.state_mut().dispatch(Action::ScrollToRow(d.index()));
     harness.run();
     let (start, finish) = harness

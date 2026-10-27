@@ -108,7 +108,7 @@ pub struct UiState {
     /// Ruban : dernier onglet, repli (ADR-0017, H-UI-69, H-UI-72).
     pub ribbon: RibbonPrefs,
     /// Chronologie affichée au-dessus du Gantt (ADR-0017, H-UI-78 : vrai par
-    /// défaut ; sans effet tant que l'habillage est `Chrome::Toolbar`).
+    /// défaut).
     pub timeline_visible: bool,
 }
 

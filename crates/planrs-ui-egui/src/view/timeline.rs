@@ -93,11 +93,11 @@ pub struct TimelineView {
     pub drawn: Option<TimelineDrawn>,
 }
 
-/// La frise est-elle montrée en tête de la vue Gantt (habillage ruban,
-/// préférence cochée, document ouvert) ?
+/// La frise est-elle montrée en tête de la vue Gantt (préférence cochée,
+/// document ouvert) ?
 #[must_use]
 pub fn wanted(fc: &FrameCtx<'_>) -> bool {
-    fc.chrome == crate::ribbon::Chrome::Ribbon && fc.state.timeline_visible && fc.doc.is_some()
+    fc.state.timeline_visible && fc.doc.is_some()
 }
 
 /// Largeur de la frise en pixels entiers, bornée à `[0, 100 000]` (0 si

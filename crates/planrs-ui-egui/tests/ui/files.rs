@@ -147,22 +147,16 @@ fn press_save(harness: &mut Harness<'static, App>) {
 /// `item` (le raccourci affiché suit le libellé), sans confondre
 /// « Enregistrer » et « Enregistrer sous… ».
 fn file_menu(harness: &mut Harness<'static, App>, item: TextId) {
-    harness.get_by_label(&fr(TextId::MenuFile)).click();
-    harness.run();
+    crate::click(harness, &fr(TextId::MenuFile));
     let label = fr(item);
     let save_as = fr(TextId::MenuSaveAs);
     // « Nouveau projet » de l'accueil commence aussi par « Nouveau ».
     let welcome_new = fr(TextId::WelcomeNewProject);
-    harness
-        .get_by(|node| {
-            node.label().is_some_and(|text| {
-                text.starts_with(&label)
-                    && (item == TextId::MenuSaveAs || !text.starts_with(&save_as))
-                    && text != welcome_new
-            })
-        })
-        .click();
-    harness.run();
+    crate::click_where(harness, |text| {
+        text.starts_with(&label)
+            && (item == TextId::MenuSaveAs || !text.starts_with(&save_as))
+            && text != welcome_new
+    });
 }
 
 /// Titre du bandeau de confirmation pour le document `name`.
@@ -333,8 +327,7 @@ fn ui_close_dirty_asks_confirmation() {
     assert!(h.state().document.is_some());
     assert!(h.state().confirmation_pending());
     assert!(h.query_by_label(&confirm_title(&name)).is_some());
-    h.get_by_label(&fr(TextId::ConfirmCancel)).click();
-    h.run();
+    crate::click(h, &fr(TextId::ConfirmCancel));
     assert!(!h.state().confirmation_pending());
     assert!(h.state().document.as_ref().unwrap().is_dirty());
     assert!(h.query_by_label(&confirm_title(&name)).is_none());
@@ -342,8 +335,7 @@ fn ui_close_dirty_asks_confirmation() {
     // « Ne pas enregistrer » : fermé sans écrire.
     h.state_mut().dispatch(Action::CloseDocument);
     h.run();
-    h.get_by_label(&fr(TextId::ConfirmDiscard)).click();
-    h.run();
+    crate::click(h, &fr(TextId::ConfirmDiscard));
     assert!(h.state().document.is_none());
     assert!(s.requests.borrow().is_empty());
 
@@ -353,8 +345,7 @@ fn ui_close_dirty_asks_confirmation() {
     edit_first_leaf(h, "17j");
     h.state_mut().dispatch(Action::CloseDocument);
     h.run();
-    h.get_by_label(&fr(TextId::ConfirmSave)).click();
-    h.run();
+    crate::click(h, &fr(TextId::ConfirmSave));
     assert!(h.state().document.is_none());
     assert_eq!(s.requests.borrow().len(), 1);
 
@@ -365,8 +356,7 @@ fn ui_close_dirty_asks_confirmation() {
     s.reply.set(SaveReply::Cancel);
     h.state_mut().dispatch(Action::CloseDocument);
     h.run();
-    h.get_by_label(&fr(TextId::ConfirmSave)).click();
-    h.run();
+    crate::click(h, &fr(TextId::ConfirmSave));
     assert!(h.state().document.as_ref().unwrap().is_dirty());
     assert!(!h.state().confirmation_pending());
 
@@ -541,8 +531,7 @@ fn ui_quit_menu_asks_then_saves_and_closes() {
     assert!(h.state().confirmation_pending());
     assert!(s.requests.borrow().is_empty());
     let h = &mut s.harness;
-    h.get_by_label(&fr(TextId::ConfirmSave)).click();
-    h.run();
+    crate::click(h, &fr(TextId::ConfirmSave));
     assert_eq!(s.requests.borrow().len(), 1);
     assert!(!s.harness.state().document.as_ref().unwrap().is_dirty());
     // Fermeture acceptée (`quit_confirmed`) : plus d'annulation.

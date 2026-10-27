@@ -60,8 +60,7 @@ fn choose(harness: &mut Harness<'static, App>, combo: &str, entry: &str) {
         .get_by_role_and_label(egui::accesskit::Role::ComboBox, combo)
         .click();
     harness.run();
-    harness.get_by_label(entry).click();
-    harness.run();
+    crate::click(harness, entry);
 }
 
 /// Brouillon de l'aperçu ouvert.
@@ -74,8 +73,7 @@ fn state(app: &App) -> &CsvImportState {
 
 /// Clique l'entrée du menu Fichier dont le libellé commence par `item`.
 fn file_menu(harness: &mut Harness<'static, App>, item: TextId) {
-    harness.get_by_label(&fr(TextId::MenuFile)).click();
-    harness.run();
+    crate::click(harness, &fr(TextId::MenuFile));
     let label = fr(item);
     harness
         .get_by(|node| node.label().is_some_and(|text| text.starts_with(&label)))
@@ -136,8 +134,7 @@ fn h_ui_40_preview_and_import() {
     assert!(!matches!(p.columns[1].1, Recognized::Column(_)));
     choose(&mut harness, &fr(TextId::CiEncoding), &fr(TextId::CiEncUtf8));
     // « Importer ».
-    harness.get_by_label(&fr(TextId::CiImport)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::CiImport));
     let app = harness.state();
     assert!(app.view().dialog.is_none());
     let document = app.document.as_ref().expect("document importé");
@@ -176,8 +173,7 @@ fn h_ui_40_unsaved_guard() {
     assert!(harness.state().document.as_ref().unwrap().is_dirty());
     harness.state_mut().dispatch(Action::ImportCsv);
     harness.run();
-    harness.get_by_label(&fr(TextId::CiImport)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::CiImport));
     let app = harness.state();
     assert!(app.confirmation_pending(), "aucune confirmation demandée");
     assert!(
@@ -185,16 +181,13 @@ fn h_ui_40_unsaved_guard() {
         "document remplacé sans confirmation"
     );
     // Annuler : rien de perdu.
-    harness.get_by_label(&fr(TextId::ConfirmCancel)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::ConfirmCancel));
     assert!(harness.state().document.as_ref().unwrap().origin.demo);
     // Nouvel import, « Ne pas enregistrer » : document remplacé.
     harness.state_mut().dispatch(Action::ImportCsv);
     harness.run();
-    harness.get_by_label(&fr(TextId::CiImport)).click();
-    harness.run();
-    harness.get_by_label(&fr(TextId::ConfirmDiscard)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::CiImport));
+    crate::click(&mut harness, &fr(TextId::ConfirmDiscard));
     let document = harness.state().document.as_ref().unwrap();
     assert_eq!(document.origin.name, "taches");
     assert_eq!(document.project().tasks.len(), 2);

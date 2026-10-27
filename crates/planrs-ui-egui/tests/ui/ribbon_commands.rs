@@ -12,7 +12,6 @@
 )]
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable as _;
 use planrs_automation::command::style::doc_style;
 use planrs_core::calendar::BuiltinCalendarNames;
 use planrs_core::{
@@ -359,5 +358,5 @@ fn h_ui_84_notes_tab() {
         panic!("autre fenêtre : {:?}", dialog.kind);
     };
     assert_eq!(state.tab, TaskInfoTab::Notes);
-    assert!(harness.query_by_label(&fr(TextId::TaskInfoTabNotes)).is_some());
+    assert!(crate::shown_off_ribbon(&harness, &fr(TextId::TaskInfoTabNotes)));
 }

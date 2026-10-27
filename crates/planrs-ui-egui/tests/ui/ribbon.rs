@@ -1,8 +1,8 @@
 //! Ruban (ADR-0017, H-UI-69 à H-UI-77) : contrat (lot L0) puis moteur,
 //! contenu et menus jumeaux (lot L2).
 //!
-//! L0 : commutateur d'habillage (aucun changement visible par défaut) et
-//! Ctrl/Cmd+F1. L2 : harnais en `Chrome::Ribbon` sur le projet « P » du
+//! L0 : Ctrl/Cmd+F1 (L5 : le ruban est le seul habillage, par défaut). L2 :
+//! harnais sur le projet « P » du
 //! cahier (UID = ID ; 1 ⊃ 2, 3, 4 ; 5 ⊃ 6, 7) ; éléments cliqués par leur
 //! nom accessible, cherchés dans le rectangle du ruban (les menus portent
 //! souvent le même libellé) ; géométrie lue dans le relevé
@@ -22,7 +22,7 @@ use planrs_ui_egui::action::{DialogKind, TaskCmd};
 use planrs_ui_egui::i18n::{Arg, Language, TextId, Texts};
 use planrs_ui_egui::keymap::{Binding, shortcut_for_os};
 use planrs_ui_egui::ribbon::spec::{QUICK_ACCESS, RIBBON, RibbonCmd, percent_value};
-use planrs_ui_egui::ribbon::{Chrome, RibbonOp, RibbonTab};
+use planrs_ui_egui::ribbon::{RibbonOp, RibbonTab};
 use planrs_ui_egui::selection::SelectMode;
 use planrs_ui_egui::state::{SortKey, SortSpec};
 use planrs_ui_egui::view::ribbon::{Kind, RibbonDrawn, Stage, TAB_BAND_H, drawn, label_of};
@@ -30,23 +30,36 @@ use planrs_ui_egui::view::task_view::TaskViewOp;
 use planrs_ui_egui::{Action, App, LanguagePref, UiState};
 
 use crate::filters::open_p_in;
-use crate::{fr, harness, harness_for, new_app};
+use crate::{fr, harness};
 
-/// ADR-0017 D9 : barre d'outils de J8 par défaut ; le ruban la remplace
-/// seulement sur demande (`set_chrome`), barre de menus gardée.
+/// H-UI-69 (lot L5) : le ruban est le seul habillage, dès l'accueil ;
+/// l'ancienne barre d'outils (« Ouvrir… », « Ajuster ») n'existe plus,
+/// la barre de menus reste.
 #[test]
-fn ribbon_l0_chrome_switch() {
+fn h_ui_69_default_chrome_is_ribbon() {
     let mut harness = harness();
-    assert_eq!(harness.state().chrome(), Chrome::Toolbar);
     harness.run();
-    assert!(harness.query_by_label(&fr(TextId::ToolbarOpen)).is_some());
-    let mut app: App = new_app();
-    app.set_chrome(Chrome::Ribbon);
-    let mut harness = harness_for(app);
-    harness.run();
-    assert_eq!(harness.state().chrome(), Chrome::Ribbon);
-    assert!(harness.query_by_label(&fr(TextId::ToolbarOpen)).is_none());
-    assert!(harness.query_by_label(&fr(TextId::MenuFile)).is_some());
+    let drawn = drawn(&harness.ctx);
+    assert!(drawn.panel.is_positive(), "ruban dessiné par défaut");
+    assert_ne!(drawn.items.len(), 0);
+    for id in [
+        TextId::RibbonTabTask,
+        TextId::RibbonTabResource,
+        TextId::RibbonTabProject,
+        TextId::RibbonTabView,
+        TextId::RibbonTabFormat,
+    ] {
+        let _ = tab(&harness, &fr(id));
+    }
+    assert!(
+        crate::shown_off_ribbon(&harness, &fr(TextId::MenuFile)),
+        "barre de menus gardée"
+    );
+    // « Ajuster » n'est plus qu'une entrée du menu Affichage → Zoom (fermé).
+    assert!(
+        harness.query_by_label(&fr(TextId::ToolbarFit)).is_none(),
+        "barre d'outils retirée"
+    );
 }
 
 /// H-UI-72 (touche, lot L0) : Ctrl+F1 replie puis déplie le ruban, accueil
@@ -95,14 +108,12 @@ const fn uid(n: u32) -> TaskUid {
     TaskUid::new(n)
 }
 
-/// Application en `Chrome::Ribbon` pour `state`.
+/// Application pour `state` (ruban, seul habillage depuis le lot L5).
 fn ribbon_app_with(state: UiState) -> App {
-    let mut app = App::new(state, planrs_ui_egui::Env::fixed(crate::now()));
-    app.set_chrome(Chrome::Ribbon);
-    app
+    App::new(state, planrs_ui_egui::Env::fixed(crate::now()))
 }
 
-/// Application de test (français, thème clair) en `Chrome::Ribbon`.
+/// Application de test (français, thème clair).
 fn ribbon_app() -> App {
     ribbon_app_with(crate::fr_light())
 }

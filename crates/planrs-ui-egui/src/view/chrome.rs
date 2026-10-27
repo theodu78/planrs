@@ -1,19 +1,20 @@
-//! Habillage : barre de menus, barre d'outils, écran d'accueil, barre d'état
-//! et bandeau de messages.
+//! Habillage : barre de menus, écran d'accueil, barre d'état et bandeau de
+//! messages (le ruban à onglets est dans `view::ribbon`, ADR-0017 ; il
+//! remplace depuis le lot L5 l'ancienne barre d'outils de J7 et J8).
 //!
-//! `menu_bar`, `toolbar` et `status_bar` reçoivent l'`Ui` racine et posent
-//! leur propre panneau (`egui::Panel`) ; `welcome` dessine dans le panneau
-//! central. Aucune chaîne en dur : tout passe par `TextId`.
+//! `menu_bar` et `status_bar` reçoivent l'`Ui` racine et posent leur propre
+//! panneau (`egui::Panel`) ; `welcome` dessine dans le panneau central.
+//! Aucune chaîne en dur : tout passe par `TextId`.
 
 use planrs_core::Severity;
 
 use crate::action::Action;
-use crate::action::{ConfirmChoice, DialogKind, TaskCmd};
+use crate::action::ConfirmChoice;
 use crate::app::{MAX_MESSAGES, UserMessage};
 use crate::column::Column;
 use crate::dialog::filter::FilterDialogMode;
 use crate::format::format_date;
-use crate::i18n::{Arg, Language, TextId};
+use crate::i18n::{Arg, TextId};
 use crate::io::SaveKind;
 use crate::keymap::{Binding, Shortcut, UiBinding, shortcut_for_os, shortcut_text};
 use crate::ribbon::spec::{PERCENT_STEPS, RibbonCmd, percent_value};
@@ -640,120 +641,6 @@ fn filter_entries(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
         filtered,
         TaskViewOp::ClearFilter,
     );
-}
-
-/// Barre d'outils : exemple, ouvrir, zoom, ajuster, thème, langue ;
-/// deuxième rangée (J8 lot L15) : 0 à 100 %, mode, actif, filtre,
-/// recherche, mode impression. Toujours visible (le zoom est grisé sans
-/// document) : le zoom reste découvrable sans connaître Ctrl+molette.
-pub fn toolbar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
-    let texts = fc.texts;
-    let has_doc = fc.doc.is_some();
-    egui::Panel::top("planrs_toolbar").show(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            if ui.button(texts.get(TextId::MenuOpenDemo)).clicked() {
-                fc.actions.push(Action::OpenDemo);
-            }
-            // Libellé court (le menu et l'accueil portent le libellé long) :
-            // la barre d'outils reste sur une ligne, et le nom accessible ne
-            // double pas le bouton de l'accueil.
-            if ui.button(texts.get(TextId::ToolbarOpen)).clicked() {
-                fc.actions.push(Action::OpenDialog);
-            }
-            ui.separator();
-            ui.add_enabled_ui(has_doc, |ui| {
-                zoom_choices(ui, fc);
-                // « Ajuster » est une action, pas un choix exclusif : séparé
-                // des étiquettes de zoom pour ne pas passer pour une bascule
-                // enfoncée.
-                ui.separator();
-                if ui.button(texts.get(TextId::ToolbarFit)).clicked() {
-                    fc.actions.push(Action::FitZoom);
-                }
-            });
-            ui.separator();
-            theme_choices(ui, fc);
-            ui.separator();
-            for (pref, label) in LANGUAGE_CHOICES {
-                // « Système » n'a sa place que dans le menu et l'accueil :
-                // la barre d'outils bascule directement entre FR et EN.
-                // Sélectionné : la langue effective (aussi quand elle vient
-                // du système).
-                let selected = texts.language() == Language::resolve(pref, None);
-                if pref != LanguagePref::System && choice(ui, selected, &texts.get(label)) {
-                    fc.actions.push(Action::SetLanguage(pref));
-                }
-            }
-        });
-        // --- J8 L15 : %, mode, actif, filtre, recherche, impression, sur
-        // une deuxième rangée (la première reste celle de J7).
-        ui.horizontal(|ui| task_tools(ui, fc));
-    });
-}
-
-/// Outils de tâche de la barre (J8 lot L15) : boutons 0 à 100 % (H-UI-35),
-/// bascules du mode (H-UI-36) et de l'activité, filtre, recherche, mode
-/// impression (H-UI-68).
-fn task_tools(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
-    let texts = fc.texts;
-    let has_doc = fc.doc.is_some();
-    let enabled = has_doc && fc.selection.is_some();
-    ui.add_enabled_ui(enabled, |ui| {
-        for (step, pct) in PERCENT_STEPS {
-            let label = texts.get_args(TextId::ToolbarPercent, &[("percent", Arg::Count(pct))]);
-            let hint = texts.get_args(TextId::ToolbarPercentHint, &[("percent", Arg::Count(pct))]);
-            if ui.button(label).on_hover_text(hint).clicked() {
-                fc.actions.push(Action::TaskCmd(TaskCmd::MarkPercent(step)));
-            }
-        }
-        if ui
-            .button(texts.get(TextId::ToolbarMode))
-            .on_hover_text(texts.get(TextId::ToolbarModeHint))
-            .clicked()
-        {
-            fc.actions.push(Action::TaskCmd(TaskCmd::ToggleMode));
-        }
-        if ui
-            .button(texts.get(TextId::ToolbarActive))
-            .on_hover_text(texts.get(TextId::ToolbarActiveHint))
-            .clicked()
-        {
-            fc.actions.push(Action::TaskCmd(TaskCmd::ToggleActive));
-        }
-    });
-    ui.add_enabled_ui(has_doc, |ui| {
-        let current = super::task_view::PRESETS
-            .iter()
-            .find(|(preset, _)| fc.task_view.state.filter == FilterChoice::Preset(preset.clone()))
-            .map_or(TextId::ToolbarFilter, |(_, label)| *label);
-        let mut chosen = None;
-        egui::ComboBox::from_id_salt("planrs.toolbar-filter")
-            .selected_text(texts.get(current))
-            .show_ui(ui, |ui| {
-                for (preset, label) in super::task_view::PRESETS {
-                    let on = fc.task_view.state.filter == FilterChoice::Preset(preset.clone());
-                    if ui.selectable_label(on, texts.get(label)).clicked() {
-                        chosen = Some(preset);
-                    }
-                }
-            })
-            .response
-            .on_hover_text(texts.get(TextId::ToolbarFilter));
-        if let Some(preset) = chosen {
-            fc.actions
-                .push(Action::TaskView(super::task_view::TaskViewOp::SetFilter(
-                    FilterChoice::Preset(preset),
-                )));
-        }
-        if ui.button(texts.get(TextId::ToolbarSearch)).clicked() {
-            fc.actions
-                .push(Action::TaskView(super::task_view::TaskViewOp::OpenSearch));
-        }
-        if ui.button(texts.get(TextId::ToolbarPrintMode)).clicked() {
-            fc.actions
-                .push(Action::ShowDialog(DialogKind::PageSetup { print_mode: true }));
-        }
-    });
 }
 
 /// Choix exclusif : une étiquette sélectionnable ; rend `true` au clic. Le

@@ -131,7 +131,6 @@ text_ids! {
     // Menus.
     MenuFile => "menu-file",
     MenuOpen => "menu-open",
-    ToolbarOpen => "toolbar-open",
     MenuOpenDemo => "menu-open-demo",
     MenuClose => "menu-close",
     MenuView => "menu-view",
@@ -139,7 +138,8 @@ text_ids! {
     MenuTheme => "menu-theme",
     MenuLanguage => "menu-language",
     MenuDiagnostics => "menu-diagnostics",
-    // Barre d'outils et zoom.
+    // Zoom (« Ajuster » : entrée du menu Affichage → Zoom, jumelle de
+    // « Projet entier » au ruban).
     ToolbarFit => "toolbar-fit",
     ZoomDay => "zoom-day",
     ZoomWeek => "zoom-week",
@@ -915,17 +915,8 @@ text_ids! {
     MenuFormat => "menu-format",
     MenuHelp => "menu-help",
     MenuMarkPercent => "menu-mark-percent",
-    ToolbarPercent => "toolbar-percent",
-    ToolbarPercentHint => "toolbar-percent-hint",
     MenuToggleMode => "menu-toggle-mode",
-    ToolbarMode => "toolbar-mode",
-    ToolbarModeHint => "toolbar-mode-hint",
     MenuToggleActive => "menu-toggle-active",
-    ToolbarActive => "toolbar-active",
-    ToolbarActiveHint => "toolbar-active-hint",
-    ToolbarFilter => "toolbar-filter",
-    ToolbarSearch => "toolbar-search",
-    ToolbarPrintMode => "toolbar-print-mode",
     MenuPageSetup => "menu-page-setup",
     MenuPrintMode => "menu-print-mode",
     MenuGallery => "menu-gallery",

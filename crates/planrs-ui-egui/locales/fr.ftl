@@ -28,9 +28,8 @@ menu-theme = Thème
 menu-language = Langue
 menu-diagnostics = Diagnostics
 
-## Barre d'outils et zoom
+## Zoom
 
-toolbar-open = Ouvrir…
 toolbar-fit = Ajuster
 zoom-day = Jour
 zoom-week = Semaine
@@ -977,17 +976,8 @@ menu-task = Tâche
 menu-format = Format
 menu-help = Aide
 menu-mark-percent = Marquer à { $percent } % achevé
-toolbar-percent = { $percent } %
-toolbar-percent-hint = Marquer la sélection à { $percent } % achevé
 menu-toggle-mode = Basculer manuelle / automatique
-toolbar-mode = Mode
-toolbar-mode-hint = Basculer la sélection en planification manuelle ou automatique
 menu-toggle-active = Activer / désactiver
-toolbar-active = Actif
-toolbar-active-hint = Activer ou désactiver la sélection
-toolbar-filter = Filtre personnalisé
-toolbar-search = Rechercher
-toolbar-print-mode = Mode impression
 menu-page-setup = Mise en page…
 menu-print-mode = Mode impression
 menu-gallery = Modèles de mise en forme…

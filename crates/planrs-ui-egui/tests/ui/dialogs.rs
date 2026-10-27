@@ -43,8 +43,7 @@ fn session(app: &App) -> &Session {
 }
 
 fn click_label(harness: &mut Harness<'static, App>, label: &str) {
-    harness.get_by_label(label).click();
-    harness.run();
+    crate::click(harness, label);
 }
 
 /// Remplace le texte du champ nommé `label` par `text`.
@@ -743,8 +742,7 @@ fn dialogs_stale_key_refused() {
 fn snapshot_working_time_fr_light() {
     let mut harness = common::harness(LanguagePref::Fr, ThemePref::Light);
     harness.run();
-    harness.get_by_label(&fr(TextId::WelcomeOpenDemo)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::WelcomeOpenDemo));
     harness
         .state_mut()
         .dispatch(Action::ShowDialog(DialogKind::WorkingTime));

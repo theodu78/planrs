@@ -1021,6 +1021,7 @@ mod tests {
                 stats: &mut stats,
                 window_open: false,
                 task_view: crate::view::task_view::TaskViewFrame::default(),
+                chrome: crate::ribbon::Chrome::Toolbar,
             };
             super::show(ui, &mut fc, view);
         });

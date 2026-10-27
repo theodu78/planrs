@@ -113,7 +113,11 @@ fn collapse_not_persisted() {
     open_p_in(&mut app);
     app.apply_task_view(TaskViewOp::ToggleCollapsed(TaskUid::new(1)));
     assert_eq!(shown(&app), [1, 5, 6, 7]);
-    let json = serde_json::to_string(&app.state).unwrap();
+    // Hors des préférences du ruban (ADR-0017 : `ribbon.collapsed`, le
+    // repli du ruban, pas celui des tâches).
+    let mut value = serde_json::to_value(&app.state).unwrap();
+    value.as_object_mut().unwrap().remove("ribbon");
+    let json = value.to_string();
     assert!(!json.contains("collapsed"), "{json}");
     assert_eq!(app.state.task_view.outline_level, None);
     open_p_in(&mut app);

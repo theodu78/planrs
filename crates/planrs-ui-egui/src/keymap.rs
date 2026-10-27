@@ -106,6 +106,8 @@ pub enum UiBinding {
     HideSubtasks,
     /// Alt+Maj++ ou = : affiche les sous-tâches (J8, H-UI-34, S61).
     ShowSubtasks,
+    /// Ctrl/Cmd+F1 : replie ou déplie le ruban (ADR-0017, H-UI-72, S83).
+    ToggleRibbon,
 }
 
 /// Liaison d'un raccourci.
@@ -302,6 +304,13 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
     // --- J8 L12 ---
     // --- J8 L13 ---
     // --- J8 L15 ---
+    // --- Ruban (ADR-0017, L0) : Ctrl+F1 (Cmd+F1 sur macOS) replie ou
+    // déplie le ruban (S83), partout, accueil compris.
+    (
+        KeyContext::Global,
+        Shortcut::new(COMMAND, Key::F1),
+        Binding::Ui(UiBinding::ToggleRibbon),
+    ),
 ];
 
 /// Raccourcis que le navigateur ne rend jamais à la page (Ctrl/Cmd+N, W,
@@ -453,6 +462,7 @@ pub const fn ui_action(binding: UiBinding) -> Action {
         UiBinding::FindPrevious => Action::TaskView(TaskViewOp::SearchPrev),
         UiBinding::HideSubtasks => Action::TaskView(TaskViewOp::HideSubtasks),
         UiBinding::ShowSubtasks => Action::TaskView(TaskViewOp::ShowSubtasks),
+        UiBinding::ToggleRibbon => Action::Ribbon(crate::ribbon::RibbonOp::ToggleCollapsed),
     }
 }
 
@@ -693,6 +703,37 @@ mod tests {
         );
         assert_eq!(ui_action(UiBinding::ZoomFiner), Action::ZoomBy(1));
         assert_eq!(ui_action(UiBinding::ZoomCoarser), Action::ZoomBy(-1));
+    }
+
+    /// ADR-0017 (L0), H-UI-72 : Ctrl/Cmd+F1 résolu (contexte global) vers
+    /// le repli du ruban, retenu au navigateur sur le web (H-UI-55), et
+    /// affiché dans les menus.
+    #[test]
+    fn keymap_ctrl_f1_toggles_ribbon() {
+        use super::{KeyScope, shortcut_for, web_interceptable, web_intercepts};
+        use crate::ribbon::RibbonOp;
+
+        let binding = Binding::Ui(UiBinding::ToggleRibbon);
+        let (context, shortcut, _) = KEYMAP
+            .iter()
+            .find(|(_, s, _)| s.logical_key == Key::F1)
+            .copied()
+            .expect("Ctrl+F1 dans KEYMAP");
+        assert_eq!(context, KeyContext::Global);
+        assert_eq!(shortcut.modifiers, egui::Modifiers::COMMAND);
+        assert_eq!(shortcut_for(binding), Some(&shortcut));
+        assert_eq!(
+            entry_action(&shortcut, binding),
+            Some(Action::Ribbon(RibbonOp::ToggleCollapsed))
+        );
+        assert!(web_interceptable(&shortcut, binding));
+        let scope = KeyScope::All(KeyState::default());
+        assert!(web_intercepts(scope, egui::Modifiers::COMMAND, Key::F1));
+        assert!(!web_intercepts(
+            KeyScope::Nothing,
+            egui::Modifiers::COMMAND,
+            Key::F1
+        ));
     }
 
     /// Relecture finale J7, F6 : sur macOS, les menus montrent Cmd+I et

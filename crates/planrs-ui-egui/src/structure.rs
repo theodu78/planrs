@@ -49,6 +49,12 @@ pub enum StructureOp {
     /// Alt+Maj+↓ (J7, H-UI-29) : descend les lignes sélectionnées sous la
     /// tâche sœur suivante (`task.move`).
     MoveDown,
+    /// Ruban, Tâche → Insérer → Jalon (ADR-0017, H-UI-83, lot L3) :
+    /// `task.add { milestone: true }` avant la première tâche sélectionnée.
+    InsertMilestone,
+    /// Ruban, Tâche → Insérer → Récapitulative (H-UI-83, lot L3) :
+    /// `task.add` puis `task.indent` des tâches sélectionnées, un lot.
+    InsertSummary,
 }
 
 /// Lot préparé par [`plan`].
@@ -165,6 +171,9 @@ pub fn plan(op: StructureOp, project: &Project, selection: &Selection) -> Option
             })]
         }
         StructureOp::Delete => return plan_delete(project, selection),
+        // Contrat ADR-0017 (L0) : servis en L3 ; `App::run_structure` dit
+        // « pas encore disponible ».
+        StructureOp::InsertMilestone | StructureOp::InsertSummary => return None,
         StructureOp::MoveUp | StructureOp::MoveDown => {
             plan_move(project, selection, op == StructureOp::MoveUp)
                 .into_iter()
@@ -331,6 +340,12 @@ impl App {
     pub fn run_structure(&mut self, op: StructureOp) {
         self.sync_selection();
         if self.pending_delete.is_some() {
+            return;
+        }
+        if matches!(op, StructureOp::InsertMilestone | StructureOp::InsertSummary) {
+            // Contrat ADR-0017 (L0) : servis en L3.
+            let text = self.texts.get(crate::i18n::TextId::NotAvailableYet);
+            self.push_message(planrs_core::Severity::Info, text);
             return;
         }
         let Some(document) = &self.document else {

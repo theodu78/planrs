@@ -36,6 +36,7 @@ pub mod shell;
 pub mod state;
 pub mod structure;
 pub mod theme;
+pub mod timeline_ops;
 pub mod timephased;
 pub mod timescale;
 pub mod view;

@@ -11,6 +11,7 @@ use planrs_core::TaskUid;
 use crate::clipboard::ClipboardOp;
 use crate::column::Column;
 use crate::nav::NavMove;
+use crate::ribbon::RibbonOp;
 use crate::selection::SelectMode;
 use crate::state::{GanttStyle, LanguagePref, ThemePref, ViewKind};
 use crate::structure::StructureOp;
@@ -196,6 +197,32 @@ pub enum Action {
     SetHighlightCritical(bool),
     /// Aide → À propos : nom et version au bandeau.
     About,
+    // --- Ruban et chronologie (ADR-0017, contrat L0) : servis par leur
+    // lot (L2 ruban, L3 commandes, L4 chronologie).
+    /// État du ruban : onglet, repli, surimpression (H-UI-69, H-UI-72).
+    Ribbon(RibbonOp),
+    /// Chronologie : visibilité, ajout et retrait de tâches, clic sur un
+    /// élément (H-UI-78, H-UI-79, H-UI-81).
+    Timeline(TimelineOp),
+    /// « Défiler jusqu'à la tâche » active (H-UI-84, lot L3).
+    ScrollToTask,
+    /// « Informations sur la tâche » de la tâche active, ouverte à
+    /// l'onglet Notes (H-UI-84, lot L3).
+    ShowTaskNotes,
+}
+
+/// Opération de la chronologie (ADR-0017 D7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimelineOp {
+    /// Affiche ou masque la frise (Affichage → Chronologie, H-UI-78).
+    SetVisible(bool),
+    /// Bascule la sélection : si une tâche sélectionnée n'y est pas, toutes
+    /// y vont, sinon toutes en sortent (H-UI-79) ; un `style.apply`.
+    ToggleSelection,
+    /// Retire une tâche de la frise (menu contextuel de la frise, H-UI-81).
+    Remove(TaskUid),
+    /// Clic sur un élément de la frise : sélection et défilement (H-UI-81).
+    Activate(TaskUid),
 }
 
 /// Commande de tâche du menu Tâche et de la barre d'outils (J8 lot L15).

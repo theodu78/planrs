@@ -9,11 +9,13 @@
 //! omis, les tirets dessinés pleins. Aucune date n'est calculée ici
 //! (règle 3).
 
+use std::collections::BTreeMap;
+
 use egui::{Color32, FontFamily, FontId, Painter, Pos2, Rect, Shape, Stroke, pos2};
 use planrs_render::geometry::{
     Anchor, Class, Clip, FontWeight, Item, Paint, Part, Prim, Scene, pattern_segments,
 };
-use planrs_render::paginate::{Page, Pages, SLOT_GAP_PT, SLOT_LINE_PT, TITLE_LINE_PT};
+use planrs_render::paginate::{Page, Pages, SLOT_GAP_PT, SLOT_LINE_PT, TIMELINE_GAP16, TITLE_LINE_PT};
 use planrs_render::style::{FontChoice, Rgb};
 
 use crate::geom::i64_to_f32;
@@ -61,20 +63,49 @@ impl Projection {
     }
 }
 
+/// Encres d'un dessin : peintures par classe, famille de police, police
+/// Inter installée, tirets dessinés (chronologie à l'écran) ou pleins
+/// (aperçu, vignettes : rendu inchangé depuis J8).
+#[derive(Clone, Copy, Debug)]
+pub struct Ink<'a> {
+    /// Peintures des classes.
+    pub paints: &'a BTreeMap<Class, Paint>,
+    /// Famille de police du style.
+    pub family: FontChoice,
+    /// Police Inter installée dans egui.
+    pub inter: bool,
+    /// Segments tiretés dessinés en tirets (sinon pleins).
+    pub dashes: bool,
+}
+
+impl<'a> Ink<'a> {
+    /// Encres de la scène `scene` (tirets pleins, comme le reste de
+    /// l'aperçu).
+    #[must_use]
+    pub const fn of(scene: &'a Scene, inter: bool) -> Self {
+        Self {
+            paints: &scene.paints,
+            family: scene.family,
+            inter,
+            dashes: false,
+        }
+    }
+}
+
 /// Peinture d'une classe (texte courant à défaut).
-fn paint_of(scene: &Scene, class: Class) -> Paint {
-    scene.paints.get(&class).copied().unwrap_or(Paint {
-        fill: scene.paints.get(&Class::Text).and_then(|p| p.fill),
+fn paint_of(paints: &BTreeMap<Class, Paint>, class: Class) -> Paint {
+    paints.get(&class).copied().unwrap_or(Paint {
+        fill: paints.get(&Class::Text).and_then(|p| p.fill),
         stroke: None,
         width16: 0,
         dash16: None,
     })
 }
 
-/// Famille de police de la scène (Inter si le style la demande et que la
-/// police est installée, sinon la police de l'interface).
-fn family(scene: &Scene, weight: FontWeight, inter: bool) -> FontFamily {
-    match (scene.family, inter, weight) {
+/// Famille de police (Inter si le style la demande et que la police est
+/// installée, sinon la police de l'interface).
+fn family(choice: FontChoice, weight: FontWeight, inter: bool) -> FontFamily {
+    match (choice, inter, weight) {
         (FontChoice::Inter, true, FontWeight::SemiBold) => {
             FontFamily::Name(crate::theme::PLAN_FAMILY_STRONG.into())
         }
@@ -85,15 +116,8 @@ fn family(scene: &Scene, weight: FontWeight, inter: bool) -> FontFamily {
 
 /// Formes d'une primitive.
 #[allow(clippy::too_many_lines, reason = "une branche par primitive")]
-fn item_shapes(
-    painter: &Painter,
-    scene: &Scene,
-    it: &Item,
-    pr: &Projection,
-    inter: bool,
-    out: &mut Vec<Shape>,
-) {
-    let paint = paint_of(scene, it.class);
+fn item_shapes(painter: &Painter, ink: &Ink<'_>, it: &Item, pr: &Projection, out: &mut Vec<Shape>) {
+    let paint = paint_of(ink.paints, it.class);
     let fill = paint.fill.map(color);
     let stroke = paint.stroke.map_or(Stroke::NONE, |c| {
         Stroke::new((pr.len(paint.width16.max(16))).clamp(0.5, 4.0), color(c))
@@ -167,10 +191,18 @@ fn item_shapes(
             }
         }
         Prim::Segments { segs } => {
+            let dash = paint
+                .dash16
+                .filter(|_| ink.dashes)
+                .map(|(on, off)| (pr.len(on).max(1.0), pr.len(off).max(1.0)))
+                .filter(|(on, off)| on.is_finite() && off.is_finite());
             for &(x0, y0, x1, y1) in segs {
                 let (a, b) = (pr.at(x0, y0), pr.at(x1, y1));
                 if a.is_finite() && b.is_finite() {
-                    out.push(Shape::line_segment([a, b], stroke));
+                    match dash {
+                        Some((on, off)) => out.extend(Shape::dashed_line(&[a, b], stroke, on, off)),
+                        None => out.push(Shape::line_segment([a, b], stroke)),
+                    }
                 }
             }
         }
@@ -194,11 +226,11 @@ fn item_shapes(
             if !size.is_finite() || size < MIN_TEXT_PX || text.is_empty() {
                 return;
             }
-            let ink = fill.unwrap_or(Color32::BLACK);
+            let text_color = fill.unwrap_or(Color32::BLACK);
             let galley = painter.layout_no_wrap(
                 text.clone(),
-                FontId::new(size, family(scene, font.weight, inter)),
-                ink,
+                FontId::new(size, family(ink.family, font.weight, ink.inter)),
+                text_color,
             );
             let base = pr.at(*x16, *y16);
             let w = galley.size().x;
@@ -208,7 +240,7 @@ fn item_shapes(
             };
             let y = base.y - size * 0.95;
             if x.is_finite() && y.is_finite() {
-                out.push(Shape::galley(pos2(x, y), galley, ink));
+                out.push(Shape::galley(pos2(x, y), galley, text_color));
             }
         }
     }
@@ -225,8 +257,25 @@ pub fn region_shapes(
     out: &mut Vec<Shape>,
 ) -> usize {
     let before = out.len();
+    let ink = Ink::of(scene, inter);
     for it in scene.items.iter().filter(|it| keep(it)) {
-        item_shapes(painter, scene, it, pr, inter, out);
+        item_shapes(painter, &ink, it, pr, out);
+    }
+    out.len().saturating_sub(before)
+}
+
+/// Primitives `items` (hors scène : chronologie, H-R16) projetées par
+/// `pr` avec les encres `ink` ; rend le nombre de formes.
+pub fn items_shapes(
+    painter: &Painter,
+    items: &[Item],
+    ink: &Ink<'_>,
+    pr: &Projection,
+    out: &mut Vec<Shape>,
+) -> usize {
+    let before = out.len();
+    for it in items {
+        item_shapes(painter, ink, it, pr, out);
     }
     out.len().saturating_sub(before)
 }
@@ -246,7 +295,9 @@ pub fn thumbnail(painter: &Painter, scene: &Scene, dst: Rect, inter: bool) {
     let mut shapes = vec![Shape::rect_filled(
         dst,
         0.0,
-        paint_of(scene, Class::Bg).fill.map_or(Color32::WHITE, color),
+        paint_of(&scene.paints, Class::Bg)
+            .fill
+            .map_or(Color32::WHITE, color),
     )];
     region_shapes(painter, scene, &pr, inter, &|_| true, &mut shapes);
     painter.extend(shapes);
@@ -274,6 +325,7 @@ fn slot_shapes(
     s: f32,
     title: Option<Color32>,
     ink: Color32,
+    inter: bool,
     out: &mut Vec<Shape>,
 ) {
     let line = pt(SLOT_LINE_PT) * s;
@@ -292,10 +344,13 @@ fn slot_shapes(
             if size < MIN_TEXT_PX || text.is_empty() {
                 continue;
             }
-            let fam = if strong {
-                FontFamily::Name(crate::theme::PLAN_FAMILY_STRONG.into())
-            } else {
-                FontFamily::Name(crate::theme::PLAN_FAMILY.into())
+            // Inter si elle est installée (style qui la demande), sinon la
+            // police de l'interface : un style sans Inter n'installe pas la
+            // famille, son nom seul ferait paniquer epaint (règle 10).
+            let fam = match (inter, strong) {
+                (true, true) => FontFamily::Name(crate::theme::PLAN_FAMILY_STRONG.into()),
+                (true, false) => FontFamily::Name(crate::theme::PLAN_FAMILY.into()),
+                (false, _) => FontFamily::Proportional,
             };
             let galley = painter.layout_no_wrap(text.to_owned(), FontId::new(size, fam), color);
             let w = galley.size().x.min(width / 3.0);
@@ -331,8 +386,12 @@ pub fn paint_page(painter: &Painter, pages: &Pages, page: &Page, dst: Rect, inte
     let s = dst.width() / pt(pages.paper_pt.0.max(1));
     let [mt, mr, mb, ml] = pages.margins_pt.map(|m| pt(m) * s);
     let k = PT_PER_16 * pt(pages.scale) / 10_000.0 * s;
-    let bg = paint_of(scene, Class::Bg).fill.map_or(Color32::WHITE, color);
-    let ink = paint_of(scene, Class::Text).fill.map_or(Color32::BLACK, color);
+    let bg = paint_of(&scene.paints, Class::Bg)
+        .fill
+        .map_or(Color32::WHITE, color);
+    let ink = paint_of(&scene.paints, Class::Text)
+        .fill
+        .map_or(Color32::BLACK, color);
     let mut shapes = vec![
         Shape::rect_filled(dst, 0.0, bg),
         Shape::rect_stroke(
@@ -348,7 +407,7 @@ pub fn paint_page(painter: &Painter, pages: &Pages, page: &Page, dst: Rect, inte
     let gap = pt(SLOT_GAP_PT) * s;
     let title = pages
         .title_block
-        .then(|| paint_of(scene, Class::Title).fill.map_or(ink, color));
+        .then(|| paint_of(&scene.paints, Class::Title).fill.map_or(ink, color));
     slot_shapes(
         painter,
         &page.header,
@@ -357,6 +416,7 @@ pub fn paint_page(painter: &Painter, pages: &Pages, page: &Page, dst: Rect, inte
         s,
         title,
         ink,
+        inter,
         &mut shapes,
     );
     if footer > 0.0 {
@@ -368,6 +428,7 @@ pub fn paint_page(painter: &Painter, pages: &Pages, page: &Page, dst: Rect, inte
             s,
             None,
             ink,
+            inter,
             &mut shapes,
         );
     }
@@ -383,6 +444,25 @@ pub fn paint_page(painter: &Painter, pages: &Pages, page: &Page, dst: Rect, inte
         columns.push((x0, x1, dst.left() + ml));
     }
     let mut y = body_top;
+    // Chronologie en tête de la première page (H-UI-82, H-R16), sur toute
+    // la largeur imprimable, comme le PDF (`draw_page`).
+    if page.timeline
+        && let Some(tl) = &pages.timeline
+    {
+        let origin = pos2(dst.left() + ml, y);
+        let h = i64_to_f32(pages.timeline16.1) * k;
+        let clip = Rect::from_min_size(origin, egui::vec2(content_w.max(0.0), h.max(0.0)));
+        let sub = painter.with_clip_rect(clip.intersect(painter.clip_rect()));
+        let pr = Projection {
+            src: (0, 0),
+            dst: origin,
+            k,
+        };
+        let mut local = Vec::new();
+        items_shapes(&sub, &tl.items, &Ink::of(scene, inter), &pr, &mut local);
+        sub.extend(local);
+        y += i64_to_f32(pages.timeline16.1.saturating_add(TIMELINE_GAP16)) * k;
+    }
     let band = |sy0: i64, sy1: i64, y: f32, filter: &dyn Fn(&Item) -> bool| {
         for &(sx0, sx1, ox) in &columns {
             let clip = Rect::from_min_max(

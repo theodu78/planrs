@@ -9,6 +9,10 @@
 //! cycle ou une hiérarchie refusée font refuser tout le lot (R-153, R-156,
 //! R-160), refus affiché dans le bandeau.
 //!
+//! Ruban (ADR-0017, H-UI-83, lot L3) : Insérer → Jalon et Récapitulative
+//! sont aussi des lots ordinaires (`task.add`, puis `task.indent` des
+//! tâches sélectionnées pour la récapitulative) : une entrée d'annulation.
+//!
 //! Hiérarchie (R-052) : une tâche est récapitulative si la tâche suivante
 //! est plus profonde ; son bloc est la suite des tâches plus profondes qui la
 //! suivent (lignes vides comprises, comme `task.delete`). Une tâche dont un
@@ -17,6 +21,7 @@
 //! Project, chaque ligne sélectionnée ne bouge que d'un niveau).
 
 use planrs_automation::command::{LinkKey, LinkSpec, TaskAdd, TaskDelete, TaskMove, TaskOne};
+use planrs_automation::json::DurationJson;
 use planrs_automation::{Batch, Command, Placement, TaskRef};
 use planrs_core::{Project, TaskUid};
 
@@ -149,11 +154,49 @@ fn top_level(project: &Project, selection: &Selection) -> Vec<(usize, TaskUid)> 
     out
 }
 
+/// Refus d'une commande de structure préparée par [`plan_named`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StructureRefusal {
+    /// Insérer → Récapitulative sur des tâches qui ne sont pas des sœurs
+    /// voisines (H-UI-83) : rien n'est écrit.
+    NotAdjacent,
+}
+
+impl StructureRefusal {
+    /// Message du refus.
+    #[must_use]
+    pub const fn text_id(self) -> TextId {
+        match self {
+            Self::NotAdjacent => TextId::InsertSummaryNotAdjacent,
+        }
+    }
+}
+
+/// Étiquette de la récapitulative créée dans le lot (R-150).
+const SUMMARY_LABEL: &str = "$s";
+
 /// Prépare le lot de `op` sur `selection` ; `None` s'il n'y a rien à faire
 /// (sélection vide, un seul maillon à lier, aucun lien entre les tâches
-/// sélectionnées).
+/// sélectionnées) ou si la commande est refusée. Les tâches créées par
+/// Insérer → Jalon et Récapitulative reçoivent un nom vide : voir
+/// [`plan_named`].
 #[must_use]
 pub fn plan(op: StructureOp, project: &Project, selection: &Selection) -> Option<StructurePlan> {
+    plan_named(op, project, selection, "").ok().flatten()
+}
+
+/// Comme [`plan`] ; `name` : nom de la tâche créée par Insérer → Jalon ou
+/// Récapitulative (texte traduit de l'interface, H-UI-83).
+///
+/// # Errors
+///
+/// [`StructureRefusal`] : Récapitulative sur une sélection non voisine.
+pub fn plan_named(
+    op: StructureOp,
+    project: &Project,
+    selection: &Selection,
+    name: &str,
+) -> Result<Option<StructurePlan>, StructureRefusal> {
     let ops = match op {
         StructureOp::InsertBefore => {
             let at = positions(project, selection)
@@ -170,10 +213,9 @@ pub fn plan(op: StructureOp, project: &Project, selection: &Selection) -> Option
                 finish: None,
             })]
         }
-        StructureOp::Delete => return plan_delete(project, selection),
-        // Contrat ADR-0017 (L0) : servis en L3 ; `App::run_structure` dit
-        // « pas encore disponible ».
-        StructureOp::InsertMilestone | StructureOp::InsertSummary => return None,
+        StructureOp::Delete => return Ok(plan_delete(project, selection)),
+        StructureOp::InsertMilestone => vec![plan_milestone(project, selection, name)],
+        StructureOp::InsertSummary => plan_summary(project, selection, name)?,
         StructureOp::MoveUp | StructureOp::MoveDown => {
             plan_move(project, selection, op == StructureOp::MoveUp)
                 .into_iter()
@@ -228,10 +270,91 @@ pub fn plan(op: StructureOp, project: &Project, selection: &Selection) -> Option
             })
             .collect(),
     };
-    (!ops.is_empty()).then(|| StructurePlan {
+    Ok((!ops.is_empty()).then(|| StructurePlan {
         batch: batch(ops),
         confirm_cascade: None,
+    }))
+}
+
+/// Placement d'une tâche insérée : avant la première tâche sélectionnée
+/// (ordre des ID), à la fin sans sélection.
+fn insert_at(project: &Project, selection: &Selection) -> Placement {
+    positions(project, selection)
+        .first()
+        .map_or(Placement::End, |(_, uid)| Placement::Before(TaskRef::Uid(*uid)))
+}
+
+/// Insérer → Jalon (H-UI-83) : `task.add { milestone: true }` de durée
+/// nulle (R-157 : un jalon explicite garderait sinon la durée par défaut
+/// d'un jour), avant la première tâche sélectionnée, à la fin sans
+/// sélection.
+fn plan_milestone(project: &Project, selection: &Selection, name: &str) -> Command {
+    Command::TaskAdd(TaskAdd {
+        name: name.to_owned(),
+        label: None,
+        at: Some(insert_at(project, selection)),
+        duration: Some(DurationJson {
+            minutes: Some(0),
+            ..DurationJson::default()
+        }),
+        milestone: Some(true),
+        notes: None,
+        start: None,
+        finish: None,
     })
+}
+
+/// Insérer → Récapitulative (H-UI-83) : `task.add` étiqueté `$s` avant la
+/// première tâche sélectionnée (au niveau de celle-ci, R-150 `Before`),
+/// puis `task.indent` de chaque tâche sélectionnée sans ancêtre
+/// sélectionné : elles passent sous la tâche créée, leurs blocs avec
+/// elles. Les tâches retenues doivent être des sœurs voisines (même
+/// niveau, blocs contigus, comme Monter/Descendre) ; sinon refus. Sans
+/// sélection : récapitulative vide en fin de projet.
+fn plan_summary(
+    project: &Project,
+    selection: &Selection,
+    name: &str,
+) -> Result<Vec<Command>, StructureRefusal> {
+    let top = top_level(project, selection);
+    if !siblings_adjacent(project, &top) {
+        return Err(StructureRefusal::NotAdjacent);
+    }
+    let mut ops = Vec::with_capacity(top.len().saturating_add(1));
+    ops.push(Command::TaskAdd(TaskAdd {
+        name: name.to_owned(),
+        label: Some(SUMMARY_LABEL.to_owned()),
+        at: Some(insert_at(project, selection)),
+        duration: None,
+        milestone: None,
+        notes: None,
+        start: None,
+        finish: None,
+    }));
+    ops.extend(top.into_iter().map(|(_, uid)| {
+        Command::TaskIndent(TaskOne {
+            uid: TaskRef::Uid(uid),
+        })
+    }));
+    Ok(ops)
+}
+
+/// Vrai si les tâches `top` (sans ancêtre sélectionné, ordre des ID) sont
+/// des sœurs consécutives : même niveau, chaque bloc commence où finit le
+/// précédent (lignes vides ignorées). Liste vide ou d'un élément : vrai.
+fn siblings_adjacent(project: &Project, top: &[(usize, TaskUid)]) -> bool {
+    let Some((first, _)) = top.first() else {
+        return true;
+    };
+    let level = level_at(project, *first);
+    let mut expected = *first;
+    for (pos, _) in top {
+        if *pos != expected || level_at(project, *pos) != level {
+            return false;
+        }
+        expected = next_non_null(project, block_end(project, *pos)).unwrap_or(usize::MAX);
+    }
+    true
 }
 
 /// Position de la première tâche non vide à partir de `from` (incluse).
@@ -267,12 +390,8 @@ fn plan_move(project: &Project, selection: &Selection, up: bool) -> Option<Comma
     let (last, _) = *top.last()?;
     let level = level_at(project, first)?;
     // Sœurs consécutives : chaque bloc commence où finit le précédent.
-    let mut expected = first;
-    for (pos, _) in &top {
-        if *pos != expected || level_at(project, *pos) != Some(level) {
-            return None;
-        }
-        expected = next_non_null(project, block_end(project, *pos)).unwrap_or(usize::MAX);
+    if !siblings_adjacent(project, &top) {
+        return None;
     }
     let first_uid = project.tasks.at(first)?.uid();
     let last_uid = project.tasks.at(last)?.uid();
@@ -342,17 +461,31 @@ impl App {
         if self.pending_delete.is_some() {
             return;
         }
-        if matches!(op, StructureOp::InsertMilestone | StructureOp::InsertSummary) {
-            // Contrat ADR-0017 (L0) : servis en L3.
-            let text = self.texts.get(crate::i18n::TextId::NotAvailableYet);
+        let name = match op {
+            StructureOp::InsertMilestone => self.texts.get(TextId::NewMilestoneName),
+            StructureOp::InsertSummary => self.texts.get(TextId::NewSummaryName),
+            _ => String::new(),
+        };
+        // H-UI-83 : Jalon et Récapitulative grisés sous tri ou filtre, comme
+        // Abaisser (H-UI-32) ; refus au bandeau si l'action arrive quand même.
+        if matches!(op, StructureOp::InsertMilestone | StructureOp::InsertSummary)
+            && self.view.task_view.reorder_locked()
+        {
+            let text = self.texts.get(TextId::ViewReorderLocked);
             self.push_message(planrs_core::Severity::Info, text);
             return;
         }
         let Some(document) = &self.document else {
             return;
         };
-        let Some(plan) = plan(op, document.project(), &self.selected) else {
-            return;
+        let plan = match plan_named(op, document.project(), &self.selected, &name) {
+            Ok(Some(plan)) => plan,
+            Ok(None) => return,
+            Err(refusal) => {
+                let text = self.texts.get(refusal.text_id());
+                self.push_message(planrs_core::Severity::Info, text);
+                return;
+            }
         };
         if let Some(count) = plan.confirm_cascade {
             self.pending_delete = Some(PendingDelete {
@@ -364,7 +497,10 @@ impl App {
         }
         // Un refus est affiché par `execute`.
         if let Ok(outcome) = self.execute(&plan.batch, EditOrigin::User)
-            && op == StructureOp::InsertBefore
+            && matches!(
+                op,
+                StructureOp::InsertBefore | StructureOp::InsertMilestone | StructureOp::InsertSummary
+            )
             && let Some(created) = outcome.created.first()
         {
             self.selection = Some(*created);

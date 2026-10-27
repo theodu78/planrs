@@ -1229,13 +1229,16 @@ menu-task-notes = Notes…
 timeline-add = Add to Timeline
 timeline-remove = Remove from Timeline
 timeline-too-many = The timeline holds at most { $max } tasks: nothing was added.
-not-available-yet = This command is not available yet.
 
 # --- RUBAN L1 ---
 
 # --- RUBAN L2 ---
 
 # --- RUBAN L3 ---
+new-milestone-name = New milestone
+new-summary-name = New summary task
+insert-summary-not-adjacent = Select adjacent tasks at the same level to group them under a summary task.
+scroll-task-hidden = The active task is hidden by the view (filter or outline).
 
 # --- RUBAN L4 ---
 

@@ -939,10 +939,8 @@ impl TaskInfoState {
 pub type TaskInfoTab = Tab;
 
 /// Ouvre « Informations sur la tâche » de `uid` sur l'onglet `tab`
-/// (Tâche → Notes du ruban, H-UI-84) ; `None` : tâche absente.
-///
-/// Lot L0 (squelette) : l'onglet Général reste affiché ; l'onglet demandé
-/// est servi en L3.
+/// (Tâche → Notes du ruban, H-UI-84) ; `None` : tâche absente. Même
+/// brouillon que [`TaskInfoState::open`], seul l'onglet affiché change.
 #[must_use]
 pub fn open_on(
     tab: TaskInfoTab,
@@ -951,8 +949,7 @@ pub fn open_on(
     key: (u64, u64),
     lang: Language,
 ) -> Option<TaskInfoState> {
-    let _ = tab;
-    TaskInfoState::open(s, uid, key, lang)
+    TaskInfoState::open(s, uid, key, lang).map(|state| TaskInfoState { tab, ..state })
 }
 
 /// Réponse de la fenêtre pour une image.

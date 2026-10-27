@@ -207,12 +207,21 @@ fn printable_pt(page: &PageStyle) -> (u32, u32) {
 /// `None` pour une échelle en % (le zoom de l'appelant est gardé).
 #[must_use]
 pub fn fit_zoom(page: &PageStyle) -> Option<Zoom> {
+    fit_zoom_at(page, FULL_SCALE)
+}
+
+/// Comme [`fit_zoom`], pour une page imprimée à l'échelle `scale`
+/// (dix-millièmes, bornée de 10 % à 100 %) : la largeur de `n` pages
+/// vaut `1 / scale` fois plus de scène, le Gantt est élargi d'autant
+/// (relecture finale de J8, F2 : « N × M pages » réduit par la hauteur).
+#[must_use]
+pub fn fit_zoom_at(page: &PageStyle, scale: u32) -> Option<Zoom> {
     let n = match page.fit {
         Fit::Scale(_) => return None,
         Fit::PagesWide(n) | Fit::PagesWideTall(n, _) => i64::from(n.clamp(1, 20)),
     };
     let (w_pt, _) = printable_pt(page);
-    let content16 = pt_to16(w_pt, FULL_SCALE);
+    let content16 = pt_to16(w_pt, scale.clamp(MIN_SCALE, FULL_SCALE));
     let table16 = table_width16(page.columns.as_deref());
     let gantt16 = if page.repeat_table && content16 >= table16.saturating_add(MIN_SLICE16) {
         content16.saturating_sub(table16).saturating_mul(n)
@@ -221,6 +230,55 @@ pub fn fit_zoom(page: &PageStyle) -> Option<Zoom> {
     };
     let width_px = u32::try_from((gantt16 / SUB).max(1)).unwrap_or(u32::MAX);
     Some(Zoom::Fill { width_px })
+}
+
+/// Écart d'échelle toléré par la seconde passe de [`layout_pages`] (1 %).
+const REFIT_SLACK: u32 = 100;
+
+/// Scène et pages du planning : `layout` puis [`paginate_with`], chemin
+/// commun de l'export PDF et de l'aperçu du mode impression.
+///
+/// « N pages en largeur et M en hauteur » (`Fit::PagesWideTall`) avec un
+/// zoom ajusté (`Zoom::Fill`) : quand la hauteur impose une réduction
+/// (échelle `s` < 100 %), la scène est recalculée avec le Gantt élargi de
+/// `1 / s` ([`fit_zoom_at`]) puis repaginée, pour que la feuille reste
+/// pleine en largeur (relecture finale de J8, F2 ; le défaut corrigé par
+/// L16 pour `PagesWide`). La seconde passe n'est gardée que si son échelle
+/// ne perd pas plus de 1 % (réduction imposée par la largeur : première
+/// passe gardée).
+///
+/// # Errors
+///
+/// Ceux de [`paginate_with`] (première passe).
+pub fn layout_pages(
+    project: &planrs_core::Project,
+    schedule: &planrs_core::Schedule,
+    st: &crate::style::PlanStyle,
+    src: &dyn BarTextSource,
+    vp: &crate::geometry::Viewport,
+    opts: PaginateOptions,
+) -> (Result<Pages, PageError>, crate::request::RenderReport) {
+    let (scene, report) = crate::geometry::layout(project, schedule, st, src, vp);
+    let first = paginate_with(&scene, &st.page, src, opts);
+    drop(scene);
+    let refit = match (&first, st.page.fit, vp.zoom) {
+        (Ok(pages), Fit::PagesWideTall(..), Zoom::Fill { .. }) if pages.scale < FULL_SCALE => {
+            Some(pages.scale)
+        }
+        _ => None,
+    };
+    let Some(scale) = refit else {
+        return (first, report);
+    };
+    let Some(zoom) = fit_zoom_at(&st.page, scale) else {
+        return (first, report);
+    };
+    let wide = crate::geometry::Viewport { zoom, ..vp.clone() };
+    let (scene, report2) = crate::geometry::layout(project, schedule, st, src, &wide);
+    match paginate_with(&scene, &st.page, src, opts) {
+        Ok(pages) if pages.scale.saturating_add(REFIT_SLACK) >= scale => (Ok(pages), report2),
+        _ => (first, report),
+    }
 }
 
 /// Hauteur et rangs utiles de la scène.
@@ -525,8 +583,8 @@ pub fn paginate(scene: &Scene, page: &PageStyle, src: &dyn BarTextSource) -> Res
 ///   la légende est en bas de la dernière bande (de chaque colonne), ou de
 ///   chaque page si `legend_every_page` ;
 /// - en-tête (5 lignes au plus) et pied de page (3 lignes au plus) :
-///   jetons `{projet}`, `{date_etat}`, `{date_impression}`, `{fichier}`
-///   (par `src`), `{page}` et `{pages}` (numéros de 1 à N) ; jeton inconnu
+///   jetons `{projet}`, `{date_etat}`, `{date_impression}`, `{fichier}`,
+///   `{planning}` (par `src`), `{page}` et `{pages}` (numéros de 1 à N) ; jeton inconnu
 ///   gardé tel quel.
 ///
 /// # Errors
@@ -586,6 +644,7 @@ pub fn paginate_with(
             "date_etat" => Token::StatusDate,
             "date_impression" => Token::PrintDate,
             "fichier" => Token::File,
+            "planning" => Token::ScheduleTitle,
             _ => return None,
         };
         Some(one_line(&src.token(t)))

@@ -229,6 +229,9 @@
     "manual": {
       "right": "name"
     },
+    "inactive": {
+      "right": "name"
+    },
     "summary": {
       "left": "name",
       "right": "duration_short"

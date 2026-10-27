@@ -733,7 +733,14 @@ struct TextCtx<'a> {
 /// la partie visible du Gantt (H-UI-46 : bascule, « … », jamais rognés),
 /// mesurés en Inter (H-R11), dessinés dans la police du planning, centrés
 /// verticalement sur la barre.
-fn text_shapes(tc: &TextCtx<'_>, bar: &ScreenBar, uid: TaskUid, geo: &GanttGeo<'_>, out: &mut Vec<Shape>) {
+fn text_shapes(
+    tc: &TextCtx<'_>,
+    bar: &ScreenBar,
+    uid: TaskUid,
+    phase: Option<Rgb>,
+    geo: &GanttGeo<'_>,
+    out: &mut Vec<Shape>,
+) {
     use planrs_render::geometry::BarTextSource as _;
     let Some(fields) = geo.style.texts.get(&bar.g.role) else {
         return;
@@ -766,7 +773,15 @@ fn text_shapes(tc: &TextCtx<'_>, bar: &ScreenBar, uid: TaskUid, geo: &GanttGeo<'
     drawn.rect.w = to16(bar.rect.width());
     let placed = geometry::place_texts(&drawn, &texts, &InterMetrics, clip16);
     let tokens = geo.tokens();
-    let ink = color(if strong { tokens.text_strong } else { tokens.text });
+    let ink_rgb = if strong { tokens.text_strong } else { tokens.text };
+    let ink = color(ink_rgb);
+    // Dedans : encre la plus contrastée sur le remplissage de la barre
+    // (H-UI-61, comme la scène `Class::TextOnBar`).
+    let bar_fill = phase
+        .filter(|_| planrs_render::geometry::phase_painted(bar.g.role))
+        .or_else(|| tokens.bars.get(&bar.g.role).map(|p| p.fill))
+        .unwrap_or(tokens.bg);
+    let inside_ink = color(planrs_render::style::ink_on(bar_fill, ink_rgb, tokens.bg));
     let family = match geo.style.font.family {
         planrs_render::style::FontChoice::Inter if strong => FontFamily::Name(PLAN_FAMILY_STRONG.into()),
         planrs_render::style::FontChoice::Inter => FontFamily::Name(PLAN_FAMILY.into()),
@@ -776,9 +791,10 @@ fn text_shapes(tc: &TextCtx<'_>, bar: &ScreenBar, uid: TaskUid, geo: &GanttGeo<'
     let bg = color(tokens.bg);
     for item in placed.items {
         let halo = item.side != planrs_render::geometry::TextSide::Inside;
+        let item_ink = if halo { ink } else { inside_ink };
         let galley = tc
             .painter
-            .layout_no_wrap(item.text, FontId::new(size, family.clone()), ink);
+            .layout_no_wrap(item.text, FontId::new(size, family.clone()), item_ink);
         let left = tc.axis.x_of16(item.x16);
         let top = bar.yc - galley.size().y / 2.0;
         if left.is_finite() && top.is_finite() {
@@ -789,7 +805,7 @@ fn text_shapes(tc: &TextCtx<'_>, bar: &ScreenBar, uid: TaskUid, geo: &GanttGeo<'
                 let r = Rect::from_min_size(pos2(left - 1.0, top), egui::vec2(size.x + 2.0, size.y));
                 out.push(Shape::rect_filled(r, 0.0, bg));
             }
-            out.push(Shape::galley(pos2(left, top), galley, ink));
+            out.push(Shape::galley(pos2(left, top), galley, item_ink));
         }
     }
 }
@@ -1287,7 +1303,7 @@ pub fn paint_body(
                     axis,
                     clip,
                 };
-                text_shapes(&tc, &bar, row.uid, &geo, &mut labels);
+                text_shapes(&tc, &bar, row.uid, phase, &geo, &mut labels);
             }
         }
         shapes.extend(labels);

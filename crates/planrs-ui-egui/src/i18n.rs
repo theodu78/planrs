@@ -1037,6 +1037,10 @@ text_ids! {
     FieldTotalSlack => "field-total-slack",
     FieldStartFinish => "field-start-finish",
     // --- J8 L16 ---
+    // --- J8 relecture finale ---
+    PasteReportTracking => "paste-report-tracking",
+    TokenScheduleTitle => "token-schedule-title",
+    MenuRelativeMonths => "menu-relative-months",
 }
 
 /// Clé fluent du refus de code `code` : `error-<code>`, points changés en
@@ -1097,6 +1101,7 @@ pub const fn token_label(token: planrs_render::geometry::Token) -> TextId {
         T::Pages => TextId::TokenPages,
         T::PrintDate => TextId::TokenPrintDate,
         T::File => TextId::TokenFile,
+        T::ScheduleTitle => TextId::TokenScheduleTitle,
     }
 }
 
@@ -1953,6 +1958,7 @@ mod tests {
             Token::Pages,
             Token::PrintDate,
             Token::File,
+            Token::ScheduleTitle,
         ];
         let labels: BTreeSet<String> = tokens.iter().map(|t| en.get(super::token_label(*t))).collect();
         assert_eq!(labels.len(), tokens.len());

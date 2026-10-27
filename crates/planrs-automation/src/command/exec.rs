@@ -81,6 +81,12 @@ pub(crate) struct BatchCache {
     spent: u64,
     /// Calendriers (et calendrier du projet) et leur compilation.
     calendars: Option<(Arena<CalendarUid, Calendar>, CalendarUid, CalendarSet)>,
+    /// Planning de référence d'une suite de passages en manuel purs
+    /// (`task.update { mode: manual }` seul, R-253 ; relecture finale de
+    /// J8) : figer une tâche à ses dates courantes ne déplace aucune autre
+    /// tâche, la suite lit donc ce planning sans recalcul ; retiré par toute
+    /// autre opération.
+    freeze: Option<Schedule>,
 }
 
 impl BatchCache {
@@ -92,6 +98,7 @@ impl BatchCache {
             fresh: false,
             spent: 0,
             calendars: None,
+            freeze: None,
         }
     }
 }
@@ -143,6 +150,19 @@ impl Ctx<'_> {
         Ok(())
     }
 
+    /// Planning de référence de la suite de passages en manuel purs en
+    /// cours (voir `BatchCache::freeze`).
+    pub(crate) const fn freeze_schedule(&self) -> Option<&Schedule> {
+        self.cache.freeze.as_ref()
+    }
+
+    /// Garde le planning courant comme référence des passages en manuel
+    /// purs qui suivent.
+    pub(crate) fn keep_freeze_schedule(&mut self) {
+        let s = self.schedule().clone();
+        self.cache.freeze = Some(s);
+    }
+
     /// Planning courant posé par le dernier [`Ctx::ensure_schedule`].
     pub(crate) fn schedule(&self) -> &Schedule {
         match &self.cache.last {
@@ -180,6 +200,11 @@ pub(crate) trait Exec {
 
 impl Exec for Command {
     fn exec(&self, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
+        // Toute opération autre qu'un passage en manuel pur retire le
+        // planning de référence de la suite (R-253, relecture finale J8).
+        if !matches!(self, Self::TaskUpdate(op) if task::is_pure_freeze(op)) {
+            ctx.cache.freeze = None;
+        }
         match self {
             Self::TaskAdd(op) => task::add(op, ctx),
             Self::TaskUpdate(op) => task::update(op, ctx),

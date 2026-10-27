@@ -718,6 +718,10 @@ pub enum Token {
     PrintDate,
     /// `{fichier}`.
     File,
+    /// `{planning}` : titre de planning neutre dans la langue du rendu
+    /// (« Planning prévisionnel », « Provisional schedule »), cartouche de
+    /// « Planning travaux » (relecture finale de J8).
+    ScheduleTitle,
 }
 
 /// Source des textes affichés autour des barres et dans l'en-tête (règle
@@ -924,6 +928,11 @@ pub enum Class {
     PhaseRow(u16),
     /// Titre du cartouche (H-UI-66, couleur d'accent `cursor`).
     Title,
+    /// Texte dans une barre d'un rôle, peinte à la couleur de la phase
+    /// d'indice donné s'il y en a une : encre du texte ou du fond, la plus
+    /// contrastée sur le remplissage (`style::ink_on`, relecture finale de
+    /// J8).
+    TextOnBar(BarRole, Option<u16>),
 }
 
 /// Peinture d'une classe.

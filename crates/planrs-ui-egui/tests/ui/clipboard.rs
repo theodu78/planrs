@@ -437,3 +437,43 @@ fn paste_special_without_copy_and_menu_entries() {
     assert_eq!(slot.clip.tasks.len(), 1);
     assert_eq!(slot.clip.tasks[0].fields.name, "Fondations");
 }
+
+/// Relecture finale de J8 (F6) : couper puis coller une tâche commencée
+/// (60 %) recrée une tâche sans avancement (R-244) ; le compte rendu le
+/// dit, en avertissement.
+#[test]
+fn paste_report_warns_tracking_dropped() {
+    let mut app = new_app();
+    let mut project = plan_p().project().clone();
+    project.tasks.get_mut(uid(2)).unwrap().progress.percent_complete =
+        planrs_core::Percent::new(6_000).unwrap();
+    app.open_project(
+        project,
+        DocOrigin {
+            name: "P".to_owned(),
+            path: None,
+            demo: false,
+        },
+    );
+    let mut harness = harness_for(app);
+    harness.run();
+    select(&mut harness, 2, 2);
+    let text = copy_event(&mut harness, Event::Cut).expect("couper écrit le texte");
+    select(&mut harness, 3, 3);
+    paste(&mut harness, &text);
+    let texts = Texts::new(Language::Fr);
+    let tracking = texts.get_args(TextId::PasteReportTracking, &[("count", Arg::Count(1))]);
+    let (severity, got) = titled(harness.state(), TextId::PasteReportTitle).unwrap();
+    assert_eq!(severity, Severity::Warning);
+    assert!(got.contains(&tracking), "{got}");
+    // La tâche collée est bien repartie de 0 % (R-244).
+    let project = harness.state().document.as_ref().unwrap().project();
+    let pasted = project.tasks.iter().find(|t| t.name == "Fondations").unwrap();
+    assert_eq!(pasted.progress.percent_complete.get(), 0);
+    // Une tâche sans suivi : pas de mention.
+    select(&mut harness, 7, 7);
+    let text = copy_event(&mut harness, Event::Copy).unwrap();
+    paste(&mut harness, &text);
+    let (_, got) = titled(harness.state(), TextId::PasteReportTitle).unwrap();
+    assert!(!got.contains(&tracking), "{got}");
+}

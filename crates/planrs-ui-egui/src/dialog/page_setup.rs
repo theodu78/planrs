@@ -17,14 +17,23 @@
 //! entrée d'annulation). Fermer ne change rien : la vue écran (colonnes,
 //! zoom) n'est jamais touchée. Logo (`page.logo`) non proposé : non
 //! dessiné par le PDF (coupe de L7).
+//!
+//! Lignes imprimées (relecture finale de J8, F1) : celles de la vue
+//! affichée, comme MS Project qui imprime la vue courante. Filtre, niveau
+//! de plan et récapitulatives repliées s'appliquent à l'aperçu et à ses
+//! exports (`RowFilter.uids`) ; l'ordre reste celui des ID (un tri de
+//! l'écran n'est pas imprimé).
+
+use std::collections::BTreeSet;
 
 use planrs_automation::Session;
 use planrs_automation::render_text::SessionTexts;
 use planrs_automation::text::Language;
-use planrs_render::geometry::{Token, Viewport, layout};
-use planrs_render::paginate::{Pages, PaginateOptions, fit_zoom, paginate_with};
+use planrs_core::TaskUid;
+use planrs_render::geometry::{Token, Viewport};
+use planrs_render::paginate::{Pages, PaginateOptions, fit_zoom, layout_pages};
 use planrs_render::style::{Fit, PageStyle, Paper, PlanStyle, Slot, TableColumn, Variant};
-use planrs_render::{Lang, RenderLimits, Zoom};
+use planrs_render::{Lang, RenderLimits, RowFilter, Zoom};
 
 use crate::i18n::{Arg, TextId, Texts, token_label};
 
@@ -33,13 +42,14 @@ use crate::i18n::{Arg, TextId, Texts, token_label};
 const MAX_ROWS: u32 = 20_000;
 
 /// Jetons proposés à l'insertion.
-const TOKENS: [(Token, &str); 6] = [
+const TOKENS: [(Token, &str); 7] = [
     (Token::Project, "{projet}"),
     (Token::StatusDate, "{date_etat}"),
     (Token::Page, "{page}"),
     (Token::Pages, "{pages}"),
     (Token::PrintDate, "{date_impression}"),
     (Token::File, "{fichier}"),
+    (Token::ScheduleTitle, "{planning}"),
 ];
 
 /// Formats de papier proposés.
@@ -61,8 +71,15 @@ enum FitKind {
     WideTall,
 }
 
-/// Aperçu calculé : clé (brouillon, document, langue) et pages (ou refus).
-type Preview = ((PageStyle, (u64, u64), Language), Result<Pages, String>);
+/// Tâches imprimées : lignes de la vue affichée (`None` : toutes).
+pub type PrintRows = Option<BTreeSet<TaskUid>>;
+
+/// Aperçu calculé : clé (brouillon, document, langue, lignes imprimées) et
+/// pages (ou refus).
+type Preview = (
+    (PageStyle, (u64, u64), Language, PrintRows),
+    Result<Pages, String>,
+);
 
 /// Brouillon de la fenêtre.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,8 +132,8 @@ impl PageSetupState {
         }
     }
 
-    /// Pages de l'aperçu (recalculées si le brouillon ou le document ont
-    /// changé).
+    /// Pages de l'aperçu (recalculées si le brouillon, le document ou les
+    /// lignes imprimées ont changé).
     ///
     /// # Errors
     ///
@@ -127,12 +144,16 @@ impl PageSetupState {
         style: &PlanStyle,
         key: (u64, u64),
         lang: Language,
+        rows: Option<&BTreeSet<TaskUid>>,
     ) -> Result<&Pages, &str> {
-        let wanted = (self.page.clone(), key, lang);
-        if self.preview.as_ref().is_none_or(|(k, _)| *k != wanted) {
+        let fresh = self.preview.as_ref().is_some_and(|((page, k, l, r), _)| {
+            *page == self.page && *k == key && *l == lang && r.as_ref() == rows
+        });
+        if !fresh {
             let mut st = style.clone();
             st.page = self.page.clone();
-            let pages = build_pages(session, &st, lang);
+            let pages = build_pages_rows(session, &st, lang, rows);
+            let wanted = (self.page.clone(), key, lang, rows.cloned());
             self.preview = Some((wanted, pages));
         }
         match &self.preview {
@@ -140,6 +161,13 @@ impl PageSetupState {
             Some((_, Err(e))) => Err(e.as_str()),
             None => Err(""),
         }
+    }
+
+    /// Pages de la dernière image de l'aperçu (`None` : pas encore
+    /// calculées, ou refus).
+    #[must_use]
+    pub fn preview_pages(&self) -> Option<&Pages> {
+        self.preview.as_ref().and_then(|(_, pages)| pages.as_ref().ok())
     }
 
     /// Style du document avec la mise en page du brouillon.
@@ -159,16 +187,36 @@ const fn render_lang(lang: Language) -> Lang {
     }
 }
 
-/// Pages du planning de `session` avec le style `st` : même chemin que
-/// l'export PDF (`layout`, `fit_zoom`, `paginate_with`, variante
-/// d'impression), textes de la session (règle 3).
+/// Pages du planning de `session` avec le style `st`, toutes les tâches
+/// (voir [`build_pages_rows`]).
 ///
 /// # Errors
 ///
 /// Texte du refus de la pagination (plus de 1 000 pages).
 pub fn build_pages(session: &Session, st: &PlanStyle, lang: Language) -> Result<Pages, String> {
+    build_pages_rows(session, st, lang, None)
+}
+
+/// Pages du planning de `session` avec le style `st`, tâches `rows` seules
+/// (`None` : toutes) : même chemin que l'export PDF (`fit_zoom`,
+/// `layout_pages`, variante d'impression), textes de la session
+/// (règle 3).
+///
+/// # Errors
+///
+/// Texte du refus de la pagination (plus de 1 000 pages).
+pub fn build_pages_rows(
+    session: &Session,
+    st: &PlanStyle,
+    lang: Language,
+    rows: Option<&BTreeSet<TaskUid>>,
+) -> Result<Pages, String> {
     let vp = Viewport {
         zoom: fit_zoom(&st.page).unwrap_or(Zoom::Week),
+        filter: RowFilter {
+            uids: rows.cloned(),
+            ..RowFilter::default()
+        },
         limits: RenderLimits {
             max_rows: MAX_ROWS,
             ..RenderLimits::default()
@@ -176,11 +224,12 @@ pub fn build_pages(session: &Session, st: &PlanStyle, lang: Language) -> Result<
         ..Viewport::new(Variant::Print, render_lang(lang))
     };
     let texts = SessionTexts { session, lang };
-    let (scene, _) = layout(session.project(), session.schedule(), st, &texts, &vp);
     let options = PaginateOptions {
         legend_every_page: st.legend.every_page,
     };
-    paginate_with(&scene, &st.page, &texts, options).map_err(|e| e.to_string())
+    layout_pages(session.project(), session.schedule(), st, &texts, &vp, options)
+        .0
+        .map_err(|e| e.to_string())
 }
 
 /// PDF des pages de l'aperçu (H-R13 : date de création = « maintenant »
@@ -222,6 +271,8 @@ pub struct PageSetupInput<'a> {
     pub key: (u64, u64),
     /// Langue.
     pub lang: Language,
+    /// Tâches imprimées (lignes de la vue affichée ; `None` : toutes).
+    pub rows: Option<&'a BTreeSet<TaskUid>>,
 }
 
 /// Réglages (colonne de gauche de la fenêtre).
@@ -434,7 +485,7 @@ pub fn show(
                 ui.strong(texts.get(TextId::PsPreview));
                 let index = state.page_index;
                 let mut count = 0_usize;
-                match state.pages(input.session, input.style, input.key, input.lang) {
+                match state.pages(input.session, input.style, input.key, input.lang, input.rows) {
                     Ok(pages) => {
                         count = pages.pages.len();
                         let index = index.min(count.saturating_sub(1));
@@ -530,6 +581,7 @@ impl crate::app::App {
         use planrs_automation::command::Command;
         use planrs_automation::command::style::{StyleApply, TemplateJson, doc_style};
         let lang = self.text_language();
+        let rows = self.printed_rows();
         let (
             Some(document),
             Some(super::DialogState {
@@ -547,6 +599,7 @@ impl crate::app::App {
             style: &style,
             key,
             lang,
+            rows: rows.as_ref(),
         };
         let outcome = show(ctx, &self.texts, state, &input);
         match outcome {
@@ -573,7 +626,7 @@ impl crate::app::App {
                 drop(self.execute(&batch, crate::app::EditOrigin::User));
             }
             PageSetupOutcome::ExportPdf => {
-                let bytes = match state.pages(&document.session, &style, key, lang) {
+                let bytes = match state.pages(&document.session, &style, key, lang, rows.as_ref()) {
                     Ok(pages) => pdf_bytes(&document.session, pages, lang),
                     Err(e) => Err(e.to_owned()),
                 };
@@ -584,7 +637,7 @@ impl crate::app::App {
             }
             PageSetupOutcome::ExportSvg => {
                 let st = state.styled(&style);
-                let svg = svg_bytes(&document.session, &st, lang);
+                let svg = svg_bytes(&document.session, &st, lang, rows);
                 self.deliver_export(crate::io::SaveKind::Svg, svg, ctx);
             }
         }
@@ -600,12 +653,15 @@ impl crate::app::App {
 }
 
 /// SVG du planning avec la mise en page du brouillon (colonnes, table
-/// masquée), même zoom que la page ajustée.
-fn svg_bytes(session: &Session, st: &PlanStyle, lang: Language) -> Vec<u8> {
+/// masquée), même zoom que la page ajustée, lignes de la vue affichée.
+fn svg_bytes(session: &Session, st: &PlanStyle, lang: Language, rows: PrintRows) -> Vec<u8> {
     let req = planrs_render::GanttRequest {
         range: planrs_render::RangeSpec::Auto,
         zoom: fit_zoom(&st.page).unwrap_or(Zoom::Week),
-        filter: planrs_render::RowFilter::default(),
+        filter: RowFilter {
+            uids: rows,
+            ..RowFilter::default()
+        },
         language: render_lang(lang),
         theme: planrs_render::Theme::Light,
         limits: RenderLimits::default(),

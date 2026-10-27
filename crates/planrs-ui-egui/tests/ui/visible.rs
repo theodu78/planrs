@@ -352,6 +352,49 @@ fn h_ui_52_gallery_apply_undo() {
     assert!(doc(harness.state()).is_none(), "style d'avant");
 }
 
+/// Relecture finale de J8 (F5) : appliquer un modèle depuis la galerie
+/// garde les couleurs de phase et la mise en page enregistrées du
+/// document (cartouche saisi, colonnes d'impression) ; le reste suit le
+/// modèle ; une seule entrée d'annulation.
+#[test]
+fn h_ui_52_gallery_apply_keeps_phases_and_page() {
+    let (mut harness, _) = sobre_p();
+    let batch = planrs_automation::Batch::from_json_str(
+        r##"{"format_version":1,"ops":[{"op":"style.apply","template":"sobre","patch":{
+            "phases":{"5":{"fill":"#D55E00","children":true}},
+            "bars":{"task":{"shape":"bar","height_pct":80,"radius16":0,"outline16":0,"pattern":"solid"}}}},
+          {"op":"style.apply","patch":{"page":{"paper":"a3","landscape":true,"margins_mm":[10,10,10,10],
+            "fit":{"pages_wide":1},"repeat_table":true,"header":["","Chantier Beaujeu",""],
+            "footer":["","",""],"logo":null,"columns":["id","name"],"title_block":true}}}]}"##,
+    )
+    .unwrap();
+    harness
+        .state_mut()
+        .execute(&batch, planrs_ui_egui::EditOrigin::User)
+        .unwrap();
+    harness.run();
+    let before = doc(harness.state()).unwrap();
+    assert!(before.over.phases.is_some() && before.over.page.is_some());
+    click(&mut harness, &fr(TextId::MenuFormat));
+    click(&mut harness, &fr(TextId::MenuGallery));
+    let apply = format!(
+        "{} {}",
+        fr(TextId::GalleryApply),
+        fr(planrs_ui_egui::i18n::template_name(TemplateId::Presentation))
+    );
+    let undo_before = history(harness.state());
+    click(&mut harness, &apply);
+    let after = doc(harness.state()).unwrap();
+    assert_eq!(after.base, TemplateId::Presentation);
+    assert_eq!(after.over.phases, before.over.phases, "couleurs de phase gardées");
+    assert_eq!(after.over.page, before.over.page, "mise en page gardée");
+    assert!(
+        after.over.bars.is_empty(),
+        "les autres surcharges suivent le modèle"
+    );
+    assert_eq!(history(harness.state()), undo_before + 1);
+}
+
 /// H-UI-52 : « Enregistrer comme modèle personnel » garde le style du
 /// document sous son nom ; le modèle se réapplique.
 #[test]
@@ -651,19 +694,62 @@ fn h_ui_65_phase_color_row_and_bar() {
         .filter(|s| matches!(s, Shape::Rect(r) if r.fill == rgb(red) && r.rect.left() > zone.left()))
         .count();
     assert!(bars >= 2, "sous-barres de la couleur : {bars}");
-    let tint = planrs_render::style::readable_tint(
-        red,
-        st.tokens(Variant::Light).bg,
-        &[
-            st.tokens(Variant::Light).text,
-            st.tokens(Variant::Light).text_strong,
-        ],
-    );
+    let tint = planrs_render::style::phase_row_tint(&st, Variant::Light, red);
     let row = row_rect(&harness, 5, "Second œuvre");
     let filled = all
         .iter()
         .any(|s| matches!(s, Shape::Rect(r) if r.fill == rgb(tint) && (r.rect.center().y - row.center().y).abs() < 2.0));
     assert!(filled, "fond de ligne de phase absent");
+}
+
+/// H-UI-61 et H-UI-65, relecture finale de J8 : une couleur de phase
+/// trop pâle sur le fond (jaune sur blanc, 1,3:1) est signalée dans le
+/// volet, avec une couleur conforme sur les fonds des trois variantes ;
+/// `style.get` (`contrast_issues`) la signale aussi.
+#[test]
+fn h_ui_61_phase_color_contrast_warned() {
+    let (mut harness, _) = sobre_p();
+    open_panel(&mut harness, BarRole::Summary, Some(5));
+    let yellow = Rgb(0xF0, 0xE4, 0x42);
+    click(
+        &mut harness,
+        &label(TextId::FpPhaseSwatch, &[("color", Arg::Str(yellow.hex().into()))]),
+    );
+    harness.run();
+    let warned = |h: &Harness<'static, App>| {
+        texts(h)
+            .iter()
+            .any(|(_, t)| t.starts_with("Contraste insuffisant"))
+    };
+    assert!(warned(&harness), "aucun avertissement pour la phase");
+    let st = effective(harness.state());
+    let issues = planrs_automation::command::style::contrast_issues(&st);
+    assert!(
+        issues.iter().any(|i| i.phase == Some(5) && i.color == yellow),
+        "{issues:?}"
+    );
+    let bgs = [Variant::Light, Variant::Dark, Variant::Print].map(|v| st.tokens(v).bg);
+    let worst = *bgs
+        .iter()
+        .min_by_key(|bg| planrs_render::style::contrast_ratio(yellow, **bg))
+        .unwrap();
+    let better = planrs_automation::command::style::nearest_compliant(yellow, worst, 3_000)
+        .filter(|b| {
+            bgs.iter()
+                .all(|bg| planrs_render::style::contrast_ratio(*b, *bg) >= 3_000)
+        })
+        .expect("couleur conforme sur les trois fonds");
+    click(
+        &mut harness,
+        &label(
+            TextId::FpUseSuggestion,
+            &[("color", Arg::Str(better.hex().into()))],
+        ),
+    );
+    harness.run();
+    let st = effective(harness.state());
+    assert_eq!(st.phases.get(&5).map(|p| p.fill), Some(better));
+    assert!(!warned(&harness));
 }
 
 /// H-UI-67 : « Planning travaux » ⇒ niveau des mois relatifs (« M1 ») en
@@ -683,6 +769,31 @@ fn h_ui_67_relative_months_tier() {
         .unwrap();
     harness.run();
     assert!(has_m1(&harness), "{:?}", texts(&harness));
+}
+
+/// H-UI-67 « en option », relecture finale de J8 : Format → « Mois
+/// relatifs » les affiche sous Sobre (une entrée d'annulation), puis les
+/// retire.
+#[test]
+fn h_ui_67_relative_months_menu_toggle() {
+    let (mut harness, _) = sobre_p();
+    let has_m1 = |h: &Harness<'static, App>| texts(h).iter().any(|(_, t)| t == "M1");
+    assert!(!has_m1(&harness));
+    let before = history(harness.state());
+    click(&mut harness, &fr(TextId::MenuFormat));
+    click(&mut harness, &fr(TextId::MenuRelativeMonths));
+    harness.key_press(egui::Key::Escape);
+    harness.run();
+    assert!(has_m1(&harness), "{:?}", texts(&harness));
+    assert_eq!(history(harness.state()), before + 1);
+    let style = doc(harness.state()).expect("style écrit");
+    assert_eq!(style.base, TemplateId::Sobre);
+    assert!(style.resolve().scale.relative_months);
+    click(&mut harness, &fr(TextId::MenuFormat));
+    click(&mut harness, &fr(TextId::MenuRelativeMonths));
+    harness.key_press(egui::Key::Escape);
+    harness.run();
+    assert!(!has_m1(&harness));
 }
 
 /// État de la fenêtre « Mise en page » ouverte.
@@ -749,6 +860,63 @@ fn h_ui_68_print_mode_keeps_screen_columns() {
     assert_eq!(app.state.columns, columns);
     assert_eq!(history(app), before);
     assert!(doc(app).is_none());
+}
+
+/// Relecture finale de J8, F1 : le mode impression, ses exports et
+/// Fichier → Exporter → PDF/SVG impriment les lignes de la vue affichée
+/// (ici le niveau de plan 1 : deux récapitulatives), pas tout le projet.
+#[test]
+fn print_follows_displayed_rows() {
+    use planrs_ui_egui::view::task_view::TaskViewOp;
+    let (mut harness, saved) = sobre_p();
+    harness
+        .state_mut()
+        .dispatch(Action::TaskView(TaskViewOp::SetOutlineLevel(Some(1))));
+    harness.run();
+    let shown = crate::filters::shown(harness.state());
+    assert_eq!(shown, vec![1, 5]);
+    // Aperçu du mode impression : deux lignes.
+    click(&mut harness, &fr(TextId::ToolbarPrintMode));
+    let state = page_state(harness.state());
+    let pages = state.preview_pages().expect("aperçu calculé");
+    let printed: Vec<u32> = pages
+        .scene
+        .rows
+        .iter()
+        .filter_map(|r| r.uid.map(TaskUid::get))
+        .collect();
+    assert_eq!(printed, shown);
+    // Export SVG de l'aperçu : les sous-tâches n'y sont pas.
+    click(&mut harness, &fr(TextId::PsExportSvg));
+    {
+        let saved = saved.borrow();
+        let svg = String::from_utf8(saved.last().unwrap().bytes.clone()).unwrap();
+        assert!(svg.contains("Gros œuvre"), "{svg}");
+        assert!(!svg.contains("Fondations"), "sous-tâche imprimée");
+    }
+    click(&mut harness, &fr(TextId::PsClose));
+    // Fichier → Exporter → PDF : même filtre.
+    harness.state_mut().dispatch(Action::Export(SaveKind::Pdf));
+    harness.run();
+    let app = harness.state();
+    let session = &app.document.as_ref().unwrap().session;
+    let params = planrs_automation::command::params::ExportPdfParams {
+        path: String::new(),
+        style: Some(TemplateId::Sobre.into()),
+        page: None,
+        range: None,
+        rows: None,
+    };
+    let lang = planrs_automation::text::Language::Fr;
+    let rows = app.printed_rows();
+    assert_eq!(rows.as_ref().map(std::collections::BTreeSet::len), Some(2));
+    let filtered = planrs_automation::pdf::export_rows(session, &params, rows.as_ref(), lang).unwrap();
+    assert_eq!(filtered.report.shown, 2);
+    let all = planrs_automation::pdf::export(session, &params, lang).unwrap();
+    assert_ne!(filtered.bytes, all.bytes);
+    let saved = saved.borrow();
+    assert_eq!(saved.last().unwrap().kind, SaveKind::Pdf);
+    assert_eq!(saved.last().unwrap().bytes, filtered.bytes);
 }
 
 /// Aperçu paginé : « Page 1 / N » avec N pages de la pagination ; page

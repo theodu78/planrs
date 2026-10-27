@@ -27,6 +27,8 @@ fn class_name(c: Class) -> std::borrow::Cow<'static, str> {
     match c {
         Class::Phase(i, r) => format!("ph{i}{}", bar_name(r)).into(),
         Class::PhaseRow(i) => format!("pr{i}").into(),
+        Class::TextOnBar(r, None) => format!("ti{}", bar_name(r)).into(),
+        Class::TextOnBar(r, Some(i)) => format!("ti{i}{}", bar_name(r)).into(),
         other => fixed_class_name(other).into(),
     }
 }
@@ -53,7 +55,7 @@ const fn fixed_class_name(c: Class) -> &'static str {
         Class::LinkCritical => "lc",
         Class::Arrow => "la",
         Class::ArrowCritical => "lac",
-        Class::Text | Class::Phase(..) | Class::PhaseRow(_) => "",
+        Class::Text | Class::Phase(..) | Class::PhaseRow(_) | Class::TextOnBar(..) => "",
         Class::TextStrong => "ts",
         Class::TextMuted => "tw",
         Class::TextCut => "tc",

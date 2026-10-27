@@ -48,6 +48,7 @@ fn r244_relative_levels() {
     assert_eq!(rel, [0, 1, 1, 1]);
     let (report, created) = paste(&mut s, &[1], &before(6), PasteOptions::default());
     assert_eq!(report.tasks, 4);
+    assert_eq!(report.tracking_dropped, 0, "aucun suivi dans P");
     assert_eq!(created, [8, 9, 10, 11]);
     let got = level_names(&s);
     let tail: Vec<(&str, u16)> = got.iter().skip(4).map(|(n, l)| (n.as_str(), *l)).collect();
@@ -222,6 +223,9 @@ fn r244_no_progress_no_baseline() {
     );
     let (report, created) = paste(&mut s, &[2, 6, 7], &Placement::End, PasteOptions::default());
     assert_eq!(report.tasks, 3);
+    // Ligne de base posée sur toutes : les trois perdent un suivi
+    // (relecture finale de J8, compté pour l'avertissement de l'interface).
+    assert_eq!(report.tracking_dropped, 3);
     assert_eq!(created, [8, 9, 10]);
     let (src, new) = (get(&s, 2), get(&s, 8));
     assert_eq!(new.progress.percent_complete.get(), 0);
@@ -278,4 +282,69 @@ fn r244_unknown_task_and_empty_clip() {
         paste_batch(&s, &empty, &Placement::End, &PasteOptions::default()).map(|_| ()),
         Err(planrs_automation::clip::ClipError::Unrecognized)
     );
+}
+
+/// Relecture finale de J8 : coller 300 feuilles manuelles dans un projet de
+/// 5 000 tâches passe en un lot. Le collage donne le début de chaque tâche
+/// manuelle : ses dates ne sont plus figées d'abord (un recalcul du
+/// planning par tâche, refusé par le budget `schedule_recomputes` au-delà
+/// d'environ 200) ; début et durée manuels de la source.
+#[test]
+fn r244_paste_many_manual_within_budget() {
+    use planrs_automation::helpers;
+    use planrs_tests::generate::large_network;
+    use planrs_tests::session::session;
+    let network = large_network(11);
+    let leaves: Vec<TaskUid> = network
+        .tasks
+        .iter()
+        .enumerate()
+        .filter(|(i, t)| {
+            !t.is_null
+                && network
+                    .tasks
+                    .iter()
+                    .nth(i + 1)
+                    .is_none_or(|n| n.outline_level <= t.outline_level)
+        })
+        .map(|(_, t)| t.uid())
+        .take(300)
+        .collect();
+    let mut s = session(network);
+    let freeze = helpers::toggle_mode(&s, &leaves).unwrap().unwrap();
+    s.apply(&freeze, ApplyMode::Commit).unwrap();
+    let clip = RowClip::capture(&s, &leaves).unwrap();
+    assert_eq!(clip.tasks.len(), 300);
+    let (batch, report) = paste_batch(&s, &clip, &Placement::End, &PasteOptions::default()).unwrap();
+    assert_eq!(report.tasks, 300);
+    let before = s.project().tasks.len();
+    s.apply(&batch, ApplyMode::Commit).unwrap();
+    let project = s.project();
+    assert_eq!(project.tasks.len(), before + 300);
+    for (src, new) in leaves.iter().zip(project.tasks.iter().skip(before)) {
+        let src = project.tasks.get(*src).unwrap();
+        // Début et durée de la source (la fin suit le calendrier de la
+        // tâche collée, que R-244 ne recolle pas).
+        let (
+            SchedulingMode::Manual {
+                start: pasted_start,
+                duration: pasted_duration,
+                ..
+            },
+            SchedulingMode::Manual {
+                start: source_start,
+                duration: source_duration,
+                ..
+            },
+        ) = (new.mode, src.mode)
+        else {
+            panic!("« {} » : manuelle attendue", src.name);
+        };
+        assert_eq!(
+            (pasted_start, pasted_duration),
+            (source_start, source_duration),
+            "« {} »",
+            src.name
+        );
+    }
 }

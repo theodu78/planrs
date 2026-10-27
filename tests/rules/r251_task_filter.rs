@@ -168,6 +168,29 @@ fn r251_resource_exact_name() {
     assert_eq!(shown(&s, &f), [1, 2]);
 }
 
+/// Relecture finale de J8 : un nom de ressource portant des espaces de
+/// bord (MSPDI, `resource.add`) est retrouvé par son nom sans eux, celui
+/// que propose la fenêtre « Utilisant la ressource… ».
+#[test]
+fn r251_resource_name_edge_spaces() {
+    let mut s = plan_p();
+    apply(
+        &mut s,
+        json!([
+            { "op": "resource.add", "name": "Maçon " },
+            { "op": "assignment.add", "task": 2, "resource": 1 }
+        ]),
+    );
+    assert_eq!(s.project().resources.iter().next().unwrap().name, "Maçon ");
+    let by = |name: &str| TaskFilter {
+        resource: Some(name.to_owned()),
+        ..TaskFilter::default()
+    };
+    assert_eq!(shown(&s, &by("Maçon")), [2]);
+    assert_eq!(shown(&s, &by(" Maçon ")), [2]);
+    assert_eq!(shown(&s, &by("maçon")), Vec::<u32>::new());
+}
+
 #[test]
 fn r251_conjunction() {
     let mut s = plan_p();

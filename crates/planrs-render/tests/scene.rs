@@ -768,3 +768,259 @@ proptest! {
         }
     }
 }
+
+/// Relecture finale de J8 (F3) : dans la table imprimée (colonnes N°, Nom,
+/// Durée, Début, Fin), aucun texte ne déborde de sa colonne, nom long en
+/// retrait ou en gras (récapitulative) compris : le nom est coupé à la
+/// largeur de sa colonne, retrait déduit.
+fn assert_table_texts_in_columns(names: &[(String, u16)], id: TemplateId) {
+    use planrs_render::style::TableColumn;
+    let mut p = project("T", "2026-10-19T08:00");
+    for (name, level) in names {
+        add(&mut p, name, 3, *level);
+    }
+    let s = planrs_core::schedule(&p);
+    let mut st = template(id);
+    st.page.columns = Some(TableColumn::PRINT_DEFAULT.to_vec());
+    let sc = layout(&p, &s, &st, &NoTexts, &Viewport::new(Variant::Print, Lang::Fr)).0;
+    // Bords des colonnes (N° 40 px, Nom 240 px, dates 64 px).
+    let mut edges = Vec::new();
+    let mut x = 0;
+    for w in [40, 240, 64, 64, 64] {
+        edges.push((x * 16, (x + w) * 16));
+        x += w;
+    }
+    let mut seen_name = false;
+    for item in sc.items.iter().filter(|i| i.clip == Clip::Table) {
+        let Prim::Text {
+            x16,
+            text,
+            font,
+            anchor,
+            ..
+        } = &item.prim
+        else {
+            continue;
+        };
+        if !matches!(item.part, Part::Row(_)) {
+            continue;
+        }
+        let w = InterMetrics.width16(text, *font);
+        let (left, right) = match anchor {
+            planrs_render::geometry::Anchor::End => (x16 - w, *x16),
+            planrs_render::geometry::Anchor::Start => (*x16, x16 + w),
+        };
+        let (c0, c1) = *edges
+            .iter()
+            .find(|(a, b)| *x16 >= *a && *x16 <= *b)
+            .expect("texte hors de la table");
+        if c0 == 40 * 16 {
+            seen_name = true;
+        }
+        assert!(
+            left >= c0 && right <= c1,
+            "« {text} » ({left}..{right}) déborde de la colonne {c0}..{c1}"
+        );
+    }
+    assert!(seen_name || names.iter().all(|(n, _)| n.is_empty()));
+}
+
+#[test]
+fn table_texts_fit_columns_vaulx_example() {
+    let names = vec![
+        ("TRAVAUX".to_owned(), 1),
+        ("Bâtiment A".to_owned(), 2),
+        (
+            "Travaux en cycle (48 logements, 1 commencé tous les 2 jours)".to_owned(),
+            3,
+        ),
+        ("Cloisons".to_owned(), 4),
+    ];
+    for id in TemplateId::ALL {
+        assert_table_texts_in_columns(&names, id);
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(48))]
+
+    #[test]
+    fn table_texts_fit_columns(
+        names in proptest::collection::vec(("[A-Za-zéÉW (),0-9]{0,90}", 1_u16..8), 1..12)
+    ) {
+        // Niveaux plausibles : chaque ligne au plus un cran sous la précédente.
+        let mut level = 0_u16;
+        let names: Vec<(String, u16)> = names
+            .into_iter()
+            .map(|(n, l)| {
+                level = l.min(level + 1);
+                (n, level)
+            })
+            .collect();
+        assert_table_texts_in_columns(&names, TemplateId::Sobre);
+    }
+}
+
+/// Source qui donne un texte à chaque champ.
+struct AllTexts;
+
+impl planrs_render::geometry::BarTextSource for AllTexts {
+    fn bar_text(&self, _uid: planrs_core::TaskUid, f: planrs_render::style::BarField) -> Option<String> {
+        Some(format!("{f:?}"))
+    }
+
+    fn token(&self, _t: planrs_render::geometry::Token) -> String {
+        String::new()
+    }
+}
+
+/// H-UI-63 et H-UI-64, valables pour tous les modèles (relecture finale de
+/// J8, F4) : sous chaque modèle stylé (Classique garde le rendu nu de J7),
+/// chaque barre porte au moins une étiquette, tâche manuelle et inactive
+/// comprises ; récapitulative : nom à gauche, durée à droite ; jalon : date
+/// à gauche, nom à droite.
+#[test]
+fn h_ui_64_every_bar_labelled_in_every_template() {
+    use planrs_core::SchedulingMode;
+    use planrs_render::geometry::TextSide;
+    let mut p = project_p();
+    let manual = add(&mut p, "Manuelle", 2, 2);
+    p.tasks.get_mut(manual).unwrap().mode = SchedulingMode::Manual {
+        start: Some(at("2026-10-21T08:00")),
+        finish: None,
+        duration: None,
+    };
+    let inactive = add(&mut p, "Inactive", 2, 2);
+    p.tasks.get_mut(inactive).unwrap().active = false;
+    let s = planrs_core::schedule(&p);
+    for id in TemplateId::ALL {
+        if id == TemplateId::Classique {
+            continue;
+        }
+        let sc = layout(
+            &p,
+            &s,
+            &template(id),
+            &AllTexts,
+            &Viewport::new(Variant::Print, Lang::Fr),
+        )
+        .0;
+        let mut roles = std::collections::BTreeSet::new();
+        for row in &sc.rows {
+            let Some(bar) = &row.bar else { continue };
+            roles.insert(format!("{:?}", bar.role));
+            assert!(
+                !row.texts.items.is_empty(),
+                "{id:?} : barre {:?} de la ligne {} sans étiquette",
+                bar.role,
+                row.id
+            );
+            let side = |s: TextSide| {
+                row.texts
+                    .items
+                    .iter()
+                    .find(|t| t.side == s)
+                    .map(|t| t.text.as_str())
+            };
+            match bar.role {
+                BarRole::Summary | BarRole::SummaryCritical => {
+                    assert_eq!(side(TextSide::Right), Some("DurationShort"), "{id:?}");
+                }
+                BarRole::Milestone | BarRole::MilestoneCritical => {
+                    assert_eq!(side(TextSide::Left), Some("FinishShort"), "{id:?}");
+                    assert_eq!(side(TextSide::Right), Some("Name"), "{id:?}");
+                }
+                _ => {}
+            }
+        }
+        for role in ["Manual", "Inactive", "Summary", "Critical"] {
+            assert!(
+                roles.iter().any(|r| r.starts_with(role)),
+                "{id:?} : rôle {role} absent : {roles:?}"
+            );
+        }
+        assert!(roles.iter().any(|r| r.starts_with("Milestone")), "{roles:?}");
+    }
+}
+
+/// H-R3, relecture finale de J8 (F9) : impression ajustée d'un projet de
+/// deux ans sur une page A3 : la plage automatique s'allonge pour que les
+/// étiquettes des barres du bord (nom de la récapitulative à gauche, sa
+/// durée et le nom du jalon final à droite) tiennent de leur côté,
+/// entières.
+#[test]
+fn h_r3_fill_keeps_end_labels_on_the_right() {
+    use planrs_render::geometry::TextSide;
+    use planrs_render::paginate::fit_zoom;
+    use planrs_render::style::Paper;
+    let mut p = project("Deux ans", "2026-01-05T08:00");
+    add(&mut p, "TRAVAUX", 0, 1);
+    let structure = add(&mut p, "Gros œuvre", 300, 2);
+    let finishes = add(&mut p, "Second œuvre", 220, 2);
+    let handover = add(&mut p, "Réception des travaux du lot principal", 0, 2);
+    link(&mut p, structure, finishes, LinkType::FinishToStart);
+    link(&mut p, finishes, handover, LinkType::FinishToStart);
+    let s = planrs_core::schedule(&p);
+    let mut st = template(TemplateId::Sobre);
+    st.page.paper = Paper::A3;
+    st.page.landscape = true;
+    let vp = Viewport {
+        zoom: fit_zoom(&st.page).unwrap(),
+        ..Viewport::new(Variant::Print, Lang::Fr)
+    };
+    let sc = layout(&p, &s, &st, &AllTexts, &vp).0;
+    // Récapitulative : nom à gauche, durée à droite ; jalon de fin : date
+    // à gauche, nom à droite ; rien de tronqué.
+    for (i, left, right) in [(0, "Name", "DurationShort"), (3, "FinishShort", "Name")] {
+        let items = &sc.rows[i].texts.items;
+        let side = |want: &str| items.iter().find(|t| t.text == want).map(|t| t.side);
+        assert_eq!(side(left), Some(TextSide::Left), "ligne {i} : {items:?}");
+        assert_eq!(side(right), Some(TextSide::Right), "ligne {i} : {items:?}");
+    }
+}
+
+/// H-UI-61, relecture finale de J8 : un texte dans la barre prend l'encre
+/// (texte ou fond) la plus contrastée sur le remplissage : en Impression
+/// N&B, plus de texte noir sur la barre critique noire.
+#[test]
+fn h_ui_61_inside_text_ink_on_bar() {
+    use planrs_render::style::{BarField, BarTexts, contrast_ratio, ink_on};
+    let p = project_p();
+    let s = planrs_core::schedule(&p);
+    for id in TemplateId::ALL {
+        let mut st = template(id);
+        for role in [BarRole::Task, BarRole::Critical] {
+            st.texts.insert(
+                role,
+                BarTexts {
+                    inside: Some(BarField::Name),
+                    ..BarTexts::default()
+                },
+            );
+        }
+        for v in [Variant::Light, Variant::Dark, Variant::Print] {
+            let sc = layout(&p, &s, &st, &NoTexts, &Viewport::new(v, Lang::Fr)).0;
+            let c = st.tokens(v);
+            let mut seen = 0;
+            for item in &sc.items {
+                let Class::TextOnBar(role, None) = item.class else {
+                    continue;
+                };
+                seen += 1;
+                let fill = c.bars[&role].fill;
+                let ink = sc.paints[&item.class].fill.unwrap();
+                assert_eq!(ink, ink_on(fill, c.text, c.bg), "{id:?} {v:?} {role:?}");
+                assert!(
+                    contrast_ratio(ink, fill) >= contrast_ratio(c.text, fill),
+                    "{id:?} {v:?} {role:?}"
+                );
+            }
+            assert!(seen > 0, "{id:?} {v:?} : aucun texte dans une barre");
+        }
+    }
+    // Impression N&B : barre critique noire, texte noir ⇒ encre du fond.
+    let st = template(TemplateId::ImpressionNb);
+    let c = st.tokens(Variant::Print);
+    let fill = c.bars[&BarRole::Critical].fill;
+    assert!(contrast_ratio(ink_on(fill, c.text, c.bg), fill) >= 4_500);
+}

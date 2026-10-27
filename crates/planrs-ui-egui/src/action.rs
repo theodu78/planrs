@@ -233,6 +233,10 @@ pub enum FormatOp {
     ApplyUserTemplate(usize),
     /// Modèle des documents sans style (H-UI-43).
     SetDefaultTemplate(planrs_render::style::TemplateId),
+    /// Mois relatifs M1… en haut de l'échelle (H-UI-67, « en option » :
+    /// case du menu Format, relecture finale de J8) ; une entrée
+    /// d'annulation.
+    SetRelativeMonths(bool),
 }
 
 /// Fenêtre à ouvrir (J7, ADR-0015 D6 ; `Action::OpenDialog` reste le

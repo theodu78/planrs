@@ -43,6 +43,68 @@ pub enum OpenError {
     Mspdi(#[from] MspdiError),
 }
 
+/// Taille maximale d'un document ouvert : la borne du lecteur MSPDI
+/// (`planrs_mspdi::Limits::max_bytes`, 256 Mio), contrôlée **avant** la
+/// lecture des octets (relecture finale de J8 : un fichier déposé de
+/// plusieurs Go ne doit pas être alloué en entier, wasm compris).
+#[must_use]
+pub fn max_open_bytes() -> u64 {
+    planrs_mspdi::Limits::default().max_bytes
+}
+
+/// Refus d'un document de `size` octets au-delà de [`max_open_bytes`]
+/// (`mspdi.error.too_large`, comme le lecteur).
+///
+/// # Errors
+///
+/// [`OpenError::Mspdi`] (`MspdiError::TooLarge`).
+pub fn check_size(size: u64) -> Result<(), OpenError> {
+    let max = max_open_bytes();
+    if size > max {
+        return Err(OpenError::Mspdi(MspdiError::TooLarge { size, max }));
+    }
+    Ok(())
+}
+
+/// Comme [`check_size`] pour la taille d'un `Blob` du navigateur (`f64`,
+/// entière) ; une valeur non finie ou négative est refusée.
+///
+/// # Errors
+///
+/// [`OpenError::Mspdi`] (`MspdiError::TooLarge`).
+pub fn check_blob_size(size: f64) -> Result<(), OpenError> {
+    let size = if size.is_finite() && size >= 0.0 {
+        format!("{size:.0}").parse::<u64>().unwrap_or(u64::MAX)
+    } else {
+        u64::MAX
+    };
+    check_size(size)
+}
+
+/// Lit le fichier `path` sans dépasser [`max_open_bytes`] : taille connue
+/// refusée avant toute lecture, lecture bornée sinon (fichier qui grandit,
+/// taille inconnue).
+///
+/// # Errors
+///
+/// [`OpenError::Read`] (fichier illisible) ; [`OpenError::Mspdi`] au-delà
+/// de la borne.
+pub fn read_path(path: &std::path::Path) -> Result<Vec<u8>, OpenError> {
+    use std::io::Read as _;
+    // Taille lue sur les métadonnées, avant même l'ouverture.
+    if let Ok(meta) = std::fs::metadata(path) {
+        check_size(meta.len())?;
+    }
+    let file = std::fs::File::open(path).map_err(|e| OpenError::Read(e.to_string()))?;
+    let max = max_open_bytes();
+    let mut bytes = Vec::new();
+    file.take(max.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|e| OpenError::Read(e.to_string()))?;
+    check_size(u64::try_from(bytes.len()).unwrap_or(u64::MAX))?;
+    Ok(bytes)
+}
+
 /// Lit un document MSPDI et ouvre sa session (planning calculé).
 ///
 /// `now` est la date courante injectée (`ReadOptions::current_date`) : aucune

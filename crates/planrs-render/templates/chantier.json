@@ -230,6 +230,9 @@
     "manual": {
       "right": "name_duration"
     },
+    "inactive": {
+      "right": "name"
+    },
     "summary": {
       "left": "name",
       "right": "duration_short"
@@ -285,11 +288,11 @@
     "repeat_table": true,
     "header": [
       "",
-      "Planning prévisionnel\nCompris congés / Hors intempéries / Aléas 10 %",
+      "{planning}",
       "{projet}"
     ],
     "footer": [
-      "État au {date_etat} – indice 0",
+      "{date_etat}",
       "Page {page}/{pages}",
       "{fichier}"
     ],

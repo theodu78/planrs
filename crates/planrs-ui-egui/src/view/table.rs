@@ -544,9 +544,11 @@ struct RowFill {
     phases: std::sync::Arc<Vec<u8>>,
     /// Couleurs de phase des tâches (H-UI-65, J8 lot L15).
     phase_colors: std::sync::Arc<crate::theme::PhaseColors>,
-    /// Encres du texte (texte, texte appuyé) : la teinte d'une ligne de
-    /// phase les garde lisibles.
-    inks: [planrs_render::style::Rgb; 2],
+    /// Encres du texte (texte, appuyé, atténué) et seuil du style : la
+    /// teinte d'une ligne de phase les garde lisibles.
+    inks: [planrs_render::style::Rgb; 3],
+    /// Contraste minimal du texte (H-UI-45 : 7:1 en Contraste élevé).
+    min: u32,
 }
 
 impl RowFill {
@@ -566,7 +568,8 @@ impl RowFill {
             zebra: fc.palette.background.lerp_to_gamma(fc.palette.header_bg, 0.6),
             phases: std::sync::Arc::clone(&screen.phases),
             phase_colors: std::sync::Arc::clone(&screen.phase_colors),
-            inks: [tokens.text, tokens.text_strong],
+            inks: [tokens.text, tokens.text_strong, tokens.text_muted],
+            min: planrs_render::style::min_text_contrast(&screen.style),
         };
         (font, fill)
     }
@@ -578,7 +581,7 @@ impl RowFill {
             && let Some(row) = rows.row(crate::row_view::DisplayRow::at(i))
             && let Some((rgb, true)) = self.phase_colors.get(&row.uid).copied()
         {
-            let tint = planrs_render::style::readable_tint(rgb, self.bg, &self.inks);
+            let tint = planrs_render::style::readable_tint(rgb, self.bg, &self.inks, self.min);
             return Some(egui::Color32::from_rgb(tint.0, tint.1, tint.2));
         }
         if self.banding == RowBanding::None {

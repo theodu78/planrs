@@ -4,7 +4,7 @@
 //! revient par un canal `std::sync::mpsc`, relevé (`try_recv`) au début de
 //! l'image suivante. Natif : `rfd::AsyncFileDialog` créé sur le fil
 //! d'interface et attendu par `pollster` dans un fil dédié, qui lit le
-//! fichier (`std::fs::read`) et appelle [`document::load`] ; jamais de
+//! fichier (`document::read_path`, borné) et appelle [`document::load`] ; jamais de
 //! `rfd::FileDialog` synchrone (sa boucle modale imbriquée fait avorter winit
 //! sur macOS, ADR-0011). `FileHandle::read` de rfd n'est jamais utilisé (il
 //! fait `unwrap` en interne). Web : `rfd::AsyncFileDialog` (téléversement par
@@ -300,9 +300,15 @@ impl FileService for RfdFileService {
                     // par le lecteur MSPDI (`OpenError::Mspdi`). Jamais
                     // `FileHandle::read`, qui n'écoute que `onload` (promesse
                     // jamais résolue en cas d'échec).
-                    let result = read_web_file(&handle)
-                        .await
-                        .and_then(|bytes| document::load(&bytes, now));
+                    // Taille contrôlée avant la lecture (relecture finale
+                    // de J8) : au-delà de la borne du lecteur MSPDI, rien
+                    // n'est lu.
+                    let result = match document::check_blob_size(handle.inner().size()) {
+                        Ok(()) => read_web_file(&handle)
+                            .await
+                            .and_then(|bytes| document::load(&bytes, now)),
+                        Err(error) => Err(error),
+                    };
                     OpenEvent::Opened { origin, result }
                 }
             };
@@ -616,7 +622,8 @@ pub fn load_csv(
 type PickFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Option<rfd::FileHandle>> + Send>>;
 
 /// Lit et calcule un fichier choisi sur le desktop. Chemin lu par
-/// `std::fs::read`, jamais par `FileHandle::read`.
+/// `document::read_path` (borné à 256 Mio avant lecture), jamais par
+/// `FileHandle::read`.
 #[cfg(not(target_arch = "wasm32"))]
 fn open_path(path: &std::path::Path, now: Moment) -> OpenEvent {
     let name = path
@@ -628,9 +635,7 @@ fn open_path(path: &std::path::Path, now: Moment) -> OpenEvent {
         path: path.to_str().map(str::to_owned),
         demo: false,
     };
-    let result = std::fs::read(path)
-        .map_err(|error| OpenError::Read(error.to_string()))
-        .and_then(|bytes| document::load(&bytes, now));
+    let result = document::read_path(path).and_then(|bytes| document::load(&bytes, now));
     OpenEvent::Opened { origin, result }
 }
 

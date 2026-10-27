@@ -19,9 +19,7 @@ use crate::geometry::{
     link_path, place_texts, row_geom_input, row_h16,
 };
 use crate::request::{Lang, RenderReport};
-use crate::style::{
-    BarField, BarRole, BarShape, Pattern, PlanStyle, Rgb, RowBanding, TableColumn, readable_tint,
-};
+use crate::style::{BarField, BarRole, BarShape, Pattern, PlanStyle, Rgb, RowBanding, TableColumn};
 
 /// Hauteur d'un niveau de l'en-tête (22 px).
 pub(crate) const TIER_H: i64 = 22 * SUB;
@@ -353,9 +351,17 @@ fn paints_of(st: &PlanStyle, v: crate::style::Variant) -> impl Fn(Class) -> Pain
                 }
             }
             Class::PhaseRow(i) => {
-                fill(phase_fill(i).map_or(c.bg, |rgb| readable_tint(rgb, c.bg, &[c.text, c.text_strong])))
+                fill(phase_fill(i).map_or(c.bg, |rgb| crate::style::phase_row_tint(st, v, rgb)))
             }
             Class::Title => fill(c.cursor),
+            Class::TextOnBar(role, phase) => {
+                let bar = phase
+                    .filter(|_| phase_painted(role))
+                    .and_then(phase_fill)
+                    .or_else(|| c.bars.get(&role).map(|p| p.fill))
+                    .unwrap_or(c.bg);
+                fill(crate::style::ink_on(bar, c.text, c.bg))
+            }
         }
     }
 }
@@ -553,6 +559,117 @@ fn non_working_runs(p: &Project, axis: &Axis16) -> Vec<(Day, Day)> {
     runs
 }
 
+/// Jours ajoutés de chaque côté de la plage au plus par [`label_room`]
+/// (un an).
+const MAX_ROOM_DAYS: i64 = 366;
+
+/// Passes de [`label_room`] au plus (chaque allongement réduit l'échelle :
+/// la passe suivante vérifie et complète).
+const ROOM_PASSES: usize = 4;
+
+/// Impression ajustée (`Zoom::Fill`) sur la plage automatique (H-R3) :
+/// les 7 jours de marge avant le début et les 21 jours après la fin du
+/// projet ne laissent qu'une dizaine ou une trentaine de pixels à
+/// l'échelle d'un projet de deux ans, et les étiquettes des barres du
+/// bord (nom d'une récapitulative à gauche, « 17,4 mois » ou nom d'un
+/// jalon de fin à droite) basculaient de côté ou étaient tronquées
+/// (relecture finale de J8, F9). Rend l'axe dont la plage est allongée du
+/// plus petit nombre de jours qui fait tenir ces étiquettes, mesurées en
+/// Inter (H-R11) : une barre à `r` px du bord d'une plage de `D` jours sur
+/// `W` px, étiquette de `L` px (écart compris), demande
+/// `E ≥ D × (L − r) / (W − L)` jours de ce côté ; quelques passes, chaque
+/// allongement réduisant l'échelle. `None` : rien à allonger (autre zoom,
+/// plage donnée, coupe à `max_days`, aucune étiquette en défaut).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mêmes entrées que la scène, lues sans les recopier"
+)]
+fn label_room(
+    p: &Project,
+    s: &Schedule,
+    st: &PlanStyle,
+    src: &dyn BarTextSource,
+    vp: &Viewport,
+    kept: &[Kept<'_>],
+    body: FontRef,
+    metrics: &dyn TextMeasure,
+    table_w: i64,
+) -> Option<Axis16> {
+    if !matches!(vp.zoom, crate::request::Zoom::Fill { .. })
+        || !matches!(vp.range, crate::request::RangeSpec::Auto)
+    {
+        return None;
+    }
+    let mut axis = Axis16::new(p, s, vp.range, vp.zoom, vp.limits.max_days, table_w);
+    if axis.span.truncated {
+        return None;
+    }
+    // Étiquettes à gauche et à droite de chaque barre, mesurées une fois.
+    let labels: Vec<(crate::geometry::RowGeomInput, i64, i64)> = kept
+        .iter()
+        .filter_map(|k| {
+            let input = row_geom_input(k.task, s.tasks.get(&k.task.uid()))?;
+            let texts = resolve_texts(k.task, input.role, st, src, body);
+            let need = |t: Option<String>| {
+                t.map_or(0, |t| {
+                    metrics
+                        .width16(&t, body)
+                        .saturating_add(crate::geometry::TEXT_GAP)
+                })
+            };
+            Some((input, need(texts.left), need(texts.right)))
+        })
+        .collect();
+    let (mut before, mut after) = (0_i64, 0_i64);
+    let mut changed = false;
+    for _ in 0..ROOM_PASSES {
+        let w = axis.width16();
+        let d = axis.span.days();
+        let days = |need: i64, room: i64| {
+            if need <= room || need >= w {
+                return 0;
+            }
+            d.saturating_mul(need.saturating_sub(room))
+                .checked_div(w.saturating_sub(need))
+                .unwrap_or(0)
+                .saturating_add(1)
+        };
+        let (mut add_before, mut add_after) = (0_i64, 0_i64);
+        for (input, left, right) in &labels {
+            let bar = bar_geom(input, &axis, st, 0);
+            add_before = add_before.max(days(*left, bar.rect.x.saturating_sub(axis.left16())));
+            add_after = add_after.max(days(*right, axis.right16().saturating_sub(bar.rect.right())));
+        }
+        if add_before == 0 && add_after == 0 {
+            break;
+        }
+        before = before.saturating_add(add_before).min(MAX_ROOM_DAYS);
+        after = after.saturating_add(add_after).min(MAX_ROOM_DAYS);
+        let first = Axis16::new(p, s, vp.range, vp.zoom, vp.limits.max_days, table_w);
+        let last = first.span.end.checked_add_days(-1).ok()?;
+        let from = first
+            .span
+            .start
+            .checked_add_days(i32::try_from(before.saturating_neg()).ok()?)
+            .ok()?;
+        let to = last.checked_add_days(i32::try_from(after).ok()?).ok()?;
+        let wider = Axis16::new(
+            p,
+            s,
+            crate::request::RangeSpec::Span { from, to },
+            vp.zoom,
+            vp.limits.max_days,
+            table_w,
+        );
+        if wider.span.truncated {
+            break;
+        }
+        axis = wider;
+        changed = true;
+    }
+    changed.then_some(axis)
+}
+
 /// Construit la scène.
 #[allow(
     clippy::too_many_lines,
@@ -580,7 +697,6 @@ pub(crate) fn build(
     let columns = table_columns(st.page.columns.as_deref());
     let table_w = table_width16(Some(&columns));
     let axis = Axis16::new(p, s, vp.range, vp.zoom, vp.limits.max_days, table_w);
-    let width = table_w.saturating_add(axis.width16());
     // H-UI-67 : un niveau de plus en haut de l'en-tête pour les mois
     // relatifs ; les deux niveaux de l'échelle descendent d'autant.
     let tier0 = if st.scale.relative_months { TIER_H } else { 0 };
@@ -618,6 +734,11 @@ pub(crate) fn build(
     let shown = kept.len().min(max_rows);
     let cut = kept.len().saturating_sub(shown);
     let kept = kept.get(..shown).unwrap_or(&[]);
+    // H-R3 (relecture finale de J8, F9) : impression ajustée, plage
+    // automatique : la plage s'allonge pour que l'étiquette de droite des
+    // barres de fin de projet tienne à droite.
+    let axis = label_room(p, s, st, src, vp, kept, body, &metrics, table_w).unwrap_or(axis);
+    let width = table_w.saturating_add(axis.width16());
     let n_rows = i64::try_from(shown.saturating_add(usize::from(cut > 0))).unwrap_or(i64::MAX);
     let rows_bottom = header_h.saturating_add(n_rows.saturating_mul(row_h));
     let row_top =
@@ -1038,17 +1159,24 @@ pub(crate) fn build(
             bar_items(&mut items, part_of(i), b, st, phase);
         }
     }
-    for (i, r) in rows.iter().enumerate() {
+    for (i, (r, k)) in rows.iter().zip(kept).enumerate() {
+        let phase = phase_by_pos.get(k.position).copied().flatten().map(|(pi, _)| pi);
         for t in &r.texts.items {
             // H-UI-64 : fond sous une étiquette hors de la barre, au-dessus
-            // des liens et de la grille (lisible sans la table).
-            if t.side != crate::geometry::TextSide::Inside {
+            // des liens et de la grille (lisible sans la table) ; dedans,
+            // encre la plus contrastée sur la barre (H-UI-61).
+            let class = if t.side == crate::geometry::TextSide::Inside {
+                r.bar
+                    .as_ref()
+                    .map_or(Class::Text, |b| Class::TextOnBar(b.role, phase))
+            } else {
                 items.rect(Clip::Gantt, part_of(i), Class::Bg, label_halo(t));
-            }
+                Class::Text
+            };
             items.text(
                 Clip::Gantt,
                 part_of(i),
-                Class::Text,
+                class,
                 t.x16,
                 t.y16,
                 t.text.clone(),
@@ -1093,7 +1221,10 @@ pub(crate) fn build(
                 x = x.saturating_add(indent);
                 room = room.saturating_sub(indent);
             }
-            let text = if c == TableColumn::Name || c == TableColumn::Id {
+            // Nom compris (relecture finale de J8, F3) : coupé à la largeur
+            // de sa colonne, retrait déduit, au lieu de déborder sur la
+            // colonne suivante (le clip est la table entière).
+            let text = if c == TableColumn::Id {
                 text
             } else {
                 fit_chars(&text, room, font, &metrics)
@@ -1224,26 +1355,40 @@ const fn column_title(c: TableColumn, l: &Labels, lang: Lang) -> &'static str {
 }
 
 /// Texte coupé avec « … » pour tenir dans `room` (1/16 px), mesuré en
-/// Inter (H-R11) ; vide si même « … » ne tient pas.
+/// Inter (H-R11) ; vide si même « … » ne tient pas. Plus long préfixe
+/// qui tient, par dichotomie sur les frontières de caractères (la largeur
+/// d'un préfixe croît avec sa longueur) : O(n log n) pour un nom long.
 fn fit_chars(text: &str, room: i64, font: FontRef, m: &dyn TextMeasure) -> String {
     if m.width16(text, font) <= room {
         return text.to_owned();
     }
-    let mut out = String::new();
-    for c in text.chars() {
-        let mut candidate = out.clone();
-        candidate.push(c);
+    let ends: Vec<usize> = text.char_indices().map(|(i, _)| i).skip(1).collect();
+    let fits = |k: usize| {
+        let end = if k == 0 {
+            0
+        } else {
+            ends.get(k.saturating_sub(1)).copied().unwrap_or(text.len())
+        };
+        let mut candidate = text.get(..end).unwrap_or_default().to_owned();
         candidate.push('…');
-        if m.width16(&candidate, font) > room {
-            break;
-        }
-        out.push(c);
-    }
-    if out.is_empty() && m.width16("…", font) > room {
+        (m.width16(&candidate, font) <= room).then_some(candidate)
+    };
+    // Plus grand k (caractères gardés) dont « préfixe… » tient.
+    let (mut lo, mut hi) = (0_usize, text.chars().count());
+    let Some(mut best) = fits(0) else {
         return String::new();
+    };
+    while lo < hi {
+        let mid = lo.saturating_add(hi.saturating_sub(lo).saturating_add(1) / 2);
+        match fits(mid) {
+            Some(candidate) => {
+                best = candidate;
+                lo = mid;
+            }
+            None => hi = mid.saturating_sub(1),
+        }
     }
-    out.push('…');
-    out
+    best
 }
 
 /// Séparateurs de la table (un par bord de colonne) et bas de l'en-tête.

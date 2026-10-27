@@ -11,8 +11,8 @@
 //! compris.
 
 use planrs_pdf::{FontSet, PdfError, PdfMeta};
-use planrs_render::geometry::{Viewport, layout};
-use planrs_render::paginate::{PageError, PaginateOptions, fit_zoom, paginate_with};
+use planrs_render::geometry::Viewport;
+use planrs_render::paginate::{PageError, PaginateOptions, fit_zoom, layout_pages};
 use planrs_render::style::{Fit, PageStyle, Paper, Variant, template};
 use planrs_render::{Lang, RangeSpec, RenderLimits, RowFilter, Zoom};
 use serde::Serialize;
@@ -90,6 +90,22 @@ fn too_many(lang: Language, needed: usize) -> ToolError {
 /// niveau 0) ; `pdf.too_many_pages` au-delà de 1 000 pages ; `file.write`
 /// si l'écriture du document échoue.
 pub fn export(s: &Session, p: &ExportPdfParams, lang: Language) -> Result<PdfExport, ToolError> {
+    export_rows(s, p, None, lang)
+}
+
+/// Comme [`export`], tâches `uids` seules (`None` : toutes) en plus du
+/// filtre de `p.rows` : l'interface imprime les lignes de sa vue affichée
+/// (filtre, niveau, repli ; relecture finale de J8, F1).
+///
+/// # Errors
+///
+/// Comme [`export`].
+pub fn export_rows(
+    s: &Session,
+    p: &ExportPdfParams,
+    uids: Option<&std::collections::BTreeSet<planrs_core::TaskUid>>,
+    lang: Language,
+) -> Result<PdfExport, ToolError> {
     let project = s.project();
     let sched = s.schedule();
     let mut st = p.style.map_or_else(
@@ -97,13 +113,14 @@ pub fn export(s: &Session, p: &ExportPdfParams, lang: Language) -> Result<PdfExp
         |t| template(t.into()),
     );
     page_overrides(&mut st.page, p, lang)?;
-    let vp = viewport(&st.page, p, lang)?;
+    let mut vp = viewport(&st.page, p, lang)?;
+    vp.filter.uids = uids.cloned();
     let texts = SessionTexts { session: s, lang };
-    let (scene, render) = layout(project, sched, &st, &texts, &vp);
     let options = PaginateOptions {
         legend_every_page: st.legend.every_page,
     };
-    let pages = paginate_with(&scene, &st.page, &texts, options).map_err(|e| match e {
+    let (pages, render) = layout_pages(project, sched, &st, &texts, &vp, options);
+    let pages = pages.map_err(|e| match e {
         PageError::TooManyPages { needed } => too_many(lang, needed),
         PageError::NotYetAvailable => ToolError::simple(codes::FILE_WRITE, e.to_string()),
     })?;

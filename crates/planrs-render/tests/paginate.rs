@@ -16,7 +16,7 @@ use planrs_core::{LinkType, Project, TaskUid};
 use planrs_render::geometry::{BarTextSource, NoTexts, Scene, Token, Viewport, layout};
 use planrs_render::paginate::{
     FOOTER_LINES, FULL_SCALE, HEADER_LINES, MAX_PAGES, PageError, Pages, PaginateOptions, SLOT_GAP_PT,
-    fit_zoom, paginate, paginate_with,
+    fit_zoom, layout_pages, paginate, paginate_with,
 };
 use planrs_render::style::{BarField, Fit, PageStyle, Paper, Slot, TemplateId, Variant, template};
 use planrs_render::{Lang, RenderLimits, Zoom};
@@ -36,6 +36,7 @@ impl BarTextSource for Tokens {
             Token::StatusDate => "02/11/2026".to_owned(),
             Token::PrintDate => "26/10/2026".to_owned(),
             Token::File => "p.xml".to_owned(),
+            Token::ScheduleTitle => "Planning prévisionnel".to_owned(),
             Token::Page | Token::Pages => String::new(),
         }
     }
@@ -212,6 +213,55 @@ fn h_ui_50_pages_wide_2() {
     style.fit = Fit::Scale(100);
     let pages = paginate(&scene_of(&long, Zoom::Day, TemplateId::Sobre), &style, &Tokens).unwrap();
     assert!(pages.pages.iter().any(|pg| pg.col >= 2));
+}
+
+/// H-UI-50, relecture finale de J8 (F2) : « 1 × 1 page » d'un planning de
+/// 85 lignes sur deux ans, A3 paysage : la hauteur impose une réduction,
+/// et le Gantt est élargi d'autant (`layout_pages`, seconde passe) ; la
+/// scène réduite occupe toute la largeur imprimable au lieu d'environ la
+/// moitié.
+#[test]
+fn h_ui_50_pages_wide_tall_fills_width() {
+    let mut p = project("B", "2026-10-19T08:00");
+    let mut prev = None;
+    for i in 0..85 {
+        let t = add(&mut p, &format!("Tâche {i}"), 6, 1);
+        if let Some(prev) = prev {
+            link(&mut p, prev, t, LinkType::FinishToStart);
+        }
+        prev = Some(t);
+    }
+    let s = planrs_core::schedule(&p);
+    let st = {
+        let mut st = template(TemplateId::Sobre);
+        st.page.paper = Paper::A3;
+        st.page.landscape = true;
+        st.page.fit = Fit::PagesWideTall(1, 1);
+        st
+    };
+    let vp = Viewport {
+        zoom: fit_zoom(&st.page).unwrap(),
+        limits: RenderLimits {
+            max_rows: 10_000,
+            ..RenderLimits::default()
+        },
+        ..Viewport::new(Variant::Print, Lang::Fr)
+    };
+    let (pages, _) = layout_pages(&p, &s, &st, &Tokens, &vp, PaginateOptions::default());
+    let pages = pages.unwrap();
+    assert_eq!(pages.pages.len(), 1, "une seule feuille");
+    assert!(
+        pages.scale < FULL_SCALE * 3 / 4,
+        "réduite par la hauteur : {}",
+        pages.scale
+    );
+    let [_, right, _, left] = pages.margins_pt;
+    let printable16 = i64::from(pages.paper_pt.0 - left - right) * 64 / 3;
+    let used16 = pages.scene.width16 * i64::from(pages.scale) / i64::from(FULL_SCALE);
+    assert!(
+        used16 * 100 >= printable16 * 97 && used16 <= printable16,
+        "largeur occupée {used16} / {printable16}"
+    );
 }
 
 /// H-UI-51 : jetons remplacés (`{page}`, `{pages}`, ceux de la source),
@@ -395,6 +445,34 @@ proptest! {
                     prop_assert!(cols <= usize::from(n) || pages.scale == 1_000);
                 }
             }
+        }
+    }
+}
+
+/// H-UI-66, relecture finale de J8 : les en-têtes et pieds des modèles
+/// intégrés sont neutres (jetons seulement, et « Page », mot des deux
+/// langues) : ni texte français en dur dans une interface anglaise, ni
+/// hypothèse contractuelle (« Aléas 10 % ») que le projet ne porte pas.
+#[test]
+fn h_ui_66_template_slots_language_neutral() {
+    for id in TemplateId::ALL {
+        let page = template(id).page;
+        for Slot(text) in page.header.iter().chain(page.footer.iter()) {
+            let mut rest = String::new();
+            let mut depth = 0;
+            for c in text.chars() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ if depth == 0 => rest.push(c),
+                    _ => {}
+                }
+            }
+            let rest = rest.replace("Page", "");
+            assert!(
+                !rest.chars().any(char::is_alphabetic),
+                "{id:?} : texte en dur « {text} »"
+            );
         }
     }
 }

@@ -236,6 +236,57 @@ fn h_ui_56_dropped_file_opens() {
     );
 }
 
+/// H-UI-56, relecture finale de J8 : un fichier déposé plus grand que la
+/// borne du lecteur MSPDI (256 Mio) est refusé **avant** d'être lu, par le
+/// message `mspdi.error.too_large` ; le document ouvert reste. Fichier
+/// creux (aucun octet écrit) et illisible (droits retirés) : une lecture
+/// complète échouerait sur les droits, le refus vient donc de la taille.
+#[test]
+fn h_ui_56_dropped_file_too_large_refused_before_read() {
+    let mut harness = harness();
+    open_demo(&mut harness);
+    let demo = doc_name(&harness);
+    let dir = std::env::temp_dir().join(format!("planrs-drop-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("enorme.xml");
+    let file = std::fs::File::create(&path).unwrap();
+    file.set_len(planrs_ui_egui::document::max_open_bytes() + 1)
+        .unwrap();
+    drop(file);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    }
+    harness.input_mut().dropped_files.push(Arc::new(Dropped {
+        path: path.clone(),
+        bytes: Err("jamais lu".to_owned()),
+    }));
+    harness.run();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    std::fs::remove_file(&path).unwrap();
+    std::fs::remove_dir(&dir).unwrap();
+    assert_eq!(doc_name(&harness), demo, "document courant gardé");
+    let refused = harness
+        .state()
+        .messages()
+        .iter()
+        .find(|m| m.severity == Severity::Error)
+        .map(|m| m.text.clone())
+        .expect("refus affiché");
+    assert!(refused.contains("document trop grand"), "{refused}");
+    // Taille d'un `Blob` (web) : même borne, valeurs hostiles refusées.
+    let check_blob_size = planrs_ui_egui::document::check_blob_size;
+    assert!(check_blob_size(1_024.0).is_ok());
+    assert!(check_blob_size(3.0e9).is_err());
+    assert!(check_blob_size(f64::NAN).is_err());
+    assert!(check_blob_size(-1.0).is_err());
+}
+
 /// H-UI-56 : document modifié ⇒ bandeau de confirmation d'abord ; Annuler
 /// garde le document, Ne pas enregistrer ouvre le fichier déposé.
 #[test]

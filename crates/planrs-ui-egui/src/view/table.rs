@@ -447,6 +447,9 @@ pub fn paint_body(
     let left = clip.left();
     let cols_left = left - scroll_x;
     let blank = rows.len();
+    // Clic sur une cellule pendant une saisie : la saisie est validée
+    // d'abord (`edit_cells`), la sélection ne bouge qu'après un accord.
+    let mut deferred = None;
     let mut place = RowPlace {
         rect: Rect::NOTHING,
         cols_left,
@@ -493,7 +496,7 @@ pub fn paint_body(
         let hit = row_rect.intersect(clip);
         if hit.is_positive() {
             let response = row_widget(ui, fc, rows, hit, i, selected);
-            row_clicked(fc, &sheet, edit, cursor, &response, i, cols_left);
+            deferred = row_clicked(fc, &sheet, edit, cursor, &response, i, cols_left).or(deferred);
         }
         // Triangle de repli (J8, lot L9, H-UI-34), interactif au-dessus de
         // la ligne : déclaré après elle.
@@ -522,10 +525,11 @@ pub fn paint_body(
         origin,
         cols_left,
         range: &range,
+        font: &font,
     };
     shapes = shapes.saturating_add(paint_cursor(ui, &painter, fc, &sheet, edit, cursor, &at));
     fc.stats.shapes = fc.stats.shapes.saturating_add(shapes);
-    edit_cells(ui, fc, &sheet, edit, cursor, &at, clip);
+    edit_cells(ui, fc, &sheet, edit, cursor, &at, clip, deferred);
 }
 
 /// Fond des lignes non sélectionnées de la table : bandes du style
@@ -727,6 +731,8 @@ struct Place<'r> {
     cols_left: f32,
     /// Lignes dessinées.
     range: &'r Range<usize>,
+    /// Police des cellules (celle de la zone de saisie, H-UI-85).
+    font: &'r egui::FontId,
 }
 
 /// Cadre de 2 px de la cellule courante (couleur `Palette::cursor`) et
@@ -792,9 +798,21 @@ fn paint_cursor(
     1
 }
 
+/// Cellule cliquée pendant une saisie : rejointe seulement si la saisie
+/// est acceptée (H-UI-86).
+#[derive(Clone, Copy, Debug)]
+struct EditClick {
+    /// Tâche de la ligne cliquée (`None` : ligne vide).
+    uid: Option<TaskUid>,
+    /// Colonne sous le pointeur.
+    column: Option<Column>,
+}
+
 /// Clic sur la ligne `i` (ou sur la ligne vide) : sélection, focus de la
 /// table, colonne courante sous le pointeur ; double-clic : ouverture de la
-/// saisie.
+/// saisie. Saisie ouverte : rien de tout cela, le clic est rendu à
+/// [`edit_cells`] qui valide d'abord (H-UI-86 : jamais de saisie ouverte
+/// sur une autre cellule que la cellule active).
 fn row_clicked(
     fc: &mut FrameCtx<'_>,
     sheet: &TaskSheet<'_>,
@@ -803,17 +821,20 @@ fn row_clicked(
     response: &Response,
     i: usize,
     left: f32,
-) {
+) -> Option<EditClick> {
     if !response.clicked() {
-        return;
+        return None;
     }
     let uid = sheet.key(i);
+    let column = response
+        .interact_pointer_pos()
+        .and_then(|p| column_at(sheet.columns(), left, p.x));
+    if edit.editing.is_some() {
+        return Some(EditClick { uid, column });
+    }
     fc.actions.push(Action::Select(uid));
     fc.actions.push(Action::FocusPane(Pane::Table));
-    if let Some(column) = response
-        .interact_pointer_pos()
-        .and_then(|p| column_at(sheet.columns(), left, p.x))
-    {
+    if let Some(column) = column {
         cursor.column = column;
     }
     // Double-clic (ou triple : deux clics suivant de près un premier) :
@@ -828,6 +849,7 @@ fn row_clicked(
             _ => open_editor(fc, sheet.rows, edit, cursor.column, uid, i),
         }
     }
+    None
 }
 
 /// Ouvre la saisie de la cellule (`uid`, `column`) de la ligne affichée
@@ -917,13 +939,19 @@ fn open_from_keys(
     }
 }
 
-/// Saisie de la cellule ouverte : zone de saisie posée sur la cellule,
-/// message d'erreur dessous, fin de saisie. Entrée valide et descend, Tab
-/// valide et passe à la cellule visible suivante, Échap abandonne ; un
-/// défilement ou la perte du focus valident sur place. Une saisie refusée
+/// Saisie de la cellule ouverte : zone de saisie dessinée dans la cellule
+/// (H-UI-85), message d'erreur dessous, fin de saisie. Entrée valide et
+/// descend, Maj+Entrée valide et monte, Tab valide et passe à la cellule
+/// visible suivante, Échap abandonne ; un défilement ou la perte du focus
+/// valident sur place ; un clic sur une autre cellule (`click`) valide puis
+/// la rend active (H-UI-86). Une saisie refusée
 /// ([`commit_edit`]) reste ouverte avec son message ; acceptée, son lot est
 /// poussé dans `Action::ExecOn` (refus du registre : bandeau), suivi du
 /// déplacement du curseur (`Action::Nav`, appliqué après le lot).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "contexte d'image découpé en emprunts disjoints"
+)]
 fn edit_cells(
     ui: &mut egui::Ui,
     fc: &mut FrameCtx<'_>,
@@ -932,12 +960,14 @@ fn edit_cells(
     cursor: &mut TableCursor,
     at: &Place<'_>,
     clip: Rect,
+    click: Option<EditClick>,
 ) {
     let Some(state) = edit.editing.as_ref() else {
         return;
     };
+    let column = state.column;
     let index = grid::row_index(sheet, RowRef::from_selection(state.uid));
-    let span = column_span(sheet.columns(), at.cols_left, state.column);
+    let span = column_span(sheet.columns(), at.cols_left, column);
     let (Some(index), Some((cell_left, cell_w))) = (index, span) else {
         // Tâche disparue ou colonne masquée : saisie abandonnée.
         close_editor(ui, edit);
@@ -950,13 +980,22 @@ fn edit_cells(
         absorb_keys(ui, edit);
     }
     let mut finish = finish_keys(ui);
-    if finish.is_none() && grid::scrolled(ui) {
+    if finish.is_none() && (click.is_some() || grid::scrolled(ui)) {
         finish = Some(Finish::Commit(Move::Stay));
     }
     if at.range.contains(&index) {
         let top = at.origin.y + index_to_f32(index) * fc.metrics.row_h;
         let rect = Rect::from_min_size(pos2(cell_left, top), vec2(cell_w, fc.metrics.row_h));
-        let lost = show_editor(ui, fc, edit, rect, clip);
+        let look = grid::EditorLook::of(
+            sheet,
+            (index, column),
+            fc.palette,
+            at.font.clone(),
+            fc.metrics.pad_x,
+            fc.metrics.indent,
+            cell_w,
+        );
+        let lost = show_editor(ui, fc, edit, rect, clip, look);
         if finish.is_none() && lost {
             finish = Some(Finish::Commit(Move::Stay));
         }
@@ -964,11 +1003,15 @@ fn edit_cells(
     match finish {
         None => {}
         Some(Finish::Cancel) => {
+            // Échap : la cellule éditée reste la cellule active.
+            if let Some(state) = edit.editing.as_ref() {
+                cursor.column = state.column;
+            }
             close_editor(ui, edit);
             // Échap rend la main à la table (navigation au clavier).
             fc.actions.push(Action::FocusPane(Pane::Table));
         }
-        Some(Finish::Commit(motion)) => commit(ui, fc, edit, cursor, motion),
+        Some(Finish::Commit(motion)) => commit(ui, fc, edit, cursor, motion, click),
     }
 }
 
@@ -992,7 +1035,14 @@ fn absorb_keys(ui: &egui::Ui, edit: &mut TableEdit) {
 
 /// Dessine la zone de saisie dans `rect` (et l'erreur dessous) ; rend vrai
 /// si elle vient de perdre le focus.
-fn show_editor(ui: &mut egui::Ui, fc: &FrameCtx<'_>, edit: &mut TableEdit, rect: Rect, clip: Rect) -> bool {
+fn show_editor(
+    ui: &mut egui::Ui,
+    fc: &FrameCtx<'_>,
+    edit: &mut TableEdit,
+    rect: Rect,
+    clip: Rect,
+    look: grid::EditorLook,
+) -> bool {
     let TableEdit {
         editing,
         focus_pending,
@@ -1008,7 +1058,12 @@ fn show_editor(ui: &mut egui::Ui, fc: &FrameCtx<'_>, edit: &mut TableEdit, rect:
         TextId::CellEditLabel,
         &[("column", Arg::Str(fc.texts.get(state.column.title()).into()))],
     );
-    let spec = EditorSpec { rect, clip, label };
+    let spec = EditorSpec {
+        rect,
+        clip,
+        label,
+        look,
+    };
     let out = grid::show_editor(ui, &mut state.buffer, focus_pending, &spec);
     if out.changed {
         state.error = None;
@@ -1026,17 +1081,19 @@ fn close_editor(ui: &egui::Ui, edit: &mut TableEdit) {
     grid::surrender_editor(ui);
 }
 
-/// Valide la saisie : refus → message sous la cellule, saisie gardée ;
-/// accord → lot poussé (s'il n'est pas vide), saisie fermée, curseur posé
-/// sur la cellule éditée puis déplacé (`Action::Nav`, après le lot : une
-/// tâche créée par la ligne vide la précède, la ligne vide reste la ligne
-/// courante pour saisir des tâches à la suite).
+/// Valide la saisie : refus → message sous la cellule, saisie gardée (la
+/// sélection ne bouge pas, H-UI-86) ; accord → lot poussé (s'il n'est pas
+/// vide), saisie fermée, curseur posé sur la cellule éditée puis déplacé
+/// (`Action::Nav`, après le lot : une tâche créée par la ligne vide la
+/// précède, la ligne vide reste la ligne courante pour saisir des tâches à
+/// la suite), ou sur la cellule cliquée (`click`).
 fn commit(
     ui: &egui::Ui,
     fc: &mut FrameCtx<'_>,
     edit: &mut TableEdit,
     cursor: &mut TableCursor,
     motion: Move,
+    click: Option<EditClick>,
 ) {
     let Some(doc) = fc.doc else {
         close_editor(ui, edit);
@@ -1068,6 +1125,13 @@ fn commit(
     if let Some(mv) = motion.nav() {
         fc.actions.push(Action::Nav { mv, extend: false });
         fc.actions.push(Action::FocusPane(Pane::Table));
+    }
+    if let Some(click) = click {
+        fc.actions.push(Action::Select(click.uid));
+        fc.actions.push(Action::FocusPane(Pane::Table));
+        if let Some(column) = click.column {
+            cursor.column = column;
+        }
     }
 }
 

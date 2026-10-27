@@ -236,6 +236,8 @@ fn paint_rows(
     let blank = sheet.len();
     let current = grid::row_index(&sheet, cursor.row);
     let cols_left = clip.left();
+    // Clic pendant une saisie : validée d'abord (H-UI-86).
+    let mut deferred = None;
     for i in range.clone() {
         let top = origin.y + index_to_f32(i) * row_h;
         let row_rect = Rect::from_min_size(pos2(clip.left(), top), vec2(clip.width(), row_h));
@@ -286,7 +288,8 @@ fn paint_rows(
                 };
                 egui::WidgetInfo::selected(egui::Role::Row, true, selected, label)
             });
-            row_clicked(fc, &sheet, edit, cursor, list_index, &response, i, cols_left);
+            deferred =
+                row_clicked(fc, &sheet, edit, cursor, list_index, &response, i, cols_left).or(deferred);
         }
     }
     shapes = shapes.saturating_add(grid::paint_column_lines(
@@ -302,7 +305,29 @@ fn paint_rows(
         shapes = shapes.saturating_add(paint_cursor(ui, &painter, fc, &sheet, cursor, origin, index));
     }
     fc.stats.shapes = fc.stats.shapes.saturating_add(shapes);
-    edit_cell(ui, fc, &sheet, edit, cursor, list_index, origin, &range);
+    let at = EditAt {
+        origin,
+        range: &range,
+        font: &font,
+        click: deferred,
+    };
+    edit_cell(ui, fc, &sheet, edit, cursor, list_index, &at);
+}
+
+/// Cellule cliquée pendant une saisie : (ligne, colonne sous le pointeur),
+/// rejointe seulement si la saisie est acceptée (H-UI-86).
+type EditClick = (RowRef<ResourceUid>, Option<ResourceColumn>);
+
+/// Place de la saisie dans l'image.
+struct EditAt<'r> {
+    /// Coin haut-gauche écran de la ligne 0.
+    origin: Pos2,
+    /// Lignes dessinées.
+    range: &'r std::ops::Range<usize>,
+    /// Police des cellules.
+    font: &'r egui::FontId,
+    /// Clic sur une cellule pendant la saisie.
+    click: Option<EditClick>,
 }
 
 /// Widget focalisable de la feuille (identifiant de la table : la
@@ -371,7 +396,8 @@ fn paint_cursor(
 }
 
 /// Clic sur la ligne `i` : curseur (ligne, colonne sous le pointeur), focus
-/// de la feuille ; double-clic : saisie de la cellule.
+/// de la feuille ; double-clic : saisie de la cellule. Saisie ouverte : le
+/// clic est rendu à [`edit_cell`], qui valide d'abord (H-UI-86).
 #[allow(
     clippy::too_many_arguments,
     reason = "emprunts disjoints de l'état de la feuille"
@@ -385,21 +411,26 @@ fn row_clicked(
     response: &Response,
     i: usize,
     left: f32,
-) {
+) -> Option<EditClick> {
     if !response.clicked() {
-        return;
+        return None;
     }
-    cursor.row = grid::row_ref(sheet, i);
-    if let Some(column) = response
+    let row = grid::row_ref(sheet, i);
+    let column = response
         .interact_pointer_pos()
-        .and_then(|p| grid::column_at(sheet.columns(), left, p.x))
-    {
+        .and_then(|p| grid::column_at(sheet.columns(), left, p.x));
+    if edit.editing.is_some() {
+        return Some((row, column));
+    }
+    cursor.row = row;
+    if let Some(column) = column {
         cursor.column = column;
     }
     fc.actions.push(Action::FocusPane(Pane::Table));
-    if (response.double_clicked() || response.triple_clicked()) && edit.editing.is_none() && !fc.window_open {
+    if (response.double_clicked() || response.triple_clicked()) && !fc.window_open {
         open_editor(sheet, edit, cursor, list_index, fc.doc);
     }
+    None
 }
 
 /// Ouvre la saisie de la cellule courante avec son texte (F2, double-clic) ;
@@ -484,10 +515,6 @@ fn calendar_list(doc: &OpenDocument) -> Vec<(String, Option<String>)> {
 /// Saisie ouverte : zone de texte (ou liste des calendriers) posée sur la
 /// cellule, refus dessous, fin de saisie comme dans la table (Entrée, Tab,
 /// Échap, défilement, perte du focus).
-#[allow(
-    clippy::too_many_arguments,
-    reason = "emprunts disjoints de l'état de la feuille"
-)]
 fn edit_cell(
     ui: &mut egui::Ui,
     fc: &mut FrameCtx<'_>,
@@ -495,9 +522,9 @@ fn edit_cell(
     edit: &mut GridEdit<ResourceUid, ResourceColumn>,
     cursor: &mut ResourceCursor,
     list_index: &mut usize,
-    origin: Pos2,
-    range: &std::ops::Range<usize>,
+    at: &EditAt<'_>,
 ) {
+    let (origin, range) = (at.origin, at.range);
     let Some(state) = edit.editing.as_ref() else {
         return;
     };
@@ -515,7 +542,7 @@ fn edit_cell(
     } else {
         grid::finish_keys(ui)
     };
-    if finish.is_none() && grid::scrolled(ui) {
+    if finish.is_none() && (at.click.is_some() || grid::scrolled(ui)) {
         finish = Some(Finish::Commit(Move::Stay));
     }
     if range.contains(&index) {
@@ -524,7 +551,7 @@ fn edit_cell(
                 *list_index = picked;
                 finish = Some(Finish::Commit(Move::Stay));
             }
-        } else if show_text_editor(ui, fc, edit, rect) && finish.is_none() {
+        } else if show_text_editor(ui, fc, sheet, edit, rect, (index, at.font)) && finish.is_none() {
             finish = Some(Finish::Commit(Move::Stay));
         }
     }
@@ -538,10 +565,14 @@ fn edit_cell(
     match finish {
         None => {}
         Some(Finish::Cancel) => {
+            if let Some(state) = edit.editing.as_ref() {
+                cursor.row = state.row;
+                cursor.column = state.column;
+            }
             close_editor(ui, edit);
             fc.actions.push(Action::FocusPane(Pane::Table));
         }
-        Some(Finish::Commit(motion)) => commit(ui, fc, sheet, edit, cursor, motion),
+        Some(Finish::Commit(motion)) => commit(ui, fc, sheet, edit, cursor, motion, at.click),
     }
 }
 
@@ -608,8 +639,10 @@ fn show_calendar_list(
 fn show_text_editor(
     ui: &mut egui::Ui,
     fc: &FrameCtx<'_>,
+    sheet: &ResourceSheet<'_>,
     edit: &mut GridEdit<ResourceUid, ResourceColumn>,
     rect: Rect,
+    (index, font): (usize, &egui::FontId),
 ) -> bool {
     let GridEdit {
         editing,
@@ -622,10 +655,20 @@ fn show_text_editor(
         TextId::CellEditLabel,
         &[("column", Arg::Str(fc.texts.get(state.column.title()).into()))],
     );
+    let look = grid::EditorLook::of(
+        sheet,
+        (index, state.column),
+        fc.palette,
+        font.clone(),
+        fc.metrics.pad_x,
+        0.0,
+        rect.width(),
+    );
     let spec = EditorSpec {
         rect,
         clip: ui.clip_rect(),
         label,
+        look,
     };
     let out = grid::show_editor(ui, &mut state.buffer, focus_pending, &spec);
     if out.changed {
@@ -654,6 +697,7 @@ fn commit(
     edit: &mut GridEdit<ResourceUid, ResourceColumn>,
     cursor: &mut ResourceCursor,
     motion: Move,
+    click: Option<EditClick>,
 ) {
     let Some(doc) = fc.doc else {
         close_editor(ui, edit);
@@ -666,7 +710,7 @@ fn commit(
     let lang = text_language(fc.texts.language());
     match grid::commit_cell(sheet, state, &doc.session, lang, &not_editable) {
         Ok(batch) => {
-            let column = state.column;
+            let (row, column) = (state.row, state.column);
             close_editor(ui, edit);
             if let Some(batch) = batch {
                 fc.actions.push(Action::ExecOn {
@@ -674,9 +718,16 @@ fn commit(
                     batch,
                 });
             }
+            cursor.row = row;
             cursor.column = column;
             if let Some(mv) = motion.nav() {
                 fc.actions.push(Action::Nav { mv, extend: false });
+            }
+            if let Some((row, column)) = click {
+                cursor.row = row;
+                if let Some(column) = column {
+                    cursor.column = column;
+                }
             }
             fc.actions.push(Action::FocusPane(Pane::Table));
         }

@@ -107,6 +107,54 @@ fn snapshot_main_fr_light_day() {
     snapshot(&mut harness, "main_fr_light_day");
 }
 
+/// H-UI-85 (correctif de la saisie de cellule, 2026-10-27) : cellule en
+/// saisie ouverte par F2, dessinée dans la cellule (police, graisse,
+/// alignement et retrait de la cellule, fond uni, cadre du curseur),
+/// curseur de texte en fin de texte (clignotement coupé pour une capture
+/// stable). Clair : nom indenté d'une tâche ; sombre : durée alignée à
+/// droite d'une récapitulative (gras simulé).
+fn cell_edit_capture(theme: ThemePref, uid: u32, column: planrs_ui_egui::column::Column, name: &str) {
+    let mut harness = demo(LanguagePref::Fr, theme);
+    harness
+        .ctx
+        .all_styles_mut(|style| style.visuals.text_cursor.blink = false);
+    let uid = planrs_core::TaskUid::new(uid);
+    harness.state_mut().dispatch(Action::Select(Some(uid)));
+    harness.run();
+    harness.state_mut().view_mut().cursor.column = column;
+    harness.key_press(egui::Key::F2);
+    harness.run();
+    let app = harness.state();
+    let editing = app.view().edit.editing.as_ref().expect("saisie ouverte");
+    assert_eq!((editing.uid, editing.column), (Some(uid), column));
+    assert!(
+        harness
+            .ctx
+            .memory(|memory| memory.has_focus(planrs_ui_egui::grid::editor_id()))
+    );
+    snapshot(&mut harness, name);
+}
+
+#[test]
+fn snapshot_cell_edit_fr_light() {
+    cell_edit_capture(
+        ThemePref::Light,
+        3,
+        planrs_ui_egui::column::Column::Name,
+        "cell_edit_fr_light",
+    );
+}
+
+#[test]
+fn snapshot_cell_edit_fr_dark() {
+    cell_edit_capture(
+        ThemePref::Dark,
+        1,
+        planrs_ui_egui::column::Column::Duration,
+        "cell_edit_fr_dark",
+    );
+}
+
 #[test]
 fn snapshot_main_fr_light_selected_scrolled() {
     let mut harness = demo(LanguagePref::Fr, ThemePref::Light);

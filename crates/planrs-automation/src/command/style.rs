@@ -425,11 +425,25 @@ pub(super) fn apply(op: &StyleApply, ctx: &mut Ctx<'_>) -> Result<(), CommandErr
         (None, None) => {
             return Err(param("template", "« template », « patch » ou « reset » attendu"));
         }
-        (Some(t), patch) => DocStyle {
-            v: STYLE_VERSION,
-            base: t.into(),
-            over: patch.unwrap_or_default(),
-        },
+        (Some(t), patch) => {
+            // Ce qui appartient au projet et non au modèle (tâches de la
+            // chronologie, ADR-0017 D7 ; couleurs de phase, H-UI-65) est
+            // gardé s'il n'est pas dans `patch`, comme dans la galerie.
+            let mut over = patch.unwrap_or_default();
+            if let Some(current) = doc_style(ctx.project) {
+                if over.timeline.is_none() {
+                    over.timeline = current.over.timeline;
+                }
+                if over.phases.is_none() {
+                    over.phases = current.over.phases;
+                }
+            }
+            DocStyle {
+                v: STYLE_VERSION,
+                base: t.into(),
+                over,
+            }
+        }
         (None, Some(patch)) => {
             let mut doc = current_or(ctx.project, HEADLESS_DEFAULT);
             doc.over = merge_patch(&doc.over, &patch)

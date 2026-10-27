@@ -546,6 +546,31 @@ fn h_ui_79_deleted_uid_dropped_on_reopen() {
     );
 }
 
+/// ADR-0017 D7 : `style.apply { template }` (agent MCP) garde la liste de
+/// la chronologie et les couleurs de phase ; `patch` les remplace ;
+/// `reset` les retire.
+#[test]
+fn style_apply_template_keeps_timeline() {
+    let mut s = session();
+    call(
+        &mut s,
+        "style.apply",
+        json!({ "patch": { "timeline": { "tasks": [1, 2] } } }),
+    );
+    call(&mut s, "style.apply", json!({ "template": "chantier" }));
+    let resolved = style::effective_style(s.project(), HEADLESS_DEFAULT);
+    assert_eq!(resolved.timeline.tasks, vec![1, 2]);
+    call(
+        &mut s,
+        "style.apply",
+        json!({ "template": "sobre", "patch": { "timeline": { "tasks": [2] } } }),
+    );
+    let resolved = style::effective_style(s.project(), HEADLESS_DEFAULT);
+    assert_eq!(resolved.timeline.tasks, vec![2]);
+    call(&mut s, "style.apply", json!({ "reset": true }));
+    assert!(style::effective_style(s.project(), HEADLESS_DEFAULT).timeline.is_empty());
+}
+
 /// ADR-0017 (lot L0) : 201 UID ou doublons ⇒ `style.apply` refusé
 /// (`style.invalid`), rien écrit ; charge du fichier hors bornes ⇒ style
 /// retiré, diagnostic `style.ignored` ; jamais de panique.

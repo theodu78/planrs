@@ -253,6 +253,8 @@ fn check_keymap_entry(i: usize) {
         }
         // Filtres, tri, recherche, repli (J8 lot L9) : `filters.rs`.
         binding if crate::filters::is_view_entry(binding) => crate::filters::check_keymap_entry(i),
+        // Passe UX (ADR-0018, L0) : sélection, remplir, effacer.
+        binding if crate::select_keys::is_ux_entry(binding) => crate::select_keys::check_keymap_entry(i),
         // Ruban (ADR-0017, L0) : Ctrl/Cmd+F1 replie puis déplie le ruban.
         Binding::Ui(UiBinding::ToggleRibbon) => {
             let mut harness = harness();
@@ -347,6 +349,21 @@ keymap_entry_tests! {
     ui_keymap_each_shortcut_dispatches_59 => 59,
     ui_keymap_each_shortcut_dispatches_60 => 60,
     ui_keymap_each_shortcut_dispatches_61 => 61,
+    ui_keymap_each_shortcut_dispatches_62 => 62,
+    ui_keymap_each_shortcut_dispatches_63 => 63,
+    ui_keymap_each_shortcut_dispatches_64 => 64,
+    ui_keymap_each_shortcut_dispatches_65 => 65,
+    ui_keymap_each_shortcut_dispatches_66 => 66,
+    ui_keymap_each_shortcut_dispatches_67 => 67,
+    ui_keymap_each_shortcut_dispatches_68 => 68,
+    ui_keymap_each_shortcut_dispatches_69 => 69,
+    ui_keymap_each_shortcut_dispatches_70 => 70,
+    ui_keymap_each_shortcut_dispatches_71 => 71,
+    ui_keymap_each_shortcut_dispatches_72 => 72,
+    ui_keymap_each_shortcut_dispatches_73 => 73,
+    ui_keymap_each_shortcut_dispatches_74 => 74,
+    ui_keymap_each_shortcut_dispatches_75 => 75,
+    ui_keymap_each_shortcut_dispatches_76 => 76,
 }
 
 /// Lot refusé : UID absent.

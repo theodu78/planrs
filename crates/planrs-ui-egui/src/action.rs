@@ -10,7 +10,7 @@ use planrs_core::TaskUid;
 
 use crate::clipboard::ClipboardOp;
 use crate::column::Column;
-use crate::nav::NavMove;
+use crate::nav::{NavMove, RowRef};
 use crate::ribbon::RibbonOp;
 use crate::selection::SelectMode;
 use crate::state::{GanttStyle, LanguagePref, ThemePref, ViewKind};
@@ -209,6 +209,109 @@ pub enum Action {
     /// « Informations sur la tâche » de la tâche active, ouverte à
     /// l'onglet Notes (H-UI-84, lot L3).
     ShowTaskNotes,
+    // --- Passe UX (ADR-0018, contrat L0) : bras posés une fois dans le
+    // réducteur ; les fonctions appelées sont servies par leur lot (L1
+    // sélection, L2 cellules, L3 lignes et colonnes). `Select` et
+    // `SelectWith` restent (Gantt, chronologie, agents) : ils posent une
+    // sélection `Cells` d'une cellule.
+    /// Geste de sélection de la table (appui, glisser, raccourcis ;
+    /// H-UI-87 à H-UI-92) : `App::select_op` (`selection.rs`).
+    SelectOp(SelectOp),
+    /// Commande de cellule sur le bloc (remplir, effacer, Suppr, Ctrl+Entrée ;
+    /// H-UI-96 à H-UI-98) : `App::cells_op` (`cells.rs`).
+    Cells(CellOp),
+    /// Déplace les lignes sélectionnées en lignes entières avant la tâche
+    /// `before` (`None` : en fin), un lot de `task.move` (H-UI-94) :
+    /// `App::move_rows` (`structure.rs`).
+    MoveRows {
+        /// Tâche devant laquelle les lignes vont (`None` : fin du projet).
+        before: Option<TaskUid>,
+    },
+    /// Ajuste la largeur d'une colonne à son contenu (double-clic sur la
+    /// bordure de l'en-tête, H-UI-99) : `App::fit_column` (`column.rs`).
+    FitColumn(Column),
+}
+
+/// Geste de sélection de la table (ADR-0018 D1, D2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectOp {
+    /// Appui du bouton principal (H-UI-88 à H-UI-90).
+    Press {
+        /// Ligne appuyée (la ligne vide comprise).
+        row: RowRef<TaskUid>,
+        /// Colonne appuyée.
+        column: Column,
+        /// Cellule, en-tête de ligne (colonne ID) ou en-tête de colonne.
+        target: PressTarget,
+        /// Modificateur.
+        mode: PressMode,
+    },
+    /// Glisser : la cellule sous le pointeur a changé (H-UI-88).
+    DragTo {
+        /// Ligne sous le pointeur (bornée au corps).
+        row: RowRef<TaskUid>,
+        /// Colonne sous le pointeur (bornée aux colonnes visibles).
+        column: Column,
+    },
+    /// Tout (Ctrl/Cmd+A, Ctrl+Maj+Espace, coin de l'en-tête ; H-UI-92).
+    All,
+    /// Lignes entières de la sélection (Maj+Espace).
+    EntireRows,
+    /// Colonnes entières de la sélection (Ctrl+Espace).
+    EntireColumns,
+    /// Réduit à la cellule active (Maj+Retour arrière).
+    Collapse,
+}
+
+impl SelectOp {
+    /// Libellé du jumeau de menu (menu Édition, H-UI-100) ; `None` pour
+    /// les gestes sans entrée de menu.
+    #[must_use]
+    pub const fn menu_label(self) -> Option<crate::i18n::TextId> {
+        match self {
+            Self::All => Some(crate::i18n::TextId::MenuSelectAll),
+            Self::Press { .. }
+            | Self::DragTo { .. }
+            | Self::EntireRows
+            | Self::EntireColumns
+            | Self::Collapse => None,
+        }
+    }
+}
+
+/// Cible d'un appui de sélection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PressTarget {
+    /// Cellule du corps.
+    Cell,
+    /// Cellule de la colonne ID (en-tête de ligne, H-UI-89).
+    RowHeader,
+    /// En-tête de colonne (H-UI-90).
+    ColumnHeader,
+}
+
+/// Modificateur d'un appui de sélection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PressMode {
+    /// Sans modificateur : remplace la sélection.
+    Replace,
+    /// Maj : étend depuis l'ancre.
+    Extend,
+    /// Ctrl/Cmd : ajoute ou retire la ligne.
+    Toggle,
+}
+
+/// Commande de cellule sur le bloc de la sélection (ADR-0018 D4, D5).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CellOp {
+    /// Remplir vers le bas (Ctrl/Cmd+D, R-258).
+    FillDown,
+    /// Effacer le contenu du bloc (Ctrl+Suppr, R-259).
+    Clear,
+    /// Suppr : supprimer les tâches ou effacer selon la cible (H-UI-97).
+    DeleteKey,
+    /// Ctrl/Cmd+Entrée : texte saisi écrit dans tout le bloc (H-UI-98).
+    FillTyped(String),
 }
 
 /// Opération de la chronologie (ADR-0017 D7).

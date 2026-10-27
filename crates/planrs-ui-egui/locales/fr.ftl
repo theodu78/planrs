@@ -1234,3 +1234,52 @@ scroll-task-hidden = La tâche active est masquée par la vue (filtre ou mode pl
 # --- RUBAN L4 ---
 
 # --- RUBAN L5 ---
+
+# --- UX L0 (ADR-0018) ---
+ux-not-available = Ce geste n'est pas encore disponible.
+cells-too-large = La sélection compte plus de { $max } cellules : rien n'a été modifié.
+cells-parse = Collage refusé : texte illisible pour la tâche { $id }, colonne « { $column } » ({ $detail }). Rien n'a été modifié.
+cells-past-end = Impossible d'ajouter des tâches en fin de projet sous un tri ou un filtre : rien n'a été modifié.
+cells-nothing-above = Aucune ligne au-dessus à recopier.
+cells-skipped =
+    { $count ->
+        [one] { $count } cellule non modifiable a été sautée.
+       *[other] { $count } cellules non modifiables ont été sautées.
+    }
+cells-not-clearable =
+    { $count ->
+        [one] { $count } cellule ne peut pas être vide.
+       *[other] { $count } cellules ne peuvent pas être vides.
+    }
+tasks-deleted =
+    { $count ->
+        [one] { $count } tâche supprimée — { $undo } annule.
+       *[other] { $count } tâches supprimées — { $undo } annule.
+    }
+rows-move-inside-block = Déposez les lignes en dehors de leur propre bloc.
+rows-move-not-adjacent = Sélectionnez des lignes voisines, de même niveau, pour les déplacer ensemble.
+rows-move-locked = Retirez le tri ou le filtre pour déplacer des lignes.
+tip-row-move = Glissez pour déplacer les lignes sélectionnées.
+tip-column-resize = Glissez pour élargir la colonne, double-cliquez pour l'ajuster au contenu.
+menu-fill-down = Remplir vers le bas
+menu-clear-contents = Effacer le contenu
+menu-select-all = Tout sélectionner
+menu-fit-column = Ajuster la largeur
+menu-sort-ascending = Trier par ordre croissant
+menu-sort-descending = Trier par ordre décroissant
+ribbon-fill = Remplir
+ribbon-fill-down = Vers le bas
+ribbon-clear = Effacer
+ribbon-clear-contents = Contenu
+ribbon-tip-fill = Recopie la première cellule de chaque colonne de la sélection dans les cellules du dessous.
+ribbon-tip-clear = Efface le contenu des cellules sélectionnées sans supprimer les tâches.
+
+# --- UX L1 ---
+
+# --- UX L2 ---
+
+# --- UX L3 ---
+
+# --- UX L4 ---
+
+# --- UX L5 ---

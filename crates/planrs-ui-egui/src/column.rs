@@ -214,6 +214,27 @@ impl ColumnState {
     }
 }
 
+/// Entrées ajoutées au menu de l'en-tête de colonne (H-UI-99, ADR-0018 D7 :
+/// Ajuster la largeur, Trier par ordre croissant, décroissant) et
+/// info-bulle de la poignée de bordure ; posées en L0, placées par le lot
+/// L3.
+pub const HEADER_MENU_TEXTS: [TextId; 4] = [
+    TextId::MenuFitColumn,
+    TextId::MenuSortAscending,
+    TextId::MenuSortDescending,
+    TextId::TipColumnResize,
+];
+
+impl crate::App {
+    /// Ajuste la largeur de `column` au contenu des lignes affichées et à
+    /// son titre (`Action::FitColumn`, double-clic sur la bordure,
+    /// H-UI-99). Contrat L0 : sans effet (lot L3).
+    #[allow(clippy::unused_self, reason = "contrat L0 : servi par le lot L3")]
+    pub(crate) fn fit_column(&mut self, column: Column) {
+        log::debug!("ajustement de la colonne {column:?} : lot L3");
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,

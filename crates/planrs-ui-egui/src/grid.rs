@@ -239,6 +239,7 @@ pub fn nav_target<S: Sheet>(
         row: row_ref(sheet, target.row),
         column,
         anchor: None,
+        anchor_column: None,
     }
 }
 
@@ -423,6 +424,11 @@ pub enum Finish {
     Cancel,
     /// Validation, puis déplacement de la cellule courante.
     Commit(Move),
+    /// Ctrl/Cmd+Entrée : le texte saisi est écrit dans tout le bloc
+    /// (H-UI-98, ADR-0018 D4) ; la table le traduit en
+    /// `Action::Cells(CellOp::FillTyped)`, la saisie reste ouverte tant que
+    /// le lot n'est pas accepté. Sans bloc (feuille des ressources) : rien.
+    FillTyped,
 }
 
 /// Déplacement après validation (H-UI-14 : Tab passe à la colonne
@@ -462,6 +468,9 @@ pub fn finish_keys(ui: &egui::Ui) -> Option<Finish> {
     ui.input_mut(|input| {
         if input.consume_key(Modifiers::NONE, Key::Escape) {
             Some(Finish::Cancel)
+        } else if input.consume_key(Modifiers::COMMAND, Key::Enter) {
+            // Ctrl/Cmd+Entrée (H-UI-98), avant Maj+Entrée et Entrée.
+            Some(Finish::FillTyped)
         } else if input.consume_key(Modifiers::SHIFT, Key::Enter) {
             // Maj+Entrée valide et monte (H-UI-13) ; avant Entrée, qu'egui
             // reconnaîtrait aussi avec Maj.
@@ -923,6 +932,7 @@ mod tests {
             row,
             column,
             anchor: None,
+            anchor_column: None,
         }
     }
 

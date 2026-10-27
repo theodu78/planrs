@@ -1235,3 +1235,52 @@ scroll-task-hidden = The active task is hidden by the view (filter or outline).
 # --- RUBAN L4 ---
 
 # --- RUBAN L5 ---
+
+# --- UX L0 (ADR-0018) ---
+ux-not-available = This gesture is not available yet.
+cells-too-large = The selection has more than { $max } cells: nothing was changed.
+cells-parse = Paste refused: unreadable text for task { $id }, column “{ $column }” ({ $detail }). Nothing was changed.
+cells-past-end = Cannot add tasks at the end of the project while a sort or filter is applied: nothing was changed.
+cells-nothing-above = No row above to fill down from.
+cells-skipped =
+    { $count ->
+        [one] { $count } read-only cell was skipped.
+       *[other] { $count } read-only cells were skipped.
+    }
+cells-not-clearable =
+    { $count ->
+        [one] { $count } cell cannot be empty.
+       *[other] { $count } cells cannot be empty.
+    }
+tasks-deleted =
+    { $count ->
+        [one] { $count } task deleted — { $undo } undoes.
+       *[other] { $count } tasks deleted — { $undo } undoes.
+    }
+rows-move-inside-block = Drop the rows outside their own block.
+rows-move-not-adjacent = Select adjacent rows at the same level to move them together.
+rows-move-locked = Remove the sort or filter to move rows.
+tip-row-move = Drag to move the selected rows.
+tip-column-resize = Drag to resize the column, double-click to fit its contents.
+menu-fill-down = Fill Down
+menu-clear-contents = Clear Contents
+menu-select-all = Select All
+menu-fit-column = Best Fit
+menu-sort-ascending = Sort Ascending
+menu-sort-descending = Sort Descending
+ribbon-fill = Fill
+ribbon-fill-down = Down
+ribbon-clear = Clear
+ribbon-clear-contents = Contents
+ribbon-tip-fill = Copies the first cell of each selected column into the cells below.
+ribbon-tip-clear = Clears the contents of the selected cells without deleting the tasks.
+
+# --- UX L1 ---
+
+# --- UX L2 ---
+
+# --- UX L3 ---
+
+# --- UX L4 ---
+
+# --- UX L5 ---

@@ -21,7 +21,7 @@ use planrs_render::style::RowBanding;
 
 use super::main_view::HBarSpec;
 use super::{FrameCtx, Pane};
-use crate::action::{Action, DialogKind};
+use crate::action::{Action, CellOp, DialogKind};
 use crate::column::{CellAlign, Column};
 use crate::edit::{EditState, TableEdit, commit_edit, editable, initial_text, text_language};
 use crate::geom::index_to_f32;
@@ -1012,6 +1012,12 @@ fn edit_cells(
             fc.actions.push(Action::FocusPane(Pane::Table));
         }
         Some(Finish::Commit(motion)) => commit(ui, fc, edit, cursor, motion, click),
+        Some(Finish::FillTyped) => {
+            if let Some(state) = edit.editing.as_ref() {
+                fc.actions
+                    .push(Action::Cells(CellOp::FillTyped(state.buffer.clone())));
+            }
+        }
     }
 }
 

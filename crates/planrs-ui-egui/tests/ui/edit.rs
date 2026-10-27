@@ -226,8 +226,11 @@ fn ui_edit_focus_loss_commits_before_document_replaced() {
     assert!(!harness.state().document.as_ref().unwrap().is_dirty());
     type_text(&mut harness, "10j");
     assert!(harness.state().view().edit.editing.is_some());
-    harness.get_by_label(&fr(TextId::MenuOpenDemo)).click();
-    harness.run();
+    // Fichier → Ouvrir l'exemple (bouton de la barre d'outils jusqu'au lot
+    // L5) : le clic sur le menu retire déjà le focus de la cellule.
+    crate::click(&mut harness, &fr(TextId::MenuFile));
+    let open_demo = fr(TextId::MenuOpenDemo);
+    crate::click_where(&mut harness, |text| text.starts_with(&open_demo));
     let app = harness.state();
     assert!(
         app.confirmation_pending(),

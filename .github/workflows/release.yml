@@ -91,6 +91,9 @@ jobs:
           [ "$id" = "io.github.theodu78.planrs" ] || { echo "::error::CFBundleIdentifier $id"; exit 1; }
           test -f "$mnt/planrs.app/Contents/Resources/planrs.icns"
           test -f "$mnt/LISEZ-MOI.txt"
+          for f in LICENSE-MIT LICENSE-APACHE NOTICE assets/fonts/OFL.txt assets/icons/lucide/LICENSE; do
+            test -s "$mnt/licenses/$f" || { echo "::error::licenses/$f absent"; exit 1; }
+          done
           for bin in "$mnt/planrs.app/Contents/MacOS/planrs-desktop" "$mnt/cli/planrs"; do
             archs="$(lipo -archs "$bin")"
             read -r -a list <<< "$archs"
@@ -129,6 +132,9 @@ jobs:
           7z x "$dir.zip"
           ls -la "$dir"
           test -f "$dir/README.txt"
+          for f in LICENSE-MIT LICENSE-APACHE NOTICE assets/fonts/OFL.txt assets/icons/lucide/LICENSE; do
+            test -s "$dir/licenses/$f" || { echo "::error::licenses/$f absent"; exit 1; }
+          done
           # planrs-desktop.exe est du sous-système fenêtré : sa sortie n'est
           # lisible que redirigée, ce que fait la substitution de commande.
           for exe in planrs-desktop.exe planrs.exe; do
@@ -166,6 +172,9 @@ jobs:
           tar xzf "$dir.tar.gz"
           ls -la "$dir"
           test -f "$dir/planrs.png"
+          for f in LICENSE-MIT LICENSE-APACHE NOTICE assets/fonts/OFL.txt assets/icons/lucide/LICENSE; do
+            test -s "$dir/licenses/$f" || { echo "::error::licenses/$f absent"; exit 1; }
+          done
           desktop-file-validate "$dir/planrs.desktop"
           for bin in planrs-desktop planrs; do
             path="$dir/$bin"
@@ -195,6 +204,9 @@ jobs:
           tar xzf "planrs-$VERSION-web.tar.gz"
           ls -la dist
           test -f dist/index.html
+          for f in LICENSE-MIT LICENSE-APACHE NOTICE assets/fonts/OFL.txt assets/icons/lucide/LICENSE; do
+            test -s "dist/licenses/$f" || { echo "::error::licenses/$f absent"; exit 1; }
+          done
           wasm="$(ls dist/*.wasm)"
           raw="$(wc -c < "$wasm")"
           gz="$(gzip -9 -c "$wasm" | wc -c)"

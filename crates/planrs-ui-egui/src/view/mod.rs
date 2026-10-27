@@ -31,11 +31,13 @@ pub mod gantt;
 pub mod main_view;
 pub mod recovery;
 pub mod resource_sheet;
+pub mod ribbon;
 pub mod scene_paint;
 pub mod search;
 pub mod side_panel;
 pub mod table;
 pub mod task_view;
+pub mod timeline;
 pub mod timescale;
 pub mod usage;
 
@@ -165,6 +167,11 @@ pub struct ViewTransient {
     pub filter_dialog: Option<crate::dialog::filter::FilterDialog>,
     /// Volet de mise en forme des barres ouvert (J8, lot L15, H-UI-59).
     pub format_panel: Option<format_panel::FormatPanelState>,
+    /// Onglet du ruban ouvert en surimpression, ruban replié (ADR-0017,
+    /// H-UI-72).
+    pub ribbon_overlay: Option<crate::ribbon::RibbonTab>,
+    /// Chronologie : disposition en cache (ADR-0017, H-UI-78, lot L4).
+    pub timeline: timeline::TimelineView,
 }
 
 /// Volet de la vue principale (J7).

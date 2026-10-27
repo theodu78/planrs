@@ -28,9 +28,8 @@ menu-theme = Thème
 menu-language = Langue
 menu-diagnostics = Diagnostics
 
-## Barre d'outils et zoom
+## Zoom
 
-toolbar-open = Ouvrir…
 toolbar-fit = Ajuster
 zoom-day = Jour
 zoom-week = Semaine
@@ -977,17 +976,8 @@ menu-task = Tâche
 menu-format = Format
 menu-help = Aide
 menu-mark-percent = Marquer à { $percent } % achevé
-toolbar-percent = { $percent } %
-toolbar-percent-hint = Marquer la sélection à { $percent } % achevé
 menu-toggle-mode = Basculer manuelle / automatique
-toolbar-mode = Mode
-toolbar-mode-hint = Basculer la sélection en planification manuelle ou automatique
 menu-toggle-active = Activer / désactiver
-toolbar-active = Actif
-toolbar-active-hint = Activer ou désactiver la sélection
-toolbar-filter = Filtre personnalisé
-toolbar-search = Rechercher
-toolbar-print-mode = Mode impression
 menu-page-setup = Mise en page…
 menu-print-mode = Mode impression
 menu-gallery = Modèles de mise en forme…
@@ -1108,3 +1098,139 @@ paste-report-tracking = { $count ->
     }
 token-schedule-title = Titre « Planning prévisionnel »
 menu-relative-months = Mois relatifs (M1, M2…)
+
+# --- RUBAN L0 (ADR-0017) ---
+ribbon-tab-task = Tâche
+ribbon-tab-resource = Ressource
+ribbon-tab-project = Projet
+ribbon-tab-view = Affichage
+ribbon-tab-format = Format
+ribbon-group-view = Affichage
+ribbon-group-clipboard = Presse-papiers
+ribbon-group-formatting = Mise en forme
+ribbon-group-schedule = Planification
+ribbon-group-tasks = Tâches
+ribbon-group-insert = Insérer
+ribbon-group-properties = Propriétés
+ribbon-group-editing = Édition
+ribbon-group-assignments = Affectations
+ribbon-group-status = État
+ribbon-group-print = Impression
+ribbon-group-task-views = Affichages des tâches
+ribbon-group-resource-views = Affichages des ressources
+ribbon-group-data = Données
+ribbon-group-zoom = Zoom
+ribbon-group-split-view = Fractionner l'affichage
+ribbon-group-interface = Interface
+ribbon-group-columns = Colonnes
+ribbon-group-bar-styles = Styles des barres
+ribbon-group-chart-style = Styles du diagramme
+ribbon-group-show-hide = Afficher/Masquer
+ribbon-gallery-short = Modèles…
+ribbon-percent = { $percent } %
+ribbon-link = Lier
+ribbon-unlink = Délier
+ribbon-indent = Indenter
+ribbon-outdent = Désindenter
+ribbon-inactivate = Désactiver
+ribbon-manual-schedule = Planifier manuellement
+ribbon-insert-task = Tâche
+ribbon-insert-summary = Récapitulative
+ribbon-insert-milestone = Jalon
+ribbon-information = Informations
+ribbon-notes = Notes
+ribbon-find = Rechercher
+ribbon-scroll-to-task = Défiler jusqu'à la tâche
+ribbon-set-baseline = Définir la référence
+ribbon-update-project = Mettre à jour le projet
+ribbon-export-pdf = Exporter en PDF…
+ribbon-sort = Trier
+ribbon-outline = Mode plan
+ribbon-filter = Filtre
+ribbon-timescale = Échelle de temps
+ribbon-zoom-in = Zoom avant
+ribbon-zoom-out = Zoom arrière
+ribbon-entire-project = Projet entier
+ribbon-timeline = Chronologie
+ribbon-collapse = Réduire le ruban
+ribbon-columns = Colonnes
+ribbon-critical-tasks = Tâches critiques
+ribbon-tip-save = Enregistre le projet.
+ribbon-tip-undo = Annule la dernière modification.
+ribbon-tip-redo = Rétablit la modification annulée.
+ribbon-tip-gantt-chart = Affiche les tâches et leurs barres dans le temps.
+ribbon-tip-tracking-gantt = Compare les barres planifiées à la ligne de base et montre l'avancement.
+ribbon-tip-resource-sheet = Liste les ressources du projet.
+ribbon-tip-resource-usage = Montre le travail affecté à chaque ressource, période par période.
+ribbon-tip-format-bars = Change la couleur, l'épaisseur et les textes des barres.
+ribbon-tip-view-menu = Choisit la vue principale.
+ribbon-tip-paste = Colle les tâches copiées avant la ligne sélectionnée.
+ribbon-tip-cut = Copie les tâches sélectionnées et les supprime.
+ribbon-tip-copy = Copie les tâches sélectionnées.
+ribbon-tip-paste-special = Choisit ce que le collage reprend.
+ribbon-tip-gallery = Applique un modèle de mise en forme au planning.
+ribbon-tip-link = Lie les tâches sélectionnées de fin à début, dans l'ordre de sélection.
+ribbon-tip-unlink = Supprime les liens entre les tâches sélectionnées.
+ribbon-tip-indent = Fait des tâches sélectionnées des sous-tâches de la tâche au-dessus.
+ribbon-tip-outdent = Remonte les tâches sélectionnées d'un niveau.
+ribbon-tip-inactivate = Garde la tâche dans le plan sans qu'elle compte dans le planning.
+ribbon-tip-manual-schedule = Bascule les tâches sélectionnées entre planification manuelle et automatique.
+ribbon-tip-insert-task = Insère une tâche avant la ligne sélectionnée.
+ribbon-tip-insert-summary = Insère une tâche récapitulative au-dessus des tâches sélectionnées.
+ribbon-tip-insert-milestone = Insère un jalon de durée nulle avant la ligne sélectionnée.
+ribbon-tip-information = Ouvre les informations de la tâche active.
+ribbon-tip-notes = Ouvre les notes de la tâche active.
+ribbon-tip-add-to-timeline = Ajoute les tâches sélectionnées à la chronologie, ou les en retire. La chronologie est enregistrée avec le style du projet.
+ribbon-tip-find = Recherche un texte dans les tâches.
+ribbon-tip-scroll-to-task = Fait défiler le Gantt jusqu'à la barre de la tâche active.
+ribbon-tip-assign-resources = Affecte des ressources aux tâches sélectionnées.
+ribbon-tip-project-information = Dates, calendrier et date d'état du projet.
+ribbon-tip-working-time = Jours et heures travaillés, congés.
+ribbon-tip-set-baseline = Enregistre le planning actuel comme référence.
+ribbon-tip-update-project = Replanifie le travail restant après une date.
+ribbon-tip-print-mode = Prépare l'impression : colonnes, page et aperçu.
+ribbon-tip-page-setup = Papier, marges, en-tête et pied de page.
+ribbon-tip-export-pdf = Enregistre le planning en PDF.
+ribbon-tip-sort = Trie les tâches, ou revient à l'ordre des ID.
+ribbon-tip-outline = Affiche les tâches jusqu'à un niveau de plan.
+ribbon-tip-filter = Affiche seulement les tâches qui répondent à un critère.
+ribbon-tip-timescale = Unité de l'échelle de temps.
+ribbon-tip-zoom-in = Affiche des unités de temps plus fines.
+ribbon-tip-zoom-out = Affiche des unités de temps plus larges.
+ribbon-tip-entire-project = Ajuste l'échelle pour voir tout le projet.
+ribbon-tip-timeline = Affiche la chronologie au-dessus du Gantt.
+ribbon-tip-ai-panel = Affiche le volet des opérations des agents IA.
+ribbon-tip-diagnostics = Affiche les erreurs et avertissements du projet.
+ribbon-tip-theme = Thème clair, sombre ou celui du système.
+ribbon-tip-language = Langue de l'interface.
+ribbon-tip-collapse = N'affiche que les onglets ; un clic sur un onglet ouvre le ruban par-dessus la vue.
+ribbon-tip-columns = Affiche ou masque des colonnes de la table.
+ribbon-tip-critical-tasks = Met en évidence les tâches du chemin critique.
+ribbon-tip-relative-months = Numérote les mois depuis le début du projet en haut de l'échelle.
+ribbon-tip-chart-only = Réduit la table au N° et au nom.
+ribbon-reason-no-document = Ouvrez ou créez un projet.
+ribbon-reason-no-selection = Sélectionnez au moins une tâche.
+ribbon-reason-nothing-to-undo = Rien à annuler.
+ribbon-reason-nothing-to-redo = Rien à rétablir.
+ribbon-reason-task-view = Affichez une vue des tâches (Diagramme de Gantt).
+menu-insert-summary = Insérer une tâche récapitulative
+menu-insert-milestone = Insérer un jalon
+menu-task-notes = Notes…
+timeline-add = Ajouter à la chronologie
+timeline-remove = Retirer de la chronologie
+timeline-too-many = La chronologie compte au plus { $max } tâches : rien n'a été ajouté.
+timeline-empty-hint = Clic droit sur une tâche, puis « Ajouter à la chronologie »
+
+# --- RUBAN L1 ---
+
+# --- RUBAN L2 ---
+
+# --- RUBAN L3 ---
+new-milestone-name = Nouveau jalon
+new-summary-name = Nouvelle tâche récapitulative
+insert-summary-not-adjacent = Sélectionnez des tâches voisines, de même niveau, pour les regrouper sous une récapitulative.
+scroll-task-hidden = La tâche active est masquée par la vue (filtre ou mode plan).
+
+# --- RUBAN L4 ---
+
+# --- RUBAN L5 ---

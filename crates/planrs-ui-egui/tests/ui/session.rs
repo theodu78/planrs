@@ -253,6 +253,15 @@ fn check_keymap_entry(i: usize) {
         }
         // Filtres, tri, recherche, repli (J8 lot L9) : `filters.rs`.
         binding if crate::filters::is_view_entry(binding) => crate::filters::check_keymap_entry(i),
+        // Ruban (ADR-0017, L0) : Ctrl/Cmd+F1 replie puis déplie le ruban.
+        Binding::Ui(UiBinding::ToggleRibbon) => {
+            let mut harness = harness();
+            harness.run();
+            press(&mut harness, i);
+            assert!(harness.state().state.ribbon.collapsed);
+            press(&mut harness, i);
+            assert!(!harness.state().state.ribbon.collapsed);
+        }
         other => panic!("entrée {i} sans vérification : {other:?}"),
     }
 }
@@ -337,6 +346,7 @@ keymap_entry_tests! {
     ui_keymap_each_shortcut_dispatches_58 => 58,
     ui_keymap_each_shortcut_dispatches_59 => 59,
     ui_keymap_each_shortcut_dispatches_60 => 60,
+    ui_keymap_each_shortcut_dispatches_61 => 61,
 }
 
 /// Lot refusé : UID absent.
@@ -527,10 +537,9 @@ fn ui_edit_menu_undo_redo() {
     let mut harness = harness();
     demo_with_one_edit(&mut harness);
     for (item, expected) in [(TextId::MenuUndo, (0, 1)), (TextId::MenuRedo, (1, 0))] {
-        harness.get_by_label(&fr(TextId::MenuEdit)).click();
-        harness.run();
-        harness.get_by_label_contains(&fr(item)).click();
-        harness.run();
+        crate::click(&mut harness, &fr(TextId::MenuEdit));
+        let label = fr(item);
+        crate::click_where(&mut harness, |text| text.contains(&label));
         assert_eq!(history_len(harness.state()), expected, "{item:?}");
     }
 }

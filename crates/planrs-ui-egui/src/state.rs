@@ -19,12 +19,17 @@
 //! écriture du style dans le fichier ; même règle, la version reste 1 (un
 //! état J7 se lit sans avertissement). Filtre, tri et repli sont des vues
 //! non persistées ([`TaskViewState`]).
+//!
+//! ADR-0017 (contrat L0) : préférences du ruban ([`RibbonPrefs`] : onglet,
+//! repli) et visibilité de la chronologie ; même règle, la version reste 1
+//! (un état J8 se lit sans avertissement).
 
 use planrs_automation::filter::{FilterPreset, TaskFilter};
 use planrs_render::style::{DocStyle, TemplateId};
 use serde::{Deserialize, Serialize};
 
 use crate::column::{Column, ColumnState};
+use crate::ribbon::RibbonPrefs;
 use crate::timescale::TimeScaleZoom;
 
 /// Version du format JSON. Elle s'incrémente quand le sens d'un champ change
@@ -61,6 +66,10 @@ pub const MAX_OUTLINE_LEVEL: u8 = 9;
 /// Préférences d'interface persistées.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "préférences indépendantes, persistées telles quelles"
+)]
 pub struct UiState {
     /// Version du format ([`UI_STATE_VERSION`]).
     pub version: u32,
@@ -96,6 +105,11 @@ pub struct UiState {
     /// « Graphique seul » à l'écran (J8 lot L15, H-UI-64) : la table est
     /// réduite au N° et au Nom, les colonnes choisies sont gardées.
     pub chart_only: bool,
+    /// Ruban : dernier onglet, repli (ADR-0017, H-UI-69, H-UI-72).
+    pub ribbon: RibbonPrefs,
+    /// Chronologie affichée au-dessus du Gantt (ADR-0017, H-UI-78 : vrai par
+    /// défaut).
+    pub timeline_visible: bool,
 }
 
 /// Préférences persistées de la vue des tâches (J8, ADR-0016 D2) : seul
@@ -372,6 +386,8 @@ impl Default for UiState {
             user_templates: Vec::new(),
             write_style_to_file: true,
             chart_only: false,
+            ribbon: RibbonPrefs::default(),
+            timeline_visible: true,
         }
     }
 }
@@ -432,6 +448,8 @@ impl UiState {
             user_templates: reader.list("user_templates", defaults.user_templates),
             write_style_to_file: reader.field("write_style_to_file", defaults.write_style_to_file),
             chart_only: reader.field("chart_only", defaults.chart_only),
+            ribbon: reader.field("ribbon", defaults.ribbon),
+            timeline_visible: reader.field("timeline_visible", defaults.timeline_visible),
         };
         let warning = (!reader.bad.is_empty()).then_some(StateLoadError::Fields(reader.bad));
         (state.normalized(), warning)
@@ -813,6 +831,39 @@ mod tests {
         assert_eq!(state.default_template, TemplateId::Sobre);
         assert!(state.task_view.highlight_critical && state.write_style_to_file);
         assert!(!state.chart_only);
+    }
+
+    /// ADR-0017 (L0) : un état J8 (sans `ribbon` ni `timeline_visible`) se
+    /// lit sans avertissement, champs nouveaux à leur défaut ; champs
+    /// relus à l'identique ; champ illisible ⇒ son défaut seul.
+    #[test]
+    fn ui_state_v1_fixture() {
+        use crate::ribbon::{RibbonPrefs, RibbonTab};
+
+        const J8: &str = include_str!("../tests/fixtures/ui_state_v1_j8.json");
+        assert!(!J8.contains("ribbon") && !J8.contains("timeline_visible"));
+        let (state, warning) = UiState::from_json_lenient(J8);
+        assert!(warning.is_none(), "{warning:?}");
+        assert_eq!(state, UiState::default());
+        assert_eq!(state.ribbon, RibbonPrefs::default());
+        assert_eq!(state.ribbon.tab, RibbonTab::Task);
+        assert!(state.timeline_visible && !state.ribbon.collapsed);
+        let state = UiState {
+            ribbon: RibbonPrefs {
+                tab: RibbonTab::Format,
+                collapsed: true,
+            },
+            timeline_visible: false,
+            ..UiState::default()
+        };
+        let (read, warning) = UiState::from_json_lenient(&state.to_json().unwrap());
+        assert!(warning.is_none(), "{warning:?}");
+        assert_eq!(read, state);
+        let (read, warning) =
+            UiState::from_json_lenient(r#"{"ribbon":{"tab":"calendrier"},"timeline_visible":false}"#);
+        assert_eq!(read.ribbon, RibbonPrefs::default());
+        assert!(!read.timeline_visible);
+        assert!(matches!(warning, Some(StateLoadError::Fields(f)) if f == ["ribbon"]));
     }
 
     /// Champs J8 relus à l'identique ; bornes appliquées ; une entrée de

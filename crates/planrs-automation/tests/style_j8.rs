@@ -468,3 +468,160 @@ proptest! {
         }
     }
 }
+
+/// ADR-0017 (lot L0), P56 étendue : chronologie (`timeline`) et case de
+/// mise en page (`page.timeline`) écrites par `style.apply`, relues à
+/// l'identique ; MSPDI stylé lu puis écrit = mêmes octets ; une entrée
+/// d'annulation.
+#[test]
+fn style_timeline_roundtrip() {
+    let mut s = session();
+    let unstyled = xml(&s);
+    let mut page = serde_json::to_value(template(TemplateId::Sobre).page).unwrap();
+    page["timeline"] = json!(true);
+    call(
+        &mut s,
+        "style.apply",
+        json!({ "template": "sobre", "patch": { "timeline": { "tasks": [1, 2] }, "page": page } }),
+    );
+    let resolved = style::effective_style(s.project(), HEADLESS_DEFAULT);
+    assert_eq!(resolved.timeline.tasks, vec![1, 2]);
+    assert!(resolved.page.timeline);
+    let first = xml(&s);
+    let (opened, diags) = reopen(first.as_bytes());
+    assert!(
+        diags.iter().all(|d| d.code.code() != "style.ignored"),
+        "{diags:?}"
+    );
+    assert_eq!(style::doc_style(opened.project()), style::doc_style(s.project()));
+    assert_eq!(xml(&opened), first);
+    // Une surcharge seule remplace la liste en entier.
+    call(
+        &mut s,
+        "style.apply",
+        json!({ "patch": { "timeline": { "tasks": [2] } } }),
+    );
+    let resolved = style::effective_style(s.project(), HEADLESS_DEFAULT);
+    assert_eq!(resolved.timeline.tasks, vec![2]);
+    assert!(resolved.page.timeline, "page gardée");
+    call(&mut s, "history.undo", json!({}));
+    call(&mut s, "history.undo", json!({}));
+    assert_eq!(xml(&s), unstyled, "MSPDI sans style : octets inchangés");
+}
+
+/// H-UI-79 : tâche de plus grand UID sur la frise, supprimée, enregistrer,
+/// rouvrir, ajouter une tâche (qui reprend cet UID) ⇒ frise vide ; les UID
+/// des tâches présentes sont gardés.
+#[test]
+fn h_ui_79_deleted_uid_dropped_on_reopen() {
+    let mut s = session();
+    let add = Batch::from_json(json!({
+        "format_version": 1,
+        "ops": [ { "op": "task.add", "name": "Toit", "duration": { "text": "2j" } } ]
+    }))
+    .unwrap();
+    s.apply(&add, ApplyMode::Commit).unwrap();
+    let last = s.project().tasks.iter().map(|t| t.uid().get()).max().unwrap();
+    call(
+        &mut s,
+        "style.apply",
+        json!({ "patch": { "timeline": { "tasks": [1, last] } } }),
+    );
+    let delete = Batch::from_json(json!({
+        "format_version": 1,
+        "ops": [ { "op": "task.delete", "uid": last } ]
+    }))
+    .unwrap();
+    s.apply(&delete, ApplyMode::Commit).unwrap();
+    let (mut opened, _) = reopen(xml(&s).as_bytes());
+    assert_eq!(
+        style::effective_style(opened.project(), HEADLESS_DEFAULT)
+            .timeline
+            .tasks,
+        vec![1]
+    );
+    opened.apply(&add, ApplyMode::Commit).unwrap();
+    assert!(
+        opened
+            .project()
+            .tasks
+            .get(planrs_core::TaskUid::new(last))
+            .is_some(),
+        "UID repris"
+    );
+    assert_eq!(
+        style::effective_style(opened.project(), HEADLESS_DEFAULT)
+            .timeline
+            .tasks,
+        vec![1]
+    );
+}
+
+/// ADR-0017 D7 : `style.apply { template }` (agent MCP) garde la liste de
+/// la chronologie et les couleurs de phase ; `patch` les remplace ;
+/// `reset` les retire.
+#[test]
+fn style_apply_template_keeps_timeline() {
+    let mut s = session();
+    call(
+        &mut s,
+        "style.apply",
+        json!({ "patch": { "timeline": { "tasks": [1, 2] } } }),
+    );
+    call(&mut s, "style.apply", json!({ "template": "chantier" }));
+    let resolved = style::effective_style(s.project(), HEADLESS_DEFAULT);
+    assert_eq!(resolved.timeline.tasks, vec![1, 2]);
+    call(
+        &mut s,
+        "style.apply",
+        json!({ "template": "sobre", "patch": { "timeline": { "tasks": [2] } } }),
+    );
+    let resolved = style::effective_style(s.project(), HEADLESS_DEFAULT);
+    assert_eq!(resolved.timeline.tasks, vec![2]);
+    call(&mut s, "style.apply", json!({ "reset": true }));
+    assert!(
+        style::effective_style(s.project(), HEADLESS_DEFAULT)
+            .timeline
+            .is_empty()
+    );
+}
+
+/// ADR-0017 (lot L0) : 201 UID ou doublons ⇒ `style.apply` refusé
+/// (`style.invalid`), rien écrit ; charge du fichier hors bornes ⇒ style
+/// retiré, diagnostic `style.ignored` ; jamais de panique.
+#[test]
+fn style_timeline_bounded() {
+    let mut s = session();
+    let before = xml(&s);
+    let many: Vec<u32> = (1..=201).collect();
+    for tasks in [json!(many), json!([2, 2]), json!([3, 1])] {
+        let err = call_with(
+            &mut s,
+            &env(),
+            "style.apply",
+            json!({ "template": "sobre", "patch": { "timeline": { "tasks": tasks } } }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, codes::STYLE_INVALID, "{err:?}");
+        assert_eq!(xml(&s), before);
+    }
+    let payload = r#"{"base":"sobre","over":{"timeline":{"tasks":[2,2]}},"v":1}"#;
+    let bad = before.replacen("<Project", &format!("<?planrs-style {payload}?>\n<Project"), 1);
+    let (opened, diags) = reopen(bad.as_bytes());
+    assert!(
+        diags.iter().any(|d| d.code.code() == "style.ignored"),
+        "{diags:?}"
+    );
+    assert!(style::doc_style(opened.project()).is_none());
+}
+
+/// ADR-0017 (lot L0) : squelette de `timeline::input` ; extrémités = dates
+/// du planning (règle 3), aucune autre donnée avant L1.
+#[test]
+fn timeline_input_skeleton_uses_engine_bounds() {
+    let s = session();
+    let spec = planrs_render::style::TimelineSpec { tasks: vec![1, 99] };
+    let input = planrs_automation::timeline::input(&s, &spec, Language::Fr);
+    assert_eq!(input.start, s.schedule().project_start);
+    assert_eq!(input.finish, s.schedule().project_finish);
+}

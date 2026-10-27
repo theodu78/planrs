@@ -6,6 +6,26 @@ Une version publiée a une section `## [X.Y.Z] - AAAA-MM-JJ` en tête (sous une 
 
 ## [Non publié]
 
+Ruban à onglets et chronologie (ADR-0017, cahier `docs/plans/ribbon.md`), demandés avant `v1.0.0` pour que l'utilisateur occasionnel de MS Project retrouve ses repères dès l'ouverture. Aucune convention n'est « vérifiée contre MS Project » (`docs/scorecard.md`).
+
+### Ajouté
+- **Ruban à onglets** Tâche, Ressource, Projet, Affichage, Format, sous la barre de menus : groupes nommés (Presse-papiers, Planification, Insérer, Propriétés, Édition, Zoom, Fractionner l'affichage…), grands et petits boutons à icône et libellé, listes déroulantes, cases ; barre d'accès rapide (Enregistrer, Annuler, Rétablir) ; info-bulles avec le raccourci clavier et, pour un élément grisé, la raison ; réduction progressive des groupes jusqu'à 800 px de large sans débordement. Chaque élément pousse la même action que son entrée de la barre de menus, qui reste (accès clavier, macOS).
+- Repli du ruban par double-clic sur un onglet, Ctrl+F1 (Cmd+F1 sur macOS) ou Affichage → Réduire le ruban ; replié, un clic sur un onglet ouvre le corps en surimpression. Onglet choisi et repli mémorisés.
+- Icônes Lucide 1.55.0 (ISC, MIT pour les icônes dérivées de Feather), vectorielles, à la couleur du thème, nettes à toute échelle ; aucune icône ni capture Microsoft.
+- Commandes nouvelles, composées de commandes existantes : Insérer → Jalon et Récapitulative (une annulation), Notes de la tâche, Défiler jusqu'à la tâche ; entrées jumelles ajoutées aux menus (Chronologie, Réduire le ruban, Colonnes, Zoom avant et arrière…).
+- **Chronologie** au-dessus du Gantt (Affichage → Chronologie, cochée par défaut) : début, fin et date d'état du projet, graduations, tâches et jalons ajoutés par Tâche → Ajouter à la chronologie ou par le menu contextuel (une annulation, 200 tâches au plus, enregistrées dans le style du document), rectangle de la partie visible du Gantt, clic sur un élément = sélection et défilement.
+- Impression de la chronologie en tête de la première page (case « Chronologie » de Mise en page, cochée d'office par Mode impression quand elle est affichée) : aperçu, PDF, SVG, `project.export_pdf` de la CLI et du serveur MCP.
+- Les archives de release (DMG, zip, archive Linux, paquet web) portent un dossier `licenses/` : licences du code, `NOTICE`, licences d'Inter et de Lucide.
+
+### Modifié
+- Le ruban remplace les deux rangées de boutons de J7 et J8 ; la vue Gantt commence sous la chronologie (repliable, masquable).
+
+### Corrigé
+- Appliquer un modèle de la galerie vidait la liste de la chronologie du document ; elle est gardée, comme les couleurs de phase, et n'est jamais enregistrée dans un modèle personnel.
+
+### Limites connues
+- Libellés français des onglets et groupes non relus sur l'interface française de Project ; Cmd+F1 peut être pris par macOS (le double-clic et le menu Affichage restent) ; ruban déplié et chronologie prennent environ 216 px au-dessus de la table (replier sur un petit écran).
+
 ## [1.0.0-rc.1] - 2026-10-26
 
 Jalon J8 (ADR-0016, cahier `docs/plans/j8.md`) : usage quotidien, mise en page et modèles, export PDF, panneau d'opérations IA, traductions, version web, releases multiplateformes. Première pré-version publique prévue ; aucune règle J8 n'est « vérifiée contre MS Project » (`docs/scorecard.md`).

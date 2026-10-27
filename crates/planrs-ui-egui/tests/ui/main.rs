@@ -1,5 +1,5 @@
 //! Tests d'interface `egui_kittest` **sans rendu** (aucun GPU) : parcours de
-//! l'accueil à l'exemple, menus, barre d'outils, langue, thème, zoom,
+//! l'accueil à l'exemple, menus, ruban, langue, thème, zoom,
 //! ouverture annulée, bandeau d'erreur, sélection et défilement synchronisé ;
 //! session d'édition, annuler/rétablir et raccourcis (`session.rs`) ;
 //! édition des cellules et ligne vide de fin (`edit.rs`) ;
@@ -10,7 +10,10 @@
 //! par le contrat (lot L0), remplis par leur lot. Modules J8 (`row_view`,
 //! `filters`, `search`, `outline`, `clipboard`, `csv_import`, `styled`,
 //! `ai_panel`, `pseudo`, `web_keys`, `j8_e2e`) déclarés vides par le contrat
-//! J8 (lot L0, ADR-0016), remplis par leur lot.
+//! J8 (lot L0, ADR-0016), remplis par leur lot. Modules du ruban et de la
+//! chronologie (`ribbon`, `ribbon_commands`, `timeline`) posés par le
+//! contrat ADR-0017 (lot L0), remplis par L2, L3 et L4 ; scénario de bout
+//! en bout du ruban (`ribbon_e2e`) ajouté par le lot L6.
 //!
 //! Cible unique `ui` (un seul binaire lié à wgpu, ADR-0011, décision 12).
 //! Les libellés cherchés sont construits par `Texts` (jamais en dur : le
@@ -49,6 +52,9 @@ mod pseudo;
 mod recovery;
 mod relay;
 mod resource_sheet;
+mod ribbon;
+mod ribbon_commands;
+mod ribbon_e2e;
 mod row_view;
 mod search;
 mod session;
@@ -56,6 +62,7 @@ mod snapshots;
 mod structure;
 mod styled;
 mod task_info;
+mod timeline;
 mod tracking;
 mod usage;
 mod visible;
@@ -72,6 +79,7 @@ use planrs_core::Moment;
 use planrs_ui_egui::document::{self, OpenError};
 use planrs_ui_egui::i18n::{Arg, TextId, Texts};
 use planrs_ui_egui::io::OpenEvent;
+use planrs_ui_egui::ribbon::RibbonTab;
 use planrs_ui_egui::timescale::{TimeAxis, zoom_anchor};
 use planrs_ui_egui::{
     Action, App, DocOrigin, Env, FileService, Language, LanguagePref, ThemePref, TimeScaleZoom, UiState,
@@ -217,10 +225,111 @@ fn fr(id: TextId) -> String {
     Texts::new(Language::Fr).get(id)
 }
 
-/// Clique sur l'unique widget portant `label`, puis laisse l'interface se
-/// stabiliser.
+/// Le nœud `node` est-il un élément du ruban : onglet (rôle `Tab` dans le
+/// panneau du ruban), ou
+/// rectangle d'un élément relevé par `view::ribbon::drawn` (barre d'accès
+/// rapide, corps, surimpression) ? Un menu ouvert passe au-dessus du ruban :
+/// la position seule ne suffit pas.
+fn in_ribbon(harness: &Harness<'static, App>, node: &egui_kittest::Node<'_>) -> bool {
+    use egui_kittest::kittest::NodeT as _;
+    let drawn = planrs_ui_egui::view::ribbon::drawn(&harness.ctx);
+    let rect = node.rect();
+    if node.accesskit_node().role() == egui::accesskit::Role::Tab && drawn.panel.contains(rect.center()) {
+        return true;
+    }
+    drawn
+        .items
+        .iter()
+        .any(|item| item.rect.min.distance(rect.min) < 0.5 && item.rect.max.distance(rect.max) < 0.5)
+}
+
+/// Clique sur l'unique widget portant `label` **hors du ruban**, puis laisse
+/// l'interface se stabiliser. Lot L5 : les onglets Tâche, Projet,
+/// Affichage, Format et la barre d'accès rapide (« Enregistrer »,
+/// « Annuler ») portent le nom d'un menu ou d'un bouton de confirmation ;
+/// un élément du ruban se clique par [`ribbon_click`].
 fn click(harness: &mut Harness<'static, App>, label: &str) {
-    harness.get_by_label(label).click();
+    {
+        let mut found = harness
+            .query_all_by_label(label)
+            .filter(|n| !in_ribbon(harness, n));
+        let node = found
+            .next()
+            .unwrap_or_else(|| panic!("« {label} » absent hors du ruban"));
+        assert!(found.next().is_none(), "« {label} » en double hors du ruban");
+        node.click();
+    }
+    harness.run();
+}
+
+/// Un nœud nommé `label` existe-t-il hors du ruban (onglet « Notes » de
+/// la fenêtre des informations, homonyme d'un élément du ruban) ?
+fn shown_off_ribbon(harness: &Harness<'static, App>, label: &str) -> bool {
+    harness.query_all_by_label(label).any(|n| !in_ribbon(harness, &n))
+}
+
+/// Comme [`click`], pour l'unique nœud hors du ruban dont le nom vérifie
+/// `pred` (entrée de menu suivie de son raccourci).
+fn click_where(harness: &mut Harness<'static, App>, pred: impl Fn(&str) -> bool) {
+    {
+        let mut found = harness
+            .query_all_by(|node| node.label().is_some_and(|text| pred(&text)))
+            .filter(|n| !in_ribbon(harness, n));
+        let node = found.next().expect("aucun nœud hors du ruban");
+        assert!(found.next().is_none(), "plusieurs nœuds hors du ruban");
+        node.click();
+    }
+    harness.run();
+}
+
+/// Échelle de temps par le ruban (Affichage → Échelle de temps ▾ ; boutons
+/// Jour à Trimestre de la barre d'outils jusqu'au lot L5).
+fn ribbon_zoom(harness: &mut Harness<'static, App>, zoom: TimeScaleZoom) {
+    ribbon_menu(
+        harness,
+        RibbonTab::View,
+        &fr(TextId::RibbonTimescale),
+        &fr(zoom.label()),
+    );
+}
+
+/// Ouvre la liste `list` de l'onglet `tab` du ruban et choisit `entry`.
+fn ribbon_menu(harness: &mut Harness<'static, App>, tab: RibbonTab, list: &str, entry: &str) {
+    ribbon_click(harness, tab, list);
+    click(harness, entry);
+}
+
+/// Clique sur l'élément `label` de l'onglet `tab` du ruban (lot L5 : les
+/// tests J7 et J8 qui cliquaient l'ancienne barre d'outils passent par
+/// lui) : onglet choisi par son nœud (rôle `Tab`), élément cherché dans le
+/// rectangle du ruban (les menus fermés n'ont pas de nœud, mais l'écran
+/// peut porter un homonyme ailleurs).
+fn ribbon_click(harness: &mut Harness<'static, App>, tab: RibbonTab, label: &str) {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT as _;
+    let tab_label = fr(match tab {
+        RibbonTab::Task => TextId::RibbonTabTask,
+        RibbonTab::Resource => TextId::RibbonTabResource,
+        RibbonTab::Project => TextId::RibbonTabProject,
+        RibbonTab::View => TextId::RibbonTabView,
+        RibbonTab::Format => TextId::RibbonTabFormat,
+    });
+    if harness.state().state.ribbon.tab != tab {
+        harness.get_by_role_and_label(Role::Tab, &tab_label).click();
+        harness.run();
+    }
+    assert_eq!(harness.state().state.ribbon.tab, tab);
+    let panel = planrs_ui_egui::view::ribbon::drawn(&harness.ctx).panel;
+    {
+        let mut found = harness
+            .query_all_by_label(label)
+            .filter(|n| n.accesskit_node().role() != Role::Tab && panel.contains(n.rect().center()));
+        let node = found
+            .next()
+            .unwrap_or_else(|| panic!("« {label} » absent de l'onglet {tab:?} du ruban"));
+        assert!(found.next().is_none(), "« {label} » en double dans le ruban");
+        node.click();
+    }
     harness.run();
 }
 
@@ -289,8 +398,14 @@ fn language_switch_relabels() {
 fn language_switch_renames_demo_document() {
     let mut harness = harness();
     open_demo(&mut harness);
-    // Bouton « English » de la barre d'outils (seul visible sans menu ouvert).
-    click(&mut harness, &fr(TextId::LangEn));
+    // Ruban, Affichage → Langue ▾ → English (bouton de la barre d'outils
+    // jusqu'au lot L5).
+    ribbon_menu(
+        &mut harness,
+        RibbonTab::View,
+        &fr(TextId::MenuLanguage),
+        &fr(TextId::LangEn),
+    );
     let app = harness.state();
     assert_eq!(app.state.language, LanguagePref::En);
     let name = &app.document.as_ref().unwrap().origin.name;
@@ -307,7 +422,7 @@ fn zoom_buttons_change_zoom() {
         TimeScaleZoom::Month,
         TimeScaleZoom::Quarter,
     ] {
-        click(&mut harness, &fr(zoom.label()));
+        ribbon_zoom(&mut harness, zoom);
         assert_eq!(harness.state().state.zoom, zoom);
     }
 }
@@ -316,7 +431,7 @@ fn zoom_buttons_change_zoom() {
 fn zoom_step_and_horizontal_scroll_are_bounded() {
     let mut harness = harness();
     open_demo(&mut harness);
-    click(&mut harness, &fr(TimeScaleZoom::Week.label()));
+    ribbon_zoom(&mut harness, TimeScaleZoom::Week);
     harness.state_mut().dispatch(Action::ScrollGanttX(-1.0e6));
     harness.run();
     assert!(harness.state().view().gantt_scroll_x.abs() < f32::EPSILON);
@@ -349,10 +464,20 @@ fn theme_switch_changes_ctx_theme() {
     let mut harness = harness();
     open_demo(&mut harness);
     assert_eq!(harness.ctx.theme(), egui::Theme::Light);
-    click(&mut harness, &fr(TextId::ThemeDark));
+    ribbon_menu(
+        &mut harness,
+        RibbonTab::View,
+        &fr(TextId::MenuTheme),
+        &fr(TextId::ThemeDark),
+    );
     assert_eq!(harness.state().state.theme, ThemePref::Dark);
     assert_eq!(harness.ctx.theme(), egui::Theme::Dark);
-    click(&mut harness, &fr(TextId::ThemeLight));
+    ribbon_menu(
+        &mut harness,
+        RibbonTab::View,
+        &fr(TextId::MenuTheme),
+        &fr(TextId::ThemeLight),
+    );
     assert_eq!(harness.ctx.theme(), egui::Theme::Light);
 }
 
@@ -558,7 +683,7 @@ fn zoom_button_keeps_center() {
     let view = harness.state().view();
     let (scroll, width) = (view.gantt_scroll_x, view.last_gantt_width);
     assert!(scroll > 0.0);
-    click(&mut harness, &fr(TimeScaleZoom::Week.label()));
+    ribbon_zoom(&mut harness, TimeScaleZoom::Week);
     let app = harness.state();
     assert_eq!(app.state.zoom, TimeScaleZoom::Week);
     let expected =
@@ -578,12 +703,12 @@ fn fit_zoom_restores_fitted_zoom() {
     open_demo(&mut harness);
     let fitted = harness.state().state.zoom;
     assert_eq!(fitted, TimeScaleZoom::Month);
-    click(&mut harness, &fr(TextId::ZoomDay));
+    ribbon_zoom(&mut harness, TimeScaleZoom::Day);
     harness.state_mut().dispatch(Action::ScrollGanttX(2_000.0));
     harness.run();
     let view = harness.state().view();
     let (scroll, width) = (view.gantt_scroll_x, view.last_gantt_width);
-    click(&mut harness, &fr(TextId::ToolbarFit));
+    ribbon_click(&mut harness, RibbonTab::View, &fr(TextId::RibbonEntireProject));
     let app = harness.state();
     assert_eq!(app.state.zoom, fitted);
     assert!(!app.view().needs_fit);

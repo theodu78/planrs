@@ -45,7 +45,9 @@ use planrs_ui_egui::view::task_view::TaskViewOp;
 use planrs_ui_egui::{Action, App, DocOrigin, Env, FileService, LanguagePref, ThemePref, UiState};
 
 use crate::filters::{shown, view_op};
-use crate::{click, fr, harness_for, now};
+use planrs_ui_egui::ribbon::RibbonTab;
+
+use crate::{click, fr, harness_for, now, ribbon_click};
 
 /// Demandes d'enregistrement reçues par le service en mémoire.
 type Saved = Rc<RefCell<Vec<SaveRequest>>>;
@@ -406,13 +408,14 @@ fn e2e_daily_j8() {
     assert_eq!(last.outline_level.get(), 1);
     assert_ne!(last.uid(), uid(7), "UID neuf");
 
-    // 7. Marquer 50 % sur la récapitulative 1 (bouton de la barre
-    // d'outils, R-252) : ses feuilles 2 et 3 à 50 %, un lot ; le jalon 4
+    // 7. Marquer 50 % sur la récapitulative 1 (bouton du ruban, Tâche →
+    // Planification, R-252) : ses feuilles 2 et 3 à 50 %, un lot ; le jalon 4
     // (durée nulle) n'accepte que 0 ou 100 % et reste à 0.
     select(harness, uid(1), uid(1));
-    click(
+    ribbon_click(
         harness,
-        &label(TextId::ToolbarPercent, &[("percent", Arg::Count(50))]),
+        RibbonTab::Task,
+        &label(TextId::RibbonPercent, &[("percent", Arg::Count(50))]),
     );
     for n in [2, 3] {
         assert_eq!(percent(harness.state(), uid(n)), 5_000, "tâche {n}");
@@ -421,11 +424,11 @@ fn e2e_daily_j8() {
     assert_eq!(percent(harness.state(), uid(6)), 0);
     assert_eq!(history(harness.state()), (4, 0));
 
-    // 8. Basculer 6 en manuel (barre d'outils, R-253), puis saisir son
+    // 8. Basculer 6 en manuel (ruban, « Planifier manuellement », R-253), puis saisir son
     // début dans la colonne Début (R-254) : dates manuelles, pas de
     // contrainte, durée gardée.
     select(harness, uid(6), uid(6));
-    click(harness, &fr(TextId::ToolbarMode));
+    ribbon_click(harness, RibbonTab::Task, &fr(TextId::RibbonManualSchedule));
     assert!(matches!(
         project(harness.state()).tasks.get(uid(6)).unwrap().mode,
         SchedulingMode::Manual { .. }
@@ -456,9 +459,9 @@ fn e2e_daily_j8() {
 
     // 9. Inactiver 2 puis le réactiver (R-255) : deux lots.
     select(harness, uid(2), uid(2));
-    click(harness, &fr(TextId::ToolbarActive));
+    ribbon_click(harness, RibbonTab::Task, &fr(TextId::RibbonInactivate));
     assert!(!project(harness.state()).tasks.get(uid(2)).unwrap().active);
-    click(harness, &fr(TextId::ToolbarActive));
+    ribbon_click(harness, RibbonTab::Task, &fr(TextId::RibbonInactivate));
     assert!(project(harness.state()).tasks.get(uid(2)).unwrap().active);
     assert_eq!(history(harness.state()), (8, 0));
 

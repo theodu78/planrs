@@ -179,8 +179,7 @@ fn check_menu(
     menu: TextId,
     at_least: usize,
 ) {
-    harness.get_by_label(&pseudo(menu)).click();
-    harness.run();
+    crate::click(harness, &pseudo(menu));
     assert_not_cut(harness, labels, &format!("menu {menu:?}"), at_least);
     harness.key_press(egui::Key::Escape);
     harness.run();
@@ -194,7 +193,8 @@ fn pseudo_main_view_no_truncation() {
     let labels = pseudo_labels();
     let mut harness = pseudo_harness(Vec::new());
     assert_not_cut(&harness, &labels, "vue principale", 10);
-    // En-têtes de colonnes, menus et barre d'outils effectivement contrôlés.
+    // En-têtes de colonnes, menus et ruban (barre d'outils jusqu'au lot L5)
+    // effectivement contrôlés.
     // (Comparaison par texte : « Duration » est aussi le libellé de la
     // fenêtre des informations sur la tâche.)
     let seen: BTreeSet<String> = seen_ids(&harness, &labels).into_iter().map(pseudo).collect();
@@ -205,7 +205,7 @@ fn pseudo_main_view_no_truncation() {
         TextId::ColStart,
         TextId::ColFinish,
         TextId::MenuFile,
-        TextId::ToolbarFit,
+        TextId::RibbonGroupSchedule,
     ] {
         assert!(seen.contains(&pseudo(id)), "{id:?} non dessiné : {seen:?}");
     }
@@ -225,10 +225,8 @@ fn pseudo_main_view_no_truncation() {
         (TextId::MenuView, TextId::MenuOutlineLevel, 3),
         (TextId::MenuFile, TextId::MenuRecent, 1),
     ] {
-        harness.get_by_label(&pseudo(menu)).click();
-        harness.run();
-        harness.get_by_label(&pseudo(sub)).click();
-        harness.run();
+        crate::click(&mut harness, &pseudo(menu));
+        crate::click(&mut harness, &pseudo(sub));
         assert_not_cut(&harness, &labels, &format!("sous-menu {sub:?}"), at_least);
         harness.key_press(egui::Key::Escape);
         harness.run();

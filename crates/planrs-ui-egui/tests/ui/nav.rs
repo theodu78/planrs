@@ -25,7 +25,9 @@ use planrs_ui_egui::view::table::table_id;
 use planrs_ui_egui::{Action, App, TimeScaleZoom};
 use proptest::prelude::*;
 
-use crate::{fr, harness, harness_for, new_app, open_demo};
+use planrs_ui_egui::ribbon::RibbonTab;
+
+use crate::{fr, harness, harness_for, new_app, open_demo, ribbon_click};
 
 const SHIFT: Modifiers = Modifiers::SHIFT;
 const COMMAND: Modifiers = Modifiers::COMMAND;
@@ -551,8 +553,7 @@ fn nav_disabled_while_editing() {
 #[test]
 fn nav_disabled_with_menu_open() {
     let mut harness = demo_at(3, Column::Name);
-    harness.get_by_label(&fr(TextId::MenuFile)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::MenuFile));
     assert!(harness.ctx.any_popup_open() || !table_focused(&harness));
     // (Ni Entrée ni Tab : ils activeraient ou parcourraient le menu.)
     for key in [Key::ArrowDown, Key::PageDown, Key::End] {
@@ -599,28 +600,26 @@ fn nav_after_open_focuses_table() {
     assert_eq!(at(harness.state()), (3, Column::Duration));
 }
 
-/// Relecture finale J7, F5 : un clic sur la barre d'outils (ou un menu, ou
+/// Relecture finale J7, F5 : un clic sur le ruban (barre d'outils jusqu'au
+/// lot L5 ; ou un menu, ou
 /// la réponse d'une confirmation) retirait le focus de la table sans le
 /// rendre : ↓ ne faisait plus rien. La table le reprend ; un clic dans le
 /// Gantt, lui, le laisse.
 #[test]
-fn nav_focus_back_after_toolbar_click() {
+fn nav_focus_back_after_ribbon_click() {
     let mut harness = harness();
     open_demo(&mut harness);
     assert!(table_focused(&harness));
-    harness.get_by_label(&crate::fr(TextId::ToolbarFit)).click();
-    harness.run();
-    assert!(table_focused(&harness), "focus perdu après la barre d'outils");
+    ribbon_click(&mut harness, RibbonTab::View, &fr(TextId::RibbonEntireProject));
+    assert!(table_focused(&harness), "focus perdu après le ruban");
     let before = at(harness.state());
     press(&mut harness, Modifiers::NONE, Key::ArrowDown);
     assert_eq!(at(harness.state()).0, before.0 + 1);
     // Menu Édition, puis Échap qui le ferme : la navigation reprend.
-    harness.get_by_label(&crate::fr(TextId::MenuEdit)).click();
-    harness.run();
+    crate::click(&mut harness, &crate::fr(TextId::MenuEdit));
     harness.key_press(Key::Escape);
     harness.run();
-    harness.get_by_label(&crate::fr(TextId::ToolbarFit)).click();
-    harness.run();
+    ribbon_click(&mut harness, RibbonTab::View, &fr(TextId::RibbonEntireProject));
     let before = at(harness.state());
     press(&mut harness, Modifiers::NONE, Key::ArrowDown);
     assert_eq!(at(harness.state()).0, before.0 + 1);

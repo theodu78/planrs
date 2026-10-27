@@ -240,7 +240,8 @@ pub struct StyleApply {
     /// Surcharge (`StylePatch` de `planrs-render`, lue et bornée par
     /// `parse_doc_style` : au plus 64 Kio). Seule : fusionnée avec les
     /// surcharges du document (sections `colors`, `bars` et `texts` rôle
-    /// par rôle, les autres remplacées en entier).
+    /// par rôle, les autres remplacées en entier, dont `timeline` : UID des
+    /// tâches de la chronologie, triés, au plus 200).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub patch: Option<serde_json::Value>,
     /// Retire le style du document (modèle par défaut des préférences ;
@@ -325,10 +326,22 @@ pub fn effective_style(project: &Project, default: TemplateId) -> PlanStyle {
 /// en JSON canonique ; illisible, version inconnue ou hors bornes ⇒
 /// retirée, diagnostic `style.ignored` (raison `invalid`, détail de
 /// l'erreur). Jamais d'erreur d'ouverture.
+///
+/// Chronologie (ADR-0017 D7, H-UI-79) : les UID absents du projet (tâches
+/// supprimées avant l'enregistrement) sont retirés de la liste, faute de
+/// quoi une tâche neuve qui réutilise leur UID (`UidAlloc` repart du plus
+/// grand UID présent) apparaîtrait d'elle-même sur la frise. Pendant la
+/// session, la liste les garde (l'annulation d'une suppression les
+/// restitue).
 pub fn check_opened(project: &mut Project) -> Option<ImportDiagnostic> {
     let payload = style_pi::entry(&project.extras)?.payload.clone();
     match parse_doc_style(&payload) {
-        Ok(doc) => {
+        Ok(mut doc) => {
+            if let Some(timeline) = doc.over.timeline.as_mut() {
+                timeline
+                    .tasks
+                    .retain(|&uid| project.tasks.contains(planrs_core::TaskUid::new(uid)));
+            }
             style_pi::set(&mut project.extras, Some(doc.to_json()));
             None
         }
@@ -412,11 +425,25 @@ pub(super) fn apply(op: &StyleApply, ctx: &mut Ctx<'_>) -> Result<(), CommandErr
         (None, None) => {
             return Err(param("template", "« template », « patch » ou « reset » attendu"));
         }
-        (Some(t), patch) => DocStyle {
-            v: STYLE_VERSION,
-            base: t.into(),
-            over: patch.unwrap_or_default(),
-        },
+        (Some(t), patch) => {
+            // Ce qui appartient au projet et non au modèle (tâches de la
+            // chronologie, ADR-0017 D7 ; couleurs de phase, H-UI-65) est
+            // gardé s'il n'est pas dans `patch`, comme dans la galerie.
+            let mut over = patch.unwrap_or_default();
+            if let Some(current) = doc_style(ctx.project) {
+                if over.timeline.is_none() {
+                    over.timeline = current.over.timeline;
+                }
+                if over.phases.is_none() {
+                    over.phases = current.over.phases;
+                }
+            }
+            DocStyle {
+                v: STYLE_VERSION,
+                base: t.into(),
+                over,
+            }
+        }
         (None, Some(patch)) => {
             let mut doc = current_or(ctx.project, HEADLESS_DEFAULT);
             doc.over = merge_patch(&doc.over, &patch)

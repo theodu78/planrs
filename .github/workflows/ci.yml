@@ -73,6 +73,11 @@ jobs:
       - name: Textes de l'interface (text-ids)
         run: cargo xtask text-ids
 
+      # Icônes du ruban (ADR-0017, lot L0) : polylignes générées à jour des
+      # SVG Lucide vendorisés.
+      - name: Icônes du ruban (icons --check)
+        run: cargo xtask icons --check
+
       - name: planrs-core en WebAssembly
         run: cargo check -p planrs-core --target wasm32-unknown-unknown
 

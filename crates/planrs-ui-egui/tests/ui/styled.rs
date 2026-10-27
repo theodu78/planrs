@@ -342,7 +342,21 @@ fn h_ui_53_bands_on_screen() {
 /// ven 15/01/2027 17:00, « maintenant » le même jour à 08:00.
 #[test]
 fn h_ui_54_status_label_and_today() {
-    let label = |h: &Harness<'static, App>| texts(h).iter().any(|(_, t)| t == "État 15/01");
+    // Hors de la chronologie (lot L5 : visible par défaut, elle porte sa
+    // propre étiquette de date d'état, H-UI-78).
+    let label = |h: &Harness<'static, App>| {
+        // Galley posée jusqu'à un point au-dessus de la bande haute.
+        let frise = h
+            .state()
+            .view()
+            .timeline
+            .drawn
+            .as_ref()
+            .map(|d| d.rect.expand(2.0));
+        texts(h)
+            .iter()
+            .any(|(p, t)| t == "État 15/01" && !frise.is_some_and(|r| r.contains(*p)))
+    };
     let today = |id: TemplateId| rgb(template(id).tokens(Variant::Light).today_line);
     let mut classique = demo(TemplateId::Classique);
     week(&mut classique);

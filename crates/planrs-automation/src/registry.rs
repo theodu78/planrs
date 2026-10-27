@@ -530,8 +530,8 @@ pub static REGISTRY: &[CommandSpec] = &[
         "apply_style",
         Kind::Write,
         schema_of::<StyleApply>,
-        "Applique un modèle de mise en forme ou une surcharge au document, ou revient au modèle par défaut.",
-        "Apply a formatting template or an override to the document, or reset to the default template.",
+        "Applique un modèle de mise en forme ou une surcharge au document, ou revient au modèle par défaut. Un modèle garde les tâches de la chronologie et les couleurs de phase du document (sauf si `patch` les donne) ; `reset` les retire.",
+        "Apply a formatting template or an override to the document, or reset to the default template. A template keeps the document's timeline tasks and phase colours (unless `patch` sets them); `reset` removes them.",
     ),
     now(
         "style.get",

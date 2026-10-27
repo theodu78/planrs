@@ -1,6 +1,7 @@
 //! Tracé d'une page : régions de la scène (échelle répétée, parent
 //! « (suite) », lignes de la bande, troncature, légende) placées sur le
-//! papier, chacune découpée à sa zone ; en-tête et pied de page. Les
+//! papier, chacune découpée à sa zone ; chronologie en tête de la première
+//! page (H-UI-82) ; en-tête et pied de page. Les
 //! primitives sont celles du SVG (`Prim`), lues dans l'ordre de la scène.
 
 use krilla::color::rgb;
@@ -11,7 +12,7 @@ use krilla::surface::Surface;
 use planrs_render::geometry::{
     Anchor, Class, Clip, FontRef, FontWeight, Item, Paint, Part, Prim, Scene, fit_text, pattern_segments,
 };
-use planrs_render::paginate::{Page, Pages, SLOT_GAP_PT, SLOT_LINE_PT, TITLE_LINE_PT};
+use planrs_render::paginate::{Page, Pages, SLOT_GAP_PT, SLOT_LINE_PT, TIMELINE_GAP16, TITLE_LINE_PT};
 use planrs_render::style::Rgb;
 use planrs_render::{InterMetrics, Lang, TextMeasure};
 
@@ -173,6 +174,23 @@ pub fn draw_page(surface: &mut Surface<'_>, ctx: &mut PageCtx<'_>, page: &Page) 
         columns.push((x0, x1, ml));
     }
     let mut y = body_top;
+    // Chronologie en tête de la première page (H-UI-82, H-R16), sur toute
+    // la largeur imprimable.
+    if page.timeline
+        && let Some(tl) = &pages.timeline
+    {
+        let r = Region {
+            sx0: 0,
+            sx1: tl.width16,
+            sy0: 0,
+            sy1: pages.timeline16.1,
+            ox: ml,
+            oy: y,
+            k,
+        };
+        draw_items(surface, ctx, &r, &tl.items, &|_| true);
+        y += d(pages.timeline16.1.saturating_add(TIMELINE_GAP16)) * k;
+    }
     let place = |sy0: i64, sy1: i64, oy: f64| {
         columns.iter().map(move |&(sx0, sx1, ox)| Region {
             sx0,
@@ -370,10 +388,22 @@ fn with_region(
 /// (table, Gantt, aucune), dans l'ordre de la scène.
 fn draw_region(surface: &mut Surface<'_>, ctx: &mut PageCtx<'_>, r: &Region, keep: &dyn Fn(&Item) -> bool) {
     let pages = ctx.pages;
+    draw_items(surface, ctx, r, &pages.scene.items, keep);
+}
+
+/// Trace les primitives retenues de `items` dans la région (peintures de
+/// la scène), groupées par découpe, dans l'ordre.
+fn draw_items(
+    surface: &mut Surface<'_>,
+    ctx: &mut PageCtx<'_>,
+    r: &Region,
+    items: &[Item],
+    keep: &dyn Fn(&Item) -> bool,
+) {
+    let pages = ctx.pages;
     let scene = &pages.scene;
     let fonts = &mut *ctx.fonts;
     let mut start = 0_usize;
-    let items = &scene.items;
     while start < items.len() {
         let Some(clip) = items.get(start).map(|it| it.clip) else {
             break;

@@ -8,7 +8,9 @@
 //!
 //! Hypothèses d'affichage H-R : `docs/features/render.md`. J8 (ADR-0016) :
 //! style et modèles (`style`), géométrie partagée (`geometry`), pagination
-//! (`paginate`), largeurs d'Inter (H-R11).
+//! (`paginate`), largeurs d'Inter (H-R11). ADR-0017 : géométrie de la
+//! chronologie (`timeline`, H-R16), imprimée en tête de la première page
+//! (`paginate::paginate_timeline`) et du SVG (`svg_styled_timeline`).
 
 mod axis;
 pub mod geometry;
@@ -19,8 +21,9 @@ mod request;
 mod scene;
 pub mod style;
 mod svg;
+pub mod timeline;
 
 pub use metrics::{FontRef, FontWeight, InterMetrics, TextMeasure};
 pub use request::{GanttRequest, Lang, RangeSpec, RenderLimits, RenderReport, RowFilter, Theme, Zoom};
 pub use style::{PlanStyle, Rgb, TemplateId, contrast_ratio, parse_doc_style, resolve, template};
-pub use svg::{svg, svg_styled};
+pub use svg::{svg, svg_styled, svg_styled_timeline};

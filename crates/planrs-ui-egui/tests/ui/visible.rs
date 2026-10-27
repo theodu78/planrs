@@ -29,7 +29,9 @@ use planrs_ui_egui::io::{OpenEvent, SaveEvent, SaveKind, SaveRequest};
 use planrs_ui_egui::{Action, App, Env, FileService, LanguagePref, ThemePref, UiState};
 
 use crate::filters::open_p_in;
-use crate::{click, fr, harness_for, now, screen_axis};
+use planrs_ui_egui::ribbon::RibbonTab;
+
+use crate::{click, fr, harness_for, now, ribbon_click, screen_axis};
 
 /// Demandes d'enregistrement reçues par le service en mémoire.
 type Saved = Rc<RefCell<Vec<SaveRequest>>>;
@@ -206,20 +208,33 @@ const fn rgb(c: Rgb) -> Color32 {
     Color32::from_rgb(c.0, c.1, c.2)
 }
 
-/// H-UI-35 : bouton « 50 % » de la barre d'outils sur une feuille ⇒ 50 %,
+/// H-UI-35 : bouton « 50 % » du ruban (Tâche → Planification ; barre
+/// d'outils jusqu'au lot L5) sur une feuille ⇒ 50 %,
 /// une entrée d'annulation.
 #[test]
 fn h_ui_35_percent_buttons() {
     let (mut harness, _) = sobre_p();
     select(&mut harness, 2);
     let before = history(harness.state());
-    click(&mut harness, &pct_label(TextId::ToolbarPercent, 50));
+    ribbon_click(
+        &mut harness,
+        RibbonTab::Task,
+        &pct_label(TextId::RibbonPercent, 50),
+    );
     assert_eq!(percent(harness.state(), 2), 5_000);
     assert_eq!(history(harness.state()), before + 1);
-    click(&mut harness, &pct_label(TextId::ToolbarPercent, 100));
+    ribbon_click(
+        &mut harness,
+        RibbonTab::Task,
+        &pct_label(TextId::RibbonPercent, 100),
+    );
     assert_eq!(percent(harness.state(), 2), 10_000);
     // Rien à faire : aucun lot, un message.
-    click(&mut harness, &pct_label(TextId::ToolbarPercent, 100));
+    ribbon_click(
+        &mut harness,
+        RibbonTab::Task,
+        &pct_label(TextId::RibbonPercent, 100),
+    );
     assert_eq!(history(harness.state()), before + 2);
     assert!(
         harness
@@ -285,10 +300,11 @@ fn menu_task_in_bar() {
     assert!(manual(&task(harness.state())), "6 manuelle");
 }
 
-/// H-UI-36, R-255 : bascules « Mode » et « Actif » de la barre d'outils,
+/// H-UI-36, R-255 : bascules « Planifier manuellement » et « Désactiver »
+/// du ruban (« Mode » et « Actif » de la barre d'outils jusqu'au lot L5),
 /// une entrée d'annulation chacune ; Annuler revient en arrière.
 #[test]
-fn toolbar_toggles() {
+fn ribbon_toggles() {
     let (mut harness, _) = sobre_p();
     select(&mut harness, 6);
     let task = |app: &App| {
@@ -302,9 +318,9 @@ fn toolbar_toggles() {
             .clone()
     };
     let before = history(harness.state());
-    click(&mut harness, &fr(TextId::ToolbarMode));
+    ribbon_click(&mut harness, RibbonTab::Task, &fr(TextId::RibbonManualSchedule));
     assert!(manual(&task(harness.state())));
-    click(&mut harness, &fr(TextId::ToolbarActive));
+    ribbon_click(&mut harness, RibbonTab::Task, &fr(TextId::RibbonInactivate));
     assert!(!task(harness.state()).active);
     assert_eq!(history(harness.state()), before + 2);
     harness.state_mut().dispatch(Action::Undo);
@@ -809,7 +825,7 @@ fn page_state(app: &App) -> planrs_ui_egui::dialog::page_setup::PageSetupState {
 #[test]
 fn h_ui_68_print_mode_default_columns() {
     let (mut harness, _) = sobre_p();
-    click(&mut harness, &fr(TextId::ToolbarPrintMode));
+    ribbon_click(&mut harness, RibbonTab::Project, &fr(TextId::MenuPrintMode));
     let state = page_state(harness.state());
     assert!(state.print_mode);
     assert_eq!(state.page.columns, Some(TableColumn::PRINT_DEFAULT.to_vec()));
@@ -850,7 +866,7 @@ fn h_ui_68_print_mode_keeps_screen_columns() {
     let (mut harness, _) = sobre_p();
     let columns = harness.state().state.columns.clone();
     let before = history(harness.state());
-    click(&mut harness, &fr(TextId::ToolbarPrintMode));
+    ribbon_click(&mut harness, RibbonTab::Project, &fr(TextId::MenuPrintMode));
     click(&mut harness, &fr(TextId::ColDuration));
     let state = page_state(harness.state());
     assert!(!state.page.columns.unwrap().contains(&TableColumn::Duration));
@@ -876,7 +892,7 @@ fn print_follows_displayed_rows() {
     let shown = crate::filters::shown(harness.state());
     assert_eq!(shown, vec![1, 5]);
     // Aperçu du mode impression : deux lignes.
-    click(&mut harness, &fr(TextId::ToolbarPrintMode));
+    ribbon_click(&mut harness, RibbonTab::Project, &fr(TextId::MenuPrintMode));
     let state = page_state(harness.state());
     let pages = state.preview_pages().expect("aperçu calculé");
     let printed: Vec<u32> = pages

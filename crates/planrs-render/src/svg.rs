@@ -18,8 +18,10 @@ use crate::geometry::{
     Anchor, BarTextSource, Class, Clip, FontWeight, Item, NoTexts, Paint, Part, Prim, Scene, Viewport,
     layout, pattern_segments,
 };
+use crate::paginate::{PrintTimeline, TIMELINE_GAP16};
 use crate::request::{GanttRequest, RenderReport, Theme};
 use crate::style::{BarRole, FontChoice, PlanStyle, TemplateId, Variant, template};
+use crate::timeline::{TIMELINE_HEIGHT16, TimelineInput};
 
 /// Nom CSS d'une classe (vide : texte courant, sans attribut) ; phases
 /// numérotées (`ph0b`, `pr0`, H-UI-65).
@@ -356,10 +358,18 @@ fn item(out: &mut String, it: &Item, base_size: u16) {
 }
 
 /// Document complet de la scène ; `sizes` reçoit, si demandé, la taille
-/// écrite de chaque ligne (`Part::Row`).
-fn write(scene: &Scene, name_chars: usize, mut sizes: Option<&mut Vec<usize>>) -> String {
+/// écrite de chaque ligne (`Part::Row`). Avec une chronologie (H-UI-82),
+/// elle est écrite en tête sur toute la largeur et la scène est décalée de
+/// sa hauteur et de [`TIMELINE_GAP16`] (`<g transform>`).
+fn write(
+    scene: &Scene,
+    name_chars: usize,
+    mut sizes: Option<&mut Vec<usize>>,
+    timeline: Option<&PrintTimeline>,
+) -> String {
     let mut out = String::new();
-    let (width, height) = (scene.width16, scene.height16);
+    let lead = timeline.map_or(0, |_| TIMELINE_HEIGHT16.saturating_add(TIMELINE_GAP16));
+    let (width, height) = (scene.width16, scene.height16.saturating_add(lead));
     out.push_str("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"");
     n(&mut out, width);
     out.push_str("\" height=\"");
@@ -384,6 +394,14 @@ fn write(scene: &Scene, name_chars: usize, mut sizes: Option<&mut Vec<usize>>) -
     out.push_str("\" height=\"");
     n(&mut out, height);
     out.push_str("\"/></clipPath></defs>");
+    if let Some(tl) = timeline {
+        for it in &tl.items {
+            item(&mut out, it, scene.font.size16);
+        }
+        out.push_str("<g transform=\"translate(0 ");
+        n(&mut out, lead);
+        out.push_str(")\">");
+    }
     let mut clip = Clip::None;
     for it in &scene.items {
         if it.clip != clip {
@@ -412,8 +430,37 @@ fn write(scene: &Scene, name_chars: usize, mut sizes: Option<&mut Vec<usize>>) -
     if clip != Clip::None {
         out.push_str("</g>");
     }
+    if timeline.is_some() {
+        out.push_str("</g>");
+    }
     out.push_str("</svg>");
     out
+}
+
+/// Chronologie de la largeur de la scène et peintures ajoutées à la scène.
+fn with_timeline(
+    mut scene: Scene,
+    input: Option<&TimelineInput>,
+    st: &PlanStyle,
+    variant: Variant,
+) -> (Scene, Option<PrintTimeline>) {
+    let Some(input) = input else {
+        return (scene, None);
+    };
+    let width16 = scene.width16.max(0);
+    let layout = crate::timeline::layout(input, width16);
+    let items = crate::timeline::items(&layout);
+    for (class, paint) in crate::timeline::paints(st, variant) {
+        scene.paints.entry(class).or_insert(paint);
+    }
+    (
+        scene,
+        Some(PrintTimeline {
+            width16,
+            layout,
+            items,
+        }),
+    )
 }
 
 /// Plus petit document : rendu quand même l'en-tête dépasse `max_bytes`.
@@ -443,6 +490,23 @@ pub fn svg_styled(
     st: &PlanStyle,
     src: &dyn BarTextSource,
 ) -> (String, RenderReport) {
+    svg_styled_timeline(project, schedule, req, st, src, None)
+}
+
+/// Comme [`svg_styled`], avec la chronologie `timeline` en tête du document
+/// (H-UI-82, géométrie H-R16 sur toute la largeur, sans rectangle de la
+/// partie visible) ; `None` : document identique à [`svg_styled`] octet
+/// pour octet. Les données viennent du moteur
+/// (`planrs_automation::timeline::input`, règle 3).
+#[must_use]
+pub fn svg_styled_timeline(
+    project: &Project,
+    schedule: &Schedule,
+    req: &GanttRequest,
+    st: &PlanStyle,
+    src: &dyn BarTextSource,
+    timeline: Option<&TimelineInput>,
+) -> (String, RenderReport) {
     let variant = match req.theme {
         Theme::Light => Variant::Light,
         Theme::Dark => Variant::Dark,
@@ -458,8 +522,9 @@ pub fn svg_styled(
     let name_chars = usize::from(req.limits.name_chars);
     let max_bytes = req.limits.max_bytes;
     let (scene, mut report) = layout(project, schedule, st, src, &vp);
+    let (scene, tl) = with_timeline(scene, timeline, st, variant);
     let mut sizes = Vec::new();
-    let full = write(&scene, name_chars, Some(&mut sizes));
+    let full = write(&scene, name_chars, Some(&mut sizes), tl.as_ref());
     if full.len() <= max_bytes {
         report.bytes = full.len();
         return (full, report);
@@ -483,7 +548,8 @@ pub fn svg_styled(
     loop {
         vp.limits.max_rows = u32::try_from(k).unwrap_or(u32::MAX);
         let (scene, mut report) = layout(project, schedule, st, src, &vp);
-        let out = write(&scene, name_chars, None);
+        let (scene, tl) = with_timeline(scene, timeline, st, variant);
+        let out = write(&scene, name_chars, None, tl.as_ref());
         if out.len() <= max_bytes {
             report.truncated_bytes = true;
             report.bytes = out.len();

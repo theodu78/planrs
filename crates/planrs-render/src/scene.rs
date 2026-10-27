@@ -278,7 +278,7 @@ fn truncate_chars(s: &str, max: usize) -> String {
 }
 
 /// Peintures des classes d'un style, pour une variante.
-fn paints_of(st: &PlanStyle, v: crate::style::Variant) -> impl Fn(Class) -> Paint + '_ {
+pub(crate) fn paints_of(st: &PlanStyle, v: crate::style::Variant) -> impl Fn(Class) -> Paint + '_ {
     let c = st.tokens(v);
     let phase_fill = move |i: u16| -> Option<Rgb> { st.phases.values().nth(usize::from(i)).map(|p| p.fill) };
     move |class: Class| {

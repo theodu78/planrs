@@ -10,7 +10,8 @@
 //! orientation, marges, ajustement (échelle, N pages en largeur, N × M),
 //! table répétée, en-tête et pied par zones (jetons insérables), cartouche
 //! (H-UI-66), colonnes imprimées, « graphique seul » (table masquée,
-//! H-UI-64). L'aperçu est paginé page par page depuis `paginate`, sur la
+//! H-UI-64), chronologie en tête de la première page (H-UI-82, cochée
+//! d'office par le mode impression quand la frise est affichée). L'aperçu est paginé page par page depuis `paginate`, sur la
 //! même scène que le PDF : l'export PDF ou SVG de la fenêtre est
 //! identique à l'aperçu. « Enregistrer avec le projet » écrit la mise en
 //! page dans le style du document (`style.apply { patch: { page } }`, une
@@ -31,7 +32,7 @@ use planrs_automation::render_text::SessionTexts;
 use planrs_automation::text::Language;
 use planrs_core::TaskUid;
 use planrs_render::geometry::{Token, Viewport};
-use planrs_render::paginate::{Pages, PaginateOptions, fit_zoom, layout_pages};
+use planrs_render::paginate::{Pages, PaginateOptions, fit_zoom, layout_pages_timeline};
 use planrs_render::style::{Fit, PageStyle, Paper, PlanStyle, Slot, TableColumn, Variant};
 use planrs_render::{Lang, RenderLimits, RowFilter, Zoom};
 
@@ -112,11 +113,14 @@ pub enum PageSetupOutcome {
 impl PageSetupState {
     /// Fenêtre ouverte sur la mise en page du style `style` ; mode
     /// impression : colonnes d'impression par défaut si le style n'en a pas,
-    /// ajustement à une page en largeur si l'échelle était libre.
+    /// ajustement à une page en largeur si l'échelle était libre, case
+    /// « Chronologie » cochée d'office si la frise est affichée à l'écran
+    /// (`timeline_shown`, H-UI-82).
     #[must_use]
-    pub fn open(style: &PlanStyle, print_mode: bool) -> Self {
+    pub fn open(style: &PlanStyle, print_mode: bool, timeline_shown: bool) -> Self {
         let mut page = style.page.clone();
         if print_mode {
+            page.timeline |= timeline_shown;
             if page.columns.is_none() {
                 page.columns = Some(TableColumn::PRINT_DEFAULT.to_vec());
             }
@@ -199,8 +203,10 @@ pub fn build_pages(session: &Session, st: &PlanStyle, lang: Language) -> Result<
 
 /// Pages du planning de `session` avec le style `st`, tâches `rows` seules
 /// (`None` : toutes) : même chemin que l'export PDF (`fit_zoom`,
-/// `layout_pages`, variante d'impression), textes de la session
-/// (règle 3).
+/// `layout_pages_timeline`, variante d'impression), textes de la session
+/// (règle 3) ; chronologie en tête de la première page si la mise en page
+/// la demande (`page.timeline`, données de
+/// `planrs_automation::timeline::print_input`, H-UI-82).
 ///
 /// # Errors
 ///
@@ -227,9 +233,18 @@ pub fn build_pages_rows(
     let options = PaginateOptions {
         legend_every_page: st.legend.every_page,
     };
-    layout_pages(session.project(), session.schedule(), st, &texts, &vp, options)
-        .0
-        .map_err(|e| e.to_string())
+    let timeline = planrs_automation::timeline::print_input(session, st, lang);
+    layout_pages_timeline(
+        session.project(),
+        session.schedule(),
+        st,
+        &texts,
+        &vp,
+        options,
+        timeline.as_ref(),
+    )
+    .0
+    .map_err(|e| e.to_string())
 }
 
 /// PDF des pages de l'aperçu (H-R13 : date de création = « maintenant »
@@ -315,6 +330,10 @@ fn settings(ui: &mut egui::Ui, texts: &Texts, page: &mut PageStyle) {
                     });
                 });
             });
+            ui.end_row();
+            // Chronologie en tête de la première page (H-UI-82).
+            ui.label("");
+            ui.checkbox(&mut page.timeline, texts.get(TextId::RibbonTimeline));
             ui.end_row();
             ui.label(texts.get(TextId::PsPaper));
             ui.horizontal(|ui| {
@@ -565,7 +584,9 @@ impl crate::app::App {
             return;
         };
         let style = self.state.effective_style(document.project());
-        let body = super::DialogBody::PageSetup(Box::new(PageSetupState::open(&style, print_mode)));
+        let timeline_shown = self.state.timeline_visible;
+        let body =
+            super::DialogBody::PageSetup(Box::new(PageSetupState::open(&style, print_mode, timeline_shown)));
         self.view.edit.editing = None;
         self.view.drag = None;
         self.view.dialog = Some(super::DialogState {
@@ -653,7 +674,8 @@ impl crate::app::App {
 }
 
 /// SVG du planning avec la mise en page du brouillon (colonnes, table
-/// masquée), même zoom que la page ajustée, lignes de la vue affichée.
+/// masquée), même zoom que la page ajustée, lignes de la vue affichée ;
+/// chronologie en tête si la mise en page la demande (H-UI-82).
 fn svg_bytes(session: &Session, st: &PlanStyle, lang: Language, rows: PrintRows) -> Vec<u8> {
     let req = planrs_render::GanttRequest {
         range: planrs_render::RangeSpec::Auto,
@@ -667,7 +689,15 @@ fn svg_bytes(session: &Session, st: &PlanStyle, lang: Language, rows: PrintRows)
         limits: RenderLimits::default(),
     };
     let texts = SessionTexts { session, lang };
-    planrs_render::svg_styled(session.project(), session.schedule(), &req, st, &texts)
-        .0
-        .into_bytes()
+    let timeline = planrs_automation::timeline::print_input(session, st, lang);
+    planrs_render::svg_styled_timeline(
+        session.project(),
+        session.schedule(),
+        &req,
+        st,
+        &texts,
+        timeline.as_ref(),
+    )
+    .0
+    .into_bytes()
 }

@@ -1,0 +1,70 @@
+# Le ruban et la chronologie : où est… ?
+
+Guide pour l'utilisateur occasionnel de MS Project qui ouvre planrs. Référence technique : ADR-0017 (`docs/decisions.md`) et `docs/features/ui.md` § 1.32 et § 1.33.
+
+## 1. Ce qui ressemble à MS Project
+
+- **Cinq onglets** sous la barre de menus, dans l'ordre de MS Project : **Tâche, Ressource, Projet, Affichage, Format** (en anglais : Task, Resource, Project, View, Format ; page Microsoft « Learn the Project 2010 Ribbon »). L'onglet Tâche est ouvert au premier lancement, puis planrs rouvre le dernier choisi.
+- **Groupes nommés** sous chaque onglet (Presse-papiers, Planification, Insérer, Propriétés, Édition…), grands boutons à icône et libellé, petits boutons empilés, listes déroulantes (▾), cases à cocher.
+- **Info-bulles** : survoler un bouton affiche son nom, une phrase d'aide et le raccourci clavier (« Lier les tâches (Ctrl+F2) ») ; un bouton grisé dit pourquoi (« Sélectionnez au moins une tâche », « Retirez le tri ou le filtre »).
+- **Barre d'accès rapide** à gauche des onglets : Enregistrer, Annuler, Rétablir.
+- **Ruban repliable** : double-clic sur un onglet, ou **Ctrl+F1** (Cmd+F1 sur macOS), ou Affichage → Réduire le ruban. Replié, un clic sur un onglet ouvre ses boutons par-dessus la vue ; Échap ou un clic ailleurs les referme.
+- **Chronologie** : frise au-dessus du diagramme de Gantt (page Microsoft « Create a timeline in Project »), affichée par défaut.
+
+Les libellés français des onglets et des groupes ont été choisis pour ce guide ; ils n'ont pas été comparés à l'interface française de MS Project.
+
+La **barre de menus** (Fichier, Édition, Affichage, Tâche, Projet, Format, Aide) reste : chaque bouton du ruban y a son entrée jumelle, qui fait exactement la même chose. Rien n'est accessible par le ruban seul.
+
+## 2. Les cinq onglets
+
+| Onglet | Groupes et boutons |
+|---|---|
+| **Tâche** | Affichage (Diagramme de Gantt ▾) · Presse-papiers (Coller, Couper, Copier, Collage spécial…) · Mise en forme (Mettre en forme les barres, Modèles…) · Planification (0 % à 100 %, Lier, Délier, Indenter, Désindenter, Désactiver) · Tâches (Planifier manuellement) · Insérer (Tâche, Récapitulative, Jalon) · Propriétés (Informations, Notes, Ajouter à la chronologie) · Édition (Rechercher, Défiler jusqu'à la tâche) |
+| **Ressource** | Affichage (Feuille des ressources, Utilisation des ressources) · Affectations (Affecter les ressources) |
+| **Projet** | Propriétés (Informations sur le projet, Modifier le temps de travail) · Planification (Définir la référence) · État (Mettre à jour le projet) · Impression (Mode impression, Mise en page…, Exporter en PDF…) |
+| **Affichage** | Affichages des tâches (Diagramme de Gantt, Gantt de suivi) · Affichages des ressources · Données (Trier ▾, Mode plan ▾, Filtre ▾) · Zoom (Échelle de temps ▾, Zoom avant, Zoom arrière, Projet entier) · Fractionner l'affichage (Chronologie, Volet Opérations IA, Diagnostics) · Interface (Thème ▾, Langue ▾, Réduire le ruban) |
+| **Format** | Colonnes ▾ · Styles des barres (Mettre en forme les barres, Tâches critiques, Mois relatifs) · Styles du diagramme (Modèles de mise en forme…) · Afficher/Masquer (Graphique seul) |
+
+Fenêtre étroite : les groupes de droite perdent d'abord les libellés de leurs petits boutons (l'info-bulle reste), puis se replient en un seul bouton à menu portant le nom du groupe.
+
+## 3. Où est… ?
+
+| Je cherche… | Dans planrs |
+|---|---|
+| Insérer une tâche | Tâche → Insérer → **Tâche** (Inser) |
+| Insérer un jalon | Tâche → Insérer → **Jalon** (avant la tâche sélectionnée, en fin de projet sans sélection) |
+| Créer une récapitulative au-dessus de tâches | Sélectionner des tâches voisines, Tâche → Insérer → **Récapitulative** (une seule annulation) |
+| Lier, délier | Tâche → Planification → **Lier** (Ctrl+F2), **Délier** (Ctrl+Maj+F2) |
+| Indenter, désindenter | Tâche → Planification (Alt+Maj+→, Alt+Maj+←) |
+| Marquer l'avancement | Tâche → Planification → **0 %** à **100 %** |
+| Planification manuelle ou automatique | Tâche → Tâches → **Planifier manuellement** (bouton enfoncé si la tâche active est manuelle) |
+| Désactiver une tâche | Tâche → Planification → **Désactiver** |
+| Informations sur la tâche, notes | Tâche → Propriétés → **Informations** (Maj+F2), **Notes** |
+| Retrouver la barre d'une tâche | Tâche → Édition → **Défiler jusqu'à la tâche** |
+| Rechercher | Tâche → Édition → **Rechercher** (Ctrl+F ; suivant Ctrl+G) |
+| Gantt de suivi, feuille des ressources | Affichage → Affichages des tâches / des ressources, ou Tâche → **Diagramme de Gantt ▾** |
+| Trier, filtrer, niveau de plan | Affichage → Données (effacer le filtre : F3 ; trier par N° : Maj+F3) |
+| Changer l'échelle de temps | Affichage → Zoom → **Échelle de temps ▾**, **Zoom avant/arrière** (Ctrl+/ et Ctrl+-), **Projet entier** |
+| Afficher ou masquer la chronologie | Affichage → Fractionner l'affichage → **Chronologie** |
+| Ajouter des tâches à la chronologie | Tâche → Propriétés → **Ajouter à la chronologie**, ou clic droit sur la tâche |
+| Calendrier, jours fériés | Projet → Propriétés → **Modifier le temps de travail** |
+| Ligne de base | Projet → Planification → **Définir la référence** |
+| Imprimer, PDF | Projet → Impression → **Mode impression**, **Mise en page…**, **Exporter en PDF…** |
+| Colonnes de la table | Format → **Colonnes ▾** (ou clic droit sur l'en-tête) |
+| Couleurs et styles des barres | Format → Styles des barres, Styles du diagramme |
+| Agrandir la vue | Ctrl+F1 (replie le ruban : la vue gagne 92 points) |
+
+## 4. La chronologie
+
+- Frise de la largeur de la fenêtre, au-dessus de la table et du Gantt : **Début** et date à gauche, **Fin** et date à droite, graduations des mois (trimestres ou années pour un long projet), date d'état en trait tireté « État JJ/MM ». Absente des vues des ressources.
+- **Ajouter** : sélectionner des tâches, Tâche → Propriétés → **Ajouter à la chronologie** (ou clic droit → « Ajouter à la chronologie ») ; si toutes y sont déjà, le même bouton les retire. Une tâche devient une barre, un jalon un losange. Au plus 3 rangées de barres ; les tâches qui ne tiennent pas sont comptées « +n » à droite. Au plus 200 tâches.
+- **Cliquer** une barre ou un losange sélectionne la tâche et fait défiler la table et le Gantt jusqu'à elle ; clic droit → « Retirer de la chronologie ».
+- Le rectangle bleu montre la partie du projet visible dans le Gantt.
+- La liste des tâches de la frise est enregistrée avec le projet (dans le style du document) ; avec la préférence « ne jamais écrire le style », elle ne l'est pas.
+- **Impression** : case **Chronologie** de Mise en page ; le Mode impression la coche d'office quand la frise est affichée. Elle s'imprime en tête de la première page (aperçu, PDF, SVG).
+
+## 5. Ce qui n'existe pas (encore)
+
+Pas de groupe Police, pas d'onglet « Format de la chronologie » (légendes, plusieurs barres, plages de dates), pas de personnalisation du ruban ni de la barre d'accès rapide, pas d'info-touches Alt, pas d'écran Fichier en coulisses (le menu Fichier le remplace), ni nivellement, Planificateur d'équipe, vues Réseau, Calendrier ou Détails (ADR-0017, reportés après la v1.0.0).
+
+Sur macOS, Cmd+F1 peut être pris par le système (luminosité, recopie vidéo) selon les réglages du clavier : le double-clic sur un onglet et le menu Affichage restent toujours disponibles.

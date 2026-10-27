@@ -329,13 +329,11 @@ fn resource_sheet_delete_confirms_cascade() {
     // Navigation coupée pendant la confirmation.
     press(&mut harness, Modifiers::NONE, Key::ArrowDown);
     assert_eq!(at(harness.state()).0, 0);
-    harness.get_by_label(&fr(TextId::ConfirmDeleteNo)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::ConfirmDeleteNo));
     assert!(harness.state().view().resources.pending_delete.is_none());
     assert_eq!(resource_count(harness.state()), before);
     press(&mut harness, Modifiers::NONE, Key::Delete);
-    harness.get_by_label(&fr(TextId::ConfirmDeleteYes)).click();
-    harness.run();
+    crate::click(&mut harness, &fr(TextId::ConfirmDeleteYes));
     let app = harness.state();
     assert_eq!(resource_count(app), before - 1);
     assert_eq!(assignments(app), assigned - 6);
@@ -431,8 +429,7 @@ fn resource_sheet_calendar_list() {
         .unwrap()
         .name
         .clone();
-    harness.get_by_label(&first).click();
-    harness.run();
+    crate::click(&mut harness, &first);
     let app = harness.state();
     assert!(app.view().resources.edit.editing.is_none());
     assert_eq!(app.view().resources.rows.text(1, ResourceColumn::Calendar), first);

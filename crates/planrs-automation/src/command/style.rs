@@ -240,7 +240,8 @@ pub struct StyleApply {
     /// Surcharge (`StylePatch` de `planrs-render`, lue et bornée par
     /// `parse_doc_style` : au plus 64 Kio). Seule : fusionnée avec les
     /// surcharges du document (sections `colors`, `bars` et `texts` rôle
-    /// par rôle, les autres remplacées en entier).
+    /// par rôle, les autres remplacées en entier, dont `timeline` : UID des
+    /// tâches de la chronologie, triés, au plus 200).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub patch: Option<serde_json::Value>,
     /// Retire le style du document (modèle par défaut des préférences ;

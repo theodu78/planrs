@@ -54,6 +54,7 @@ pub mod registry;
 pub mod render_text;
 pub mod session;
 pub mod text;
+pub mod timeline;
 mod uid;
 pub mod view;
 pub mod workspace;

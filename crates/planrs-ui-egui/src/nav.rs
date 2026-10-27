@@ -207,6 +207,18 @@ pub fn page_rows(view: f32, extent: f32) -> usize {
     f32_to_index((view / extent).floor())
 }
 
+impl crate::App {
+    /// « Défiler jusqu'à la tâche » active (ADR-0017, H-UI-84) : le Gantt
+    /// défile pour placer le début de sa barre à 1/8 de la largeur visible
+    /// (`TimeAxis::x`, date → pixel), la table jusqu'à sa ligne. Le
+    /// réducteur borne ensuite le défilement horizontal.
+    ///
+    /// Lot L0 (squelette) : rien ; servi en L3.
+    pub(crate) const fn scroll_to_task(&mut self) {
+        let _ = self;
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,

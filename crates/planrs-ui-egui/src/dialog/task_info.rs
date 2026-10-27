@@ -935,6 +935,26 @@ impl TaskInfoState {
     }
 }
 
+/// Onglet de « Informations sur la tâche » (nom du contrat ADR-0017).
+pub type TaskInfoTab = Tab;
+
+/// Ouvre « Informations sur la tâche » de `uid` sur l'onglet `tab`
+/// (Tâche → Notes du ruban, H-UI-84) ; `None` : tâche absente.
+///
+/// Lot L0 (squelette) : l'onglet Général reste affiché ; l'onglet demandé
+/// est servi en L3.
+#[must_use]
+pub fn open_on(
+    tab: TaskInfoTab,
+    s: &Session,
+    uid: TaskUid,
+    key: (u64, u64),
+    lang: Language,
+) -> Option<TaskInfoState> {
+    let _ = tab;
+    TaskInfoState::open(s, uid, key, lang)
+}
+
 /// Réponse de la fenêtre pour une image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {

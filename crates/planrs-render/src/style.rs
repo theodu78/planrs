@@ -550,6 +550,10 @@ pub struct LogoRef {
 /// Mise en page.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "cases indépendantes de la mise en page, sérialisées telles quelles"
+)]
 pub struct PageStyle {
     /// Papier.
     pub paper: Paper,
@@ -576,6 +580,9 @@ pub struct PageStyle {
     /// l'en-tête en titre, première ligne de la zone droite appuyée.
     #[serde(default, skip_serializing_if = "is_false")]
     pub title_block: bool,
+    /// Chronologie en tête de la première page (ADR-0017 D8, H-UI-82).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub timeline: bool,
 }
 
 /// Colonnes au plus dans la table du SVG et du PDF.
@@ -583,6 +590,44 @@ pub const MAX_TABLE_COLUMNS: usize = 8;
 
 /// Couleurs de phase au plus dans un style (H-UI-65).
 pub const MAX_PHASES: usize = 512;
+
+/// Tâches au plus sur la chronologie (ADR-0017 D7, H-UI-79).
+pub const MAX_TIMELINE_TASKS: usize = 200;
+
+/// Tâches ajoutées à la chronologie (ADR-0017 D7) : UID triés, sans
+/// doublon, au plus [`MAX_TIMELINE_TASKS`] ([`PlanStyle::validate`]). Un
+/// UID absent du projet est ignoré à l'affichage.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimelineSpec {
+    /// UID des tâches, triés et sans doublon.
+    #[serde(default)]
+    pub tasks: Vec<u32>,
+}
+
+impl TimelineSpec {
+    /// Vrai si aucune tâche n'est sur la chronologie.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+
+    /// Liste bornée : UID triés, dédoublonnés, coupés à
+    /// [`MAX_TIMELINE_TASKS`] (les plus petits gardés).
+    #[must_use]
+    pub fn bounded(mut tasks: Vec<u32>) -> Self {
+        tasks.sort_unstable();
+        tasks.dedup();
+        tasks.truncate(MAX_TIMELINE_TASKS);
+        Self { tasks }
+    }
+
+    /// Vrai si la liste est triée strictement et dans la borne.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.tasks.len() <= MAX_TIMELINE_TASKS && self.tasks.windows(2).all(|w| matches!(w, [a, b] if a < b))
+    }
+}
 
 /// Colonne de la table du SVG et du PDF (H-UI-68) ; textes venus de
 /// `BarTextSource` (règle 3).
@@ -668,6 +713,9 @@ pub struct PlanStyle {
     /// [`MAX_PHASES`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub phases: BTreeMap<u32, PhaseColor>,
+    /// Tâches de la chronologie (ADR-0017 D7, H-UI-79).
+    #[serde(default, skip_serializing_if = "TimelineSpec::is_empty")]
+    pub timeline: TimelineSpec,
 }
 
 /// Surcharge partielle des couleurs d'une variante.
@@ -800,6 +848,9 @@ pub struct StylePatch {
     /// Couleurs de phase (H-UI-65), remplacées en entier.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub phases: Option<BTreeMap<u32, PhaseColor>>,
+    /// Tâches de la chronologie (ADR-0017 D7), remplacées en entier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<TimelineSpec>,
 }
 
 impl StylePatch {
@@ -971,6 +1022,7 @@ impl PlanStyle {
             )?;
         }
         check(self.phases.len() <= MAX_PHASES, "phases")?;
+        check(self.timeline.is_valid(), "timeline")?;
         Ok(())
     }
 
@@ -1073,8 +1125,10 @@ impl PlanStyle {
                 logo: None,
                 columns: None,
                 title_block: false,
+                timeline: false,
             },
             phases: BTreeMap::new(),
+            timeline: TimelineSpec::default(),
         }
     }
 
@@ -1126,6 +1180,9 @@ impl PlanStyle {
         }
         if let Some(v) = &over.phases {
             self.phases.clone_from(v);
+        }
+        if let Some(v) = &over.timeline {
+            self.timeline.clone_from(v);
         }
     }
 }
@@ -1678,5 +1735,79 @@ mod tests {
         let print = style.tokens(Variant::Print);
         assert_eq!(print.bg, Rgb(0xFA, 0xFA, 0xFA));
         assert_eq!(print.text, style.tokens(Variant::Light).text);
+    }
+
+    /// ADR-0017 (lot L0) : `timeline` et `page.timeline` absents du JSON
+    /// à leur défaut (un style écrit avant gardé à l'octet), relus à
+    /// l'identique, `timeline` remplacée en entier par une surcharge.
+    #[test]
+    fn style_timeline_roundtrip() {
+        let plain = r#"{"base":"sobre","over":{"density":"compact"},"v":1}"#;
+        let doc = parse_doc_style(plain).unwrap();
+        assert_eq!(doc.to_json(), plain);
+        assert!(doc.resolve().timeline.is_empty() && !doc.resolve().page.timeline);
+        let mut page = template(TemplateId::Sobre).page;
+        page.timeline = true;
+        let doc = DocStyle {
+            v: STYLE_VERSION,
+            base: TemplateId::Sobre,
+            over: StylePatch {
+                page: Some(page),
+                timeline: Some(TimelineSpec { tasks: vec![3, 4] }),
+                ..StylePatch::default()
+            },
+        };
+        let json = doc.to_json();
+        assert!(json.contains(r#""timeline":{"tasks":[3,4]}"#), "{json}");
+        assert!(json.contains(r#""timeline":true"#), "{json}");
+        let back = parse_doc_style(&json).unwrap();
+        assert_eq!(back, doc);
+        let resolved = back.resolve();
+        assert_eq!(resolved.timeline.tasks, vec![3, 4]);
+        assert!(resolved.page.timeline);
+        // Style résolu sérialisé puis relu : identité.
+        let text = serde_json::to_string(&resolved).unwrap();
+        assert_eq!(serde_json::from_str::<PlanStyle>(&text).unwrap(), resolved);
+        // Surcharge vide : la liste est vidée (remplacement en entier).
+        let mut style = resolved;
+        style.apply(&StylePatch {
+            timeline: Some(TimelineSpec::default()),
+            ..StylePatch::default()
+        });
+        assert!(style.timeline.is_empty());
+    }
+
+    /// ADR-0017 (lot L0) : 201 UID, doublons ou désordre ⇒ hors bornes
+    /// (le style du document est refusé avec diagnostic), jamais de
+    /// panique ; `bounded` rend une liste valide.
+    #[test]
+    fn style_timeline_bounded() {
+        let mut style = template(TemplateId::Sobre);
+        style.timeline.tasks = (1..=u32::try_from(MAX_TIMELINE_TASKS).unwrap()).collect();
+        assert_eq!(style.validate(), Ok(()));
+        for bad in [
+            (1..=u32::try_from(MAX_TIMELINE_TASKS + 1).unwrap()).collect::<Vec<_>>(),
+            vec![3, 3],
+            vec![4, 3],
+        ] {
+            style.timeline.tasks.clone_from(&bad);
+            assert_eq!(
+                style.validate(),
+                Err(StyleError::OutOfBounds("timeline")),
+                "{bad:?}"
+            );
+            let json = format!(
+                r#"{{"base":"sobre","over":{{"timeline":{{"tasks":{}}}}},"v":1}}"#,
+                serde_json::to_string(&bad).unwrap()
+            );
+            assert_eq!(parse_doc_style(&json), Err(StyleError::OutOfBounds("timeline")));
+            assert!(TimelineSpec::bounded(bad).is_valid());
+        }
+        let bounded = TimelineSpec::bounded((0..500).rev().chain([7, 7]).collect());
+        assert_eq!(bounded.tasks.len(), MAX_TIMELINE_TASKS);
+        assert_eq!(bounded.tasks.first(), Some(&0));
+        // Champ inconnu refusé (deny_unknown_fields).
+        let unknown = r#"{"base":"sobre","over":{"timeline":{"tasks":[],"x":1}},"v":1}"#;
+        assert!(matches!(parse_doc_style(unknown), Err(StyleError::Syntax(_))));
     }
 }

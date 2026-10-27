@@ -34,7 +34,7 @@ use planrs_automation::{
 use planrs_core::{Day, Moment, PRODUCT_NAME, Project, Schedule, Severity, TaskUid, TimeOfDay, Weekday};
 use planrs_mspdi::ImportDiagnostic;
 
-use crate::action::{Action, ConfirmChoice, DialogKind, UiOp};
+use crate::action::{Action, ConfirmChoice, DialogKind, TimelineOp, UiOp};
 use crate::clipboard::ClipboardSlot;
 use crate::column::Column;
 use crate::dialog::link::{self, LinkOutcome, LinkState};
@@ -410,6 +410,9 @@ pub struct App {
     pub(crate) pick_tx: Sender<PickedFile>,
     /// Récepteur des fichiers choisis pour l'import CSV.
     pub(crate) pick_rx: Receiver<PickedFile>,
+    /// Habillage (ADR-0017 D9) : barre d'outils jusqu'au lot L5, ruban
+    /// et chronologie sur demande ([`App::set_chrome`]). Jamais persisté.
+    chrome: crate::ribbon::Chrome,
 }
 
 impl App {
@@ -467,7 +470,20 @@ impl App {
             menu_paste_at: None,
             pick_tx,
             pick_rx,
+            chrome: crate::ribbon::Chrome::default(),
         }
+    }
+
+    /// Habillage courant (ADR-0017 D9).
+    #[must_use]
+    pub const fn chrome(&self) -> crate::ribbon::Chrome {
+        self.chrome
+    }
+
+    /// Choisit l'habillage : ruban et chronologie, ou barre d'outils de J8
+    /// (défaut jusqu'au lot L5). Tests et exemple `snapshot` seulement.
+    pub const fn set_chrome(&mut self, chrome: crate::ribbon::Chrome) {
+        self.chrome = chrome;
     }
 
     /// Installe l'observateur du document (remplace le précédent) et lui
@@ -1906,6 +1922,31 @@ impl App {
             }
             // L'aperçu s'ouvre à l'arrivée des octets du fichier choisi.
             Action::ShowDialog(DialogKind::CsvImport) => self.start_csv_import(ctx),
+            // --- Ruban et chronologie (ADR-0017, contrat L0) : bras posés
+            // une fois ; les fonctions appelées sont servies par leur lot.
+            Action::Ribbon(op) => {
+                crate::ribbon::reduce(&mut self.state.ribbon, &mut self.view.ribbon_overlay, op);
+            }
+            Action::Timeline(TimelineOp::SetVisible(on)) => self.state.timeline_visible = on,
+            Action::Timeline(op @ (TimelineOp::ToggleSelection | TimelineOp::Remove(_))) => {
+                self.timeline_edit(op);
+            }
+            Action::Timeline(TimelineOp::Activate(uid)) => {
+                self.selection = Some(uid);
+                self.sync_selection();
+                self.scroll_to_task();
+                self.clamp_gantt_scroll();
+            }
+            Action::ScrollToTask => {
+                self.scroll_to_task();
+                self.clamp_gantt_scroll();
+            }
+            Action::ShowTaskNotes if self.state.view != ViewKind::Gantt => {}
+            Action::ShowTaskNotes => {
+                if let Some(uid) = self.selection {
+                    self.open_task_info_on(uid, crate::dialog::task_info::TaskInfoTab::Notes);
+                }
+            }
         }
     }
 
@@ -2249,11 +2290,19 @@ impl App {
     /// session ; une saisie de cellule ouverte est abandonnée. Sans document
     /// ou tâche absente : rien.
     fn open_task_info(&mut self, uid: TaskUid) {
+        self.open_task_info_on(uid, crate::dialog::task_info::TaskInfoTab::General);
+    }
+
+    /// Comme [`App::open_task_info`], sur l'onglet `tab` (Tâche → Notes du
+    /// ruban, ADR-0017, H-UI-84).
+    fn open_task_info_on(&mut self, uid: TaskUid, tab: crate::dialog::task_info::TaskInfoTab) {
         let lang = self.text_language();
         let Some(document) = &self.document else {
             return;
         };
-        let Some(state) = TaskInfoState::open(&document.session, uid, document.cache_key(), lang) else {
+        let Some(state) =
+            crate::dialog::task_info::open_on(tab, &document.session, uid, document.cache_key(), lang)
+        else {
             return;
         };
         self.view.edit.editing = None;
@@ -2261,6 +2310,27 @@ impl App {
             kind: DialogKind::TaskInformation(uid),
             body: DialogBody::TaskInfo(Box::new(state)),
         });
+    }
+
+    /// Ajout ou retrait de tâches de la chronologie (ADR-0017, H-UI-79) :
+    /// lot de [`crate::timeline_ops::batch`] appliqué comme une édition
+    /// (une entrée d'annulation), refus au bandeau.
+    fn timeline_edit(&mut self, op: TimelineOp) {
+        self.sync_selection();
+        let Some(document) = &self.document else {
+            return;
+        };
+        let default = self.state.default_template;
+        match crate::timeline_ops::batch(&document.session, &self.selected, op, default) {
+            // Un refus du registre est affiché par `execute`.
+            Ok(Some(batch)) => drop(self.execute(&batch, EditOrigin::User)),
+            Ok(None) => {}
+            Err(error) => {
+                let max = i64::try_from(crate::timeline_ops::TimelineOpError::max()).unwrap_or(i64::MAX);
+                let text = self.texts.get_args(error.text_id(), &[("max", Arg::Count(max))]);
+                self.push_message(Severity::Info, text);
+            }
+        }
     }
 
     /// Ouvre la boîte « Dépendance » du lien `predecessor` → `successor`
@@ -2786,9 +2856,15 @@ impl App {
                 stats: &mut stats,
                 window_open: self.view.dialog.is_some(),
                 task_view,
+                chrome: self.chrome,
             };
             view::chrome::menu_bar(ui, &mut fc, self.side.open);
-            view::chrome::toolbar(ui, &mut fc);
+            match self.chrome {
+                crate::ribbon::Chrome::Toolbar => view::chrome::toolbar(ui, &mut fc),
+                crate::ribbon::Chrome::Ribbon => {
+                    view::ribbon::show(ui, &mut fc, &self.state.ribbon, self.view.ribbon_overlay);
+                }
+            }
             view::search::search_bar(ui, &mut fc);
             view::chrome::status_bar(ui, &mut fc, &self.messages);
             view::chrome::confirm_banner(ui, &mut fc, confirm_name.as_deref());

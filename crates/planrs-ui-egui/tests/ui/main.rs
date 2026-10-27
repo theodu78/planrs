@@ -10,7 +10,9 @@
 //! par le contrat (lot L0), remplis par leur lot. Modules J8 (`row_view`,
 //! `filters`, `search`, `outline`, `clipboard`, `csv_import`, `styled`,
 //! `ai_panel`, `pseudo`, `web_keys`, `j8_e2e`) déclarés vides par le contrat
-//! J8 (lot L0, ADR-0016), remplis par leur lot.
+//! J8 (lot L0, ADR-0016), remplis par leur lot. Modules du ruban et de la
+//! chronologie (`ribbon`, `ribbon_commands`, `timeline`) posés par le
+//! contrat ADR-0017 (lot L0), remplis par L2, L3 et L4.
 //!
 //! Cible unique `ui` (un seul binaire lié à wgpu, ADR-0011, décision 12).
 //! Les libellés cherchés sont construits par `Texts` (jamais en dur : le
@@ -49,6 +51,8 @@ mod pseudo;
 mod recovery;
 mod relay;
 mod resource_sheet;
+mod ribbon;
+mod ribbon_commands;
 mod row_view;
 mod search;
 mod session;
@@ -56,6 +60,7 @@ mod snapshots;
 mod structure;
 mod styled;
 mod task_info;
+mod timeline;
 mod tracking;
 mod usage;
 mod visible;

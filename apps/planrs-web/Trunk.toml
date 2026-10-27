@@ -11,6 +11,7 @@ public_url = "./"
 filehash = true
 # Profil cargo du web (J8, lot L13) : `[profile.wasm-release]` du
 # Cargo.toml racine (LTO complet, une unité de code, optimisé en taille ;
-# budget C-REL-05 : .wasm gzip -9 ≤ 3 Mio). S'applique aussi à
+# budget C-REL-05 : .wasm gzip -9 ≤ 4 Mio ; SIMD 128 par
+# `.cargo/config.toml`). S'applique aussi à
 # `trunk serve` : construction plus lente, mais même binaire qu'en release.
 cargo_profile = "wasm-release"

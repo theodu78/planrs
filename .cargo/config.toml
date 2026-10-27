@@ -1,3 +1,12 @@
 # Alias du motif cargo-xtask : `cargo xtask <tâche>`.
 [alias]
 xtask = "run --quiet --package xtask --"
+
+# Web (C-REL-05, ADR-0016, budget du web du 2026-10-27) : SIMD 128 bits de
+# WebAssembly. fearless_simd (tiré par vello_cpu, rastérisation des glyphes
+# d'epaint) n'embarque alors que ses noyaux simd128 au lieu de leur émulation
+# scalaire (~1 Mo de code) : .wasm gzip -9 3 783 021 → 3 518 979 octets.
+# Navigateurs : Chrome/Edge 91, Firefox 89, Safari 16.4 au moins. Une
+# variable RUSTFLAGS de l'environnement remplace ce réglage (porte C-REL-05).
+[target.wasm32-unknown-unknown]
+rustflags = ["-Ctarget-feature=+simd128"]

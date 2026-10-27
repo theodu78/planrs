@@ -173,7 +173,8 @@ opt-level = 1
 # Version web (J8, lot L13, C-REL-05) : `cargo_profile` de
 # `apps/planrs-web/Trunk.toml`. LTO complet et une seule unité de code
 # (taille du .wasm) ; `panic` inchangé (le crochet de panique d'eframe
-# reste actif). `opt-level` : voir ADR-0016, écarts du lot L13 (mesure).
+# reste actif). `opt-level` : « z » mesuré contre « s » (ADR-0016, budget
+# du web : 3 518 979 contre 3 960 257 octets gzip -9 après wasm-opt -Oz).
 [profile.wasm-release]
 inherits = "release"
 lto = "fat"

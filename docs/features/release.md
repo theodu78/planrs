@@ -24,7 +24,7 @@ Tags `v*-test.*` ⇒ brouillon (non public) ; un tag d'essai `vX.Y.Z-test.N` ép
 | C-REL-02 | macOS : `lipo -archs` des deux binaires = « x86_64 arm64 » ; `codesign --verify --deep --strict` vert ; `hdiutil verify` vert | L1 |
 | C-REL-03 | `planrs --version` et `planrs-desktop --version` impriment `planrs <version>` sans fenêtre, sur les 3 OS | L1 |
 | C-REL-04 | Linux : plus haute version `GLIBC_` requise (`objdump -T`) ≤ 2.36 | L1 |
-| C-REL-05 | Web : `.wasm` compressé gzip -9 ≤ 3 Mio | L1 (mesure), L13 (porte) |
+| C-REL-05 | Web : `.wasm` compressé gzip -9 ≤ 4 Mio (3 Mio jusqu'au 2026-10-27, ADR-0016) | L1 (mesure), L13 (porte) |
 | C-REL-06 | Web : `chromium --headless` sur `dist` servi en HTTP ⇒ attribut `data-planrs-started="1"` dans le DOM (posé par Rust au démarrage) | L1, L13 |
 | C-REL-07 | `sha256sum -c SHA256SUMS` vert sur les artefacts téléchargés de la release | L1 |
 | C-REL-08 | `gh release view --json assets` liste exactement les cinq fichiers du § 1 ; `gh attestation verify` vert sur l'un d'eux | L1 |
@@ -32,6 +32,8 @@ Tags `v*-test.*` ⇒ brouillon (non public) ; un tag d'essai `vX.Y.Z-test.N` ép
 ## 3. Budget du web
 
 Mesure du lot L0 (sonde `cdylib` wasm32, `opt-level = "s"`, LTO) : krilla seule 509 Kio gzip -9, `raster-images` + 73 Kio ; polices Inter du dépôt 2 × 87 Kio (non compressées). Le budget de C-REL-05 décide du logo du PDF (L7).
+
+Mesure de la release d'essai (2026-10-27, `v1.0.0-test.1`) : 9 897 306 octets, 3 783 052 gzip -9, au-delà des 3 Mio. Après SIMD 128 (`.cargo/config.toml`) : 8 534 454 octets, 3 518 979 gzip -9 ; budget relevé à 4 Mio (détail et options écartées : ADR-0016, budget du web).
 
 ## 4. Pipeline (lot L1)
 
@@ -44,7 +46,7 @@ Mesure du lot L0 (sonde `cdylib` wasm32, `opt-level = "s"`, LTO) : krilla seule 
 | `verify-macos` | `hdiutil verify`, `codesign --verify --deep --strict`, `lipo -archs`, `--version` des deux binaires (tranche x86_64 aussi si Rosetta est présent) | C-REL-02, C-REL-03 |
 | `verify-windows` | contenu du zip, `--version` des deux `.exe` (sortie redirigée) | C-REL-03 |
 | `verify-linux` | dans `debian:bookworm` : `objdump -T` (plus haute `GLIBC_` ≤ 2.36), `--version`, `desktop-file-validate` | C-REL-03, C-REL-04 |
-| `verify-web` | taille du `.wasm` gzip -9 publiée dans le résumé du run, **échec** au-delà de 3 Mio (porte depuis le lot L13) ; `dist` servi en HTTP, Chromium headless, `data-planrs-started="1"` cherché dans le DOM | C-REL-05, C-REL-06 |
+| `verify-web` | taille du `.wasm` gzip -9 publiée dans le résumé du run, **échec** au-delà de 4 Mio (porte depuis le lot L13, relevée de 3 à 4 Mio le 2026-10-27) ; `dist` servi en HTTP, Chromium headless, `data-planrs-started="1"` cherché dans le DOM | C-REL-05, C-REL-06 |
 | `publish` | tag `v*` seulement : `SHA256SUMS`, `actions/attest-build-provenance`, `gh release create --verify-tag --notes-file` (`--draft` si `-test.`, `--prerelease` si `-`), puis contrôle de la release publiée : téléchargement, `sha256sum -c`, liste exacte des cinq fichiers, `gh attestation verify` | C-REL-07, C-REL-08 |
 
 Le contrôle après publication est fait dans le job `publish` et non dans un job séparé : un brouillon n'est visible que d'un jeton en écriture, et ce job est le seul à en avoir un. Aucun secret n'est ajouté (seul `github.token`).

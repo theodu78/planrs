@@ -763,6 +763,20 @@ impl App {
     /// document), puis pose la ligne du curseur sur la tâche active (la
     /// ligne vide sans sélection, J7 lot L1).
     pub(crate) fn sync_selection(&mut self) {
+        // Saisie ouverte : sa cellule reste la cellule active ; une sélection
+        // changée ailleurs pendant la saisie (Gantt, chronologie, saisie
+        // refusée) est ramenée sur elle (H-UI-86 : jamais de saisie ouverte
+        // sur une autre cellule que la cellule active).
+        if let Some(editing) = &self.view.edit.editing
+            && editing.uid.is_none_or(|uid| {
+                self.rows
+                    .as_ref()
+                    .is_some_and(|rows| rows.index_of(uid).is_some())
+            })
+        {
+            self.selection = editing.uid;
+            self.view.cursor.column = editing.column;
+        }
         if self.selected.focus() != self.selection {
             self.selected = Selection::single(self.selection);
         }
@@ -2134,12 +2148,17 @@ impl App {
     /// Donne le focus clavier à un volet (clic dans la table ou le Gantt,
     /// fin de saisie) : la table reçoit le focus d'egui (sans le
     /// redemander s'il l'a déjà, pour garder son verrou de focus), le Gantt
-    /// le lui retire.
+    /// le lui retire. Saisie de cellule ouverte : la table ne le prend pas,
+    /// la zone de saisie le garde (H-UI-85 : le double-clic qui ouvre la
+    /// saisie pousse aussi `FocusPane(Table)`, appliqué après le dessin ; il
+    /// retirait le focus à la zone, sans curseur de texte ni fin de saisie
+    /// au clic suivant).
     fn focus_pane(&mut self, pane: Pane, ctx: &egui::Context) {
         self.view.focus = pane;
+        let editing = self.view.edit.editing.is_some() || self.view.resources.edit.editing.is_some();
         ctx.memory_mut(|memory| match pane {
             Pane::Table => {
-                if !memory.has_focus(table_id()) {
+                if !editing && !memory.has_focus(table_id()) {
                     memory.request_focus(table_id());
                 }
             }

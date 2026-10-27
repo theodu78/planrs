@@ -617,3 +617,348 @@ proptest! {
         }
     }
 }
+
+// H-UI-85 et H-UI-86 (correctif « saisie de cellule », 2026-10-27) : la
+// zone de saisie a réellement le focus clavier (curseur de texte, flèches
+// dans le texte) et ne reste jamais ouverte sur une autre cellule que la
+// cellule active.
+
+/// Harnais à pas d'image court (deux clics rapprochés font un double-clic),
+/// exemple ouvert.
+fn quick_harness() -> Harness<'static, App> {
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 720.0))
+        .with_pixels_per_point(1.0)
+        .with_theme(egui::Theme::Light)
+        .with_os(egui::os::OperatingSystem::Nix)
+        .with_step_dt(1.0 / 60.0)
+        .with_max_steps(8)
+        .build_ui_state(planrs_ui_egui::ui, crate::new_app());
+    open_demo(&mut harness);
+    harness
+}
+
+/// La zone de saisie a-t-elle le focus clavier d'egui ?
+fn editor_focused(harness: &Harness<'static, App>) -> bool {
+    harness
+        .ctx
+        .memory(|memory| memory.has_focus(planrs_ui_egui::grid::editor_id()))
+}
+
+/// Position du curseur de texte (en caractères) de la zone de saisie.
+fn caret(harness: &Harness<'static, App>) -> Option<usize> {
+    egui::text_edit::TextEditState::load(&harness.ctx, planrs_ui_egui::grid::editor_id())
+        .and_then(|state| state.cursor.char_range())
+        .map(|range| range.primary.index.0)
+}
+
+/// Texte de la saisie ouverte.
+fn buffer(harness: &Harness<'static, App>) -> Option<String> {
+    harness
+        .state()
+        .view()
+        .edit
+        .editing
+        .as_ref()
+        .map(|editing| editing.buffer.clone())
+}
+
+/// Double-clic sur la cellule (ligne `index`, `column`).
+fn double_click_cell(harness: &mut Harness<'static, App>, index: usize, column: Column) {
+    let label = row_label(harness.state(), index);
+    let p = cell_point(harness, &label, column);
+    clicks_at(harness, p, 2);
+}
+
+/// Point du Gantt sur la ligne `index` (à droite de la table).
+fn gantt_point(harness: &Harness<'static, App>, index: usize) -> Pos2 {
+    let rect = harness.get_by_label(&row_label(harness.state(), index)).rect();
+    pos2(rect.right() + 200.0, rect.center().y)
+}
+
+/// H-UI-85 : F2, la frappe et le double-clic donnent le focus clavier à la
+/// zone de saisie (curseur de texte en fin de texte), et le gardent les
+/// images suivantes. Le double-clic le perdait : `FocusPane(Table)`,
+/// poussé par le même clic et appliqué après le dessin, le rendait à la
+/// table.
+#[test]
+fn h_ui_85_editor_takes_keyboard_focus() {
+    let mut harness = quick_harness();
+    let index = index_of(harness.state(), 3);
+    let name = harness
+        .state()
+        .rows()
+        .unwrap()
+        .text(index, Column::Name)
+        .to_owned();
+    click_cell(&mut harness, index, Column::Name);
+
+    press(&mut harness, Key::F2);
+    assert_eq!(buffer(&harness).as_deref(), Some(name.as_str()));
+    assert!(editor_focused(&harness), "F2 : zone sans focus");
+    assert!(harness.ctx.text_edit_focused());
+    assert_eq!(caret(&harness), Some(name.chars().count()));
+    press(&mut harness, Key::Escape);
+    assert!(harness.state().view().edit.editing.is_none());
+
+    type_text(&mut harness, "X");
+    assert!(editor_focused(&harness), "frappe : zone sans focus");
+    assert_eq!(buffer(&harness).as_deref(), Some("X"));
+    assert_eq!(caret(&harness), Some(1));
+    press(&mut harness, Key::Escape);
+
+    double_click_cell(&mut harness, index, Column::Duration);
+    let duration = harness
+        .state()
+        .rows()
+        .unwrap()
+        .text(index, Column::Duration)
+        .to_owned();
+    assert_eq!(buffer(&harness).as_deref(), Some(duration.as_str()));
+    for _ in 0..3 {
+        harness.run();
+        assert!(editor_focused(&harness), "double-clic : zone sans focus");
+    }
+    assert_eq!(caret(&harness), Some(duration.chars().count()));
+    // La table n'a pas le focus : ses raccourcis restent muets.
+    assert!(
+        !harness
+            .ctx
+            .memory(|memory| memory.has_focus(planrs_ui_egui::view::table::table_id()))
+    );
+}
+
+/// H-UI-86 : ← → Origine Fin déplacent le curseur dans le texte, sans
+/// toucher à la sélection ni à la cellule active ; Échap abandonne et garde
+/// la cellule active.
+#[test]
+fn h_ui_86_horizontal_keys_move_caret_in_text() {
+    let mut harness = quick_harness();
+    let index = index_of(harness.state(), 3);
+    let uid = TaskUid::new(3);
+    let name = harness
+        .state()
+        .rows()
+        .unwrap()
+        .text(index, Column::Name)
+        .to_owned();
+    let n = name.chars().count();
+    let project = harness.state().document.as_ref().unwrap().project().clone();
+    double_click_cell(&mut harness, index, Column::Name);
+    press(&mut harness, Key::ArrowLeft);
+    press(&mut harness, Key::ArrowLeft);
+    assert_eq!(caret(&harness), Some(n - 2));
+    press(&mut harness, Key::Home);
+    assert_eq!(caret(&harness), Some(0));
+    type_text(&mut harness, "Z");
+    assert_eq!(buffer(&harness), Some(format!("Z{name}")));
+    press(&mut harness, Key::End);
+    assert_eq!(caret(&harness), Some(n + 1));
+    press(&mut harness, Key::ArrowRight);
+    assert_eq!(caret(&harness), Some(n + 1));
+    let app = harness.state();
+    assert_eq!(app.selection, Some(uid));
+    assert_eq!(app.view().cursor.column, Column::Name);
+    assert!(editor_focused(&harness));
+    press(&mut harness, Key::Escape);
+    let app = harness.state();
+    assert!(app.view().edit.editing.is_none());
+    assert_eq!(app.document.as_ref().unwrap().project(), &project);
+    assert_eq!(app.selection, Some(uid));
+    assert_eq!(app.view().cursor.column, Column::Name);
+}
+
+/// H-UI-86 : ↓ valide puis descend, Maj+Entrée valide puis monte, ↑ valide
+/// puis monte ; la colonne reste.
+#[test]
+fn h_ui_86_vertical_keys_commit_then_move() {
+    let mut harness = quick_harness();
+    let index = index_of(harness.state(), 3);
+    let uid_at =
+        |harness: &Harness<'static, App>, i: usize| harness.state().rows().unwrap().row(i).unwrap().uid;
+    let (above, below) = (uid_at(&harness, index - 1), uid_at(&harness, index + 1));
+    click_cell(&mut harness, index, Column::Duration);
+    type_text(&mut harness, "3j");
+    press(&mut harness, Key::ArrowDown);
+    let app = harness.state();
+    assert!(app.view().edit.editing.is_none());
+    assert_eq!(schedule_of(app, TaskUid::new(3)).duration, Minutes::new(3 * 480));
+    assert_eq!(app.selection, Some(below));
+    assert_eq!(app.view().cursor.column, Column::Duration);
+
+    type_text(&mut harness, "2j");
+    harness.key_press_modifiers(Modifiers::SHIFT, Key::Enter);
+    harness.run();
+    let app = harness.state();
+    assert!(app.view().edit.editing.is_none());
+    assert_eq!(schedule_of(app, below).duration, Minutes::new(2 * 480));
+    assert_eq!(app.selection, Some(TaskUid::new(3)));
+
+    type_text(&mut harness, "4j");
+    press(&mut harness, Key::ArrowUp);
+    let app = harness.state();
+    assert!(app.view().edit.editing.is_none());
+    assert_eq!(schedule_of(app, TaskUid::new(3)).duration, Minutes::new(4 * 480));
+    assert_eq!(app.selection, Some(above));
+    assert_eq!(app.view().cursor.column, Column::Duration);
+}
+
+/// H-UI-86 (capture du propriétaire, 2026-10-27) : saisie ouverte par un
+/// double-clic, puis clic sur une autre cellule : la saisie est validée et
+/// fermée, la cellule cliquée devient active ; aucune zone de saisie ne
+/// reste sur l'ancienne cellule.
+#[test]
+fn h_ui_86_click_other_cell_commits_and_closes() {
+    let mut harness = quick_harness();
+    let index = index_of(harness.state(), 3);
+    let name = harness
+        .state()
+        .rows()
+        .unwrap()
+        .text(index, Column::Name)
+        .to_owned();
+    let other = harness.state().rows().unwrap().row(index + 2).unwrap().uid;
+    double_click_cell(&mut harness, index, Column::Name);
+    press(&mut harness, Key::End);
+    type_text(&mut harness, " bis");
+    let label = row_label(harness.state(), index + 2);
+    let p = cell_point(&harness, &label, Column::Start);
+    click_at(&mut harness, p);
+    harness.run();
+    let app = harness.state();
+    assert!(app.view().edit.editing.is_none(), "zone de saisie périmée");
+    assert_eq!(
+        task_name(app, TaskUid::new(3)).as_deref(),
+        Some(format!("{name} bis").as_str())
+    );
+    assert_eq!(app.selection, Some(other));
+    assert_eq!(app.view().cursor.column, Column::Start);
+    assert!(harness.query_by_label(&cell_edit_label(Column::Name)).is_none());
+    // La table reprend le focus : les flèches naviguent de nouveau.
+    press(&mut harness, Key::ArrowDown);
+    let next = harness.state().rows().unwrap().row(index + 3).unwrap().uid;
+    assert_eq!(harness.state().selection, Some(next));
+}
+
+/// H-UI-86 : un clic ailleurs (Gantt, ruban) valide et ferme la saisie.
+#[test]
+fn h_ui_86_click_elsewhere_commits_and_closes() {
+    let mut harness = quick_harness();
+    let index = index_of(harness.state(), 3);
+    let name = harness
+        .state()
+        .rows()
+        .unwrap()
+        .text(index, Column::Name)
+        .to_owned();
+    click_cell(&mut harness, index, Column::Name);
+    press(&mut harness, Key::F2);
+    type_text(&mut harness, " A");
+    let p = gantt_point(&harness, index);
+    click_at(&mut harness, p);
+    harness.run();
+    let app = harness.state();
+    assert!(app.view().edit.editing.is_none());
+    assert_eq!(
+        task_name(app, TaskUid::new(3)).as_deref(),
+        Some(format!("{name} A").as_str())
+    );
+
+    click_cell(&mut harness, index, Column::Name);
+    press(&mut harness, Key::F2);
+    type_text(&mut harness, "B");
+    let tab = fr(TextId::RibbonTabView);
+    {
+        let node = harness
+            .query_all_by_label(&tab)
+            .find(|node| crate::in_ribbon(&harness, node))
+            .expect("onglet Affichage du ruban");
+        node.click();
+    }
+    harness.run();
+    let app = harness.state();
+    assert!(app.view().edit.editing.is_none());
+    assert_eq!(
+        task_name(app, TaskUid::new(3)).as_deref(),
+        Some(format!("{name} AB").as_str())
+    );
+}
+
+/// H-UI-86 : saisie illisible (« abc » en Durée) : ni ↓, ni un clic sur
+/// une autre cellule, ni un clic sur une autre ligne du Gantt ne déplacent
+/// la sélection ; la zone reste ouverte sur sa cellule, avec le focus et le
+/// message ; Échap abandonne sans rien changer.
+#[test]
+fn h_ui_86_invalid_entry_keeps_editor_and_selection() {
+    let mut harness = quick_harness();
+    let index = index_of(harness.state(), 3);
+    let uid = TaskUid::new(3);
+    let project = harness.state().document.as_ref().unwrap().project().clone();
+    click_cell(&mut harness, index, Column::Duration);
+    type_text(&mut harness, "abc");
+    let still_open = |harness: &Harness<'static, App>, step: &str| {
+        let app = harness.state();
+        let editing = app
+            .view()
+            .edit
+            .editing
+            .as_ref()
+            .unwrap_or_else(|| panic!("{step} : saisie fermée"));
+        assert_eq!(
+            (editing.uid, editing.column),
+            (Some(uid), Column::Duration),
+            "{step}"
+        );
+        assert_eq!(editing.buffer, "abc", "{step}");
+        assert!(editing.error.is_some(), "{step} : refus absent");
+        assert_eq!(app.selection, Some(uid), "{step} : sélection déplacée");
+        assert!(editor_focused(harness), "{step} : zone sans focus");
+    };
+    press(&mut harness, Key::ArrowDown);
+    still_open(&harness, "↓");
+    let label = row_label(harness.state(), index + 2);
+    let p = cell_point(&harness, &label, Column::Name);
+    click_at(&mut harness, p);
+    harness.run();
+    still_open(&harness, "clic sur une cellule");
+    let p = gantt_point(&harness, index + 2);
+    click_at(&mut harness, p);
+    harness.run();
+    still_open(&harness, "clic dans le Gantt");
+    press(&mut harness, Key::Escape);
+    let app = harness.state();
+    assert!(app.view().edit.editing.is_none());
+    assert_eq!(app.document.as_ref().unwrap().project(), &project);
+    assert_eq!(app.selection, Some(uid));
+    assert_eq!(app.view().cursor.column, Column::Duration);
+}
+
+/// H-UI-86 : Ctrl/Cmd+Z dans la zone de saisie annule la frappe en cours,
+/// pas une modification du projet.
+#[test]
+fn h_ui_86_undo_in_editor_reverts_text_only() {
+    let mut harness = quick_harness();
+    let index = index_of(harness.state(), 3);
+    click_cell(&mut harness, index, Column::Duration);
+    type_text(&mut harness, "4j");
+    press(&mut harness, Key::Enter);
+    assert_eq!(history_entries(harness.state()), 1);
+    let up = harness.state().rows().unwrap().row(index).unwrap().uid;
+    harness.state_mut().dispatch(Action::Select(Some(up)));
+    harness.run();
+    press(&mut harness, Key::F2);
+    let original = buffer(&harness).unwrap();
+    // Frappe plus d'une seconde plus tard : un pas d'annulation d'egui.
+    for _ in 0..90 {
+        harness.step();
+    }
+    type_text(&mut harness, "9");
+    assert_eq!(buffer(&harness), Some(format!("{original}9")));
+    for _ in 0..90 {
+        harness.step();
+    }
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    harness.run();
+    assert_eq!(buffer(&harness), Some(original), "texte de la saisie annulé");
+    assert_eq!(history_entries(harness.state()), 1, "projet intact");
+}

@@ -431,7 +431,7 @@ pub enum Finish {
 pub enum Move {
     /// Entrée, flèche bas : ligne suivante.
     Down,
-    /// Flèche haut : ligne précédente.
+    /// Flèche haut, Maj+Entrée : ligne précédente.
     Up,
     /// Tab : colonne visible suivante.
     Next,
@@ -462,6 +462,10 @@ pub fn finish_keys(ui: &egui::Ui) -> Option<Finish> {
     ui.input_mut(|input| {
         if input.consume_key(Modifiers::NONE, Key::Escape) {
             Some(Finish::Cancel)
+        } else if input.consume_key(Modifiers::SHIFT, Key::Enter) {
+            // Maj+Entrée valide et monte (H-UI-13) ; avant Entrée, qu'egui
+            // reconnaîtrait aussi avec Maj.
+            Some(Finish::Commit(Move::Up))
         } else if input.consume_key(Modifiers::SHIFT, Key::Tab) {
             Some(Finish::Commit(Move::Previous))
         } else if input.consume_key(Modifiers::NONE, Key::Tab) {
@@ -497,6 +501,54 @@ pub fn editor_id() -> Id {
     Id::unique("planrs-cell-editor")
 }
 
+/// Apparence de la zone de saisie : celle du texte de la cellule (police,
+/// taille, couleur, gras simulé, alignement, retrait), sur un fond uni de
+/// cellule encadré comme le curseur (H-UI-85).
+#[derive(Clone, Debug, PartialEq)]
+pub struct EditorLook {
+    /// Police des cellules de la grille (Inter si le style la demande).
+    pub font: FontId,
+    /// Alignement de la colonne.
+    pub align: CellAlign,
+    /// Marge horizontale du texte (celle de [`paint_cells`]).
+    pub pad: f32,
+    /// Retrait de niveau, déjà plafonné par [`name_indent`].
+    pub indent: f32,
+    /// Couleur, gras simulé et texte barré de la cellule.
+    pub style: CellStyle,
+    /// Fond de la cellule en saisie.
+    pub fill: Color32,
+    /// Cadre de la cellule (couleur du curseur).
+    pub frame: Color32,
+}
+
+impl EditorLook {
+    /// Apparence de la cellule (ligne `row`, colonne `col`) d'une grille :
+    /// celle que lui donne [`paint_cells`] avec `font`, `pad` et le retrait
+    /// par niveau `indent`, dans une colonne de largeur `w`.
+    #[must_use]
+    pub fn of<S: Sheet>(
+        sheet: &S,
+        (row, col): (usize, S::Col),
+        palette: &Palette,
+        font: FontId,
+        pad: f32,
+        indent: f32,
+        w: f32,
+    ) -> Self {
+        let style = sheet.style(row, col, palette);
+        Self {
+            font,
+            align: sheet.align(col),
+            pad,
+            indent: name_indent(indent, style.level, w),
+            style,
+            fill: palette.background,
+            frame: palette.cursor,
+        }
+    }
+}
+
 /// Zone de saisie d'une cellule à dessiner.
 pub struct EditorSpec {
     /// Rectangle de la cellule.
@@ -505,6 +557,8 @@ pub struct EditorSpec {
     pub clip: Rect,
     /// Nom accessible (« Saisie : Durée »).
     pub label: String,
+    /// Apparence du texte et de la cellule.
+    pub look: EditorLook,
 }
 
 /// Résultat d'une image de la zone de saisie.
@@ -516,9 +570,32 @@ pub struct EditorOut {
     pub lost: bool,
 }
 
-/// Dessine la zone de saisie posée sur la cellule ; `focus_pending` : la
-/// zone prend le focus, curseur en fin de texte (F2 comme la frappe d'un
-/// caractère).
+/// Marge en points → marge d'egui (entière, bornée à `[0, 127]`).
+fn margin_points(v: f32) -> i8 {
+    let v = if v.is_finite() {
+        v.round().clamp(0.0, 127.0)
+    } else {
+        0.0
+    };
+    i8::try_from(crate::geom::f32_to_index(v)).unwrap_or(0)
+}
+
+/// Alignement egui d'une colonne.
+const fn egui_align(align: CellAlign) -> egui::Align {
+    match align {
+        CellAlign::Left => egui::Align::LEFT,
+        CellAlign::Right => egui::Align::RIGHT,
+        CellAlign::Center => egui::Align::Center,
+    }
+}
+
+/// Dessine la zone de saisie **dans** la cellule (H-UI-85) : fond uni et
+/// cadre du curseur, texte dans la police, la couleur, l'alignement et le
+/// retrait de la cellule, sans cadre arrondi d'egui ; curseur de texte et
+/// sélection d'egui. `focus_pending` : la zone prend le focus, état de
+/// saisie remis à neuf (ni défilement ni historique d'annulation d'une
+/// saisie précédente : l'identifiant est partagé), curseur en fin de texte
+/// (F2, double-clic comme la frappe d'un caractère).
 pub fn show_editor(
     ui: &mut egui::Ui,
     buffer: &mut String,
@@ -529,25 +606,70 @@ pub fn show_editor(
     if !rect.is_finite() || !rect.is_positive() {
         return EditorOut::default();
     }
-    let mut child = ui.new_child(UiBuilder::new().max_rect(rect));
-    child.set_clip_rect(spec.clip.intersect(ui.clip_rect()));
-    let response = child.add_sized(
-        rect.size(),
-        egui::TextEdit::singleline(buffer)
-            .id(editor_id())
-            .lock_focus(true)
-            .font(egui::TextStyle::Body)
-            .margin(egui::Margin::symmetric(3, 2)),
+    let look = &spec.look;
+    let clip = spec.clip.intersect(ui.clip_rect());
+    let painter = ui.painter().with_clip_rect(clip);
+    painter.rect_filled(rect, 0.0, look.fill);
+    painter.rect_stroke(
+        rect.shrink(CURSOR_STROKE * 0.5),
+        0.0,
+        Stroke::new(CURSOR_STROKE, look.frame),
+        StrokeKind::Inside,
     );
+    if *focus_pending {
+        let mut state = egui::text_edit::TextEditState::default();
+        let end = CCursor::new(buffer.chars().count());
+        state.cursor.set_char_range(Some(CCursorRange::one(end)));
+        state.store(ui.ctx(), editor_id());
+    }
+    // Zone du texte : la cellule moins le retrait de niveau ; la marge
+    // horizontale est celle de `paint_cells`.
+    let indent = if look.indent.is_finite() {
+        look.indent
+            .clamp(0.0, (rect.width() - 2.0 * look.pad - MIN_TEXT_WIDTH).max(0.0))
+    } else {
+        0.0
+    };
+    let text_rect = Rect::from_min_max(pos2(rect.left() + indent, rect.top()), rect.max);
+    let mut child = ui.new_child(UiBuilder::new().max_rect(text_rect));
+    child.set_clip_rect(clip);
+    let pad = margin_points(look.pad);
+    let output = egui::TextEdit::singleline(buffer)
+        .id(editor_id())
+        .lock_focus(true)
+        .frame(egui::Frame::NONE.inner_margin(egui::Margin {
+            left: pad,
+            right: pad,
+            top: 0,
+            bottom: 0,
+        }))
+        .font(look.font.clone())
+        .text_color(look.style.color)
+        .align(egui::Align2([egui_align(look.align), egui::Align::Center]))
+        .desired_width(text_rect.width())
+        .min_size(text_rect.size())
+        .show(&mut child);
+    // Gras simulé et texte barré de la cellule, repeints sur le texte
+    // saisi : `galley_pos` est le bord gauche visible du texte (défilement
+    // horizontal et alignement compris). Le gras simulé est une galley
+    // neuve du même texte, sans le surlignage de la sélection que porte
+    // celle de la zone.
+    let text_painter = painter.with_clip_rect(output.text_clip_rect.expand(1.0).intersect(clip));
+    let size = output.galley.size();
+    let (x, y) = (output.galley_pos.x, output.galley_pos.y);
+    if look.style.faux_bold && size.x > 0.0 {
+        let bold = text_painter.layout_no_wrap(buffer.clone(), look.font.clone(), look.style.color);
+        text_painter.galley(pos2(x + FAUX_BOLD_DX, y), bold, look.style.color);
+    }
+    if look.style.strike && size.x > 0.0 {
+        let y = (y + size.y * 0.55).round() + 0.5;
+        text_painter.hline(x..=x + size.x, y, Stroke::new(1.0, look.style.color));
+    }
+    let response = output.response.response;
     let label = spec.label.clone();
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, label.clone()));
     if *focus_pending {
         response.request_focus();
-        if let Some(mut text_state) = egui::text_edit::TextEditState::load(ui.ctx(), editor_id()) {
-            let end = CCursor::new(buffer.chars().count());
-            text_state.cursor.set_char_range(Some(CCursorRange::one(end)));
-            text_state.store(ui.ctx(), editor_id());
-        }
         *focus_pending = false;
     }
     EditorOut {

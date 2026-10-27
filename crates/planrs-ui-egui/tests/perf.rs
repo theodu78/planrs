@@ -74,6 +74,11 @@
 //!   série deux fois, en Sobre puis en Classique, rapports dans deux
 //!   dossiers. `static_styled` mesure aussi Classique.
 //!
+//! - Ruban (ADR-0017, lot L2, cahier § 2.5) : `ribbon_tabs` (ignoré,
+//!   release) : ruban à onglets dessiné (`Chrome::Ribbon`), changement
+//!   d'onglet à chaque image (5 onglets × 12) et pointeur déplacé sur les
+//!   éléments ; mêmes seuils.
+//!
 //! Le rendu GPU n'est pas chronométré (lavapipe en CI n'est pas
 //! représentatif). Le projet est construit directement
 //! (`planrs_tests::generate::ui_network`) et ouvert sans MSPDI
@@ -1575,4 +1580,32 @@ fn ai_panel() {
         .collect();
     assert_eq!(app.relay().unwrap().diff_builds(), 1, "diff calculé une fois");
     assert_budget("ai_panel", samples, bench.last);
+}
+
+/// ADR-0017 (lot L2, § 2.5) : ruban dessiné sur le réseau de 5 000 tâches,
+/// un onglet différent à chaque image (5 onglets × 12) et le pointeur
+/// survolant le corps du ruban ; image médiane < 16 ms, p95 < 32 ms.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn ribbon_tabs() {
+    use planrs_ui_egui::ribbon::{Chrome, RibbonOp, RibbonTab};
+
+    let (mut app, mut bench) = nav_bench();
+    app.set_chrome(Chrome::Ribbon);
+    bench.settle(&mut app);
+    for _ in 0..WARMUP {
+        bench.frame(&mut app, Vec::new());
+    }
+    let mut samples = Vec::with_capacity(60);
+    for round in 0..12_usize {
+        for (i, tab) in RibbonTab::ALL.into_iter().enumerate() {
+            app.dispatch(Action::Ribbon(RibbonOp::Select(tab)));
+            // Pointeur sur le corps du ruban (sous la barre de menus et la
+            // bande d'onglets), décalé à chaque image.
+            let x = 40.0 + ((round * 5 + i) as f32 * 97.0) % (SCREEN.0 - 80.0);
+            samples.push(bench.frame(&mut app, vec![Event::PointerMoved(pos2(x, 100.0))]));
+        }
+    }
+    assert_eq!(app.state.ribbon.tab, RibbonTab::Format);
+    assert_budget("ribbon_tabs", samples, bench.last);
 }

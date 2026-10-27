@@ -289,6 +289,13 @@ mod imp {
     /// Délai d'écriture du refus d'une connexion évincée (le fil
     /// d'acceptation ne s'y attarde pas).
     const EVICT_WRITE_TIMEOUT: Duration = Duration::from_millis(200);
+    /// Tranche de lecture avant le `hello` : une connexion évincée voit
+    /// son éviction en au plus ce délai et rend sa place. Sous Windows,
+    /// la coupure (`shutdown`) par le fil d'acceptation ne réveille pas la
+    /// lecture bloquée de son fil (CI Windows de la PR #7 : les évincées
+    /// gardaient leur place jusqu'à l'échéance du `hello`, le client muni
+    /// du jeton recevait `control.busy`).
+    const EVICT_POLL: Duration = Duration::from_millis(50);
     /// Pas de la surveillance de la connexion d'un appel en attente : un
     /// client parti (délai écoulé, processus mort) est vu en au plus ce
     /// délai, et son appel expiré.
@@ -320,8 +327,9 @@ mod imp {
         service: Service,
         active: AtomicUsize,
         /// Connexions sans `hello` accepté, de la plus ancienne à la plus
-        /// récente (numéro et second descripteur pour l'éviction).
-        pending: Mutex<VecDeque<(u64, ControlStream)>>,
+        /// récente (numéro, second descripteur pour l'éviction, marque
+        /// d'éviction lue par le fil de la connexion).
+        pending: Mutex<VecDeque<(u64, ControlStream, Arc<AtomicBool>)>>,
         /// Numéro de la prochaine connexion.
         next_conn: AtomicU64,
     }
@@ -329,21 +337,23 @@ mod imp {
     impl Shared {
         /// Inscrit la connexion `id` parmi celles sans `hello` ; au-delà de
         /// [`MAX_PENDING`], la plus ancienne est coupée (sa lecture se
-        /// termine, son fil rend la place).
-        fn add_pending(&self, id: u64, stream: &ControlStream) {
+        /// termine, son fil rend la place). Rend la marque d'éviction de
+        /// la connexion.
+        fn add_pending(&self, id: u64, stream: &ControlStream) -> Arc<AtomicBool> {
+            let flag = Arc::new(AtomicBool::new(false));
             let Ok(clone) = stream.try_clone() else {
-                return;
+                return flag;
             };
             let evicted = {
                 let mut pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
-                pending.push_back((id, clone));
+                pending.push_back((id, clone, Arc::clone(&flag)));
                 if pending.len() > MAX_PENDING {
                     pending.pop_front()
                 } else {
                     None
                 }
             };
-            if let Some((_, old)) = evicted {
+            if let Some((_, old, old_flag)) = evicted {
                 // Refus dit comme pour des connexions pleines : un client
                 // légitime évincé avant son `hello` lit `control.busy` et
                 // ne se détache pas ; puis coupure, qui termine la lecture
@@ -352,14 +362,18 @@ mod imp {
                 if old.set_write_timeout(Some(EVICT_WRITE_TIMEOUT)).is_ok() {
                     let _ = send(&old, &busy);
                 }
+                // Marque posée après le refus : le fil de la connexion ne
+                // la ferme pas avant que `control.busy` soit écrit.
+                old_flag.store(true, Ordering::SeqCst);
                 old.shutdown();
             }
+            flag
         }
 
         /// Retire la connexion `id` des connexions sans `hello`.
         fn drop_pending(&self, id: u64) {
             let mut pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
-            pending.retain(|(other, _)| *other != id);
+            pending.retain(|(other, _, _)| *other != id);
         }
     }
 
@@ -555,13 +569,13 @@ mod imp {
                 continue;
             }
             let id = shared.next_conn.fetch_add(1, Ordering::SeqCst);
-            shared.add_pending(id, &stream);
+            let evicted = shared.add_pending(id, &stream);
             let guard = ActiveGuard(Arc::clone(shared));
             // Échec du fil : la fermeture de `guard` rend la place.
             let spawned = thread::Builder::new()
                 .name("planrs-control-conn".to_owned())
                 .spawn(move || {
-                    serve(&stream, &guard.0, id);
+                    serve(&stream, &guard.0, id, &evicted);
                     guard.0.drop_pending(id);
                     stream.close_gracefully();
                     drop(guard);
@@ -584,7 +598,7 @@ mod imp {
         Relay(u64, RelayKind, Option<Duration>),
     }
 
-    fn serve(stream: &ControlStream, shared: &Shared, id: u64) {
+    fn serve(stream: &ControlStream, shared: &Shared, id: u64, evicted: &AtomicBool) {
         if stream.set_read_timeout(Some(HELLO_TIMEOUT)).is_err()
             || stream.set_write_timeout(Some(WRITE_TIMEOUT)).is_err()
         {
@@ -603,13 +617,17 @@ mod imp {
                 }
                 read_line_bounded(&mut reader, MAX_LINE_BYTES)
             } else {
-                // Avant le `hello` : échéance absolue, ligne courte.
+                // Avant le `hello` : échéance absolue, ligne courte, lue
+                // par tranches de `EVICT_POLL` (éviction vue sous Windows).
                 let mut before_fill = || {
+                    if evicted.load(Ordering::SeqCst) {
+                        return Err(std::io::Error::from(ErrorKind::ConnectionAborted));
+                    }
                     let left = hello_deadline.saturating_duration_since(Instant::now());
                     if left.is_zero() {
                         return Err(std::io::Error::from(ErrorKind::TimedOut));
                     }
-                    stream.set_read_timeout(Some(left))
+                    stream.set_read_timeout(Some(left.min(EVICT_POLL)))
                 };
                 read_line_bounded_with(&mut reader, MAX_HELLO_BYTES, &mut before_fill)
             };

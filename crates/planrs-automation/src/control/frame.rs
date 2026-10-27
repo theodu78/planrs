@@ -212,13 +212,18 @@ pub enum LineError {
 /// [`LineError::TooLong`] dès que la ligne dépasse `max` ;
 /// [`LineError::Io`] sur une erreur du flux.
 pub fn read_line_bounded<R: BufRead>(reader: &mut R, max: usize) -> Result<Option<Vec<u8>>, LineError> {
-    read_line_bounded_with(reader, max, &mut || Ok(()))
+    read_line(reader, max, &mut || Ok(()), false)
 }
 
 /// Comme [`read_line_bounded`], `before_fill` appelé avant chaque
 /// remplissage du tampon (l'écouteur y pose le délai qui reste avant l'échéance du
 /// `hello` : une ligne envoyée octet par octet ne la repousse pas) ; son
-/// erreur arrête la lecture.
+/// erreur arrête la lecture. Un délai de lecture écoulé (`WouldBlock`,
+/// `TimedOut`) n'arrête pas la lecture : `before_fill` est rappelé et
+/// décide (échéance atteinte, connexion évincée) ; la ligne commencée est
+/// gardée. L'écouteur lit ainsi par tranches courtes : sous Windows, la
+/// coupure (`shutdown`) d'une connexion par un autre fil ne réveille pas
+/// une lecture bloquée (CI Windows de la PR #7).
 ///
 /// # Errors
 ///
@@ -229,12 +234,27 @@ pub fn read_line_bounded_with<R: BufRead>(
     max: usize,
     before_fill: &mut dyn FnMut() -> io::Result<()>,
 ) -> Result<Option<Vec<u8>>, LineError> {
+    read_line(reader, max, before_fill, true)
+}
+
+fn read_line<R: BufRead>(
+    reader: &mut R,
+    max: usize,
+    before_fill: &mut dyn FnMut() -> io::Result<()>,
+    retry_timeouts: bool,
+) -> Result<Option<Vec<u8>>, LineError> {
     let mut line = Vec::new();
     loop {
         before_fill().map_err(LineError::Io)?;
         let buf = match reader.fill_buf() {
             Ok(buf) => buf,
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e)
+                if retry_timeouts
+                    && matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
+            {
+                continue;
+            }
             Err(e) => return Err(LineError::Io(e)),
         };
         if buf.is_empty() {

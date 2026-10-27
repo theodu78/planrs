@@ -9,6 +9,7 @@
 
 use planrs_core::{Day, Moment, Project, Schedule, Weekday, round_div};
 
+use crate::metrics::{FontRef, InterMetrics, TextMeasure};
 use crate::request::{Lang, RangeSpec, Zoom};
 
 /// Minutes d'un jour civil.
@@ -39,18 +40,44 @@ pub(crate) enum Scale {
     Week,
     /// 3,5 px par jour.
     Month,
-    /// 1,1875 px par jour (19/16, arrondi de 1,2).
+    /// 1,2 px par jour (19,2/16, exact : 96/5 seizièmes ; J8 lot L11, comme
+    /// l'écran J7).
     Quarter,
+    /// Échelle continue de `Zoom::Fill` : `num / den` seizièmes de pixel
+    /// par jour (largeur remplie / jours, exacte), niveaux de l'en-tête
+    /// `tiers` (ceux de l'échelle discrète atteinte).
+    Fill {
+        /// Niveaux de l'en-tête (haut, bas).
+        tiers: (TierUnit, TierUnit),
+        /// Seizièmes de pixel par jour : numérateur (≥ 1).
+        num: i64,
+        /// Seizièmes de pixel par jour : dénominateur (≥ 1).
+        den: i64,
+    },
 }
 
 impl Scale {
-    /// Seizièmes de pixel par jour civil.
-    pub(crate) const fn px16_per_day(self) -> i64 {
+    /// Seizièmes de pixel par jour civil, en fraction `(numérateur,
+    /// dénominateur)` : exacte pour les quatre échelles de l'interface
+    /// (36, 12, 3,5 et 1,2 px par jour), pour que l'écran et la scène
+    /// tombent au même 1/16 px (P55).
+    pub(crate) const fn rate(self) -> (i64, i64) {
         match self {
-            Self::Day => 576,
-            Self::Week => 192,
-            Self::Month => 56,
-            Self::Quarter => 19,
+            Self::Day => (576, 1),
+            Self::Week => (192, 1),
+            Self::Month => (56, 1),
+            Self::Quarter => (96, 5),
+            Self::Fill { num, den, .. } => (num, den),
+        }
+    }
+
+    /// Seizièmes de pixel par jour civil, arrondis à l'entier inférieur
+    /// (seuils de la scène).
+    pub(crate) const fn px16_per_day(self) -> i64 {
+        let (num, den) = self.rate();
+        match num.checked_div(den) {
+            Some(v) => v,
+            None => num,
         }
     }
 
@@ -61,6 +88,7 @@ impl Scale {
             Self::Week => (TierUnit::Month, TierUnit::Week),
             Self::Month => (TierUnit::Quarter, TierUnit::Month),
             Self::Quarter => (TierUnit::Year, TierUnit::Quarter),
+            Self::Fill { tiers, .. } => tiers,
         }
     }
 }
@@ -70,6 +98,13 @@ impl Scale {
 /// `Auto { width_px }` (H-R, comme « Ajuster » de l'interface) : Semaine si
 /// `jours × 12 ≤ largeur` ; sinon Trimestre si `jours × 3,5 > 1,5 × largeur`
 /// (écrit `jours × 7 > 3 × largeur`) ; sinon Mois. Largeur nulle : Mois.
+///
+/// `Fill { width_px }` (J8 lot L16) : `largeur × 16 / jours` seizièmes de
+/// pixel par jour, exactement (la plage remplit la largeur) ; au-delà de
+/// Jour (36 px), Jour ; niveaux de l'en-tête (mois et semaines) de Semaine
+/// à partir de 3,5 px par jour, de Mois à partir de 1,2 px, de Trimestre en
+/// dessous (hypothèse de design, H-R4 : un cran plus fin que l'échelle
+/// discrète atteinte, les libellés suivant H-R5). Largeur nulle : Mois.
 pub(crate) fn resolve_scale(zoom: Zoom, days: i64) -> Scale {
     match zoom {
         Zoom::Day => Scale::Day,
@@ -88,6 +123,36 @@ pub(crate) fn resolve_scale(zoom: Zoom, days: i64) -> Scale {
                 Scale::Month
             }
         }
+        Zoom::Fill { width_px } => fill_scale(width_px, days),
+    }
+}
+
+/// Échelle continue de `Zoom::Fill` (voir [`resolve_scale`]).
+fn fill_scale(width_px: u32, days: i64) -> Scale {
+    if width_px == 0 {
+        return Scale::Month;
+    }
+    let width16 = i64::from(width_px).saturating_mul(SUB);
+    let days = days.max(1);
+    let reaches = |s: Scale| width16 >= days.saturating_mul(s.px16_per_day());
+    if reaches(Scale::Day) {
+        return Scale::Day;
+    }
+    // Niveaux d'un cran plus fins que l'échelle discrète atteinte : à
+    // 3,5 px par jour une semaine fait 24,5 px, assez pour son numéro ou son
+    // jour (H-R5 choisit la variante), comme les plannings de chantier de
+    // référence (mois et semaines même sur deux ans en A3).
+    let base = if reaches(Scale::Month) {
+        Scale::Week
+    } else if reaches(Scale::Quarter) {
+        Scale::Month
+    } else {
+        Scale::Quarter
+    };
+    Scale::Fill {
+        tiers: base.tiers(),
+        num: width16,
+        den: days,
     }
 }
 
@@ -191,8 +256,10 @@ fn auto_range(project: &Project, schedule: &Schedule, max_days: i64) -> (Day, Da
 pub(crate) struct Axis {
     /// Minute du minuit du premier jour.
     origin: i64,
-    /// Seizièmes de pixel par jour.
+    /// Seizièmes de pixel par jour : numérateur.
     px16: i64,
+    /// Seizièmes de pixel par jour : dénominateur (≥ 1).
+    den: i64,
     /// Abscisse (1/16 px) du début de la plage.
     left16: i64,
     /// Largeur du contenu (1/16 px).
@@ -202,22 +269,35 @@ pub(crate) struct Axis {
 impl Axis {
     /// Axe de `span` à l'échelle `scale`, le début de plage étant en `left16`.
     pub(crate) fn new(span: DaySpan, scale: Scale, left16: i64) -> Self {
-        let px16 = scale.px16_per_day();
+        let (px16, den) = scale.rate();
+        let width16 = round_div(
+            i128::from(span.days()).saturating_mul(i128::from(px16)),
+            i128::from(den),
+        )
+        .unwrap_or(0);
         Self {
             origin: day_minutes(span.start),
             px16,
+            den,
             left16,
-            width16: span.days().saturating_mul(px16),
+            width16,
         }
     }
 
     /// Abscisse d'une minute absolue :
-    /// `left16 + round_div((minutes − origine) × px16, 1 440)`.
+    /// `left16 + round_div((minutes − origine) × px16, 1 440 × den)`.
     pub(crate) fn x16_minutes(&self, minutes: i64) -> i64 {
         let delta = i128::from(minutes.saturating_sub(self.origin));
         let px16 = i128::from(self.px16);
-        let x = round_div(delta.saturating_mul(px16), i128::from(MINUTES_PER_DAY)).unwrap_or(0);
+        let den = i128::from(MINUTES_PER_DAY).saturating_mul(i128::from(self.den.max(1)));
+        let x = round_div(delta.saturating_mul(px16), den).unwrap_or(0);
         self.left16.saturating_add(x)
+    }
+
+    /// Seizièmes de pixel par jour, en fraction `(numérateur,
+    /// dénominateur)`.
+    pub(crate) const fn rate(&self) -> (i64, i64) {
+        (self.px16, self.den)
     }
 
     /// Abscisse d'un instant.
@@ -352,15 +432,19 @@ pub(crate) struct Cell {
     pub label: String,
 }
 
-/// Cellules d'un niveau sur toute la plage (au plus [`MAX_CELLS`]).
+/// Cellules d'un niveau sur toute la plage (au plus [`MAX_CELLS`]) ;
+/// étiquettes mesurées dans `font` (H-R11), numéros de semaine ISO si
+/// `week_numbers` (niveau Semaine).
 pub(crate) fn tier_cells(
     axis: &Axis,
     span: DaySpan,
     unit: TierUnit,
     week_start: Weekday,
     lang: Lang,
+    font: FontRef,
+    week_numbers: bool,
 ) -> Vec<Cell> {
-    let level = label_level(unit, axis.px16, lang);
+    let level = label_level(unit, axis.rate(), lang, font, week_numbers);
     let mut cells = Vec::new();
     let mut cur = unit_start(span.start, unit, week_start);
     while cells.len() < MAX_CELLS && cur < span.end {
@@ -372,13 +456,39 @@ pub(crate) fn tier_cells(
         let x0 = axis.x16_day(cur.max(span.start));
         let x1 = axis.x16_day(next.min(span.end));
         let label = level
-            .and_then(|k| label_variants(cur, unit, lang).into_iter().nth(k))
+            .and_then(|k| label_variants(cur, unit, lang, week_numbers).into_iter().nth(k))
             .unwrap_or_default();
         cells.push(Cell {
             x0,
             x1,
             boundary,
             label,
+        });
+        cur = next;
+    }
+    cells
+}
+
+/// Cellules du niveau des mois relatifs au démarrage `start` (H-UI-67) :
+/// une par mois de la plage, étiquette « M1 », « M-3 » (vide si elle ne
+/// tient pas dans la cellule, mesurée dans `font`).
+pub(crate) fn relative_month_cells(axis: &Axis, span: DaySpan, start: Day, font: FontRef) -> Vec<Cell> {
+    let mut cells = Vec::new();
+    let mut cur = unit_start(span.start, TierUnit::Month, Weekday::Monday);
+    while cells.len() < MAX_CELLS && cur < span.end {
+        let next = match next_unit_start(cur, TierUnit::Month) {
+            Some(next) if next > cur => next,
+            _ => span.end,
+        };
+        let x0 = axis.x16_day(cur.max(span.start));
+        let x1 = axis.x16_day(next.min(span.end));
+        let label = crate::geometry::relative_month_label(crate::geometry::relative_month(cur, start));
+        let fits = label_width16(&label, font).saturating_add(4 * SUB) <= x1.saturating_sub(x0);
+        cells.push(Cell {
+            x0,
+            x1,
+            boundary: cur >= span.start,
+            label: if fits { label } else { String::new() },
         });
         cur = next;
     }
@@ -431,8 +541,9 @@ fn pick<'a>(names: &[&'a str], i: usize) -> &'a str {
 }
 
 /// Variantes d'étiquette d'une cellule, de la plus longue à la plus courte
-/// (H-R, mêmes formes que l'en-tête de l'interface, sans numéro de semaine).
-fn label_variants(day: Day, unit: TierUnit, lang: Lang) -> Vec<String> {
+/// (H-R5, mêmes formes que l'en-tête de l'interface) ; semaine numérotée
+/// « S43 » / « W43 » si `week_numbers` (H-R5, modèle Chantier).
+fn label_variants(day: Day, unit: TierUnit, lang: Lang, week_numbers: bool) -> Vec<String> {
     let (year, month, dom) = ymd(day);
     let month_i = usize::try_from(month.saturating_sub(1)).unwrap_or(0);
     let (month_long, short) = match lang {
@@ -447,6 +558,14 @@ fn label_variants(day: Day, unit: TierUnit, lang: Lang) -> Vec<String> {
                 Lang::En => pick(&WEEKDAY_INITIALS_EN, wd),
             };
             vec![format!("{initial} {dom}"), dom.to_string()]
+        }
+        TierUnit::Week if week_numbers => {
+            let n = crate::scene::iso_week(day.checked_add_days(3).unwrap_or(day));
+            let prefix = match lang {
+                Lang::Fr => "S",
+                Lang::En => "W",
+            };
+            vec![format!("{prefix}{n} · {dom}"), format!("{prefix}{n}")]
         }
         TierUnit::Week => {
             let full = match lang {
@@ -482,31 +601,40 @@ fn label_variants(day: Day, unit: TierUnit, lang: Lang) -> Vec<String> {
     }
 }
 
-/// Largeur estimée d'une étiquette en 1/16 px : `caractères × 125` (≈ 0,6 ×
-/// 13 px) plus 4 px de marge, sans mesure de police (H-R).
-pub(crate) fn estimated_width16(text: &str) -> i64 {
-    let chars = i64::try_from(text.chars().count()).unwrap_or(i64::MAX);
-    chars.saturating_mul(125).saturating_add(4 * SUB)
+/// Largeur d'une étiquette en 1/16 px : mesure d'Inter (H-R11) plus 4 px
+/// de marge.
+pub(crate) fn label_width16(text: &str, font: FontRef) -> i64 {
+    InterMetrics.width16(text, font).saturating_add(4 * SUB)
 }
 
 /// Rang de variante commun à un niveau : la plus longue dont toutes les
 /// formes (les douze mois de 2026) tiennent dans la plus petite cellule de
 /// l'unité ; `None` si aucune ne tient.
-fn label_level(unit: TierUnit, px16: i64, lang: Lang) -> Option<usize> {
-    let width = unit.min_days().saturating_mul(px16);
+fn label_level(
+    unit: TierUnit,
+    rate: (i64, i64),
+    lang: Lang,
+    font: FontRef,
+    week_numbers: bool,
+) -> Option<usize> {
+    let width = unit
+        .min_days()
+        .saturating_mul(rate.0)
+        .checked_div(rate.1)
+        .unwrap_or(0);
     let dom = match unit {
         TierUnit::Day | TierUnit::Week => 28,
         TierUnit::Month | TierUnit::Quarter | TierUnit::Year => 1,
     };
     let samples: Vec<Vec<String>> = (1..=12_u32)
         .filter_map(|m| format!("2026-{m:02}-{dom:02}").parse::<Day>().ok())
-        .map(|d| label_variants(d, unit, lang))
+        .map(|d| label_variants(d, unit, lang, week_numbers))
         .collect();
     let levels = samples.iter().map(Vec::len).max().unwrap_or(0);
     (0..levels).find(|&k| {
         samples
             .iter()
-            .all(|variants| variants.get(k).is_none_or(|v| estimated_width16(v) <= width))
+            .all(|variants| variants.get(k).is_none_or(|v| label_width16(v, font) <= width))
     })
 }
 
@@ -563,17 +691,82 @@ mod tests {
         assert_eq!(resolve_scale(Zoom::Auto { width_px: 1200 }, 600), Scale::Quarter);
     }
 
+    /// `Zoom::Fill` : la plage remplit exactement la largeur ; niveaux de
+    /// l'échelle discrète atteinte ; plafond Jour ; largeur nulle : Mois.
+    #[test]
+    fn fill_scale_fills_width() {
+        assert_eq!(resolve_scale(Zoom::Fill { width_px: 0 }, 10), Scale::Month);
+        assert_eq!(resolve_scale(Zoom::Fill { width_px: 1_000 }, 10), Scale::Day);
+        let scale = resolve_scale(Zoom::Fill { width_px: 800 }, 70);
+        assert_eq!(scale.rate(), (800 * 16, 70));
+        assert_eq!(scale.tiers(), Scale::Week.tiers(), "11,4 px par jour ≥ 3,5");
+        assert_eq!(
+            resolve_scale(Zoom::Fill { width_px: 800 }, 400).tiers(),
+            Scale::Month.tiers(),
+            "2 px par jour : 1,2 ≤ … < 3,5"
+        );
+        assert_eq!(
+            resolve_scale(Zoom::Fill { width_px: 800 }, 1_000).tiers(),
+            Scale::Quarter.tiers(),
+            "0,8 px par jour < 1,2"
+        );
+        let start: Day = "2026-10-19".parse().unwrap();
+        let span = DaySpan {
+            start,
+            end: start.checked_add_days(70).unwrap(),
+            truncated: false,
+        };
+        let axis = Axis::new(span, resolve_scale(Zoom::Fill { width_px: 800 }, 70), 0);
+        assert_eq!(axis.width16(), 800 * 16);
+    }
+
+    /// Trimestre exact (J8, lot L11) : 1,2 px par jour, comme l'écran J7 ;
+    /// cinq jours font 6 px pile, un jour 19,2 arrondi à 19/16 px.
+    #[test]
+    fn quarter_scale_is_exactly_1_2_px_per_day() {
+        let start: Day = "2026-10-19".parse().unwrap();
+        let span = DaySpan {
+            start,
+            end: start.checked_add_days(100).unwrap(),
+            truncated: false,
+        };
+        let axis = Axis::new(span, Scale::Quarter, 0);
+        assert_eq!(axis.width16(), 1_920);
+        assert_eq!(axis.x16_day(start.checked_add_days(5).unwrap()), 96);
+        assert_eq!(axis.x16_day(start.checked_add_days(1).unwrap()), 19);
+        assert_eq!(Scale::Quarter.px16_per_day(), 19);
+        for scale in [Scale::Day, Scale::Week, Scale::Month] {
+            assert_eq!(scale.rate().1, 1);
+        }
+    }
+
+    const BODY: FontRef = FontRef {
+        weight: crate::metrics::FontWeight::Regular,
+        size16: 192,
+    };
+
     #[test]
     fn labels_fit_their_cells() {
-        assert_eq!(label_level(TierUnit::Month, 192, Lang::Fr), Some(0));
-        assert_eq!(label_level(TierUnit::Week, 192, Lang::Fr), Some(0));
         assert_eq!(
-            label_variants("2026-11-02".parse().unwrap(), TierUnit::Week, Lang::En)[0],
-            "Nov 2"
+            label_level(TierUnit::Month, (192, 1), Lang::Fr, BODY, false),
+            Some(0)
         );
         assert_eq!(
-            label_variants("2026-11-02".parse().unwrap(), TierUnit::Quarter, Lang::Fr)[0],
+            label_level(TierUnit::Week, (192, 1), Lang::Fr, BODY, false),
+            Some(0)
+        );
+        let d: Day = "2026-11-02".parse().unwrap();
+        assert_eq!(label_variants(d, TierUnit::Week, Lang::En, false)[0], "Nov 2");
+        assert_eq!(
+            label_variants(d, TierUnit::Quarter, Lang::Fr, false)[0],
             "T4 2026"
         );
+        // Chantier : semaine ISO (lun 19/10/2026 = S43).
+        let w: Day = "2026-10-19".parse().unwrap();
+        assert_eq!(
+            label_variants(w, TierUnit::Week, Lang::Fr, true),
+            ["S43 · 19", "S43"]
+        );
+        assert_eq!(label_variants(w, TierUnit::Week, Lang::En, true)[1], "W43");
     }
 }

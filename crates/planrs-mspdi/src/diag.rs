@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use planrs_core::{Diagnostic, Severity, Subject};
+use planrs_core::{DiagArg, Diagnostic, Severity, Subject};
 
 use crate::error::{LineIndex, Location};
 
@@ -101,6 +101,13 @@ pub enum ImportCode {
         /// Valeurs relues remplacées.
         count: u32,
     },
+    /// Instruction `<?planrs-style?>` ignorée (H-R12, J8) : trop grande,
+    /// seconde, après la racine, ou contenu invalide ; le document s'ouvre
+    /// avec le modèle par défaut.
+    StyleIgnored {
+        /// Raison.
+        reason: crate::style_pi::StyleIgnoredReason,
+    },
 }
 
 impl ImportCode {
@@ -122,6 +129,7 @@ impl ImportCode {
             Self::NotPreserved => "mspdi.not_preserved".to_owned(),
             Self::HonorConstraintsOff => "mspdi.honor_constraints_off".to_owned(),
             Self::ProgressInconsistent { .. } => "mspdi.progress_inconsistent".to_owned(),
+            Self::StyleIgnored { .. } => "style.ignored".to_owned(),
         }
     }
 
@@ -142,6 +150,7 @@ impl ImportCode {
             Self::NotPreserved => 11,
             Self::HonorConstraintsOff => 12,
             Self::ProgressInconsistent { .. } => 13,
+            Self::StyleIgnored { .. } => 14,
         }
     }
 
@@ -156,7 +165,8 @@ impl ImportCode {
             | Self::Inconsistent
             | Self::Truncated { .. }
             | Self::LinkIgnored { .. }
-            | Self::Unsupported { .. } => Severity::Warning,
+            | Self::Unsupported { .. }
+            | Self::StyleIgnored { .. } => Severity::Warning,
             Self::MissingRequired | Self::DanglingReference => Severity::Error,
             Self::NotPreserved | Self::HonorConstraintsOff | Self::ProgressInconsistent { .. } => {
                 Severity::Info
@@ -230,6 +240,7 @@ impl fmt::Display for ImportDiagnostic {
             ImportCode::Unsupported { what } => write!(f, " ({what})")?,
             ImportCode::Truncated { dropped } => write!(f, " ({dropped} diagnostics supprimés)")?,
             ImportCode::ProgressInconsistent { count } => write!(f, " ({count} restes relus remplacés)")?,
+            ImportCode::StyleIgnored { reason } => write!(f, " ({})", reason.as_str())?,
             _ => {}
         }
         if !self.element.is_empty() {
@@ -249,7 +260,7 @@ impl fmt::Display for ImportDiagnostic {
 }
 
 /// Nombre de rangs de [`ImportCode`] (plafond par code).
-const RANKS: usize = 14;
+const RANKS: usize = 15;
 
 /// Collecteur de diagnostics, avec l'index des lignes de l'entrée ; borné
 /// par [`MAX_DIAGNOSTICS`] et [`MAX_DIAGNOSTICS_PER_CODE`].
@@ -313,6 +324,63 @@ impl<'a> Sink<'a> {
     }
 }
 
+/// Traduction par code (N5, J8 lot L14) : arguments neutres, en plus du
+/// `Display` français qui ne change pas.
+impl ImportCode {
+    /// Arguments nommés propres au code (sans les champs communs de
+    /// [`ImportDiagnostic`] : élément, valeur, sujet, position). Pour
+    /// [`ImportCode::Core`], ceux du diagnostic du cœur.
+    #[must_use]
+    pub fn args(&self) -> Vec<(&'static str, DiagArg)> {
+        match self {
+            Self::UnknownCode { code } => vec![("code", DiagArg::Int(*code))],
+            Self::LinkIgnored { reason } => vec![("reason", DiagArg::Text(reason.as_str().to_owned()))],
+            Self::Unsupported { what } => vec![("what", DiagArg::Text(what.clone()))],
+            Self::Truncated { dropped } => vec![("dropped", DiagArg::count64(*dropped))],
+            Self::ProgressInconsistent { count } => vec![("count", DiagArg::Int(i64::from(*count)))],
+            Self::StyleIgnored { reason } => vec![("reason", DiagArg::Text(reason.as_str().to_owned()))],
+            Self::Core(d) => d.args(),
+            Self::InvalidValue
+            | Self::MissingRequired
+            | Self::Duplicate
+            | Self::DanglingReference
+            | Self::Rounded
+            | Self::Inconsistent
+            | Self::NotPreserved
+            | Self::HonorConstraintsOff => Vec::new(),
+        }
+    }
+
+    /// Un exemple de chaque variante hors [`ImportCode::Core`] (couverte par
+    /// `Diagnostic::examples`), pour les contrôles de couverture des
+    /// traductions.
+    #[must_use]
+    pub fn examples() -> Vec<Self> {
+        vec![
+            Self::InvalidValue,
+            Self::UnknownCode { code: 7 },
+            Self::MissingRequired,
+            Self::Duplicate,
+            Self::DanglingReference,
+            Self::LinkIgnored {
+                reason: LinkIgnoredReason::CrossProject,
+            },
+            Self::Rounded,
+            Self::Unsupported {
+                what: "leveling_delay".to_owned(),
+            },
+            Self::Inconsistent,
+            Self::Truncated { dropped: 3 },
+            Self::NotPreserved,
+            Self::HonorConstraintsOff,
+            Self::ProgressInconsistent { count: 2 },
+            Self::StyleIgnored {
+                reason: crate::style_pi::StyleIgnoredReason::TooLarge,
+            },
+        ]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -322,7 +390,7 @@ mod tests {
 
     use planrs_core::{Diagnostic, Severity, Subject, TaskUid};
 
-    use super::{ImportCode, ImportDiagnostic, LinkIgnoredReason};
+    use super::{DiagArg, ImportCode, ImportDiagnostic, LinkIgnoredReason};
 
     #[test]
     fn codes_and_severities() {
@@ -408,5 +476,27 @@ mod tests {
             text.starts_with("mspdi.unknown_code (42) : Tasks/Task/Type"),
             "{text}"
         );
+    }
+
+    /// Un exemple par variante non enveloppée, codes distincts, arguments
+    /// nommés distincts (N5).
+    #[test]
+    fn n5_import_examples_cover_every_variant() {
+        let examples = ImportCode::examples();
+        let ranks: Vec<usize> = examples.iter().map(ImportCode::rank).collect();
+        let mut expected: Vec<usize> = (0..15).collect();
+        expected.retain(|r| *r != ImportCode::Core(planrs_core::Diagnostic::TaskReservedUid).rank());
+        assert_eq!(ranks, expected);
+        let codes: std::collections::BTreeSet<String> = examples.iter().map(ImportCode::code).collect();
+        assert_eq!(codes.len(), examples.len());
+        for code in &examples {
+            let args = code.args();
+            let names: std::collections::BTreeSet<&str> = args.iter().map(|(n, _)| *n).collect();
+            assert_eq!(names.len(), args.len());
+        }
+        let core = ImportCode::Core(planrs_core::Diagnostic::LinkSelf {
+            task: planrs_core::TaskUid::new(3),
+        });
+        assert_eq!(core.args(), vec![("task", DiagArg::Uid(3))]);
     }
 }

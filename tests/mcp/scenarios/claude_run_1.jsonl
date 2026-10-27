@@ -9,4 +9,4 @@
 {"v":1,"seq":5,"tool":"save_project","params":{"path":"$TMP/renovation-maison.xml"}}
 {"v":1,"seq":5,"tool":"save_project","params":null,"result":{"ok":{"bytes":68746,"diagnostics":[],"dirty":false,"path":"$TMP/renovation-maison.xml"}}}
 {"v":1,"seq":6,"tool":"render_gantt","params":{"max_rows":40,"zoom":"week"}}
-{"v":1,"seq":6,"tool":"render_gantt","params":null,"result":{"ok":{"bytes":18966,"hidden":0,"shown":35,"truncated_bytes":false,"truncated_days":false}}}
+{"v":1,"seq":6,"tool":"render_gantt","params":null,"result":{"ok":{"bytes":18900,"hidden":0,"shown":35,"truncated_bytes":false,"truncated_days":false}}}

@@ -139,3 +139,28 @@ pub fn xml_texts(svg: &str) -> Vec<String> {
     assert_eq!(roots, 1, "un seul élément racine");
     texts
 }
+
+/// Projet « P » du cahier J8 (repère des exemples) : 1 « Gros œuvre » ⊃
+/// 2 « Fondations » 5 j, 3 « Murs » 10 j (2→3 FS), 4 « Livraison » jalon
+/// (3→4 FS) ; 5 « Second œuvre » ⊃ 6 « Plâtrerie » 4 j (3→6 FS),
+/// 7 « Peinture » 3 j (6→7 FS) ; début lun 19/10/2026 08:00.
+pub fn project_p() -> Project {
+    let mut p = project("P", "2026-10-19T08:00");
+    add(&mut p, "Gros œuvre", 0, 1);
+    let t2 = add(&mut p, "Fondations", 5, 2);
+    let t3 = add(&mut p, "Murs", 10, 2);
+    let t4 = add(&mut p, "Livraison", 0, 2);
+    add(&mut p, "Second œuvre", 0, 1);
+    let t6 = add(&mut p, "Plâtrerie", 4, 2);
+    let t7 = add(&mut p, "Peinture", 3, 2);
+    link(&mut p, t2, t3, LinkType::FinishToStart);
+    link(&mut p, t3, t4, LinkType::FinishToStart);
+    link(&mut p, t3, t6, LinkType::FinishToStart);
+    link(&mut p, t6, t7, LinkType::FinishToStart);
+    p
+}
+
+/// UID `n`.
+pub fn uid(n: u32) -> TaskUid {
+    TaskUid::new(n)
+}

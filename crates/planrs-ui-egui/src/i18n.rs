@@ -251,7 +251,6 @@ text_ids! {
     StatusWarnings => "status-warnings",
     StatusNoDocument => "status-no-document",
     // Ouverture.
-    OpenInProgress => "open-in-progress",
     OpenErrorTitle => "open-error-title",
     OpenErrorRead => "open-error-read",
     OpenErrorMspdi => "open-error-mspdi",
@@ -623,6 +622,425 @@ text_ids! {
     RecoveryKept => "recovery-kept",
     RecoveredFileName => "recovered-file-name",
     // --- J7 L16 ---
+    // --- J8 L0 : codes de refus du contrat (ADR-0016) ---
+    ErrorPasteUnrecognized => "error-paste-unrecognized",
+    ErrorPasteTooLarge => "error-paste-too_large",
+    ErrorPasteLinksDropped => "error-paste-links_dropped",
+    ErrorStyleIgnored => "error-style-ignored",
+    ErrorStyleInvalid => "error-style-invalid",
+    ErrorPdfTooManyPages => "error-pdf-too_many_pages",
+    ErrorPdfGlyphMissing => "error-pdf-glyph_missing",
+    ErrorPdfLogoInvalid => "error-pdf-logo_invalid",
+    ErrorTaskManualFinishBeforeStart => "error-task-manual_finish_before_start",
+    ErrorControlBadEndpoint => "error-control-bad_endpoint",
+    // --- J8 L1 ---
+    // --- J8 L2 ---
+    // --- J8 L3 ---
+    // --- J8 L4 ---
+    // --- J8 L5 ---
+    // --- J8 L6 ---
+    // --- J8 L7 ---
+    // --- J8 L8 ---
+    // --- J8 L9 ---
+    MenuFilter => "menu-filter",
+    FilterAll => "filter-all",
+    FilterCritical => "filter-critical",
+    FilterLate => "filter-late",
+    FilterIncomplete => "filter-incomplete",
+    FilterMilestones => "filter-milestones",
+    FilterSummaries => "filter-summaries",
+    FilterUsingResource => "filter-using-resource",
+    FilterDateRange => "filter-date-range",
+    FilterCustom => "filter-custom",
+    FilterReapply => "filter-reapply",
+    FilterClear => "filter-clear",
+    FilterUsingNamed => "filter-using-named",
+    StatusFilter => "status-filter",
+    FilterCustomTitle => "filter-custom-title",
+    FilterResourceTitle => "filter-resource-title",
+    FilterDateRangeTitle => "filter-date-range-title",
+    FilterApply => "filter-apply",
+    FilterResource => "filter-resource",
+    FilterNoResource => "filter-no-resource",
+    FilterUseResource => "filter-use-resource",
+    FilterFrom => "filter-from",
+    FilterTo => "filter-to",
+    FilterActiveOnly => "filter-active-only",
+    FilterOutlineMax => "filter-outline-max",
+    FilterNameContains => "filter-name-contains",
+    FilterRelated => "filter-related",
+    FilterDateOrder => "filter-date-order",
+    FilterDatesRequired => "filter-dates-required",
+    FilterResourceMissing => "filter-resource-missing",
+    MenuSort => "menu-sort",
+    MenuSortById => "menu-sort-by-id",
+    SortTitle => "sort-title",
+    SortBy => "sort-by",
+    SortAscending => "sort-ascending",
+    SortDescending => "sort-descending",
+    SortKeepOutline => "sort-keep-outline",
+    SortApply => "sort-apply",
+    SortReset => "sort-reset",
+    MenuOutlineLevel => "menu-outline-level",
+    OutlineLevelN => "outline-level-n",
+    OutlineAll => "outline-all",
+    MenuHideSubtasks => "menu-hide-subtasks",
+    MenuShowSubtasks => "menu-show-subtasks",
+    OutlineExpandRow => "outline-expand-row",
+    OutlineCollapseRow => "outline-collapse-row",
+    ViewReorderLocked => "view-reorder-locked",
+    MenuFind => "menu-find",
+    SearchLabel => "search-label",
+    SearchPrevious => "search-previous",
+    SearchNext => "search-next",
+    SearchAllColumns => "search-all-columns",
+    SearchClose => "search-close",
+    SearchNone => "search-none",
+    SearchCounter => "search-counter",
+    SearchHidden => "search-hidden",
+    // --- J8 L10 ---
+    MenuCut => "menu-cut",
+    MenuCopy => "menu-copy",
+    MenuPaste => "menu-paste",
+    MenuPasteSpecial => "menu-paste-special",
+    MenuImportCsv => "menu-import-csv",
+    PasteReportTitle => "paste-report-title",
+    PasteReportTasks => "paste-report-tasks",
+    PasteReportLinks => "paste-report-links",
+    PasteReportAssignments => "paste-report-assignments",
+    PasteReportResources => "paste-report-resources",
+    PasteHintUnrecognized => "paste-hint-unrecognized",
+    PasteHintTooLarge => "paste-hint-too-large",
+    PasteUseShortcut => "paste-use-shortcut",
+    PsTitle => "ps-title",
+    PsSource => "ps-source",
+    PsLinks => "ps-links",
+    PsResources => "ps-resources",
+    PsResMatch => "ps-res-match",
+    PsResCreate => "ps-res-create",
+    PsResDrop => "ps-res-drop",
+    PsNothing => "ps-nothing",
+    CiPickTitle => "ci-pick-title",
+    CiPickFilter => "ci-pick-filter",
+    CiTitle => "ci-title",
+    CiFile => "ci-file",
+    CiSeparator => "ci-separator",
+    CiEncoding => "ci-encoding",
+    CiLanguage => "ci-language",
+    CiAuto => "ci-auto",
+    CiSepSemicolon => "ci-sep-semicolon",
+    CiSepComma => "ci-sep-comma",
+    CiSepTab => "ci-sep-tab",
+    CiEncUtf8 => "ci-enc-utf8",
+    CiEncUtf16Le => "ci-enc-utf16le",
+    CiEncUtf16Be => "ci-enc-utf16be",
+    CiEncWindows1252 => "ci-enc-windows1252",
+    CiDetected => "ci-detected",
+    CiColumns => "ci-columns",
+    CiRows => "ci-rows",
+    CiRecognized => "ci-recognized",
+    CiUnknown => "ci-unknown",
+    CiUnsupported => "ci-unsupported",
+    CiDuplicate => "ci-duplicate",
+    CiDiagnostics => "ci-diagnostics",
+    CiDiagnosticLine => "ci-diagnostic-line",
+    CiImport => "ci-import",
+    CiImported => "ci-imported",
+    ErrorCsvErrorTooLarge => "error-csv-error-too_large",
+    ErrorCsvErrorEmpty => "error-csv-error-empty",
+    ErrorCsvErrorNoHeader => "error-csv-error-no_header",
+    ErrorCsvErrorNoKnownColumn => "error-csv-error-no_known_column",
+    ErrorCsvErrorTooManyRows => "error-csv-error-too_many_rows",
+    ErrorCsvErrorTooManyColumns => "error-csv-error-too_many_columns",
+    ErrorCsvErrorEncoding => "error-csv-error-encoding",
+    ErrorCsvErrorNotYetAvailable => "error-csv-error-not_yet_available",
+    // --- J8 L11 ---
+    ColMode => "col-mode",
+    FmtModeManual => "fmt-mode-manual",
+    FmtModeAuto => "fmt-mode-auto",
+    GanttStatusLabel => "gantt-status-label",
+    // --- J8 L12 ---
+    MenuAiPanel => "menu-ai-panel",
+    SideTabAi => "side-tab-ai",
+    SideTabWhy => "side-tab-why",
+    SideClose => "side-close",
+    AiNoPending => "ai-no-pending",
+    AiMore => "ai-more",
+    AiCriticalEntered => "ai-critical-entered",
+    AiCriticalLeft => "ai-critical-left",
+    AiAdded => "ai-added",
+    AiRemoved => "ai-removed",
+    AiNoPreview => "ai-no-preview",
+    AiHistory => "ai-history",
+    AiHistoryEmpty => "ai-history-empty",
+    AiHistoryLine => "ai-history-line",
+    AiOutcomeAccepted => "ai-outcome-accepted",
+    AiOutcomeRejected => "ai-outcome-rejected",
+    AiOutcomeExpired => "ai-outcome-expired",
+    AiOutcomeStale => "ai-outcome-stale",
+    AiOutcomeFailed => "ai-outcome-failed",
+    AiUndoEntry => "ai-undo-entry",
+    WhyNoTask => "why-no-task",
+    WhyDrivers => "why-drivers",
+    WhyUnavailable => "why-unavailable",
+    // --- J8 L13 ---
+    WebStartFailed => "web-start-failed",
+    DroppedFirstOnly => "dropped-first-only",
+    MenuExport => "menu-export",
+    MenuExportPdf => "menu-export-pdf",
+    MenuExportSvg => "menu-export-svg",
+    MenuExportCsv => "menu-export-csv",
+    ExportDone => "export-done",
+    ExportErrorTitle => "export-error-title",
+    ExportErrorFailed => "export-error-failed",
+    // --- J8 L14 ---
+    DiagCalendarUnknown => "diag-calendar-unknown",
+    DiagCalendarBaseMissing => "diag-calendar-base_missing",
+    DiagCalendarBaseNotBase => "diag-calendar-base_not_base",
+    DiagCalendarInheritanceCycle => "diag-calendar-inheritance_cycle",
+    DiagCalendarNoWorkingTime => "diag-calendar-no_working_time",
+    DiagCalendarInternal => "diag-calendar-internal",
+    DiagCalendarExceptionsOverlap => "diag-calendar-exceptions_overlap",
+    DiagCalendarWorkWeeksOverlap => "diag-calendar-work_weeks_overlap",
+    DiagCalendarRecurrenceUnsupported => "diag-calendar-recurrence_unsupported",
+    DiagProjectCalendarNotBase => "diag-project-calendar_not_base",
+    DiagTaskReservedUid => "diag-task-reserved_uid",
+    DiagTaskOutlineJump => "diag-task-outline_jump",
+    DiagTaskNullWithData => "diag-task-null_with_data",
+    DiagTaskNegativeProgress => "diag-task-negative_progress",
+    DiagLinkSelf => "diag-link-self",
+    DiagLinkDuplicate => "diag-link-duplicate",
+    DiagLinkUnknownTask => "diag-link-unknown_task",
+    DiagAssignmentUnknownTask => "diag-assignment-unknown_task",
+    DiagAssignmentUnknownResource => "diag-assignment-unknown_resource",
+    DiagConversionOutOfDomain => "diag-conversion-out_of_domain",
+    DiagLinkCycle => "diag-link-cycle",
+    DiagLinkIgnoredInCycle => "diag-link-ignored_in_cycle",
+    DiagLinkSummaryDescendant => "diag-link-summary_descendant",
+    DiagLinkFinishToSummary => "diag-link-finish_to_summary",
+    DiagLinkExpansionLimit => "diag-link-expansion_limit",
+    DiagLinkStartFromSummary => "diag-link-start_from_summary",
+    DiagLinkInactive => "diag-link-inactive",
+    DiagLinkExcludedEndpoint => "diag-link-excluded_endpoint",
+    DiagLinkManualNotHonored => "diag-link-manual_not_honored",
+    DiagLinkUnschedulable => "diag-link-unschedulable",
+    DiagTaskManualUndated => "diag-task-manual_undated",
+    DiagTaskManualDatesInverted => "diag-task-manual_dates_inverted",
+    DiagTaskCalendarFallback => "diag-task-calendar_fallback",
+    DiagProjectCalendarFallback => "diag-project-calendar_fallback",
+    DiagTaskUnschedulable => "diag-task-unschedulable",
+    DiagConstraintOverride => "diag-constraint-override",
+    DiagConstraintNotHonored => "diag-constraint-not_honored",
+    DiagConstraintSummaryIgnored => "diag-constraint-summary_ignored",
+    DiagConstraintManualIgnored => "diag-constraint-manual_ignored",
+    DiagTaskDeadlineMissed => "diag-task-deadline_missed",
+    DiagResourceOverallocated => "diag-resource-overallocated",
+    DiagResourceAvailabilityIgnored => "diag-resource-availability_ignored",
+    DiagAssignmentContourUnsupported => "diag-assignment-contour_unsupported",
+    DiagAssignmentZeroUnits => "diag-assignment-zero_units",
+    DiagAssignmentDurationOutOfDomain => "diag-assignment-duration_out_of_domain",
+    DiagAssignmentCalendarEmpty => "diag-assignment-calendar_empty",
+    DiagTaskFixedWorkEffortDriven => "diag-task-fixed_work_effort_driven",
+    DiagCalendarTooManySegments => "diag-calendar-too_many_segments",
+    DiagAssignmentTooManyParts => "diag-assignment-too_many_parts",
+    DiagProgressLinkIgnored => "diag-progress-link_ignored",
+    DiagProgressLinkOverridden => "diag-progress-link_overridden",
+    DiagProgressOptionUnsupported => "diag-progress-option_unsupported",
+    DiagProgressFromFinishInProgress => "diag-progress-from_finish_in_progress",
+    DiagProgressActualStartMissing => "diag-progress-actual_start_missing",
+    DiagProgressMilestoneRounded => "diag-progress-milestone_rounded",
+    DiagConstraintIgnoredInProgress => "diag-constraint-ignored_in_progress",
+    DiagBaselineCostNotComputed => "diag-baseline-cost_not_computed",
+    DiagBaselineTaskSkipped => "diag-baseline-task_skipped",
+    DiagBaselineNothingToClear => "diag-baseline-nothing_to_clear",
+    DiagScheduleInternal => "diag-schedule-internal",
+    DiagMspdiInvalidValue => "diag-mspdi-invalid_value",
+    DiagMspdiUnknownCode => "diag-mspdi-unknown_code",
+    DiagMspdiMissingRequired => "diag-mspdi-missing_required",
+    DiagMspdiDuplicate => "diag-mspdi-duplicate",
+    DiagMspdiDanglingReference => "diag-mspdi-dangling_reference",
+    DiagMspdiLinkIgnored => "diag-mspdi-link_ignored",
+    DiagMspdiRounded => "diag-mspdi-rounded",
+    DiagMspdiUnsupported => "diag-mspdi-unsupported",
+    DiagMspdiInconsistent => "diag-mspdi-inconsistent",
+    DiagMspdiTruncated => "diag-mspdi-truncated",
+    DiagMspdiNotPreserved => "diag-mspdi-not_preserved",
+    DiagMspdiHonorConstraintsOff => "diag-mspdi-honor_constraints_off",
+    DiagMspdiProgressInconsistent => "diag-mspdi-progress_inconsistent",
+    DiagStyleIgnored => "diag-style-ignored",
+    DiagMspdiErrorEmpty => "diag-mspdi-error-empty",
+    DiagMspdiErrorTooLarge => "diag-mspdi-error-too_large",
+    DiagMspdiErrorUtf16NotSupported => "diag-mspdi-error-utf16_not_supported",
+    DiagMspdiErrorInvalidUtf8 => "diag-mspdi-error-invalid_utf8",
+    DiagMspdiErrorXml => "diag-mspdi-error-xml",
+    DiagMspdiErrorUnexpectedEof => "diag-mspdi-error-unexpected_eof",
+    DiagMspdiErrorDoctypeNotAllowed => "diag-mspdi-error-doctype_not_allowed",
+    DiagMspdiErrorTooDeep => "diag-mspdi-error-too_deep",
+    DiagMspdiErrorTooManyElements => "diag-mspdi-error-too_many_elements",
+    DiagMspdiErrorTooManyRetained => "diag-mspdi-error-too_many_retained",
+    DiagMspdiErrorTextTooLong => "diag-mspdi-error-text_too_long",
+    DiagMspdiErrorNotMspdi => "diag-mspdi-error-not_mspdi",
+    DiagLocation => "diag-location",
+    DiagSubjectProject => "diag-subject-project",
+    DiagSubjectCalendar => "diag-subject-calendar",
+    DiagSubjectTask => "diag-subject-task",
+    DiagSubjectLink => "diag-subject-link",
+    DiagSubjectResource => "diag-subject-resource",
+    DiagSubjectAssignment => "diag-subject-assignment",
+    DiagPassForward => "diag-pass-forward",
+    DiagPassBackward => "diag-pass-backward",
+    DiagBoundProjectStart => "diag-bound-project-start",
+    DiagBoundProjectFinish => "diag-bound-project-finish",
+    DiagBoundSummaryGate => "diag-bound-summary-gate",
+    DiagBoundSummaryCap => "diag-bound-summary-cap",
+    DiagBoundPredecessor => "diag-bound-predecessor",
+    DiagBoundSuccessor => "diag-bound-successor",
+    DiagWithElement => "diag-with-element",
+    DiagWithValue => "diag-with-value",
+    DiagWithDetail => "diag-with-detail",
+    TemplateClassique => "template-classique",
+    TemplateSobre => "template-sobre",
+    TemplateContrasteEleve => "template-contraste-eleve",
+    TemplatePresentation => "template-presentation",
+    TemplateChantier => "template-chantier",
+    TemplateImpressionNb => "template-impression-nb",
+    TokenProject => "token-project",
+    TokenStatusDate => "token-status-date",
+    TokenPage => "token-page",
+    TokenPages => "token-pages",
+    TokenPrintDate => "token-print-date",
+    TokenFile => "token-file",
+    // --- J8 L15 ---
+    MenuTask => "menu-task",
+    MenuFormat => "menu-format",
+    MenuHelp => "menu-help",
+    MenuMarkPercent => "menu-mark-percent",
+    ToolbarPercent => "toolbar-percent",
+    ToolbarPercentHint => "toolbar-percent-hint",
+    MenuToggleMode => "menu-toggle-mode",
+    ToolbarMode => "toolbar-mode",
+    ToolbarModeHint => "toolbar-mode-hint",
+    MenuToggleActive => "menu-toggle-active",
+    ToolbarActive => "toolbar-active",
+    ToolbarActiveHint => "toolbar-active-hint",
+    ToolbarFilter => "toolbar-filter",
+    ToolbarSearch => "toolbar-search",
+    ToolbarPrintMode => "toolbar-print-mode",
+    MenuPageSetup => "menu-page-setup",
+    MenuPrintMode => "menu-print-mode",
+    MenuGallery => "menu-gallery",
+    MenuFormatBars => "menu-format-bars",
+    MenuChartOnly => "menu-chart-only",
+    MenuHighlightCritical => "menu-highlight-critical",
+    MenuAbout => "menu-about",
+    AboutText => "about-text",
+    ContextFormatBars => "context-format-bars",
+    TaskCmdNothing => "task-cmd-nothing",
+    TaskCmdNoSelection => "task-cmd-no-selection",
+    GalleryTitle => "gallery-title",
+    GalleryApply => "gallery-apply",
+    GalleryCurrent => "gallery-current",
+    GalleryDefault => "gallery-default",
+    GalleryMakeDefault => "gallery-make-default",
+    GalleryDefaultHint => "gallery-default-hint",
+    GalleryUserTemplates => "gallery-user-templates",
+    GalleryNoUserTemplate => "gallery-no-user-template",
+    GallerySaveName => "gallery-save-name",
+    GallerySave => "gallery-save",
+    GallerySaved => "gallery-saved",
+    GalleryNameInvalid => "gallery-name-invalid",
+    GalleryFull => "gallery-full",
+    GalleryClose => "gallery-close",
+    GalleryPreviewEmpty => "gallery-preview-empty",
+    PageSetupTitle => "page-setup-title",
+    PrintModeTitle => "print-mode-title",
+    PsPaper => "ps-paper",
+    PsLandscape => "ps-landscape",
+    PsPortrait => "ps-portrait",
+    PsMargins => "ps-margins",
+    PsMarginTop => "ps-margin-top",
+    PsMarginRight => "ps-margin-right",
+    PsMarginBottom => "ps-margin-bottom",
+    PsMarginLeft => "ps-margin-left",
+    PsFit => "ps-fit",
+    PsFitScale => "ps-fit-scale",
+    PsFitWide => "ps-fit-wide",
+    PsFitWideTall => "ps-fit-wide-tall",
+    PsPagesTall => "ps-pages-tall",
+    PsRepeatTable => "ps-repeat-table",
+    PsHeader => "ps-header",
+    PsFooter => "ps-footer",
+    PsZoneLeft => "ps-zone-left",
+    PsZoneCenter => "ps-zone-center",
+    PsZoneRight => "ps-zone-right",
+    PsInsertToken => "ps-insert-token",
+    PsTitleBlock => "ps-title-block",
+    PsColumns => "ps-columns",
+    PsChartOnly => "ps-chart-only",
+    PsPreview => "ps-preview",
+    PsPageOf => "ps-page-of",
+    PsPrev => "ps-prev",
+    PsNext => "ps-next",
+    PsScale => "ps-scale",
+    PsExportPdf => "ps-export-pdf",
+    PsExportSvg => "ps-export-svg",
+    PsSave => "ps-save",
+    PsClose => "ps-close",
+    PsError => "ps-error",
+    PsColumnName => "ps-column-name",
+    FpTitle => "fp-title",
+    FpRole => "fp-role",
+    FpRoleTask => "fp-role-task",
+    FpRoleCritical => "fp-role-critical",
+    FpRoleSummary => "fp-role-summary",
+    FpRoleSummaryCritical => "fp-role-summary-critical",
+    FpRoleMilestone => "fp-role-milestone",
+    FpRoleMilestoneCritical => "fp-role-milestone-critical",
+    FpRoleProgress => "fp-role-progress",
+    FpRoleBaseline => "fp-role-baseline",
+    FpRoleInactive => "fp-role-inactive",
+    FpRoleManual => "fp-role-manual",
+    FpRoleSlack => "fp-role-slack",
+    FpRoleDeadline => "fp-role-deadline",
+    FpColor => "fp-color",
+    FpCustomColor => "fp-custom-color",
+    FpSwatch => "fp-swatch",
+    FpPhaseSwatch => "fp-phase-swatch",
+    FpThickness => "fp-thickness",
+    FpEnds => "fp-ends",
+    FpEndsSquare => "fp-ends-square",
+    FpEndsRounded => "fp-ends-rounded",
+    FpTextLeft => "fp-text-left",
+    FpTextRight => "fp-text-right",
+    FpTextInside => "fp-text-inside",
+    FpNone => "fp-none",
+    FpDurationAfterName => "fp-duration-after-name",
+    FpDetails => "fp-details",
+    FpContrastLow => "fp-contrast-low",
+    FpUseSuggestion => "fp-use-suggestion",
+    FpRevert => "fp-revert",
+    FpSaveTemplate => "fp-save-template",
+    FpClose => "fp-close",
+    FpPhase => "fp-phase",
+    FpPhaseChildren => "fp-phase-children",
+    FpPhaseRemove => "fp-phase-remove",
+    FieldName => "field-name",
+    FieldNameDuration => "field-name-duration",
+    FieldResources => "field-resources",
+    FieldStart => "field-start",
+    FieldFinish => "field-finish",
+    FieldStartShort => "field-start-short",
+    FieldFinishShort => "field-finish-short",
+    FieldDuration => "field-duration",
+    FieldDurationShort => "field-duration-short",
+    FieldPercent => "field-percent",
+    FieldTotalSlack => "field-total-slack",
+    FieldStartFinish => "field-start-finish",
+    // --- J8 L16 ---
+    // --- J8 relecture finale ---
+    PasteReportTracking => "paste-report-tracking",
+    TokenScheduleTitle => "token-schedule-title",
+    MenuRelativeMonths => "menu-relative-months",
 }
 
 /// Clé fluent du refus de code `code` : `error-<code>`, points changés en
@@ -644,6 +1062,91 @@ pub fn error_text_id(code: &str) -> TextId {
         .copied()
         .find(|id| id.key() == key)
         .unwrap_or(TextId::ErrorUnknown)
+}
+
+/// Clé fluent d'un diagnostic de code `code` (N5, N9 ; J8 lot L14) :
+/// `diag-<code>`, points changés en tirets (`link.cycle` →
+/// `diag-link-cycle`, `mspdi.error.xml` → `diag-mspdi-error-xml`).
+#[must_use]
+pub fn diag_key(code: &str) -> String {
+    format!("diag-{}", code.replace('.', "-"))
+}
+
+/// Nom affiché d'un modèle de mise en forme (galerie, préférences).
+/// « Chantier » s'affiche « Planning travaux » (retour du propriétaire du
+/// 2026-10-26, H-UI-63 à H-UI-67) ; l'identifiant stable ne change pas.
+#[must_use]
+pub const fn template_name(id: planrs_render::TemplateId) -> TextId {
+    use planrs_render::TemplateId as T;
+    match id {
+        T::Classique => TextId::TemplateClassique,
+        T::Sobre => TextId::TemplateSobre,
+        T::ContrasteEleve => TextId::TemplateContrasteEleve,
+        T::Presentation => TextId::TemplatePresentation,
+        T::Chantier => TextId::TemplateChantier,
+        T::ImpressionNb => TextId::TemplateImpressionNb,
+    }
+}
+
+/// Libellé d'un jeton d'en-tête ou de pied de page (H-UI-51), pour la
+/// fenêtre « Mise en page » ; le jeton écrit dans le style (`{projet}`…)
+/// ne se traduit pas.
+#[must_use]
+pub const fn token_label(token: planrs_render::geometry::Token) -> TextId {
+    use planrs_render::geometry::Token as T;
+    match token {
+        T::Project => TextId::TokenProject,
+        T::StatusDate => TextId::TokenStatusDate,
+        T::Page => TextId::TokenPage,
+        T::Pages => TextId::TokenPages,
+        T::PrintDate => TextId::TokenPrintDate,
+        T::File => TextId::TokenFile,
+        T::ScheduleTitle => TextId::TokenScheduleTitle,
+    }
+}
+
+/// Pseudo-langue de test (J8 lot L14) : lettres accentuées, texte allongé
+/// d'au moins 40 % et encadré de crochets (« [Ƒíléé····] »), pour voir une
+/// troncature ou une chaîne restée en dur. Les espaces et la ponctuation
+/// sont gardés ; seules des lettres Latin-1 (présentes dans les polices
+/// d'egui) sont utilisées. Chaîne vide inchangée.
+#[must_use]
+pub fn pseudo(text: &str) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
+    let mut out = String::with_capacity(text.len().saturating_mul(2).saturating_add(8));
+    out.push('[');
+    let mut chars: usize = 0;
+    for c in text.chars() {
+        chars = chars.saturating_add(1);
+        out.push(match c {
+            'a' => 'á',
+            'e' => 'é',
+            'i' => 'í',
+            'o' => 'ó',
+            'u' => 'ú',
+            'y' => 'ý',
+            'c' => 'ç',
+            'n' => 'ñ',
+            'A' => 'Á',
+            'E' => 'É',
+            'I' => 'Í',
+            'O' => 'Ó',
+            'U' => 'Ú',
+            'Y' => 'Ý',
+            'C' => 'Ç',
+            'N' => 'Ñ',
+            other => other,
+        });
+    }
+    // 40 % arrondi au-dessus, au moins un caractère de remplissage.
+    let pad = chars.saturating_mul(2).saturating_add(4) / 5;
+    for _ in 0..pad.max(1) {
+        out.push('·');
+    }
+    out.push(']');
+    out
 }
 
 /// Noms longs des mois, janvier d'abord.
@@ -721,6 +1224,9 @@ pub struct Texts {
     missing: RefCell<BTreeSet<TextId>>,
     /// Libellés des formateurs, résolus une fois à la construction.
     labels: FormatLabels,
+    /// Pseudo-langue de test ([`pseudo`]) appliquée à chaque message, sauf
+    /// aux conventions de formatage (`fmt-*`).
+    pseudo: bool,
 }
 
 impl std::fmt::Debug for Texts {
@@ -759,7 +1265,33 @@ impl Texts {
     #[must_use]
     pub fn new(language: Language) -> Self {
         let fallback = (language != Language::Fr).then(|| build_bundle(Language::Fr, FTL_FR));
-        Self::assemble(language, build_bundle(language, language.source()), fallback)
+        Self::assemble(
+            language,
+            build_bundle(language, language.source()),
+            fallback,
+            false,
+        )
+    }
+
+    /// Pseudo-langue de test (J8 lot L14) : messages anglais passés par
+    /// [`pseudo`] (accents, +40 %, crochets) ; dates, nombres et saisie
+    /// comme en anglais ([`Texts::language`] rend `En`). Réservée aux tests
+    /// de troncature (`tests/ui/pseudo.rs`), jamais proposée à
+    /// l'utilisateur.
+    #[must_use]
+    pub fn pseudo() -> Self {
+        Self::assemble(
+            Language::En,
+            build_bundle(Language::En, FTL_EN),
+            Some(build_bundle(Language::Fr, FTL_FR)),
+            true,
+        )
+    }
+
+    /// Vrai pour la pseudo-langue de test.
+    #[must_use]
+    pub const fn is_pseudo(&self) -> bool {
+        self.pseudo
     }
 
     /// Recueil construit sur des sources arbitraires (tests du repli).
@@ -769,6 +1301,7 @@ impl Texts {
             language,
             build_bundle(language, source),
             fallback.map(|fr| build_bundle(Language::Fr, fr)),
+            false,
         )
     }
 
@@ -778,6 +1311,7 @@ impl Texts {
         language: Language,
         bundle: FluentBundle<FluentResource>,
         fallback: Option<FluentBundle<FluentResource>>,
+        pseudo: bool,
     ) -> Self {
         let mut texts = Self {
             language,
@@ -785,6 +1319,7 @@ impl Texts {
             fallback,
             missing: RefCell::new(BTreeSet::new()),
             labels: FormatLabels::default(),
+            pseudo,
         };
         texts.labels = texts.build_format_labels();
         texts
@@ -825,6 +1360,9 @@ impl Texts {
                 let text = bundle.format_pattern(pattern, args, &mut errors);
                 for error in errors {
                     log::warn!("traduction « {key} » : {error}");
+                }
+                if self.pseudo && !key.starts_with("fmt-") {
+                    return pseudo(&text);
                 }
                 return text.into_owned();
             }
@@ -896,6 +1434,8 @@ impl Texts {
             quarter_prefix: self.get(TextId::TierQuarter),
             week_prefix: self.get(TextId::TierWeek),
             percent_suffix: self.get(TextId::FmtPercentSuffix),
+            mode_manual: self.get(TextId::FmtModeManual),
+            mode_auto: self.get(TextId::FmtModeAuto),
         }
     }
 }
@@ -957,6 +1497,63 @@ mod tests {
             ("value", Arg::Str("5 jours".into())),
             ("document", Arg::Str("maison.xml".into())),
             ("stem", Arg::Str("maison".into())),
+            ("date", Arg::Str("02/11".into())),
+            // Diagnostics traduits par code (N5, N9 ; J8 lot L14).
+            ("calendar", Arg::Str("1".into())),
+            ("referenced_by", Arg::Str("la tâche 3".into())),
+            ("base", Arg::Str("2".into())),
+            ("chain", Arg::Str("1 -> 2 -> 1".into())),
+            ("kept", Arg::Count(1)),
+            ("ignored", Arg::Count(2)),
+            ("exception", Arg::Count(3)),
+            ("task", Arg::Str("3".into())),
+            ("predecessor", Arg::Str("2".into())),
+            ("successor", Arg::Str("3".into())),
+            ("assignment", Arg::Str("4".into())),
+            ("resource", Arg::Str("5".into())),
+            ("from", Arg::Str("lun 02/11/26".into())),
+            ("to", Arg::Str("ven 06/11/26".into())),
+            ("minutes", Arg::Count(480)),
+            ("tasks", Arg::Str("1, 2, 3".into())),
+            ("limit", Arg::Count(64)),
+            ("cause", Arg::Str("cause".into())),
+            ("pass", Arg::Str("passe avant".into())),
+            ("kind", Arg::Str("Doit commencer le".into())),
+            ("bound", Arg::Str("le début du projet".into())),
+            ("deadline", Arg::Str("lun 02/11/26".into())),
+            ("peak", Arg::Count(150)),
+            ("contour", Arg::Str("BackLoaded".into())),
+            ("task_calendar", Arg::Str("1".into())),
+            ("resource_calendar", Arg::Str("2".into())),
+            ("other", Arg::Str("2".into())),
+            ("parts", Arg::Count(70)),
+            ("option", Arg::Str("MoveCompletedEndsForward".into())),
+            ("number", Arg::Count(1)),
+            ("code", Arg::Count(7)),
+            ("reason", Arg::Str("cross_project".into())),
+            ("what", Arg::Str("leveling_delay".into())),
+            ("dropped", Arg::Count(3)),
+            ("size", Arg::Count(300)),
+            ("max", Arg::Count(200)),
+            ("message", Arg::Str("message".into())),
+            ("open", Arg::Str("Project/Tasks".into())),
+            ("depth", Arg::Count(2)),
+            ("root", Arg::Str("html".into())),
+            ("at", Arg::Str("ligne 4, colonne 9 (octet 120)".into())),
+            ("line", Arg::Count(4)),
+            ("byte", Arg::Count(120)),
+            ("head", Arg::Str("tête".into())),
+            ("element", Arg::Str("Tasks/Task/Name".into())),
+            ("summary", Arg::Str("1".into())),
+            // J8 lot L15.
+            ("percent", Arg::Count(50)),
+            ("version", Arg::Str("1.0.0".into())),
+            ("role", Arg::Str("Barres critiques".into())),
+            ("color", Arg::Str("#D55E00".into())),
+            ("ratio", Arg::Str("1,6".into())),
+            ("page", Arg::Count(2)),
+            ("pages", Arg::Count(7)),
+            ("scale", Arg::Count(95)),
         ]
     }
 
@@ -1305,6 +1902,67 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Pseudo-langue : accents, crochets, au moins +40 % de caractères ;
+    /// conventions de formatage intactes ; chaque message transformé.
+    #[test]
+    fn pseudo_language_transforms_messages() {
+        assert_eq!(super::pseudo("File"), "[Fílé··]");
+        assert_eq!(super::pseudo(""), "");
+        for text in ["a", "Open", "Resource usage", "Gantt de suivi"] {
+            let out = super::pseudo(text);
+            let (n, m) = (text.chars().count(), out.chars().count());
+            assert!(m.saturating_sub(2) * 5 >= n * 7, "{text} -> {out}");
+            assert!(out.starts_with('[') && out.ends_with(']'));
+        }
+        let texts = Texts::pseudo();
+        assert!(texts.is_pseudo());
+        assert_eq!(texts.language(), Language::En);
+        assert_eq!(texts.get(TextId::MenuFile), "[Fílé··]");
+        let labels = texts.format_labels();
+        assert_eq!(labels.decimal_sep, '.');
+        assert_eq!(labels.date_order, DateOrder::MonthDayYear);
+        assert_eq!(labels.plural, PluralRule::ExactlyOne);
+        for &id in TextId::ALL {
+            if !id.key().starts_with("fmt-") {
+                let text = texts.get_args(id, &sample_args());
+                assert!(text.starts_with('['), "{id:?} : {text}");
+            }
+        }
+        assert!(!Texts::new(Language::En).is_pseudo());
+    }
+
+    /// Noms des modèles et libellés des jetons : un message par valeur, dans
+    /// les deux langues ; « Chantier » s'affiche « Planning travaux ».
+    #[test]
+    fn template_and_token_names() {
+        use planrs_render::TemplateId;
+        use planrs_render::geometry::Token;
+        let fr = Texts::new(Language::Fr);
+        let en = Texts::new(Language::En);
+        let names: BTreeSet<String> = TemplateId::ALL
+            .iter()
+            .map(|t| fr.get(super::template_name(*t)))
+            .collect();
+        assert_eq!(names.len(), TemplateId::ALL.len());
+        assert_eq!(
+            fr.get(super::template_name(TemplateId::Chantier)),
+            "Planning travaux"
+        );
+        assert_eq!(en.get(super::template_name(TemplateId::Sobre)), "Clean");
+        let tokens = [
+            Token::Project,
+            Token::StatusDate,
+            Token::Page,
+            Token::Pages,
+            Token::PrintDate,
+            Token::File,
+            Token::ScheduleTitle,
+        ];
+        let labels: BTreeSet<String> = tokens.iter().map(|t| en.get(super::token_label(*t))).collect();
+        assert_eq!(labels.len(), tokens.len());
+        assert_eq!(super::diag_key("mspdi.error.xml"), "diag-mspdi-error-xml");
     }
 
     #[test]

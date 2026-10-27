@@ -25,6 +25,49 @@
         "null"
       ]
     },
+    "style": {
+      "anyOf": [
+        {
+          "description": "Modèle de mise en forme intégré, en JSON.",
+          "oneOf": [
+            {
+              "const": "classique",
+              "description": "Apparence de J7.",
+              "type": "string"
+            },
+            {
+              "const": "sobre",
+              "description": "Sobre.",
+              "type": "string"
+            },
+            {
+              "const": "contraste_eleve",
+              "description": "Contraste élevé.",
+              "type": "string"
+            },
+            {
+              "const": "presentation",
+              "description": "Présentation client.",
+              "type": "string"
+            },
+            {
+              "const": "chantier",
+              "description": "Chantier.",
+              "type": "string"
+            },
+            {
+              "const": "impression_nb",
+              "description": "Impression noir et blanc.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Modèle de mise en forme (défaut : style du document, sinon\nClassique, apparence J7)."
+    },
     "to": {
       "description": "Dernier jour affiché (défaut : fin du projet).",
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",

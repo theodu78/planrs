@@ -12,7 +12,9 @@
 
 pub mod action;
 pub mod app;
+pub mod clipboard;
 pub mod column;
+pub mod diag_text;
 pub mod dialog;
 pub mod document;
 pub mod edit;
@@ -26,6 +28,7 @@ pub mod nav;
 pub mod query;
 pub mod relay;
 pub mod resource_rows;
+pub mod row_view;
 pub mod rows;
 pub mod selection;
 pub mod shell;

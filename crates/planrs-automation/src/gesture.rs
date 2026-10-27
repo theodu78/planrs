@@ -215,6 +215,7 @@ fn task_update(uid: TaskUid) -> TaskUpdate {
         task_type: Patch::Keep,
         effort_driven: Patch::Keep,
         work: Patch::Keep,
+        mode: Patch::Keep,
     }
 }
 
@@ -307,7 +308,7 @@ fn progress_leaf(s: &Session, uid: TaskUid) -> Result<(&Task, &TaskSchedule), Ge
 /// courant ne change rien : aucun lot (relecture finale J7 : T 3 j, 33 %
 /// envoyé, 32,99 % stocké ; refaire le même geste ajoutait une entrée
 /// d'annulation sans effet).
-fn stored_percent(task: &Task, p: Percent) -> Percent {
+pub(crate) fn stored_percent(task: &Task, p: Percent) -> Percent {
     if p == Percent::ZERO {
         return p;
     }

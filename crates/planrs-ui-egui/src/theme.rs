@@ -4,7 +4,10 @@
 //! Nuances propres (barres bleues, chemin critique rouge, récapitulatives et
 //! jalons sombres, comme l'usage de MS Project), non copiées (hypothèse).
 
+use std::sync::Arc;
+
 use egui::Color32;
+use planrs_render::style::{BarRole, FontChoice, PlanStyle, Rgb, TemplateId, Variant, template};
 
 /// Couleurs de dessin de la vue principale.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,6 +120,43 @@ impl Palette {
         progress: Color32::from_rgb(0x0F, 0x23, 0x40),
     };
 
+    /// Palette tirée d'un style du planning (ADR-0016 D5) pour une variante.
+    ///
+    /// Le séparateur table / Gantt prend la grille marquée (égaux en J7). Un
+    /// rôle de barre absent (style non validé) prend le texte courant.
+    #[must_use]
+    pub fn from_style(style: &PlanStyle, variant: Variant) -> Self {
+        let c = style.tokens(variant);
+        let rgb = |v: Rgb| Color32::from_rgb(v.0, v.1, v.2);
+        let fill = |role: BarRole| rgb(c.bars.get(&role).map_or(c.text, |p| p.fill));
+        let outline = |role: BarRole| rgb(c.bars.get(&role).map_or(c.text, |p| p.outline.unwrap_or(p.fill)));
+        Self {
+            background: rgb(c.bg),
+            text: rgb(c.text),
+            text_strong: rgb(c.text_strong),
+            text_weak: rgb(c.text_muted),
+            grid: rgb(c.grid),
+            grid_major: rgb(c.grid_major),
+            header_bg: rgb(c.header_bg),
+            selection: rgb(c.selection),
+            bar: fill(BarRole::Task),
+            bar_outline: outline(BarRole::Task),
+            critical: fill(BarRole::Critical),
+            milestone: fill(BarRole::Milestone),
+            summary: fill(BarRole::Summary),
+            link: rgb(c.link),
+            status_date: rgb(c.status_line),
+            splitter: rgb(c.grid_major),
+            non_working: rgb(c.non_working),
+            summary_critical: fill(BarRole::SummaryCritical),
+            message_error_bg: rgb(c.message_error_bg),
+            message_warning_bg: rgb(c.message_warning_bg),
+            cursor: rgb(c.cursor),
+            baseline: fill(BarRole::Baseline),
+            progress: fill(BarRole::Progress),
+        }
+    }
+
     /// Palette du thème résolu.
     #[must_use]
     pub const fn for_theme(theme: egui::Theme) -> Self {
@@ -124,6 +164,213 @@ impl Palette {
             egui::Theme::Light => Self::LIGHT,
             egui::Theme::Dark => Self::DARK,
         }
+    }
+}
+
+/// Variante du style pour un thème résolu de l'interface.
+#[must_use]
+pub const fn variant_for(theme: egui::Theme) -> Variant {
+    match theme {
+        egui::Theme::Light => Variant::Light,
+        egui::Theme::Dark => Variant::Dark,
+    }
+}
+
+/// Famille de police du planning (Inter Regular), chargée seulement quand
+/// le style effectif la demande (ADR-0016 D9, J8 lot L11).
+pub const PLAN_FAMILY: &str = "planrs-plan";
+
+/// Famille Inter `SemiBold` (textes appuyés : récapitulatives).
+pub const PLAN_FAMILY_STRONG: &str = "planrs-plan-semibold";
+
+/// Inter Regular (OFL-1.1, `assets/fonts`, mention dans `NOTICE`).
+static INTER_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+
+/// Inter `SemiBold`.
+static INTER_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf");
+
+/// Installe les deux familles Inter du planning dans `ctx` (sans effet si
+/// elles y sont déjà ; egui ne relit que les noms). Les polices d'egui
+/// suivent en repli pour les caractères absents d'Inter.
+pub fn install_plan_fonts(ctx: &egui::Context) {
+    use egui::epaint::text::{FontData, FontInsert, FontPriority, InsertFontFamily};
+    for (name, bytes) in [(PLAN_FAMILY, INTER_REGULAR), (PLAN_FAMILY_STRONG, INTER_SEMIBOLD)] {
+        ctx.add_font(FontInsert::new(
+            name,
+            FontData::from_static(bytes),
+            vec![InsertFontFamily {
+                family: egui::FontFamily::Name(name.into()),
+                priority: FontPriority::Highest,
+            }],
+        ));
+    }
+}
+
+/// Style du planning lu par l'écran à une image (J8, lot L11, ADR-0016
+/// D5) : style effectif du document (modèle par défaut des préférences pour
+/// un document sans style, H-UI-43) et variante du thème résolu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScreenStyle {
+    /// Style résolu.
+    pub style: Arc<PlanStyle>,
+    /// Variante (clair ou sombre).
+    pub variant: Variant,
+    /// Phase (0 ou 1) de chaque ligne du modèle pour les bandes de phase
+    /// (H-UI-53) ; vide sans bandes de phase. Calculée une fois par
+    /// génération du document, jamais pendant une image.
+    pub phases: Arc<Vec<u8>>,
+    /// Couleur de phase par tâche (H-UI-65, J8 lot L15) : `(couleur, la
+    /// tâche porte elle-même la couleur)` ; vide sans couleur de phase.
+    /// Calculée une fois par génération du document.
+    pub phase_colors: Arc<PhaseColors>,
+}
+
+/// Couleurs de phase des tâches (H-UI-65) : UID → (couleur, couleur
+/// propre).
+pub type PhaseColors = std::collections::BTreeMap<planrs_core::TaskUid, (Rgb, bool)>;
+
+/// Couleurs de phase de chaque tâche d'un projet (même règle que la scène :
+/// `planrs_render::geometry::task_phases`).
+#[must_use]
+pub fn phase_colors(p: &planrs_core::Project, style: &PlanStyle) -> PhaseColors {
+    let fills: Vec<Rgb> = style.phases.values().map(|c| c.fill).collect();
+    planrs_render::geometry::task_phases(p, &style.phases)
+        .into_iter()
+        .zip(p.tasks.iter())
+        .filter_map(|(phase, task)| {
+            let (rank, own) = phase?;
+            let fill = fills.get(usize::from(rank)).copied()?;
+            Some((task.uid(), (fill, own)))
+        })
+        .collect()
+}
+
+impl Default for ScreenStyle {
+    /// Classique clair (J7).
+    fn default() -> Self {
+        Self {
+            style: Arc::new(template(TemplateId::Classique)),
+            variant: Variant::Light,
+            phases: Arc::new(Vec::new()),
+            phase_colors: Arc::new(PhaseColors::new()),
+        }
+    }
+}
+
+impl ScreenStyle {
+    /// Hauteur d'une ligne (densité du style : 18, 22 ou 28 px).
+    #[must_use]
+    pub fn row_h(&self) -> f32 {
+        f32::from(self.style.density.row_px())
+    }
+
+    /// Le style demande la police Inter (table et Gantt).
+    #[must_use]
+    pub fn inter(&self) -> bool {
+        self.style.font.family == FontChoice::Inter
+    }
+}
+
+/// Cache du style effectif et de ses palettes (J8, lot L11) : relu
+/// seulement quand le document (ouverture, génération) ou le modèle par
+/// défaut changent ; la palette du thème courant est servie sans calcul.
+#[derive(Clone, Debug)]
+pub struct StyleCache {
+    /// Clé du style gardé : (ouverture, génération) du document, modèle
+    /// par défaut.
+    key: Option<(Option<(u64, u64)>, TemplateId)>,
+    /// Style gardé.
+    style: Arc<PlanStyle>,
+    /// Palettes claire et sombre du style gardé.
+    palettes: Option<(Palette, Palette)>,
+    /// Phases gardées et leur clé (document).
+    phases: (Option<(u64, u64)>, Arc<Vec<u8>>),
+    /// Couleurs de phase gardées et leur clé (document, H-UI-65).
+    phase_colors: (Option<(u64, u64)>, Arc<PhaseColors>),
+    /// Lectures faites (tests).
+    builds: u64,
+}
+
+impl Default for StyleCache {
+    fn default() -> Self {
+        Self {
+            key: None,
+            style: ScreenStyle::default().style,
+            palettes: None,
+            phases: (None, Arc::new(Vec::new())),
+            phase_colors: (None, Arc::new(PhaseColors::new())),
+            builds: 0,
+        }
+    }
+}
+
+impl StyleCache {
+    /// Style et palette pour la clé `(document, défaut)` et le thème
+    /// `theme` ; `resolve` n'est appelé que si la clé change.
+    pub fn screen(
+        &mut self,
+        doc_key: Option<(u64, u64)>,
+        default: TemplateId,
+        theme: egui::Theme,
+        resolve: impl FnOnce() -> PlanStyle,
+    ) -> (ScreenStyle, Palette) {
+        let key = (doc_key, default);
+        if self.key != Some(key) || self.palettes.is_none() {
+            let style = resolve();
+            self.palettes = Some((
+                Palette::from_style(&style, Variant::Light),
+                Palette::from_style(&style, Variant::Dark),
+            ));
+            self.style = Arc::new(style);
+            self.key = Some(key);
+            self.builds = self.builds.saturating_add(1);
+        }
+        let (light, dark) = self.palettes.unwrap_or((Palette::LIGHT, Palette::DARK));
+        let palette = match theme {
+            egui::Theme::Light => light,
+            egui::Theme::Dark => dark,
+        };
+        let screen = ScreenStyle {
+            style: Arc::clone(&self.style),
+            variant: variant_for(theme),
+            phases: Arc::new(Vec::new()),
+            phase_colors: Arc::new(PhaseColors::new()),
+        };
+        (screen, palette)
+    }
+
+    /// Couleurs de phase du document `doc_key` (H-UI-65), calculées par
+    /// `compute` seulement si le document a changé.
+    pub fn phase_colors(
+        &mut self,
+        doc_key: Option<(u64, u64)>,
+        compute: impl FnOnce() -> PhaseColors,
+    ) -> Arc<PhaseColors> {
+        if self.phase_colors.0 != doc_key || doc_key.is_none() {
+            self.phase_colors = (doc_key, Arc::new(compute()));
+        }
+        Arc::clone(&self.phase_colors.1)
+    }
+
+    /// Phases des lignes du document `doc_key`, calculées par `compute`
+    /// seulement si le document a changé.
+    pub fn phases(&mut self, doc_key: Option<(u64, u64)>, compute: impl FnOnce() -> Vec<u8>) -> Arc<Vec<u8>> {
+        if self.phases.0 != doc_key || doc_key.is_none() {
+            self.phases = (doc_key, Arc::new(compute()));
+        }
+        Arc::clone(&self.phases.1)
+    }
+
+    /// Résolutions faites depuis la création (tests du cache).
+    #[must_use]
+    pub const fn builds(&self) -> u64 {
+        self.builds
+    }
+
+    /// Style gardé (hauteur de ligne de la navigation entre deux images).
+    #[must_use]
+    pub fn style(&self) -> &PlanStyle {
+        &self.style
     }
 }
 
@@ -138,27 +385,18 @@ impl Palette {
 mod tests {
     use egui::Color32;
 
-    use super::Palette;
+    use planrs_render::style::{TemplateId, Variant, template};
 
-    /// Luminance relative WCAG 2.x d'une couleur opaque (calcul de dessin,
-    /// hors moteur : les flottants sont admis ici).
-    fn luminance(color: Color32) -> f32 {
-        let channel = |c: u8| {
-            let c = f32::from(c) / 255.0;
-            if c <= 0.039_28 {
-                c / 12.92
-            } else {
-                ((c + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        0.2126 * channel(color.r()) + 0.7152 * channel(color.g()) + 0.0722 * channel(color.b())
+    use super::{Palette, Rgb};
+
+    /// Rapport de contraste WCAG en millièmes, par la fonction entière
+    /// partagée avec le rendu (`planrs_render::style::contrast_ratio`).
+    fn contrast(a: Color32, b: Color32) -> u32 {
+        planrs_render::style::contrast_ratio(Rgb(a.r(), a.g(), a.b()), Rgb(b.r(), b.g(), b.b()))
     }
 
-    /// Rapport de contraste WCAG entre deux couleurs (≥ 1).
-    fn contrast(a: Color32, b: Color32) -> f32 {
-        let (la, lb) = (luminance(a), luminance(b));
-        let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
-        (hi + 0.05) / (lo + 0.05)
+    fn luminance(c: Color32) -> u32 {
+        planrs_render::style::luminance_ppm(Rgb(c.r(), c.g(), c.b()))
     }
 
     fn palettes() -> [(&'static str, Palette); 2] {
@@ -167,9 +405,8 @@ mod tests {
 
     #[test]
     fn palette_contrast_helper_sane() {
-        let ratio = contrast(Color32::BLACK, Color32::WHITE);
-        assert!((ratio - 21.0).abs() < 0.01, "{ratio}");
-        assert!((contrast(Color32::WHITE, Color32::WHITE) - 1.0).abs() < f32::EPSILON);
+        assert_eq!(contrast(Color32::BLACK, Color32::WHITE), 21_000);
+        assert_eq!(contrast(Color32::WHITE, Color32::WHITE), 1000);
     }
 
     #[test]
@@ -182,11 +419,11 @@ mod tests {
             ] {
                 for (text_label, text) in [("texte", p.text), ("texte fort", p.text_strong)] {
                     let ratio = contrast(text, bg);
-                    assert!(ratio >= 4.5, "{name} : {text_label} sur {label} = {ratio:.2}");
+                    assert!(ratio >= 4500, "{name} : {text_label} sur {label} = {ratio}‰");
                 }
             }
             let weak = contrast(p.text_weak, p.background);
-            assert!(weak >= 3.0, "{name} : texte atténué = {weak:.2}");
+            assert!(weak >= 3000, "{name} : texte atténué = {weak}‰");
         }
     }
 
@@ -203,17 +440,14 @@ mod tests {
                 for (text_label, text) in [("texte fort", p.text_strong), ("texte", p.text)] {
                     let ratio = contrast(text, bg);
                     assert!(
-                        ratio >= 4.5,
-                        "{name} : {text_label} sur bandeau {label} = {ratio:.2}"
+                        ratio >= 4500,
+                        "{name} : {text_label} sur bandeau {label} = {ratio}‰"
                     );
                 }
                 assert_ne!(bg, p.background, "{name} : bandeau {label} non teinté");
             }
             let accent = contrast(p.critical, p.message_error_bg);
-            assert!(
-                accent >= 3.0,
-                "{name} : liseré critique sur bandeau = {accent:.2}"
-            );
+            assert!(accent >= 3000, "{name} : liseré critique sur bandeau = {accent}‰");
             // Erreur rougeâtre, avertissement jaunâtre.
             assert!(p.message_error_bg.r() > p.message_error_bg.b(), "{name}");
             assert!(p.message_warning_bg.g() > p.message_warning_bg.b(), "{name}");
@@ -233,7 +467,7 @@ mod tests {
                 ("date d'état", p.status_date),
             ] {
                 let ratio = contrast(color, p.background);
-                assert!(ratio >= 3.0, "{name} : {label} sur fond = {ratio:.2}");
+                assert!(ratio >= 3000, "{name} : {label} sur fond = {ratio}‰");
             }
         }
     }
@@ -250,7 +484,7 @@ mod tests {
                 ("sélection", p.selection),
             ] {
                 let ratio = contrast(p.cursor, bg);
-                assert!(ratio >= 3.0, "{name} : curseur sur {label} = {ratio:.2}");
+                assert!(ratio >= 3000, "{name} : curseur sur {label} = {ratio}‰");
             }
         }
     }
@@ -265,11 +499,11 @@ mod tests {
             assert_ne!(p.non_working, p.background, "{name}");
             for (label, bg) in [("fond", p.background), ("jour chômé", p.non_working)] {
                 let ratio = contrast(p.baseline, bg);
-                assert!(ratio >= 3.0, "{name} : ligne de base sur {label} = {ratio:.2}");
+                assert!(ratio >= 3000, "{name} : ligne de base sur {label} = {ratio}‰");
             }
             for (label, bar) in [("barre", p.bar), ("barre critique", p.critical)] {
                 let ratio = contrast(p.progress, bar);
-                assert!(ratio >= 3.0, "{name} : avancement dans la {label} = {ratio:.2}");
+                assert!(ratio >= 3000, "{name} : avancement dans la {label} = {ratio}‰");
             }
             for (label, color) in [
                 ("barre", p.bar),
@@ -280,7 +514,7 @@ mod tests {
                 ("date d'état", p.status_date),
             ] {
                 let ratio = contrast(color, p.non_working);
-                assert!(ratio >= 3.0, "{name} : {label} sur jour chômé = {ratio:.2}");
+                assert!(ratio >= 3000, "{name} : {label} sur jour chômé = {ratio}‰");
             }
             assert_ne!(p.baseline, p.bar, "{name}");
             // Ligne de base grise : aucune composante dominante nette.
@@ -298,6 +532,50 @@ mod tests {
             assert!(p.bar.b() > p.bar.r(), "{name}");
             assert_ne!(p.summary_critical, p.summary, "{name}");
         }
+    }
+
+    /// Le modèle Classique reproduit J7 champ par champ (ADR-0016 D6), dans
+    /// les deux thèmes ; l'impression part du clair.
+    #[test]
+    fn classique_equals_j7_palette() {
+        let style = template(TemplateId::Classique);
+        assert_eq!(Palette::from_style(&style, Variant::Light), Palette::LIGHT);
+        assert_eq!(Palette::from_style(&style, Variant::Dark), Palette::DARK);
+        assert_eq!(Palette::from_style(&style, Variant::Print), Palette::LIGHT);
+    }
+
+    /// Le style n'est relu que si le document ou le modèle par défaut
+    /// changent ; le thème ne fait que choisir la palette.
+    #[test]
+    fn style_cache_rebuilds_on_key_only() {
+        let mut cache = super::StyleCache::default();
+        let sobre = || template(TemplateId::Sobre);
+        let (a, light) = cache.screen(Some((1, 0)), TemplateId::Sobre, egui::Theme::Light, sobre);
+        let (b, dark) = cache.screen(Some((1, 0)), TemplateId::Sobre, egui::Theme::Dark, || {
+            panic!("relu")
+        });
+        assert_eq!(cache.builds(), 1);
+        assert_eq!(a.style, b.style);
+        assert_eq!(
+            light,
+            Palette::from_style(&template(TemplateId::Sobre), Variant::Light)
+        );
+        assert_eq!(
+            dark,
+            Palette::from_style(&template(TemplateId::Sobre), Variant::Dark)
+        );
+        assert_eq!(b.variant, Variant::Dark);
+        cache.screen(Some((1, 1)), TemplateId::Sobre, egui::Theme::Dark, sobre);
+        cache.screen(Some((1, 1)), TemplateId::Classique, egui::Theme::Dark, sobre);
+        assert_eq!(cache.builds(), 3);
+        let (classique, light) =
+            super::StyleCache::default().screen(None, TemplateId::Classique, egui::Theme::Light, || {
+                template(TemplateId::Classique)
+            });
+        assert_eq!(light, Palette::LIGHT);
+        assert_eq!(classique, super::ScreenStyle::default());
+        assert!((classique.row_h() - 22.0).abs() < f32::EPSILON);
+        assert!(!classique.inter());
     }
 
     #[test]

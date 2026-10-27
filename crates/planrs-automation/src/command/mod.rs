@@ -24,6 +24,7 @@ mod progress;
 mod project;
 mod refs;
 mod resource;
+pub mod style;
 mod task;
 
 pub use outline::is_summary_at;
@@ -229,6 +230,16 @@ pub enum Command {
     /// Efface une ligne de base (R-250 ; J7).
     #[serde(rename = "baseline.clear")]
     BaselineClear(BaselineClear),
+    /// Applique un modèle, une surcharge, ou retire le style du document
+    /// (J8, ADR-0016 D7, H-R12).
+    #[serde(rename = "style.apply")]
+    StyleApply(style::StyleApply),
+    /// Mise en forme directe d'un type de barre (J8, H-UI-59, H-UI-60).
+    #[serde(rename = "style.set_bar_role")]
+    StyleSetBarRole(style::StyleSetBarRole),
+    /// Retire les surcharges du style (« Revenir au modèle », J8, H-UI-61).
+    #[serde(rename = "style.reset_to_template")]
+    StyleResetToTemplate(style::StyleResetToTemplate),
 }
 
 impl Command {
@@ -266,6 +277,9 @@ impl Command {
             Self::CalendarSetWeek(_) => "calendar.set_week",
             Self::CalendarDelete(_) => "calendar.delete",
             Self::BaselineClear(_) => "baseline.clear",
+            Self::StyleApply(_) => "style.apply",
+            Self::StyleSetBarRole(_) => "style.set_bar_role",
+            Self::StyleResetToTemplate(_) => "style.reset_to_template",
         }
     }
 }
@@ -467,6 +481,22 @@ pub struct TaskUpdate {
     /// refusé jusqu'au lot L7).
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
     pub work: Patch<DurationJson>,
+    /// Mode de planification (J8, R-253) : vers manuel, dates planifiées
+    /// courantes figées ; vers automatique, valeurs manuelles retirées.
+    /// Sur une feuille manuelle, `start`, `finish` et `duration` écrivent
+    /// les valeurs manuelles, sans contrainte (R-254).
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub mode: Patch<ModeJson>,
+}
+
+/// Mode de planification d'une tâche en JSON (J8, R-253).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModeJson {
+    /// Planification automatique.
+    Auto,
+    /// Planification manuelle (dates figées, S73).
+    Manual,
 }
 
 impl TaskUpdate {

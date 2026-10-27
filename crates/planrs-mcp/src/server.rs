@@ -480,7 +480,7 @@ impl PlanrsServer {
             None => None,
         };
         let target = match id {
-            "project.open" | "project.export_mspdi" => given,
+            "project.open" | "project.export_mspdi" | "project.export_pdf" => given,
             "project.save" => given.or_else(|| {
                 ws.session()
                     .and_then(|s| s.origin().path.clone())

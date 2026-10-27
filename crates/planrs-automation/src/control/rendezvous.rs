@@ -14,7 +14,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{ControlError, PROTOCOL_VERSION, ensure_dir, next_stem};
+use super::{ControlError, Endpoint, PROTOCOL_VERSION, ensure_dir, next_stem};
 
 /// Variable d'environnement qui remplace le dossier d'état (chemin absolu ;
 /// tests d'intégration, installations portables).
@@ -34,7 +34,8 @@ pub struct Rendezvous {
     pub v: u32,
     /// Processus de l'application.
     pub pid: u32,
-    /// Adresse de l'écouteur (socket Unix).
+    /// Adresse de l'écouteur : chemin de la socket Unix (forme J7), ou
+    /// `tcp:127.0.0.1:<port>` (J8, C-CTL-11 ; [`Endpoint::from_rendezvous`]).
     pub endpoint: String,
     /// Jeton (64 chiffres hexadécimaux).
     pub token: String,
@@ -194,16 +195,17 @@ pub fn find_live_for(path: &Path) -> Option<Rendezvous> {
 ///
 /// Les fichiers sont lus dans l'ordre de leur nom. Un rendez-vous qui
 /// désigne `path` (comparé par chemin canonique) est sondé par un `hello`
-/// avec son jeton. Il n'est supprimé que sur une preuve de mort (jeton
-/// refusé, socket absente ou sans écouteur) ; un délai, une connexion
-/// fermée sans réponse ou `control.busy` (application au maximum de ses
-/// connexions) le laissent en place et l'application est tenue pour
-/// vivante. Sont aussi supprimés : un fichier de version 1 illisible, et
-/// sous Unix un rendez-vous dont la socket n'existe plus.
-///
-/// Windows (J4, hypothèse) : pas d'écouteur ; un rendez-vous est tenu pour
-/// vivant s'il a été écrit il y a moins de 24 h. À remplacer en J7 par une
-/// sonde sur le named pipe.
+/// avec son jeton. Socket Unix : il n'est supprimé que sur une preuve de
+/// mort (jeton refusé, socket absente ou sans écouteur) ; un délai, une
+/// connexion fermée sans réponse ou `control.busy` (application au maximum
+/// de ses connexions) le laissent en place et l'application est tenue pour
+/// vivante. TCP (J8, C-CTL-13, remplace la règle des 24 h de Windows) :
+/// seule une réponse compte (`hello` accepté ou `control.busy`) ; toute
+/// sonde qui échoue en 2 s le supprime (un port libéré peut être repris
+/// par un autre programme : ni connexion acceptée ni délai ne prouvent que
+/// l'application vit). Sont aussi supprimés : un fichier de version 1
+/// illisible ou d'adresse illisible (`control.bad_endpoint`), et un
+/// rendez-vous d'un autre fichier dont la socket Unix n'existe plus.
 #[must_use]
 pub fn find_live_for_in(dir: &Path, path: &Path) -> Option<Rendezvous> {
     let target = canonical_project(path)?;
@@ -224,7 +226,7 @@ pub fn find_live_for_in(dir: &Path, path: &Path) -> Option<Rendezvous> {
             }
             continue;
         }
-        if is_live(&r, &file) {
+        if is_live(&r) {
             return Some(r);
         }
         let _ = std::fs::remove_file(&file);
@@ -256,29 +258,35 @@ fn read_rendezvous(file: &Path) -> Option<Rendezvous> {
     }
 }
 
-#[cfg(unix)]
+/// Vrai si l'adresse est illisible, ou si la socket Unix n'existe plus
+/// (sans connexion ; un port TCP ne se vérifie pas sans sonde).
 fn endpoint_gone(r: &Rendezvous) -> bool {
-    !Path::new(&r.endpoint).exists()
+    match Endpoint::from_rendezvous(&r.endpoint) {
+        Err(_) => true,
+        Ok(Endpoint::Unix(path)) => cfg!(unix) && !path.exists(),
+        Ok(Endpoint::Tcp(_)) => false,
+    }
 }
 
-#[cfg(not(unix))]
-fn endpoint_gone(_r: &Rendezvous) -> bool {
-    false
-}
-
-/// Vivant sauf preuve de mort : un `hello` réussi, ou un échec qui ne
-/// prouve rien (délai, `control.busy` ou connexion fermée sans réponse
-/// parce que l'application sert déjà son maximum de connexions, réponse
-/// illisible). Mort : jeton refusé (rendez-vous périmé : l'écouteur n'est
-/// plus celui qui l'a publié), socket absente ou sans écouteur
-/// (`ECONNREFUSED`).
-#[cfg(unix)]
-fn is_live(r: &Rendezvous, _file: &Path) -> bool {
-    match probe(r) {
-        Ok(_) => true,
-        Err(ControlError::Refused(w)) if w.code == super::codes::BUSY => true,
-        Err(ControlError::Refused(_)) => false,
-        Err(_) => !endpoint_dead(r),
+/// Socket Unix : vivant sauf preuve de mort, un `hello` réussi, ou un
+/// échec qui ne prouve rien (délai, `control.busy` ou connexion fermée sans
+/// réponse parce que l'application sert déjà son maximum de connexions,
+/// réponse illisible). Mort : jeton refusé (rendez-vous périmé : l'écouteur
+/// n'est plus celui qui l'a publié), socket absente ou sans écouteur
+/// (`ECONNREFUSED`), adresse illisible.
+///
+/// TCP (C-CTL-13) : vivant seulement sur une réponse de l'application
+/// (`hello` accepté ou `control.busy`, voir [`answers`]).
+fn is_live(r: &Rendezvous) -> bool {
+    match Endpoint::from_rendezvous(&r.endpoint) {
+        Err(_) => false,
+        Ok(Endpoint::Tcp(_)) => answers(r),
+        Ok(Endpoint::Unix(path)) => match probe(r) {
+            Ok(_) => true,
+            Err(ControlError::Refused(w)) if w.code == super::codes::BUSY => true,
+            Err(ControlError::Refused(_)) => false,
+            Err(_) => !unix_socket_dead(&path),
+        },
     }
 }
 
@@ -294,47 +302,40 @@ pub(super) fn answers(r: &Rendezvous) -> bool {
     }
 }
 
-/// Vrai si la socket du rendez-vous n'existe plus ou que personne n'y
-/// écoute. Une connexion acceptée puis fermée prouve un écouteur vivant.
-#[cfg(unix)]
-fn endpoint_dead(r: &Rendezvous) -> bool {
+/// Vrai si la socket n'existe plus ou que personne n'y écoute. Une
+/// connexion acceptée puis fermée prouve un écouteur vivant. Hors Unix,
+/// une socket Unix est toujours morte (personne ne peut y écouter).
+fn unix_socket_dead(path: &Path) -> bool {
     use std::io::ErrorKind;
-    use std::os::unix::net::UnixStream;
 
-    match UnixStream::connect(&r.endpoint) {
+    match Endpoint::Unix(path.to_path_buf()).connect(PROBE_TIMEOUT) {
         Ok(_) => false,
-        Err(e) => matches!(e.kind(), ErrorKind::NotFound | ErrorKind::ConnectionRefused),
+        Err(e) => matches!(
+            e.kind(),
+            ErrorKind::NotFound | ErrorKind::ConnectionRefused | ErrorKind::Unsupported
+        ),
     }
 }
 
-#[cfg(not(unix))]
-fn is_live(_r: &Rendezvous, file: &Path) -> bool {
-    const MAX_AGE: Duration = Duration::from_hours(24);
-    std::fs::metadata(file)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|written| written.elapsed().ok())
-        .is_some_and(|age| age < MAX_AGE)
-}
-
 /// Sonde une application : `hello` avec le jeton du rendez-vous, rend le
-/// résultat de l'application (`app`, `version`, `pid`…).
+/// résultat de l'application (`app`, `version`, `pid`…). Même sonde sur
+/// les deux transports (connexion et réponse en 2 s chacune).
 ///
 /// # Errors
 ///
 /// [`ControlError::Io`] (connexion, délai de 2 s, réponse illisible),
-/// [`ControlError::Refused`] (jeton refusé), [`ControlError::Unsupported`]
-/// hors Unix.
-#[cfg(unix)]
+/// [`ControlError::Refused`] (jeton refusé, `control.busy`),
+/// [`ControlError::BadEndpoint`] (adresse illisible).
 pub fn probe(r: &Rendezvous) -> Result<Value, ControlError> {
     use std::io::BufReader;
-    use std::os::unix::net::UnixStream;
 
     use super::{Frame, Method, Reply, read_line_bounded, to_line};
 
     const PROBE_ID: u64 = 1;
-    let stream =
-        UnixStream::connect(&r.endpoint).map_err(|e| ControlError::io("connexion à l'application", &e))?;
+    let endpoint = Endpoint::from_rendezvous(&r.endpoint)?;
+    let stream = endpoint
+        .connect(PROBE_TIMEOUT)
+        .map_err(|e| ControlError::io("connexion à l'application", &e))?;
     stream
         .set_read_timeout(Some(PROBE_TIMEOUT))
         .and_then(|()| stream.set_write_timeout(Some(PROBE_TIMEOUT)))
@@ -346,13 +347,19 @@ pub fn probe(r: &Rendezvous) -> Result<Value, ControlError> {
         params: serde_json::json!({ "token": r.token }),
     };
     let line = to_line(&hello).map_err(|e| ControlError::Io(e.to_string()))?;
-    (&stream)
-        .write_all(&line)
-        .map_err(|e| ControlError::io("envoi du hello", &e))?;
+    // Un envoi refusé n'est pas encore une absence de réponse : un écouteur
+    // saturé répond `control.busy` puis ferme, parfois avant d'avoir lu le
+    // hello ; sa réponse reste lisible.
+    let sent = (&stream).write_all(&line);
     let mut reader = BufReader::new(&stream);
     let reply = match read_line_bounded(&mut reader, super::MAX_LINE_BYTES) {
         Ok(Some(line)) => line,
-        Ok(None) => return Err(ControlError::Io("connexion fermée".to_owned())),
+        Ok(None) => {
+            return Err(match sent {
+                Err(e) => ControlError::io("envoi du hello", &e),
+                Ok(()) => ControlError::Io("connexion fermée".to_owned()),
+            });
+        }
         Err(super::LineError::TooLong) => {
             return Err(ControlError::Io("réponse trop longue".to_owned()));
         }
@@ -364,15 +371,4 @@ pub fn probe(r: &Rendezvous) -> Result<Value, ControlError> {
         Ok(_) => Err(ControlError::Io("réponse inattendue".to_owned())),
         Err(e) => Err(ControlError::Io(format!("réponse illisible : {e}"))),
     }
-}
-
-/// Sonde une application (hors Unix : pas d'écouteur en J4).
-///
-/// # Errors
-///
-/// Toujours [`ControlError::Unsupported`].
-#[cfg(not(unix))]
-pub fn probe(r: &Rendezvous) -> Result<Value, ControlError> {
-    let _ = (r, PROBE_TIMEOUT);
-    Err(ControlError::Unsupported)
 }

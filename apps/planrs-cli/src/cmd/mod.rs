@@ -10,10 +10,12 @@
 
 pub mod apply;
 pub mod explain;
+pub mod export_pdf;
 pub mod import_csv;
 pub mod mcp;
 pub mod render;
 pub mod resources;
+pub mod style;
 pub mod summary;
 pub mod tasks;
 pub mod usage;

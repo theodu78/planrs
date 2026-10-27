@@ -50,6 +50,8 @@ pub(crate) enum TaskChange {
     /// Avancement (J6, `progress.update`, `progress.reschedule`, R-161
     /// amendée) : interruption de la tâche.
     Progress,
+    /// Mode de planification ou valeurs manuelles (J8, R-253, R-254).
+    Mode,
 }
 
 /// Éléments de tâche MSPDI qui dépendent des dates calculées : répartition
@@ -93,7 +95,8 @@ pub(crate) const fn task_keys(change: TaskChange) -> &'static [&'static str] {
         | TaskChange::Milestone
         | TaskChange::Active
         | TaskChange::Links
-        | TaskChange::Outline => TASK_SCHEDULE_KEYS,
+        | TaskChange::Outline
+        | TaskChange::Mode => TASK_SCHEDULE_KEYS,
         TaskChange::Progress => TASK_PROGRESS_KEYS,
     }
 }

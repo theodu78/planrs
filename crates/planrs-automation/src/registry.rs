@@ -6,9 +6,13 @@
 //! entrées J6 (contrat du lot L0, activées par les lots L7 et L8 de J6) et
 //! les cinq écritures J7 (`calendar.add`, `calendar.update`,
 //! `calendar.set_week`, `calendar.delete`, `baseline.clear`, contrat J7 L0,
-//! activées par le lot L5). Une entrée réservée à un jalon futur
+//! activées par le lot L5), puis les entrées J8 : `project.export_pdf`,
+//! réservée au jalon 8 par le contrat L0, activée par le lot L7, et les six
+//! entrées `style.*` du lot L6 (`style.apply`, `style.get`, `style.list`,
+//! posées par L0, plus `style.set_bar_role`, `style.reset_to_template`,
+//! `style.save_as_template`). Une entrée réservée à un jalon futur
 //! (`Availability::Milestone`) n'est pas listée et est refusée
-//! `command.not_yet_available` (aucune en J7). Les trois entrées `app.*` (genre [`Kind::Ui`]) ne sont servies que
+//! `command.not_yet_available`. Les trois entrées `app.*` (genre [`Kind::Ui`]) ne sont servies que
 //! par une application rattachée (`Availability::Attached`, ADR-0015 D11) :
 //! non listées par une surface « headless », refusées
 //! `control.not_attached`. Le schéma de chaque
@@ -20,10 +24,11 @@ use schemars::generate::SchemaSettings;
 use schemars::{JsonSchema, Schema};
 
 use crate::command::params::{
-    ApplyBatchParams, ExplainParams, ExportMspdiParams, ImportCsvParams, NewProjectParams, NoParams,
-    OpenProjectParams, RenderGanttParams, ResourceListParams, SaveProjectParams, ScreenshotParams,
+    ApplyBatchParams, ExplainParams, ExportMspdiParams, ExportPdfParams, ImportCsvParams, NewProjectParams,
+    NoParams, OpenProjectParams, RenderGanttParams, ResourceListParams, SaveProjectParams, ScreenshotParams,
     TaskGetParams, TaskListParams, UiActionParams, UsageParams, VarianceParams, WhatIfParams,
 };
+use crate::command::style::{StyleApply, StyleResetToTemplate, StyleSaveAsTemplate, StyleSetBarRole};
 use crate::command::{
     AnchorSpec, AssignmentAdd, AssignmentKey, AssignmentUpdate, BaselineClear, BaselineSet, CalendarAdd,
     CalendarDelete, CalendarException, CalendarExceptionKey, CalendarSetWeek, CalendarUpdate, LinkKey,
@@ -143,10 +148,11 @@ const fn now(
 }
 
 /// Entrée réservée au jalon `milestone` (non listée, refusée
-/// `command.not_yet_available`).
+/// `command.not_yet_available`). Aucune depuis le lot L7 de J8 ; gardée
+/// pour réserver une entrée d'un jalon futur.
 #[allow(
     dead_code,
-    reason = "aucune entrée réservée depuis le lot L5 de J7 ; gardée pour les jalons suivants"
+    reason = "aucune entrée réservée aujourd'hui ; forme gardée pour les jalons futurs"
 )]
 const fn reserved(
     milestone: u8,
@@ -408,6 +414,14 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Write a copy of the project as MSPDI (MS Project XML).",
     ),
     now(
+        "project.export_pdf",
+        "export_pdf",
+        Kind::File,
+        schema_of::<ExportPdfParams>,
+        "Écrit le planning en PDF (style, mise en page, plage et lignes facultatifs).",
+        "Write the schedule as PDF (optional style, page setup, range and rows).",
+    ),
+    now(
         "project.import_csv",
         "import_csv",
         Kind::File,
@@ -510,6 +524,54 @@ pub static REGISTRY: &[CommandSpec] = &[
         schema_of::<ResourceUpdate>,
         "Modifie une ressource (nom, capacité, calendrier, initiales, groupe…).",
         "Update a resource (name, capacity, calendar, initials, group…).",
+    ),
+    now(
+        "style.apply",
+        "apply_style",
+        Kind::Write,
+        schema_of::<StyleApply>,
+        "Applique un modèle de mise en forme ou une surcharge au document, ou revient au modèle par défaut.",
+        "Apply a formatting template or an override to the document, or reset to the default template.",
+    ),
+    now(
+        "style.get",
+        "get_style",
+        Kind::Read,
+        schema_of::<NoParams>,
+        "Style du document : modèle de base, surcharges, style résolu et contrastes insuffisants.",
+        "Document style: base template, overrides, resolved style and insufficient contrasts.",
+    ),
+    now(
+        "style.list",
+        "list_styles",
+        Kind::Read,
+        schema_of::<NoParams>,
+        "Modèles de mise en forme intégrés et style du document.",
+        "Built-in formatting templates and the document style.",
+    ),
+    now(
+        "style.reset_to_template",
+        "reset_style",
+        Kind::Write,
+        schema_of::<StyleResetToTemplate>,
+        "Revient au modèle : retire les surcharges du style du document, ou celles d'un type de barre.",
+        "Revert to the template: remove the document style overrides, or those of one bar type.",
+    ),
+    now(
+        "style.save_as_template",
+        "save_style_as_template",
+        Kind::Read,
+        schema_of::<StyleSaveAsTemplate>,
+        "Style du document nommé, à garder comme modèle personnel (rien n'est modifié).",
+        "The document style under a name, to keep as a personal template (nothing is changed).",
+    ),
+    now(
+        "style.set_bar_role",
+        "set_bar_style",
+        Kind::Write,
+        schema_of::<StyleSetBarRole>,
+        "Met en forme un type de barre : couleur, épaisseur, extrémités, textes à gauche, à droite, dedans.",
+        "Format a bar type: color, thickness, ends, texts on the left, right, inside.",
     ),
     now(
         "task.add",

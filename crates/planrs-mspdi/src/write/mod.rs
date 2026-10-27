@@ -30,6 +30,7 @@ use planrs_core::{Extras, Percent, Project, Subject, round_div};
 use crate::extras::{self, Anchor, ExtraKey, ORIGIN};
 pub use crate::schema::Profile as OrderProfile;
 use crate::schema::{Class, Parent, sequence};
+use crate::style_pi;
 pub(crate) use assignment::remaining_work as assignment_remaining_work;
 pub(crate) use computed::leveling_delay as leveling_payload_int;
 pub use computed::{Computed, choose_computed, schedule_image};
@@ -84,6 +85,11 @@ pub struct WriteOptions {
     pub newline: Newline,
     /// Indentation.
     pub indent: Indent,
+    /// Écrire le style du document (`<?planrs-style?>`, H-R12) s'il en a un
+    /// (vrai par défaut ; faux : préférence « ne jamais écrire la mise en
+    /// forme dans le fichier »). Sans style, rien n'est écrit dans les deux
+    /// cas.
+    pub style: bool,
 }
 
 impl Default for WriteOptions {
@@ -94,6 +100,7 @@ impl Default for WriteOptions {
             currency_code: "EUR".to_owned(),
             newline: Newline::Lf,
             indent: Indent::Tab,
+            style: true,
         }
     }
 }
@@ -186,7 +193,21 @@ pub fn write(project: &Project, computed: Computed<'_>, options: &WriteOptions) 
         .filter_map(|e| Some((e.key.strip_prefix("@xmlns:")?.to_owned(), e.payload.clone())))
         .filter(|(prefix, _)| ExtraKey::parse(&format!("@xmlns:{prefix}")).is_some())
         .collect();
-    em.root(&namespaces);
+    // H-R12 : style du document juste après la déclaration, s'il est
+    // écrivable ; sinon rien, et un diagnostic.
+    let style = style_pi::entry(&project.extras)
+        .filter(|_| options.style)
+        .map(|e| e.payload.as_str());
+    let style = match style {
+        Some(payload) if style_pi::writable(payload) => Some(payload),
+        Some(payload) => {
+            let shown: String = payload.chars().take(200).collect();
+            em.report(WriteCode::ExtraInvalid, "?planrs-style", Some(shown));
+            None
+        }
+        None => None,
+    };
+    em.root(&namespaces, style);
     project::write(&mut em, project, values.as_ref(), options);
     em.end_root();
     let (xml, diagnostics) = em.finish();

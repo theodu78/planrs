@@ -2,7 +2,7 @@
 //!
 //! Il expose les mêmes opérations que le serveur MCP (`summary`, `tasks`,
 //! `resources`, `usage`, `apply`, `render`, `import-csv`, `mcp`,
-//! `explain`), toutes via le
+//! `explain`, `style`, `export-pdf`), toutes via le
 //! `Workspace` de `planrs-automation` : mêmes JSON que le MCP (ADR-0012 D1).
 //! Codes de sortie (C-MCP-08) dans [`exit`] ; « maintenant » et langue dans
 //! [`now`] (seule lecture de l'horloge). Détail : `docs/features/cli.md`.
@@ -15,11 +15,14 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use planrs_automation::text::Language;
-use planrs_core::PRODUCT_NAME;
+use planrs_core::{PRODUCT_NAME, PRODUCT_VERSION};
 
 /// Planification de projet compatible MS Project, pilotable par IA.
+///
+/// `--version` imprime `planrs <version>` (version du workspace,
+/// `PRODUCT_VERSION` : C-REL-03).
 #[derive(Debug, Parser)]
-#[command(name = PRODUCT_NAME, version, arg_required_else_help = true)]
+#[command(name = PRODUCT_NAME, version = PRODUCT_VERSION, arg_required_else_help = true)]
 struct Cli {
     /// « Maintenant » (`AAAA-MM-JJTHH:MM`) ; défaut : `PLANRS_NOW`, sinon
     /// l'horloge locale.
@@ -62,6 +65,10 @@ enum Command {
     Mcp(cmd::mcp::McpArgs),
     /// Explication d'une date : pilote, calendrier, avancement, chaîne.
     Explain(cmd::explain::ExplainArgs),
+    /// Style du document : modèles, style effectif, application (J8).
+    Style(cmd::style::StyleArgs),
+    /// Planning en PDF (style, papier, pages en largeur ; J8).
+    ExportPdf(cmd::export_pdf::ExportPdfArgs),
 }
 
 fn main() -> ExitCode {
@@ -94,5 +101,7 @@ fn main() -> ExitCode {
         Command::ImportCsv(a) => cmd::import_csv::run(&ctx, &a),
         Command::Mcp(a) => cmd::mcp::run(&ctx, a),
         Command::Explain(a) => cmd::explain::run(&ctx, &a),
+        Command::Style(a) => cmd::style::run(&ctx, &a),
+        Command::ExportPdf(a) => cmd::export_pdf::run(&ctx, &a),
     }
 }

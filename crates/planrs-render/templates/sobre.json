@@ -1,0 +1,299 @@
+{
+  "v": 1,
+  "name": "Sobre",
+  "base": "sobre",
+  "colors": {
+    "light": {
+      "bg": "#FFFFFF",
+      "text": "#1F2933",
+      "text_strong": "#0B1015",
+      "text_muted": "#52606D",
+      "header_bg": "#F5F7FA",
+      "grid": "#E4E7EB",
+      "grid_major": "#CBD2D9",
+      "band": [
+        "#FFFFFF",
+        "#F5F7FA"
+      ],
+      "non_working": "#EEF1F4",
+      "status_line": "#6B3FA0",
+      "today_line": "#0B7A55",
+      "link": "#616E7C",
+      "link_critical": "#B54700",
+      "selection": "#D6E4F5",
+      "cursor": "#0B5CAD",
+      "message_error_bg": "#FDECEA",
+      "message_warning_bg": "#FFF4D6",
+      "bars": {
+        "task": {
+          "fill": "#0072B2"
+        },
+        "critical": {
+          "fill": "#D55E00",
+          "outline": "#7A3500"
+        },
+        "summary": {
+          "fill": "#323F4B"
+        },
+        "summary_critical": {
+          "fill": "#A34700"
+        },
+        "milestone": {
+          "fill": "#1F2933"
+        },
+        "milestone_critical": {
+          "fill": "#D55E00",
+          "outline": "#7A3500"
+        },
+        "progress": {
+          "fill": "#00243D"
+        },
+        "baseline": {
+          "fill": "#7B8794"
+        },
+        "inactive": {
+          "fill": "#FFFFFF",
+          "outline": "#7B8794"
+        },
+        "manual": {
+          "fill": "#FFFFFF",
+          "outline": "#0072B2"
+        },
+        "slack": {
+          "fill": "#7B8794"
+        },
+        "deadline": {
+          "fill": "#B54700"
+        }
+      }
+    },
+    "dark": {
+      "bg": "#16191D",
+      "text": "#E4E7EB",
+      "text_strong": "#FFFFFF",
+      "text_muted": "#AAB4BF",
+      "header_bg": "#1E2227",
+      "grid": "#2A2F35",
+      "grid_major": "#3E454D",
+      "band": [
+        "#16191D",
+        "#1C2025"
+      ],
+      "non_working": "#20242A",
+      "status_line": "#B794F6",
+      "today_line": "#4FD1A5",
+      "link": "#9AA5B1",
+      "link_critical": "#FF8C42",
+      "selection": "#23364D",
+      "cursor": "#7FB8F0",
+      "message_error_bg": "#3A1414",
+      "message_warning_bg": "#3A3012",
+      "bars": {
+        "task": {
+          "fill": "#3D9BE0"
+        },
+        "critical": {
+          "fill": "#FF8C42",
+          "outline": "#FFD1B0"
+        },
+        "summary": {
+          "fill": "#CBD2D9"
+        },
+        "summary_critical": {
+          "fill": "#FFB27A"
+        },
+        "milestone": {
+          "fill": "#E4E7EB"
+        },
+        "milestone_critical": {
+          "fill": "#FF8C42",
+          "outline": "#FFD1B0"
+        },
+        "progress": {
+          "fill": "#04192B"
+        },
+        "baseline": {
+          "fill": "#8D99A6"
+        },
+        "inactive": {
+          "fill": "#16191D",
+          "outline": "#8D99A6"
+        },
+        "manual": {
+          "fill": "#16191D",
+          "outline": "#3D9BE0"
+        },
+        "slack": {
+          "fill": "#8D99A6"
+        },
+        "deadline": {
+          "fill": "#FF8C42"
+        }
+      }
+    },
+    "print": null
+  },
+  "bars": {
+    "task": {
+      "outline16": 0,
+      "shape": "bar",
+      "height_pct": 45,
+      "radius16": 32,
+      "pattern": "solid"
+    },
+    "critical": {
+      "outline16": 32,
+      "shape": "bar",
+      "height_pct": 45,
+      "radius16": 32,
+      "pattern": "solid"
+    },
+    "summary": {
+      "outline16": 0,
+      "shape": "bracket",
+      "height_pct": 30,
+      "radius16": 0,
+      "pattern": "solid"
+    },
+    "summary_critical": {
+      "outline16": 32,
+      "shape": "bracket",
+      "height_pct": 30,
+      "radius16": 0,
+      "pattern": "solid"
+    },
+    "milestone": {
+      "outline16": 0,
+      "shape": "diamond",
+      "height_pct": 55,
+      "radius16": 0,
+      "pattern": "solid"
+    },
+    "milestone_critical": {
+      "outline16": 32,
+      "shape": "diamond",
+      "height_pct": 55,
+      "radius16": 0,
+      "pattern": "solid"
+    },
+    "progress": {
+      "outline16": 0,
+      "shape": "bar",
+      "height_pct": 35,
+      "radius16": 0,
+      "pattern": "solid"
+    },
+    "baseline": {
+      "outline16": 0,
+      "shape": "bar",
+      "height_pct": 20,
+      "radius16": 0,
+      "pattern": "solid"
+    },
+    "inactive": {
+      "outline16": 16,
+      "shape": "bar",
+      "height_pct": 45,
+      "radius16": 32,
+      "pattern": "outline"
+    },
+    "manual": {
+      "outline16": 16,
+      "shape": "bar",
+      "height_pct": 45,
+      "radius16": 32,
+      "pattern": "outline"
+    },
+    "slack": {
+      "outline16": 0,
+      "shape": "line",
+      "height_pct": 10,
+      "radius16": 0,
+      "pattern": "solid"
+    },
+    "deadline": {
+      "outline16": 0,
+      "shape": "line",
+      "height_pct": 100,
+      "radius16": 0,
+      "pattern": "solid"
+    }
+  },
+  "texts": {
+    "task": {
+      "right": "name"
+    },
+    "critical": {
+      "right": "name"
+    },
+    "manual": {
+      "right": "name"
+    },
+    "inactive": {
+      "right": "name"
+    },
+    "summary": {
+      "left": "name",
+      "right": "duration_short"
+    },
+    "summary_critical": {
+      "left": "name",
+      "right": "duration_short"
+    },
+    "milestone": {
+      "left": "finish_short",
+      "right": "name"
+    },
+    "milestone_critical": {
+      "left": "finish_short",
+      "right": "name"
+    }
+  },
+  "scale": {
+    "tiers": "auto",
+    "week_numbers": false,
+    "shade_non_working": true,
+    "status_label": true,
+    "today_mark": true
+  },
+  "grid": {
+    "rows": "none",
+    "major_v": true,
+    "minor_v": true,
+    "row_lines": true
+  },
+  "density": "normal",
+  "font": {
+    "family": "inter",
+    "size16": 192
+  },
+  "legend": {
+    "show": true,
+    "every_page": false
+  },
+  "page": {
+    "paper": "a4",
+    "landscape": true,
+    "margins_mm": [
+      10,
+      10,
+      10,
+      10
+    ],
+    "fit": {
+      "pages_wide": 1
+    },
+    "repeat_table": true,
+    "header": [
+      "{projet}",
+      "",
+      "{date_etat}"
+    ],
+    "footer": [
+      "{fichier}",
+      "",
+      "Page {page}/{pages}"
+    ],
+    "logo": null
+  }
+}

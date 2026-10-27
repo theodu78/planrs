@@ -547,7 +547,7 @@ fn e2e_daily_use() {
 /// `tests/ui/`.
 #[cfg(unix)]
 #[path = "../../../planrs-mcp/tests/common/replay.rs"]
-mod replay;
+pub(crate) mod replay;
 
 #[cfg(unix)]
 #[allow(
@@ -555,19 +555,20 @@ mod replay;
     clippy::arithmetic_side_effects,
     reason = "test natif : processus fils, fils et attentes, comme `planrs mcp` en vrai ; compteurs d'identifiants et de générations bornés par le scénario"
 )]
-mod relay_app {
+pub(crate) mod relay_app {
     use std::io::{BufRead, BufReader, Write};
     use std::path::PathBuf;
     use std::process::{Child, Command, Stdio};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
     use std::thread;
     use std::time::Duration;
 
     use egui_kittest::Harness;
     use planrs_automation::control::{
-        ListenerHandle, ListenerOptions, RendezvousGuard, canonical_project, new_token, publish_in,
-        spawn_listener_with,
+        ListenerHandle, ListenerOptions, RendezvousGuard, Transport, canonical_project, new_token,
+        publish_in, spawn_listener_on,
     };
     use planrs_automation::text::Language as ToolLanguage;
     use planrs_automation::{Batch, EditSource, Workspace};
@@ -583,10 +584,10 @@ mod relay_app {
     const SCENARIO: &str = "relay_j7";
 
     /// Attente de la validation côté serveur (`--approval-timeout`).
-    const APPROVAL_SECS: u64 = 30;
+    pub(crate) const APPROVAL_SECS: u64 = 30;
 
     /// Images d'interface au plus par appel (5 ms chacune : ~60 s).
-    const MAX_FRAMES: usize = 12_000;
+    pub(crate) const MAX_FRAMES: usize = 12_000;
 
     /// Ce que l'utilisateur fait pendant un appel relayé.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -623,7 +624,7 @@ mod relay_app {
     }
 
     /// Binaire `planrs` : `PLANRS_MCP_BIN`, sinon à côté de `deps/`.
-    fn mcp_binary() -> Option<PathBuf> {
+    pub(crate) fn mcp_binary() -> Option<PathBuf> {
         if let Some(path) = std::env::var_os("PLANRS_MCP_BIN") {
             return Some(PathBuf::from(path));
         }
@@ -635,7 +636,7 @@ mod relay_app {
     /// Client JSON-RPC stdio minimal (`initialize`, `tools/call`) dans un
     /// fil : les appels arrivent par `calls`, chaque résultat repart par
     /// `results` sous la forme du journal (`{"ok": …}` / `{"error": …}`).
-    fn client_thread(
+    pub(crate) fn client_thread(
         child: &mut Child,
         calls: Receiver<Option<(String, Value)>>,
         results: SyncSender<Value>,
@@ -701,11 +702,49 @@ mod relay_app {
 
     /// Application de test branchée sur un écouteur réel, fichier
     /// `maison.xml` (l'exemple) tenu dans `tmp`, rendez-vous publié dans
-    /// `tmp/control`.
-    fn wired(
-        tmp: &TempDir,
-        now: Moment,
-    ) -> (Harness<'static, App>, ListenerHandle, RendezvousGuard, PathBuf) {
+    /// `tmp/control` ; écouteur sur `transport` (J8 lot L8 : socket Unix
+    /// ou TCP en boucle locale).
+    pub(crate) fn wired(tmp: &TempDir, now: Moment, transport: Transport) -> Wired {
+        wired_with(tmp, now, transport, APPROVAL_SECS)
+    }
+
+    /// Application, écouteur, rendez-vous publié, dossier des rendez-vous
+    /// et dossier de la socket (à garder jusqu'à la fin du test).
+    pub(crate) type Wired = (
+        Harness<'static, App>,
+        ListenerHandle,
+        RendezvousGuard,
+        PathBuf,
+        SocketDir,
+    );
+
+    /// Dossier court de la socket Unix, supprimé à la fin du test. Pas dans
+    /// `tmp` : sous macOS, le dossier temporaire canonique
+    /// (`/private/var/folders/…/T/planrs-replay-<tag>-<pid>-<n>`) laissait
+    /// au chemin de la socket moins que les 104 octets de `sun_path`
+    /// (« path must be shorter than `SUN_LEN` », CI macOS de la PR #7).
+    /// `temp_dir()` non canonique et un nom court gardent ~80 octets.
+    pub(crate) struct SocketDir(PathBuf);
+
+    impl SocketDir {
+        fn new() -> Self {
+            static N: AtomicU32 = AtomicU32::new(0);
+            let n = N.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("prs-{}-{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            Self(dir)
+        }
+    }
+
+    impl Drop for SocketDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Comme [`wired`], délai de validation `approval_secs` (J8 lot L16 :
+    /// `relay_j8` laisse expirer une demande).
+    pub(crate) fn wired_with(tmp: &TempDir, now: Moment, transport: Transport, approval_secs: u64) -> Wired {
         let plan = tmp.path().join("maison.xml");
         std::fs::write(&plan, planrs_ui_egui::DEMO_MSPDI).unwrap();
         let state = UiState {
@@ -730,15 +769,22 @@ mod relay_app {
             harness.state().messages()
         );
         let options = ListenerOptions {
-            approval_timeout: Duration::from_secs(APPROVAL_SECS),
+            approval_timeout: Duration::from_secs(approval_secs),
             reply_grace: Duration::from_secs(2),
         };
-        let sockets = tmp.path().join("sock");
-        let handle =
-            spawn_listener_with(&sockets, new_token().unwrap(), tx, Arc::new(|| {}), options).unwrap();
+        let sockets = SocketDir::new();
+        let handle = spawn_listener_on(
+            &sockets.0,
+            new_token().unwrap(),
+            tx,
+            Arc::new(|| {}),
+            options,
+            transport,
+        )
+        .unwrap();
         let control = tmp.path().join("control");
         let guard = publish_in(&control, &handle.rendezvous(canonical_project(&plan))).unwrap();
-        (harness, handle, guard, control)
+        (harness, handle, guard, control, sockets)
     }
 
     fn generation(app: &App) -> u64 {
@@ -801,6 +847,36 @@ mod relay_app {
 
     #[test]
     fn relay_app_real_mcp() {
+        relay_scenario(Transport::Unix, "relay");
+    }
+
+    /// Même scénario, même journal, relayé en TCP sur la boucle locale (J8
+    /// lot L8, transport de Windows rejoué sous Linux ; P47).
+    #[test]
+    fn relay_app_real_mcp_tcp() {
+        relay_scenario(Transport::Tcp, "relaytcp");
+    }
+
+    /// Détail du système dans `control.app_gone` : l'application fermée
+    /// laisse une socket absente (`ENOENT`) en Unix, un port fermé
+    /// (`ECONNREFUSED`) en TCP. Seul ce détail change d'un transport à
+    /// l'autre ; il est ramené à la forme Unix du scénario.
+    fn as_unix_detail(text: &str) -> String {
+        const UNIX: &str = "No such file or directory (os error 2)";
+        // Linux (111) et macOS (61).
+        [
+            "Connection refused (os error 111)",
+            "Connection refused (os error 61)",
+        ]
+        .into_iter()
+        .fold(text.to_owned(), |acc, tcp| acc.replace(tcp, UNIX))
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "scénario de bout en bout lu d'un bloc, appel par appel"
+    )]
+    fn relay_scenario(transport: Transport, tag: &str) {
         let Some(binary) = mcp_binary().filter(|p| p.is_file()) else {
             let required = std::env::var("PLANRS_RELAY").is_ok_and(|v| v == "required");
             assert!(
@@ -815,8 +891,14 @@ mod relay_app {
         let root = repo_root(env!("CARGO_MANIFEST_DIR"));
         let scenario = Scenario::load(&root, SCENARIO);
         let now: Moment = replay::NOW.parse().unwrap();
-        let tmp = TempDir::new("relay");
-        let (mut harness, handle, guard, control) = wired(&tmp, now);
+        let tmp = TempDir::new(tag);
+        let (mut harness, handle, guard, control, _sockets) = wired(&tmp, now, transport);
+        assert_eq!(
+            handle.endpoint().starts_with("tcp:127.0.0.1:"),
+            transport == Transport::Tcp,
+            "{}",
+            handle.endpoint()
+        );
         let initial_session = harness.state().document.as_ref().unwrap().session.clone();
         let mut app_side: (Option<ListenerHandle>, Option<RendezvousGuard>) = (Some(handle), Some(guard));
 
@@ -864,7 +946,11 @@ mod relay_app {
                 }
                 _ => {}
             }
-            got.push(normalized(&result, tmp.path()));
+            let result = normalized(&result, tmp.path());
+            got.push(match transport {
+                Transport::Unix => result,
+                Transport::Tcp => serde_json::from_str(&as_unix_detail(&result.to_string())).unwrap(),
+            });
         }
         calls_tx.send(None).unwrap();
         drop(calls_tx);
@@ -883,7 +969,10 @@ mod relay_app {
         drop(app_side);
 
         // Journal produit : scénario octet pour octet (ou régénéré).
-        let produced = std::fs::read_to_string(&journal).unwrap();
+        let mut produced = std::fs::read_to_string(&journal).unwrap();
+        if transport == Transport::Tcp {
+            produced = as_unix_detail(&produced);
+        }
         if replay::blessing() {
             replay::bless(&root, &scenario, &produced, tmp.path(), None);
             return;

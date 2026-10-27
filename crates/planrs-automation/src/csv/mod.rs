@@ -16,12 +16,29 @@ mod decode;
 mod export;
 mod header;
 mod import;
+mod preview;
 
+pub(crate) use export::guard;
 pub use export::{CsvExportOptions, default_columns, export};
 pub use import::{MAX_DIAGNOSTICS, MAX_DIAGNOSTICS_PER_CODE, import};
+pub use preview::{CsvPreview, PREVIEW_ROWS, Recognized, preview};
 
 use planrs_core::{Moment, Project, ScheduleAnchor};
 use serde::Serialize;
+
+/// R-144 : sort d'un intitulé de colonne d'en-tête (casse, accents,
+/// espaces et ponctuation ignorés ; français ou anglais) : colonne lue,
+/// connue mais non prise en charge, ou inconnue (jamais
+/// [`Recognized::Duplicate`], qui dépend des autres colonnes). Sert aussi
+/// au collage d'un texte externe (R-256).
+#[must_use]
+pub fn recognize(header: &str) -> Recognized {
+    match header::recognize(header) {
+        Some((header::Field::Column(c), _)) => Recognized::Column(c),
+        Some((header::Field::Unsupported, _)) => Recognized::Unsupported,
+        None => Recognized::Unknown,
+    }
+}
 
 /// Bornes de l'import (règle 10 : un fichier hostile ne fait pas croître la
 /// mémoire sans borne).
@@ -305,6 +322,11 @@ pub enum CsvError {
     #[serde(rename = "csv.error.encoding")]
     #[error("le fichier n'est pas dans l'encodage indiqué")]
     Encoding,
+    /// Fonction posée par le contrat J8 (L0), livrée par un lot ultérieur
+    /// (aperçu, L3).
+    #[serde(rename = "csv.error.not_yet_available")]
+    #[error("fonction pas encore disponible")]
+    NotYetAvailable,
 }
 
 impl CsvError {
@@ -318,6 +340,7 @@ impl CsvError {
             Self::NoKnownColumn => "csv.error.no_known_column",
             Self::TooManyRows => "csv.error.too_many_rows",
             Self::TooManyColumns => "csv.error.too_many_columns",
+            Self::NotYetAvailable => "csv.error.not_yet_available",
             Self::Encoding => "csv.error.encoding",
         }
     }
@@ -398,6 +421,7 @@ mod tests {
             CsvError::TooManyRows,
             CsvError::TooManyColumns,
             CsvError::Encoding,
+            CsvError::NotYetAvailable,
         ] {
             assert_eq!(serde_json::to_value(&e).unwrap()["code"], e.code());
             assert_ne!(e.to_string(), "");

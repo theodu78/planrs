@@ -41,6 +41,39 @@
 //!   `usage_counts_equal_at_1000_and_5000_tasks` (formes, sommets et galleys
 //!   de la vue à ± 5 %).
 //!
+//! - J8 L5 (ignorés, release) : `filter_sort_5000` (filtre « Critiques »,
+//!   tri Début décroissant avec structure, retour à l'ordre des ID, 60
+//!   images) et `outline_5000` (niveau 1, Tous, 2, puis repli de 50
+//!   récapitulatives) : `RowView::build` médiane < 8 ms, images mêmes
+//!   seuils.
+//! - J8 L9 (ignoré, release) : `search_5000` (barre de recherche ouverte,
+//!   10 caractères tapés, un par image, puis 20 « suivant ») : image
+//!   médiane < 16 ms, p95 < 32 ms.
+//!
+//! - J8 L10 (ignoré, release) : `paste_1000` (1 000 lignes copiées par
+//!   `Event::Copy`, collées par `Event::Paste` au milieu du réseau, cinq
+//!   fois, annulées entre deux) : image du collage (lot, recalcul,
+//!   `RowModel`) plus l'image suivante, décomposée ; budget médiane
+//!   < 500 ms publié (non tenu, non bloquant), garde bloquante < 1 s.
+//!
+//! - J8 L11 : `static_styled` (ignoré, release) : vue principale stylée
+//!   (Classique depuis L16, Sobre, Présentation en densité Aérée, Chantier
+//!   en densité Compacte, clair et sombre), 5 000 tâches, molette au milieu du réseau, zoom
+//!   Semaine, mêmes seuils. Garde toujours exécutée :
+//!   `styled_counts_equal_at_1000_and_5000_tasks` (formes, sommets et
+//!   galleys à ± 5 % pour chaque modèle).
+//! - J8 L12 (ignoré, release) : `ai_panel` (volet d'opérations IA ouvert
+//!   sur une proposition de 250 tâches décalées, diff affiché de 200
+//!   lignes, défilement de la table à chaque image) : mêmes seuils ; le
+//!   diff n'est calculé qu'une fois.
+//!
+//! - J8 L16 : modèle de la vue principale de **tous** les scénarios
+//!   (sauf `static_styled`, qui fixe les siens) lu dans
+//!   `PLANRS_PERF_TEMPLATE` (`sobre` par défaut, défaut de l'application
+//!   depuis L15 ; `classique` : apparence de J7). Le job CI `perf` lance la
+//!   série deux fois, en Sobre puis en Classique, rapports dans deux
+//!   dossiers. `static_styled` mesure aussi Classique.
+//!
 //! Le rendu GPU n'est pas chronométré (lavapipe en CI n'est pas
 //! représentatif). Le projet est construit directement
 //! (`planrs_tests::generate::ui_network`) et ouvert sans MSPDI
@@ -80,12 +113,16 @@ use egui::epaint::{ClippedPrimitive, Primitive, Shape};
 use egui::{
     Event, Key, Modifiers, MouseWheelSource, MouseWheelUnit, Pos2, RawInput, Rect, TouchPhase, pos2, vec2,
 };
+use planrs_automation::filter::{FilterCtx, FilterPreset};
 use planrs_core::Moment;
+use planrs_render::style::TemplateId;
 use planrs_tests::generate::{ui_network, ui_network_with_resources};
 use planrs_ui_egui::column::Column;
 use planrs_ui_egui::edit::{EditState, commit_edit};
 use planrs_ui_egui::nav::RowRef;
+use planrs_ui_egui::row_view::RowView;
 use planrs_ui_egui::rows::{RowKind, RowModel};
+use planrs_ui_egui::state::{FilterChoice, SortKey, SortSpec, TaskViewState};
 use planrs_ui_egui::timescale::TimeAxis;
 use planrs_ui_egui::view::{OVERSCAN, ROW_H};
 use planrs_ui_egui::{
@@ -117,11 +154,27 @@ fn now() -> Moment {
     "2026-01-05T08:00".parse().unwrap()
 }
 
-/// Application ouverte sur un réseau généré : français, thème clair.
+/// Modèle de la mesure (`PLANRS_PERF_TEMPLATE`, clé d'un modèle intégré :
+/// `sobre` par défaut, `classique`…) ; une valeur inconnue fait échouer la
+/// mesure plutôt que de mesurer autre chose.
+fn perf_template() -> TemplateId {
+    match std::env::var("PLANRS_PERF_TEMPLATE") {
+        Err(std::env::VarError::NotPresent) => TemplateId::Sobre,
+        Ok(key) => TemplateId::ALL
+            .into_iter()
+            .find(|id| id.key() == key)
+            .unwrap_or_else(|| panic!("PLANRS_PERF_TEMPLATE inconnu : {key:?}")),
+        Err(e) => panic!("PLANRS_PERF_TEMPLATE illisible : {e}"),
+    }
+}
+
+/// Application ouverte sur un réseau généré : français, thème clair, modèle
+/// de [`perf_template`].
 fn app_with(summaries: usize, leaves: usize, max_links: usize) -> App {
     let state = UiState {
         language: LanguagePref::Fr,
         theme: ThemePref::Light,
+        default_template: perf_template(),
         ..UiState::default()
     };
     let mut app = App::new(state, Env::fixed(now()));
@@ -1049,4 +1102,477 @@ fn usage_scroll() {
     );
     assert_budget("usage_scroll horizontal", horizontal, bench.last);
     assert!(worst < SPIKE, "bloc neuf : {worst:?} ≥ {SPIKE:?}");
+}
+
+/// Budget de `RowView::build` (J8, lot L5) : médiane.
+const VIEW_BUILD_BUDGET: Duration = Duration::from_millis(8);
+
+/// Durées de `RowView::build` pour `state` (repli courant de `app`), `n`
+/// constructions.
+fn view_builds(app: &App, state: &TaskViewState, n: usize) -> Vec<Duration> {
+    let doc = app.document.as_ref().unwrap();
+    let project = doc.project();
+    let ctx = FilterCtx {
+        project,
+        schedule: doc.schedule(),
+        status: project.effective_status_date(),
+    };
+    let model = app.rows().unwrap();
+    (0..n)
+        .map(|_| {
+            let t0 = Instant::now();
+            black_box(RowView::build(model, &ctx, state, app.collapsed()));
+            t0.elapsed()
+        })
+        .collect()
+}
+
+/// Médiane des constructions de la vue, vérifiée contre
+/// [`VIEW_BUILD_BUDGET`] (rapport JSON écrit avant).
+fn assert_build_budget(label: &str, mut builds: Vec<Duration>) {
+    builds.sort();
+    let median = percentile(&builds, 50);
+    eprintln!(
+        "perf UI {label} : RowView::build médiane {:.2} ms, max {:.2} ms ({} constructions)",
+        ms(median),
+        builds.last().map_or(0.0, |d| ms(*d)),
+        builds.len()
+    );
+    report(
+        label,
+        &builds,
+        Counts::default(),
+        serde_json::json!({ "budget_median_ms": VIEW_BUILD_BUDGET.as_millis() }),
+    );
+    assert!(
+        median < VIEW_BUILD_BUDGET,
+        "{label} : médiane {median:?} ≥ {VIEW_BUILD_BUDGET:?}"
+    );
+}
+
+/// J8 L5 : filtre « Critiques », puis tri Début décroissant avec structure,
+/// puis retour à l'ordre des ID, 20 images par étape (molette à chaque
+/// image ; l'image du changement compte la reconstruction de la vue).
+/// `RowView::build` médiane < 8 ms ; image médiane < 16 ms, p95 < 32 ms.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn filter_sort_5000() {
+    let (mut app, mut bench) = nav_bench();
+    let critical = TaskViewState {
+        filter: FilterChoice::Preset(FilterPreset::Critical),
+        ..TaskViewState::default()
+    };
+    let sorted = TaskViewState {
+        sort: Some(SortSpec {
+            key: SortKey::Start,
+            descending: true,
+            keep_outline: true,
+        }),
+        ..critical.clone()
+    };
+    let by_id = TaskViewState {
+        sort: Some(SortSpec {
+            key: SortKey::Id,
+            descending: false,
+            keep_outline: true,
+        }),
+        ..critical.clone()
+    };
+    let mut builds = Vec::new();
+    let mut samples = Vec::new();
+    for state in [critical, sorted, by_id] {
+        builds.extend(view_builds(&app, &state, 20));
+        let t0 = Instant::now();
+        app.set_task_view(state);
+        let change = t0.elapsed();
+        samples.push(change + bench.frame(&mut app, wheel_events(-WHEEL_STEP)));
+        for _ in 1..20 {
+            samples.push(bench.frame(&mut app, wheel_events(-WHEEL_STEP)));
+        }
+        assert!(!app.row_view().is_empty());
+        assert!(app.row_view().len() < app.rows().unwrap().len());
+    }
+    assert_build_budget("filter_sort_5000 build", builds);
+    assert_budget("filter_sort_5000", samples, bench.last);
+}
+
+/// J8 L5 : niveau 1, Tous, niveau 2 (20 images chacun), puis repli de 50
+/// récapitulatives une par image ; mêmes seuils que `filter_sort_5000`.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn outline_5000() {
+    let (mut app, mut bench) = nav_bench();
+    let mut builds = Vec::new();
+    let mut samples = Vec::new();
+    for level in [Some(1), None, Some(2)] {
+        let state = TaskViewState {
+            outline_level: level,
+            ..TaskViewState::default()
+        };
+        builds.extend(view_builds(&app, &state, 20));
+        let t0 = Instant::now();
+        app.set_task_view(state);
+        let change = t0.elapsed();
+        samples.push(change + bench.frame(&mut app, wheel_events(-WHEEL_STEP)));
+        for _ in 1..20 {
+            samples.push(bench.frame(&mut app, wheel_events(-WHEEL_STEP)));
+        }
+    }
+    assert_eq!(app.row_view().len(), app.rows().unwrap().len());
+    app.set_task_view(TaskViewState::default());
+    let summaries: Vec<_> = (0..app.rows().unwrap().len())
+        .filter_map(|i| app.rows().unwrap().row(i))
+        .filter(|row| row.kind == RowKind::Summary)
+        .map(|row| row.uid)
+        .take(50)
+        .collect();
+    assert_eq!(summaries.len(), 50);
+    for uid in summaries {
+        let t0 = Instant::now();
+        app.toggle_collapsed(uid);
+        let change = t0.elapsed();
+        samples.push(change + bench.frame(&mut app, Vec::new()));
+    }
+    builds.extend(view_builds(&app, &TaskViewState::default(), 20));
+    assert_eq!(
+        app.row_view().len(),
+        app.rows().unwrap().len() - 50 * LEAVES_PER_SUMMARY
+    );
+    assert_build_budget("outline_5000 build", builds);
+    assert_budget("outline_5000", samples, bench.last);
+}
+
+/// J8 L9 : barre de recherche ouverte, « préparatio » tapé un caractère par
+/// image (correspondances recalculées à chaque frappe), puis 20 « suivant »
+/// (sélection, défilement) ; image médiane < 16 ms, p95 < 32 ms.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn search_5000() {
+    use planrs_ui_egui::view::task_view::TaskViewOp;
+    let (mut app, mut bench) = nav_bench();
+    app.dispatch(Action::TaskView(TaskViewOp::OpenSearch));
+    bench.settle(&mut app);
+    let query = "préparatio";
+    let mut samples = Vec::new();
+    for (end, _) in query.char_indices().skip(1).chain([(query.len(), ' ')]) {
+        let prefix = query.get(..end).unwrap_or(query).to_owned();
+        app.dispatch(Action::TaskView(TaskViewOp::SetQuery(prefix)));
+        samples.push(bench.frame(&mut app, Vec::new()));
+    }
+    let search = app.search().unwrap();
+    assert_eq!(search.query, query);
+    assert_ne!(search.hits.len(), 0);
+    let mut seen = std::collections::BTreeSet::new();
+    for _ in 0..20 {
+        app.dispatch(Action::TaskView(TaskViewOp::SearchNext));
+        samples.push(bench.frame(&mut app, Vec::new()));
+        seen.extend(app.selection);
+    }
+    assert!(seen.len() > 1, "« suivant » doit avancer");
+    assert_eq!(app.document.as_ref().unwrap().generation(), 0);
+    assert_budget("search_5000", samples, bench.last);
+}
+
+/// Budget du collage de 1 000 lignes (J8, § 2.8) : collage → recalcul →
+/// `RowModel` → image. **Non tenu au lot L10** : médiane mesurée de 522 à
+/// 896 ms sur serveurdvp (machine partagée), dont 80 à 90 % dans
+/// `Session::apply`, et là dans les 1 000 `task.add` (environ 0,7 ms chacun
+/// sur 6 000 tâches ; les 1 985 `link.add` et le recalcul unique pèsent
+/// peu) : coût du moteur, hors de l'interface. Publié dans le rapport, non
+/// bloquant, en attendant l'arbitrage de la session principale (ADR-0016,
+/// écarts du lot L10). Relecture finale de J8 (perf F4) : 429 et 435 ms
+/// en release sur serveurdvp calme (2026-10-27), budget tenu mais sur une
+/// machine calme seulement ; l'arbitrage reste dû au propriétaire
+/// (ADR-0016, « Relecture finale de J8 »), la garde bloquante reste 1 s.
+const PASTE_BUDGET: Duration = Duration::from_millis(500);
+
+/// Garde bloquante du collage de 1 000 lignes (régression grossière) :
+/// deux fois le budget.
+const PASTE_GUARD: Duration = Duration::from_millis(1_000);
+
+/// Décomposition d'un collage du tampon `slot` avant `uid`, sur une copie
+/// du document : construction du lot, `Session::apply`, `RowModel::build`.
+fn paste_parts(
+    doc: &planrs_ui_egui::app::OpenDocument,
+    slot: &planrs_ui_egui::clipboard::ClipboardSlot,
+    uid: planrs_core::TaskUid,
+    labels: &planrs_ui_egui::format::FormatLabels,
+) -> (Duration, Duration, Duration) {
+    let at = planrs_automation::Placement::Before(planrs_automation::TaskRef::Uid(uid));
+    let t0 = Instant::now();
+    let (batch, _) = planrs_automation::clip::paste_batch(
+        &doc.session,
+        &slot.clip,
+        &at,
+        &planrs_automation::clip::PasteOptions::default(),
+    )
+    .unwrap();
+    let batch_time = t0.elapsed();
+    let mut copy = doc.clone();
+    let t0 = Instant::now();
+    copy.session
+        .apply(&batch, planrs_automation::ApplyMode::Commit)
+        .unwrap();
+    let apply = t0.elapsed();
+    let t0 = Instant::now();
+    black_box(RowModel::build(&copy, labels));
+    (batch_time, apply, t0.elapsed())
+}
+
+/// J8 L10 : coller 1 000 lignes copiées (tampon interne reconnu par son
+/// empreinte) au milieu du réseau de 5 000 tâches.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn paste_1000() {
+    let (mut app, mut bench) = nav_bench();
+    let first = app.rows().unwrap().row(0).unwrap().uid;
+    let last = app.rows().unwrap().row(999).unwrap().uid;
+    app.dispatch(Action::Select(Some(first)));
+    app.dispatch(Action::SelectWith {
+        uid: last,
+        mode: planrs_ui_egui::selection::SelectMode::Range,
+    });
+    bench.settle(&mut app);
+    bench.frame(&mut app, vec![Event::Copy]);
+    let slot = app.clipboard().expect("rien copié").clone();
+    assert_eq!(slot.clip.tasks.len(), 1_000);
+    // Le texte émis (relu ici par les mêmes fonctions) : même empreinte.
+    let doc = app.document.as_ref().unwrap();
+    let ctx = planrs_automation::text::TextContext::for_project(
+        doc.project(),
+        planrs_automation::text::Language::Fr,
+    );
+    let text = slot
+        .clip
+        .to_tsv(&planrs_ui_egui::clipboard::tsv_columns(&app.state), &ctx);
+    assert_eq!(planrs_automation::clip::fingerprint(&text), slot.fingerprint);
+    let len = app.rows().unwrap().len();
+    let labels = planrs_ui_egui::i18n::Texts::new(planrs_ui_egui::Language::Fr)
+        .format_labels()
+        .clone();
+    let mut samples = Vec::new();
+    let (mut batches, mut applies, mut builds) = (Vec::new(), Vec::new(), Vec::new());
+    for k in 0..5 {
+        let index = 2_500 + k * 100;
+        let uid = app.rows().unwrap().row(index).unwrap().uid;
+        app.dispatch(Action::ScrollToRow(index));
+        app.dispatch(Action::Select(Some(uid)));
+        bench.settle(&mut app);
+        // Décomposition, hors image, sur une copie du document.
+        let (batch, apply, build) = paste_parts(app.document.as_ref().unwrap(), &slot, uid, &labels);
+        batches.push(batch);
+        applies.push(apply);
+        builds.push(build);
+        let generation = app.document.as_ref().unwrap().generation();
+        let paste = bench.frame(&mut app, vec![Event::Paste(text.clone())]);
+        let next = bench.frame(&mut app, Vec::new());
+        let doc = app.document.as_ref().unwrap();
+        assert_eq!(doc.generation(), generation + 1, "collage non appliqué ({k})");
+        assert_eq!(doc.project().tasks.len(), len + 1_000);
+        samples.push(paste + next);
+        app.dispatch(Action::Undo);
+        bench.settle(&mut app);
+        assert_eq!(app.document.as_ref().unwrap().project().tasks.len(), len);
+    }
+    samples.sort();
+    let (median, max) = (percentile(&samples, 50), *samples.last().unwrap());
+    let (batch_median, _, _) = stats(batches);
+    let (apply_median, _, _) = stats(applies);
+    let (build_median, _, _) = stats(builds);
+    let rest = (ms(median) - ms(batch_median) - ms(apply_median) - ms(build_median)).max(0.0);
+    eprintln!(
+        "perf UI paste_1000 (5 collages de 1 000 lignes dans 5 000 tâches) : médiane {:.1} ms, max {:.1} ms ; \
+         décomposition (médianes) : lot (paste_batch) {:.1} ms, Session::apply {:.1} ms, RowModel::build {:.1} ms, \
+         reste {:.1} ms ; budget : médiane < {} ms",
+        ms(median),
+        ms(max),
+        ms(batch_median),
+        ms(apply_median),
+        ms(build_median),
+        rest,
+        PASTE_BUDGET.as_millis(),
+    );
+    report(
+        "paste_1000",
+        &samples,
+        bench.last,
+        serde_json::json!({
+            "guard_median_ms": PASTE_GUARD.as_millis(),
+            "paste_batch_median_ms": ms(batch_median),
+            "apply_median_ms": ms(apply_median),
+            "row_model_build_median_ms": ms(build_median),
+            "rest_median_ms": rest,
+            "budget_median_ms": PASTE_BUDGET.as_millis(),
+        }),
+    );
+    if median >= PASTE_BUDGET {
+        eprintln!("perf UI paste_1000 : HORS BUDGET (médiane {median:?} ≥ {PASTE_BUDGET:?}), non bloquant");
+    }
+    assert!(
+        median < PASTE_GUARD,
+        "paste_1000 : médiane {median:?} ≥ {PASTE_GUARD:?}"
+    );
+}
+
+/// J8 L11 : modèles mesurés par `static_styled` et la garde des formes
+/// (Classique depuis L16, Sobre, Présentation en densité Aérée, Chantier
+/// en densité Compacte).
+const STYLED: [(TemplateId, &str); 4] = [
+    (TemplateId::Classique, "classique"),
+    (TemplateId::Sobre, "sobre"),
+    (TemplateId::Presentation, "presentation"),
+    (TemplateId::Chantier, "chantier"),
+];
+
+/// Application ouverte sur un réseau généré, modèle par défaut `id`,
+/// thème `theme` (J8, lot L11).
+fn styled_app(summaries: usize, links: usize, id: TemplateId, theme: ThemePref) -> App {
+    let mut app = app_with(summaries, LEAVES_PER_SUMMARY, links);
+    app.state.default_template = id;
+    app.state.theme = theme;
+    app
+}
+
+/// Zoom Semaine, table et Gantt défilés au milieu du réseau, images
+/// stabilisées.
+fn styled_middle(app: &mut App, bench: &mut Bench) {
+    bench.settle(app);
+    app.dispatch(Action::SetZoom(TimeScaleZoom::Week));
+    bench.settle(app);
+    let row = app.rows().unwrap().len() / 2;
+    app.dispatch(Action::ScrollToRow(row));
+    bench.settle(app);
+    scroll_gantt_to_row(app, row);
+    bench.settle(app);
+}
+
+/// J8 L11 (`static_styled`) : vue principale stylée sur 5 000 tâches et
+/// 10 000 liens, Classique, Sobre, Présentation (Aérée), Chantier
+/// (Compacte), clair et sombre ; molette à chaque image au milieu du réseau, zoom Semaine
+/// (barres, liens, hachures et textes du moteur dessinés) ; mêmes seuils
+/// que la vue principale.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn static_styled() {
+    for (id, name) in STYLED {
+        for (theme, variant) in [(ThemePref::Light, "clair"), (ThemePref::Dark, "sombre")] {
+            let mut app = styled_app(SUMMARIES, LINKS, id, theme);
+            let mut bench = Bench::new();
+            styled_middle(&mut app, &mut bench);
+            for k in 0..WARMUP {
+                let dy = if k % 2 == 0 { -WHEEL_STEP } else { WHEEL_STEP };
+                bench.frame(&mut app, wheel_events(dy));
+            }
+            let samples: Vec<Duration> = (0..2 * FRAMES)
+                .map(|k| {
+                    let dy = if k < FRAMES { -WHEEL_STEP } else { WHEEL_STEP };
+                    bench.frame(&mut app, wheel_events(dy))
+                })
+                .collect();
+            assert_budget(&format!("static_styled_{name}_{variant}"), samples, bench.last);
+        }
+    }
+}
+
+/// J8 L11 (garde indépendante de la machine) : pour chaque modèle stylé,
+/// formes, sommets et galleys de la vue principale égaux à ± 5 % à 1 000 et
+/// 5 000 tâches (aucun travail proportionnel au nombre de tâches pendant
+/// une image : textes du moteur, bandes, hachures seulement sur les lignes
+/// visibles).
+#[test]
+fn styled_counts_equal_at_1000_and_5000_tasks() {
+    let close = |a: usize, b: usize| a.abs_diff(b) * 20 <= a.max(b);
+    for (id, name) in STYLED {
+        let mut measured = Vec::new();
+        for summaries in [50, SUMMARIES] {
+            let mut app = styled_app(
+                summaries,
+                2 * summaries * LEAVES_PER_SUMMARY,
+                id,
+                ThemePref::Light,
+            );
+            let mut bench = Bench::new();
+            styled_middle(&mut app, &mut bench);
+            measured.push(bench.last);
+        }
+        let (small, large) = (measured[0], measured[1]);
+        eprintln!("{name} : 1 000 tâches {small:?}, 5 000 tâches {large:?}");
+        assert!(small.shapes > 0 && small.galleys > 0, "{name} : {small:?}");
+        assert!(
+            close(small.shapes, large.shapes),
+            "{name} : formes {small:?} / {large:?}"
+        );
+        assert!(
+            close(small.vertices, large.vertices),
+            "{name} : sommets {small:?} / {large:?}"
+        );
+        assert!(
+            close(small.galleys, large.galleys),
+            "{name} : galleys {small:?} / {large:?}"
+        );
+    }
+}
+
+/// J8 L12 : volet d'opérations IA ouvert sur une proposition de 250 tâches
+/// décalées (diff affiché de 200 lignes, H-UI-41), 5 000 tâches,
+/// défilement de la table à chaque image ; budget : médiane < 16 ms.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn ai_panel() {
+    use std::sync::Arc;
+    use std::sync::mpsc::sync_channel;
+
+    use planrs_automation::control::{CallState, RelayCall, RelayKind, Reply};
+    use planrs_core::{Task, TaskRole};
+    use planrs_ui_egui::view::side_panel::MAX_DIFF_ROWS;
+
+    let (mut app, mut bench) = nav_bench();
+    let doc = app.document.as_ref().unwrap();
+    let ops: Vec<serde_json::Value> = doc
+        .project()
+        .tasks
+        .iter()
+        .map(Task::uid)
+        .filter(|uid| {
+            doc.schedule()
+                .scheduled(*uid)
+                .is_some_and(|s| s.role == TaskRole::Leaf)
+        })
+        .take(250)
+        .map(|uid| serde_json::json!({ "op": "task.update", "uid": uid.get(), "duration": { "text": "9j" } }))
+        .collect();
+    let (tx, rx) = sync_channel(4);
+    app.control_inbox(rx);
+    let (reply, replies) = sync_channel(4);
+    tx.send(RelayCall {
+        id: 1,
+        kind: RelayKind::Execute {
+            tool: "batch.apply".to_owned(),
+            params: serde_json::json!({ "ops": ops }),
+        },
+        state: Arc::new(CallState::new()),
+        reply,
+    })
+    .unwrap();
+    bench.settle(&mut app);
+    assert_eq!(replies.try_recv().unwrap(), Reply::PendingApproval { id: 1 });
+    let relay = app.relay().unwrap();
+    assert_eq!(relay.diff_builds(), 1);
+    assert_eq!(
+        relay.pending()[0].diff.as_ref().map(|d| d.rows.len()),
+        Some(MAX_DIFF_ROWS)
+    );
+    assert!(app.side_panel().shows_ai(), "volet ouvert");
+    for _ in 0..WARMUP {
+        bench.frame(&mut app, wheel_events(-WHEEL_STEP));
+    }
+    let samples: Vec<Duration> = (0..120)
+        .map(|i| {
+            let dy = if i % 2 == 0 { -WHEEL_STEP } else { WHEEL_STEP };
+            bench.frame(&mut app, wheel_events(dy))
+        })
+        .collect();
+    assert_eq!(app.relay().unwrap().diff_builds(), 1, "diff calculé une fois");
+    assert_budget("ai_panel", samples, bench.last);
 }

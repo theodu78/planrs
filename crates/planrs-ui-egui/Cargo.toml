@@ -13,6 +13,8 @@ planrs-mspdi.workspace = true
 # Session et registre de commandes (ADR-0012 D11) : toute édition passe par
 # `Action::Exec(Batch)`.
 planrs-automation.workspace = true
+# Style du planning et contraste WCAG partagés (ADR-0016 D5, D6).
+planrs-render.workspace = true
 egui.workspace = true
 eframe.workspace = true
 chrono.workspace = true
@@ -51,7 +53,7 @@ egui_kittest.workspace = true
 egui_system_font_provider.workspace = true
 # Réseau généré ouvert sans MSPDI (N8 : `App::open_project`), exemple
 # `snapshot --generate N` et test de fluidité.
-planrs-tests = { path = "../../tests", version = "0.1.0" }
+planrs-tests = { path = "../../tests", version = "1.0.0-rc.1" }
 fluent-syntax.workspace = true
 proptest.workspace = true
 

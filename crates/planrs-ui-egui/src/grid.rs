@@ -104,6 +104,8 @@ pub struct CellStyle {
     /// Niveau hiérarchique (retrait au-delà du premier niveau, plafonné par
     /// [`name_indent`]) ; 0 ou 1 : aucun retrait.
     pub level: u16,
+    /// Texte barré (tâche inactive, H-UI-37, J8 lot L11).
+    pub strike: bool,
 }
 
 impl CellStyle {
@@ -114,6 +116,7 @@ impl CellStyle {
             color,
             faux_bold: false,
             level: 0,
+            strike: false,
         }
     }
 }
@@ -303,6 +306,12 @@ pub fn paint_cells<S: Sheet>(
                 Arc::clone(&galley),
                 style.color,
             );
+            shapes = shapes.saturating_add(1);
+        }
+        if style.strike {
+            // Trait au milieu de la hauteur d'x, sur la largeur du texte.
+            let y = (text_y + size.y * 0.55).round() + 0.5;
+            painter.hline(text_x..=text_x + size.x, y, Stroke::new(1.0, style.color));
             shapes = shapes.saturating_add(1);
         }
         painter.galley(pos2(text_x, text_y), galley, style.color);

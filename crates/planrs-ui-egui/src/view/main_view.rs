@@ -42,9 +42,9 @@ use crate::app::OpenDocument;
 use crate::geom::{self, GanttHit, MainLayout};
 use crate::i18n::TextId;
 use crate::keymap::{self, Binding, UiBinding};
-use crate::rows::{RowKind, RowModel};
+use crate::row_view::{DisplayRow, VisibleRows};
+use crate::rows::RowKind;
 use crate::selection::SelectMode;
-use crate::state::GanttStyle;
 use crate::structure::StructureOp;
 use crate::timescale::TimeAxis;
 
@@ -85,7 +85,7 @@ struct GanttInput {
 pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) {
     let avail = ui.available_rect_before_wrap();
     let metrics = *fc.metrics;
-    let layout = geom::main_layout(avail, f32::from(fc.state.table_width), &metrics);
+    let layout = geom::main_layout(avail, f32::from(fc.state.effective_table_width()), &metrics);
     let Some(doc) = fc.doc else {
         ui.advance_cursor_after_rect(avail);
         return;
@@ -182,12 +182,12 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
 /// la zone de saisie est dessinée dès l'image suivante (relecture finale J7,
 /// F2 : une saisie ouverte hors de l'écran ne recevait pas la frappe).
 fn reveal_edited_row(fc: &FrameCtx<'_>, view: &mut ViewTransient) {
-    let (Some(rows), Some(state)) = (fc.rows, view.edit.editing.as_ref()) else {
+    let (Some(rows), Some(state)) = (fc.visible(), view.edit.editing.as_ref()) else {
         return;
     };
     let index = match state.uid {
-        Some(uid) => match rows.index_of(uid) {
-            Some(index) => index,
+        Some(uid) => match rows.display_of(uid) {
+            Some(d) => d.index(),
             None => return,
         },
         None => rows.len(),
@@ -221,6 +221,35 @@ struct RowsOut {
 struct ContextClick {
     /// Tâche de la ligne cliquée (`None` sous la dernière ligne).
     uid: Option<TaskUid>,
+    /// Barre cliquée : son type et sa tâche (H-UI-59, J8 lot L15).
+    bar: Option<(planrs_render::style::BarRole, TaskUid)>,
+}
+
+/// Type et tâche de la barre sous le pointeur `p` (H-UI-59) : même
+/// géométrie que le dessin et le survol (`gantt::hit_test`), type déduit
+/// de la ligne (`gantt::row_role`, surbrillance du critique comprise).
+#[must_use]
+pub fn bar_under(
+    fc: &FrameCtx<'_>,
+    axis: &TimeAxis,
+    origin: Pos2,
+    p: Pos2,
+) -> Option<(planrs_render::style::BarRole, TaskUid)> {
+    let rows = fc.visible()?;
+    let screen = fc.task_view.style.clone();
+    let geo = gantt::GanttGeo::new(fc, &screen.style);
+    let uid = match gantt::hit_test(rows, axis, origin, &geo, p) {
+        GanttHit::Bar(uid) | GanttHit::BarStart(uid) | GanttHit::BarEnd(uid) => uid,
+        GanttHit::Link(..) | GanttHit::Empty => return None,
+    };
+    let row = (0..rows.len()).find_map(|i| rows.row(DisplayRow::at(i)).filter(|r| r.uid == uid))?;
+    let role = gantt::row_role(row, geo.highlight_critical)?;
+    Some((role, uid))
+}
+
+/// Barre du dernier clic droit, gardée pendant que le menu est ouvert.
+fn context_bar_id() -> Id {
+    Id::unique("planrs.context-bar")
 }
 
 /// Réécrit les `Select(Some(uid))` poussés depuis `start` en `SelectWith`
@@ -274,7 +303,7 @@ fn paint_rows(
 ) -> RowsOut {
     let row_h = fc.metrics.row_h;
     // Une ligne de plus que de tâches : la ligne vide de fin (création).
-    let len = fc.rows.map_or(0, |rows| rows.len().saturating_add(1));
+    let len = fc.visible().map_or(0, |rows| rows.len().saturating_add(1));
     let content_h = geom::index_to_f32(len) * row_h;
     let content_h = if content_h.is_finite() {
         content_h.max(0.0)
@@ -333,8 +362,7 @@ fn paint_rows(
             let in_gantt = gantt_clip.contains(p);
             let uid = if in_gantt {
                 geom::row_at(p.y - origin.y, row_h, len)
-                    .and_then(|i| fc.rows.and_then(|rows| rows.row(i)))
-                    .map(|row| row.uid)
+                    .and_then(|i| fc.visible().and_then(|rows| rows.uid(DisplayRow::at(i))))
             } else {
                 None
             };
@@ -347,8 +375,11 @@ fn paint_rows(
         apply_click_modifiers(fc.actions, first_action, modifiers);
         let context_click = secondary_click(ui, table_clip.union(gantt_clip)).map(|p| ContextClick {
             uid: geom::row_at(p.y - origin.y, row_h, len)
-                .and_then(|i| fc.rows.and_then(|rows| rows.row(i)))
-                .map(|row| row.uid),
+                .and_then(|i| fc.visible().and_then(|rows| rows.uid(DisplayRow::at(i)))),
+            bar: gantt_clip
+                .contains(p)
+                .then(|| bar_under(fc, axis, origin, p))
+                .flatten(),
         });
         let from_gantt = ui
             .input(|i| i.pointer.press_origin())
@@ -380,12 +411,12 @@ fn paint_rows(
 /// Écart en jours du glisser `d` pour l'abscisse écran `x` : depuis le
 /// point de départ (déplacer, redimensionner), depuis le début de la barre
 /// (avancement, R-242). `left` : bord gauche du Gantt.
-fn gesture_days(d: &BarDrag, rows: &RowModel, axis: &TimeAxis, left: f32, x: f32) -> i64 {
+fn gesture_days(d: &BarDrag, rows: VisibleRows<'_>, axis: &TimeAxis, left: f32, x: f32) -> i64 {
     match d.kind {
         GestureKind::Move | GestureKind::Resize => axis.days_for_dx(x - left - d.origin_x),
         GestureKind::Progress => {
             let start_x = rows
-                .index_of(d.uid)
+                .display_of(d.uid)
                 .and_then(|i| rows.row(i))
                 .and_then(|row| row.bar)
                 .map_or(left + d.origin_x, |(start, _)| axis.x(start));
@@ -416,12 +447,12 @@ fn bar_gesture(
     gantt_clip: Rect,
     from_gantt: bool,
 ) -> bool {
-    let (Some(doc), Some(rows)) = (fc.doc, fc.rows) else {
+    let (Some(doc), Some(rows)) = (fc.doc, fc.visible()) else {
         *drag = None;
         return false;
     };
-    let row_h = fc.metrics.row_h;
-    let tracking = fc.state.gantt_style == GanttStyle::Tracking;
+    let screen = fc.task_view.style.clone();
+    let geo = gantt::GanttGeo::new(fc, &screen.style);
     let left = gantt_clip.left();
     let pointer = ui.input(|i| i.pointer.interact_pos());
     if drag.is_none()
@@ -429,7 +460,7 @@ fn bar_gesture(
         && background.drag_started_by(PointerButton::Primary)
         && let Some(p) = ui.input(|i| i.pointer.press_origin())
     {
-        let start = match gantt::hit_test(rows, axis, origin, row_h, tracking, p) {
+        let start = match gantt::hit_test(rows, axis, origin, &geo, p) {
             GanttHit::Bar(uid) => Some((uid, GestureKind::Move)),
             GanttHit::BarStart(uid) => Some((uid, GestureKind::Progress)),
             GanttHit::BarEnd(uid) => Some((uid, GestureKind::Resize)),
@@ -441,7 +472,7 @@ fn bar_gesture(
                 kind,
                 origin_x: p.x - left,
                 days: 0,
-                over_row: link_target(rows, axis, origin, row_h, tracking, p, uid),
+                over_row: link_target(rows, axis, origin, &geo, p, uid),
                 preview: None,
             };
             d.days = gesture_days(&d, rows, axis, left, p.x);
@@ -456,7 +487,7 @@ fn bar_gesture(
             && let Some(p) = ui.ctx().pointer_hover_pos()
             && gantt_clip.contains(p)
         {
-            hover_cursor(ui, gantt::hit_test(rows, axis, origin, row_h, tracking, p));
+            hover_cursor(ui, gantt::hit_test(rows, axis, origin, &geo, p));
         }
         return false;
     };
@@ -470,7 +501,7 @@ fn bar_gesture(
             current.days = days;
             current.preview = gesture_preview(doc, current);
         }
-        current.over_row = link_target(rows, axis, origin, row_h, tracking, p, current.uid);
+        current.over_row = link_target(rows, axis, origin, &geo, p, current.uid);
     }
     let released = background.drag_stopped() || !ui.input(|i| i.pointer.primary_down());
     if released {
@@ -493,17 +524,16 @@ fn bar_gesture(
 /// relecture finale J7, F7 : lâcher n'importe où sur une autre ligne,
 /// même dans le vide, liait au lieu de déplacer).
 fn link_target(
-    rows: &RowModel,
+    rows: VisibleRows<'_>,
     axis: &TimeAxis,
     origin: Pos2,
-    row_h: f32,
-    tracking: bool,
+    geo: &gantt::GanttGeo<'_>,
     p: Pos2,
     from: TaskUid,
-) -> Option<usize> {
-    match gantt::hit_test(rows, axis, origin, row_h, tracking, p) {
+) -> Option<DisplayRow> {
+    match gantt::hit_test(rows, axis, origin, geo, p) {
         GanttHit::Bar(uid) | GanttHit::BarStart(uid) | GanttHit::BarEnd(uid) if uid != from => {
-            rows.index_of(uid)
+            rows.display_of(uid)
         }
         _ => None,
     }
@@ -525,9 +555,9 @@ fn hover_cursor(ui: &egui::Ui, hit: GanttHit) {
 /// ailleurs, même sur une autre ligne, le geste reste un déplacement), déplacement (R-240 ; récapitulative : rien),
 /// redimensionnement (R-241), avancement (R-242, seulement si le pointeur
 /// a bougé d'au moins un demi-jour).
-fn drop_gesture(fc: &mut FrameCtx<'_>, doc: &OpenDocument, rows: &RowModel, d: &BarDrag, moved: bool) {
+fn drop_gesture(fc: &mut FrameCtx<'_>, doc: &OpenDocument, rows: VisibleRows<'_>, d: &BarDrag, moved: bool) {
     let s = &doc.session;
-    let origin_row = rows.index_of(d.uid);
+    let origin_row = rows.display_of(d.uid);
     let result = match d.kind {
         GestureKind::Move => {
             if let Some(target) = d.over_row.filter(|&r| Some(r) != origin_row) {
@@ -572,14 +602,15 @@ fn gantt_double_click(
     if !(background.double_clicked() || background.triple_clicked()) {
         return;
     }
-    let (Some(rows), Some(p)) = (fc.rows, background.interact_pointer_pos()) else {
+    let (Some(rows), Some(p)) = (fc.visible(), background.interact_pointer_pos()) else {
         return;
     };
     if !gantt_clip.contains(p) {
         return;
     }
-    let tracking = fc.state.gantt_style == GanttStyle::Tracking;
-    let kind = match gantt::hit_test(rows, axis, origin, fc.metrics.row_h, tracking, p) {
+    let screen = fc.task_view.style.clone();
+    let geo = gantt::GanttGeo::new(fc, &screen.style);
+    let kind = match gantt::hit_test(rows, axis, origin, &geo, p) {
         GanttHit::Bar(uid) | GanttHit::BarStart(uid) | GanttHit::BarEnd(uid) => {
             DialogKind::TaskInformation(uid)
         }
@@ -632,18 +663,23 @@ pub(crate) const CONTEXT_ENTRIES: [(StructureOp, TextId, &str, bool); 6] = [
 /// clic droit sur le corps ; la ligne cliquée est d'abord sélectionnée si
 /// elle ne l'est pas (la sélection multiple est gardée sinon).
 fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick>) {
-    let open = click.map(|ContextClick { uid }| {
+    let open = click.map(|ContextClick { uid, bar }| {
         if let Some(uid) = uid
             && !fc.selected.contains(uid)
         {
             fc.actions.push(Action::Select(Some(uid)));
         }
+        ui.ctx().data_mut(|d| d.insert_temp(context_bar_id(), bar));
         SetOpenCommand::Bool(true)
     });
+    let bar: Option<(planrs_render::style::BarRole, TaskUid)> =
+        ui.ctx().data(|d| d.get_temp(context_bar_id())).flatten();
+    let mut format_bar = None;
     // La sélection change à la fin de l'image : une ligne cliquée compte
     // déjà comme sélectionnée pour griser les entrées.
     let has_selection = fc.selection.is_some() || click.is_some_and(|c| c.uid.is_some());
     let texts = fc.texts;
+    let reorder_locked = fc.task_view.state.reorder_locked();
     let ctx = ui.ctx().clone();
     let mut chosen = None;
     let mut information = false;
@@ -658,15 +694,28 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
     .style(menu_style)
     .open_memory(open)
     .show(|ui| {
+        // Mise en forme directe (H-UI-59, J8 lot L15) : clic droit sur une
+        // barre ⇒ volet du type de barre.
+        if let Some((role, uid)) = bar {
+            if ui.button(texts.get(TextId::ContextFormatBars)).clicked() {
+                format_bar = Some((role, uid));
+            }
+            ui.separator();
+        }
         for (op, text, command, needs_selection) in CONTEXT_ENTRIES {
             let mut button = egui::Button::new(texts.get(text));
             if let Some(shortcut) = keymap::shortcut_for_os(Binding::Command(command), ctx.os()) {
                 button = button.shortcut_text(keymap::shortcut_text(&ctx, shortcut));
             }
-            if ui
-                .add_enabled(has_selection || !needs_selection, button)
-                .clicked()
-            {
+            // H-UI-32 (J8, lot L9) : grisé sous tri ou filtre.
+            let locked = super::task_view::reorders(op) && reorder_locked;
+            let response = ui.add_enabled((has_selection || !needs_selection) && !locked, button);
+            let response = if locked {
+                response.on_disabled_hover_text(texts.get(TextId::ViewReorderLocked))
+            } else {
+                response
+            };
+            if response.clicked() {
                 chosen = Some(op);
             }
         }
@@ -685,6 +734,12 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
     }
     if information {
         fc.actions.push(Action::ShowTaskInformation);
+    }
+    if let Some((role, uid)) = format_bar {
+        fc.actions.push(Action::Format(crate::action::FormatOp::OpenBars {
+            role,
+            task: Some(uid),
+        }));
     }
 }
 
@@ -758,7 +813,9 @@ pub(crate) fn paint_splitter(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, layout: &
     };
     ui.painter().rect_filled(rect, 0.0, color);
     fc.stats.shapes = fc.stats.shapes.saturating_add(1);
-    if response.dragged() {
+    // « Graphique seul » (H-UI-64) : largeur imposée, le séparateur ne la
+    // change pas (la largeur choisie revient à la sortie du mode).
+    if response.dragged() && !fc.state.chart_only {
         let splitter_w = rect.width();
         let wanted = response.interact_pointer_pos().map_or_else(
             || layout.table_clip.width() + response.drag_delta().x,
@@ -953,6 +1010,7 @@ mod tests {
                 state: &app.state,
                 doc: app.document.as_ref(),
                 rows: app.rows(),
+                row_view: Some(app.row_view()),
                 texts: &texts,
                 palette: &palette,
                 metrics: &metrics,
@@ -962,6 +1020,7 @@ mod tests {
                 actions: &mut actions,
                 stats: &mut stats,
                 window_open: false,
+                task_view: crate::view::task_view::TaskViewFrame::default(),
             };
             super::show(ui, &mut fc, view);
         });

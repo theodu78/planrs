@@ -17,19 +17,25 @@ use crate::dialog::DialogState;
 use crate::edit::TableEdit;
 use crate::i18n::Texts;
 use crate::nav::CellCursor;
+use crate::row_view::{DisplayRow, FilterMemo, RowView, VisibleRows};
 use crate::rows::RowModel;
 use crate::selection::Selection;
-use crate::state::UiState;
+use crate::state::{TaskViewState, UiState};
 use crate::theme::Palette;
 
 pub mod approval;
 pub mod chrome;
 pub mod diagnostics;
+pub mod format_panel;
 pub mod gantt;
 pub mod main_view;
 pub mod recovery;
 pub mod resource_sheet;
+pub mod scene_paint;
+pub mod search;
+pub mod side_panel;
 pub mod table;
+pub mod task_view;
 pub mod timescale;
 pub mod usage;
 
@@ -137,6 +143,28 @@ pub struct ViewTransient {
     /// Utilisation des ressources : curseur, lignes, blocs de périodes du
     /// moteur (J7, lot L11).
     pub usage: usage::UsageState,
+    /// Filtre, tri et niveau affiché de la vue des tâches (J8, lot L5) :
+    /// une vue, rien d'écrit (P50).
+    pub task_view: TaskViewState,
+    /// Récapitulatives repliées (J8, lot L5, H-UI-34).
+    pub collapsed: BTreeSet<TaskUid>,
+    /// Version du repli : change à chaque changement de `collapsed` (clé du
+    /// cache de `RowView`).
+    pub collapse_version: u64,
+    /// Version de réapplication du filtre (J8, lot L9, H-UI-30) : change à
+    /// chaque application d'un filtre (clé du cache de `RowView`).
+    pub reapply_version: u64,
+    /// Lignes gardées visibles malgré le filtre jusqu'à sa réapplication
+    /// (J8, lot L9, H-UI-30).
+    pub filter_memo: FilterMemo,
+    /// Barre de recherche ouverte (J8, lot L9, H-UI-33).
+    pub search: Option<search::SearchState>,
+    /// Fenêtre « Trier » ouverte (J8, lot L9, H-UI-31).
+    pub sort_dialog: Option<crate::dialog::sort::SortDialog>,
+    /// Fenêtre « Filtre » ouverte (J8, lot L9, H-UI-30).
+    pub filter_dialog: Option<crate::dialog::filter::FilterDialog>,
+    /// Volet de mise en forme des barres ouvert (J8, lot L15, H-UI-59).
+    pub format_panel: Option<format_panel::FormatPanelState>,
 }
 
 /// Volet de la vue principale (J7).
@@ -162,9 +190,9 @@ pub struct BarDrag {
     pub origin_x: f32,
     /// Écart courant en jours entiers (`TimeAxis::days_for_dx`).
     pub days: i64,
-    /// Ligne de la barre d'une autre tâche sous le pointeur (tracer un
-    /// lien, R-243) ; `None` ailleurs, même sur une autre ligne.
-    pub over_row: Option<usize>,
+    /// Ligne affichée de la barre d'une autre tâche sous le pointeur
+    /// (tracer un lien, R-243) ; `None` ailleurs, même sur une autre ligne.
+    pub over_row: Option<DisplayRow>,
     /// Aperçu pour `days`, recalculé seulement quand `days` change.
     pub preview: Option<Preview>,
 }
@@ -219,18 +247,20 @@ fn displayable(text: &str) -> String {
 
 impl DiagnosticsView {
     /// Construit la vue des diagnostics d'import et de calcul d'un document
-    /// (tri stable par gravité).
+    /// (tri stable par gravité), traduits par code dans la langue de
+    /// `texts` (N5, J8 lot L14).
     #[must_use]
-    pub fn build(doc: &OpenDocument) -> Self {
+    pub fn build(doc: &OpenDocument, texts: &crate::i18n::Texts) -> Self {
+        let tr = crate::diag_text::DiagTexts::new(texts);
         let mut entries: Vec<(Severity, String)> = doc
             .import_diagnostics
             .iter()
-            .map(|diagnostic| (diagnostic.severity, displayable(&diagnostic.to_string())))
+            .map(|diagnostic| (diagnostic.severity, displayable(&tr.import(diagnostic))))
             .chain(
                 doc.schedule()
                     .diagnostics
                     .iter()
-                    .map(|diagnostic| (diagnostic.severity(), displayable(&diagnostic.to_string()))),
+                    .map(|diagnostic| (diagnostic.severity(), displayable(&tr.core(diagnostic)))),
             )
             .collect();
         entries.sort_by_key(|(severity, _)| severity_rank(*severity));
@@ -250,8 +280,12 @@ pub struct FrameCtx<'a> {
     pub state: &'a UiState,
     /// Document ouvert, s'il y en a un.
     pub doc: Option<&'a OpenDocument>,
-    /// Modèle de lignes du document (dans la langue courante).
+    /// Modèle de lignes du document (dans la langue courante, ordre des
+    /// ID).
     pub rows: Option<&'a RowModel>,
+    /// Vue des lignes (J8, lot L5) : lignes affichées, construite sur
+    /// `rows` ; lue par [`FrameCtx::visible`].
+    pub row_view: Option<&'a RowView>,
     /// Messages traduits.
     pub texts: &'a Texts,
     /// Couleurs du thème résolu.
@@ -272,4 +306,17 @@ pub struct FrameCtx<'a> {
     /// laisse la table cliquable) : aucune saisie de cellule ne s'ouvre, ses
     /// touches seraient retirées de l'image (relecture finale J7, F9).
     pub window_open: bool,
+    /// Vue des tâches à cette image : filtre, tri, niveau, recherche,
+    /// triangles de repli (J8, lot L9).
+    pub task_view: task_view::TaskViewFrame,
+}
+
+impl<'a> FrameCtx<'a> {
+    /// Lignes affichées (modèle lu à travers sa vue) ; `None` sans document.
+    #[must_use]
+    pub fn visible(&self) -> Option<VisibleRows<'a>> {
+        self.rows
+            .zip(self.row_view)
+            .map(|(model, view)| VisibleRows::new(model, view))
+    }
 }

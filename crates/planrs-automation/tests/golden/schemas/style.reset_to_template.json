@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`style.reset_to_template` : « Revenir au modèle » (H-UI-61) ; retire\nles surcharges du document, ou celles d'un seul type de barre. Le modèle\nde base est gardé ; sans style, rien ne change.",
+  "properties": {
+    "role": {
+      "anyOf": [
+        {
+          "description": "Rôle d'une barre en JSON (type de barre de la mise en forme directe,\nH-UI-59).",
+          "oneOf": [
+            {
+              "const": "task",
+              "description": "Tâche non critique.",
+              "type": "string"
+            },
+            {
+              "const": "critical",
+              "description": "Tâche critique.",
+              "type": "string"
+            },
+            {
+              "const": "summary",
+              "description": "Récapitulative.",
+              "type": "string"
+            },
+            {
+              "const": "summary_critical",
+              "description": "Récapitulative critique.",
+              "type": "string"
+            },
+            {
+              "const": "milestone",
+              "description": "Jalon.",
+              "type": "string"
+            },
+            {
+              "const": "milestone_critical",
+              "description": "Jalon critique.",
+              "type": "string"
+            },
+            {
+              "const": "progress",
+              "description": "Bande d'avancement.",
+              "type": "string"
+            },
+            {
+              "const": "baseline",
+              "description": "Ligne de base.",
+              "type": "string"
+            },
+            {
+              "const": "inactive",
+              "description": "Tâche inactive.",
+              "type": "string"
+            },
+            {
+              "const": "manual",
+              "description": "Tâche manuelle.",
+              "type": "string"
+            },
+            {
+              "const": "slack",
+              "description": "Marge totale.",
+              "type": "string"
+            },
+            {
+              "const": "deadline",
+              "description": "Échéance.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Type de barre (défaut : toutes les surcharges)."
+    }
+  },
+  "title": "StyleResetToTemplate",
+  "type": "object"
+}

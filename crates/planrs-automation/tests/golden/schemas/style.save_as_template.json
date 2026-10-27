@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`style.save_as_template` : « Enregistrer comme modèle » (H-UI-61).\nLecture : rend le style du document nommé ; l'appelant le garde dans\nses modèles personnels (préférences de l'interface).",
+  "properties": {
+    "name": {
+      "description": "Nom du modèle (1 à 64 caractères, espaces de bord retirés).",
+      "maxLength": 64,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "title": "StyleSaveAsTemplate",
+  "type": "object"
+}

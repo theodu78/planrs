@@ -2,7 +2,9 @@
 //!
 //! Seules les lignes de la plage visible sont dessinées ; chaque ligne déclare
 //! un nœud d'accessibilité (`row-label`) pour être retrouvée par les tests.
-//! Les textes viennent tout formatés du `RowModel` : aucune mise en forme ni
+//! Les textes viennent tout formatés du `RowModel`, lus à travers la vue
+//! des lignes (`VisibleRows`, J8 lot L5 : indice de ligne = ligne affichée) :
+//! aucune mise en forme ni
 //! aucun parcours proportionnel au nombre de tâches pendant l'image. Chaque
 //! cellule est une galley du cache d'egui (`LayoutJob` tronqué par « … »),
 //! colorée au dessin (`Color32::PLACEHOLDER`), donc partagée entre les thèmes.
@@ -15,6 +17,7 @@ use egui::{
 use planrs_automation::text::Language as TextLanguage;
 use planrs_automation::{Batch, Session};
 use planrs_core::TaskUid;
+use planrs_render::style::RowBanding;
 
 use super::main_view::HBarSpec;
 use super::{FrameCtx, Pane};
@@ -31,7 +34,8 @@ use crate::grid::{
 use crate::grid::{NAME_MIN_TEXT_ROOM, name_indent};
 use crate::i18n::{Arg, TextId, Texts};
 use crate::nav::{CellCursor, RowRef};
-use crate::rows::{Row, RowKind, RowModel};
+use crate::row_view::{DisplayRow, VisibleRows};
+use crate::rows::{Row, RowKind};
 use crate::state::UiState;
 use crate::theme::Palette;
 
@@ -78,26 +82,38 @@ fn cell_text_color(row: &Row, column: Column, palette: &Palette) -> egui::Color3
 }
 
 /// La table des tâches vue comme une grille ([`Sheet`], J7 lot L10) : lignes
-/// du `RowModel`, colonnes visibles de l'état d'interface, nom indenté par
-/// niveau, récapitulative en gras simulé.
+/// affichées du `RowModel` (indice de la grille = ligne affichée, J8 lot
+/// L5), colonnes visibles de l'état d'interface, nom indenté par niveau,
+/// récapitulative en gras simulé.
 pub struct TaskSheet<'a> {
-    /// Lignes et textes pré-formatés.
-    rows: &'a RowModel,
+    /// Lignes affichées et textes pré-formatés.
+    rows: VisibleRows<'a>,
     /// Colonnes visibles et leurs largeurs.
     columns: Vec<(Column, u16)>,
     /// Messages (refus d'une saisie).
     texts: &'a Texts,
+    /// Triangles de repli (J8, lot L9) : un cran de retrait de plus pour
+    /// chaque nom, où se dessine le triangle des récapitulatives.
+    outline: bool,
 }
 
 impl<'a> TaskSheet<'a> {
     /// Grille des lignes `rows` avec les colonnes visibles de `state`.
     #[must_use]
-    pub fn new(rows: &'a RowModel, state: &UiState, texts: &'a Texts) -> Self {
+    pub fn new(rows: VisibleRows<'a>, state: &UiState, texts: &'a Texts) -> Self {
         Self {
             rows,
             columns: visible_columns(state),
             texts,
+            outline: false,
         }
+    }
+
+    /// Avec ou sans triangles de repli (H-UI-34, J8 lot L9).
+    #[must_use]
+    pub const fn with_outline(mut self, outline: bool) -> Self {
+        self.outline = outline;
+        self
     }
 }
 
@@ -119,11 +135,11 @@ impl Sheet for TaskSheet<'_> {
     }
 
     fn key(&self, row: usize) -> Option<TaskUid> {
-        self.rows.row(row).map(|row| row.uid)
+        self.rows.uid(DisplayRow::at(row))
     }
 
     fn index_of(&self, key: TaskUid) -> Option<usize> {
-        self.rows.index_of(key)
+        self.rows.display_of(key).map(DisplayRow::index)
     }
 
     fn columns(&self) -> &[(Column, u16)] {
@@ -139,18 +155,24 @@ impl Sheet for TaskSheet<'_> {
     }
 
     fn style(&self, row: usize, col: Column, palette: &Palette) -> CellStyle {
-        let Some(r) = self.rows.row(row) else {
+        let Some(r) = self.rows.row(DisplayRow::at(row)) else {
             return CellStyle::plain(palette.text);
         };
         CellStyle {
             color: cell_text_color(r, col, palette),
             faux_bold: r.kind == RowKind::Summary,
-            level: if col == Column::Name { r.level } else { 0 },
+            // Tâche inactive : grisée (exclue du calcul) et barrée (H-UI-37).
+            strike: !r.active && r.kind != RowKind::Null,
+            level: match col {
+                Column::Name if self.outline => r.level.saturating_add(1),
+                Column::Name => r.level,
+                _ => 0,
+            },
         }
     }
 
     fn text(&self, row: usize, col: Column) -> &str {
-        self.rows.text(row, col)
+        self.rows.text(DisplayRow::at(row), col)
     }
 
     fn editable(&self, col: Column) -> bool {
@@ -408,19 +430,18 @@ pub fn paint_body(
     let palette = fc.palette;
     let metrics = fc.metrics;
     let row_h = metrics.row_h;
-    let font = cell_font(ui);
+    let (font, bands) = RowFill::of(ui, fc);
     let mut shapes = 0_usize;
 
     painter.rect_filled(clip, 0.0, palette.background);
     shapes = shapes.saturating_add(1);
-    let zebra = palette.background.lerp_to_gamma(palette.header_bg, 0.6);
 
-    let Some(rows) = fc.rows else {
+    let Some(rows) = fc.visible() else {
         fc.stats.shapes = fc.stats.shapes.saturating_add(shapes);
         return;
     };
     focus_widget(ui, fc, clip);
-    let sheet = TaskSheet::new(rows, fc.state, fc.texts);
+    let sheet = TaskSheet::new(rows, fc.state, fc.texts).with_outline(fc.task_view.outline_triangles);
     open_from_keys(ui, fc, &sheet, edit, cursor);
     fc.stats.table_rows = range.clone();
     let left = clip.left();
@@ -438,7 +459,7 @@ pub fn paint_body(
         if !row_rect.is_finite() {
             continue;
         }
-        let row = rows.row(i);
+        let row = rows.row(DisplayRow::at(i));
         if row.is_none() && i != blank {
             continue;
         }
@@ -446,11 +467,13 @@ pub fn paint_body(
             Some(row) => fc.selected.contains(row.uid),
             None => fc.selection.is_none(),
         };
-        if selected {
-            painter.rect_filled(row_rect, 0.0, palette.selection);
-            shapes = shapes.saturating_add(1);
-        } else if !i.is_multiple_of(2) {
-            painter.rect_filled(row_rect, 0.0, zebra);
+        let fill = if selected {
+            Some(palette.selection)
+        } else {
+            bands.fill(rows, i)
+        };
+        if let Some(fill) = fill {
+            painter.rect_filled(row_rect, 0.0, fill);
             shapes = shapes.saturating_add(1);
         }
         painter.hline(
@@ -472,6 +495,19 @@ pub fn paint_body(
             let response = row_widget(ui, fc, rows, hit, i, selected);
             row_clicked(fc, &sheet, edit, cursor, &response, i, cols_left);
         }
+        // Triangle de repli (J8, lot L9, H-UI-34), interactif au-dessus de
+        // la ligne : déclaré après elle.
+        if sheet.outline
+            && let Some(row) = row
+            && row.kind == RowKind::Summary
+        {
+            let at = TrianglePlace {
+                row_rect,
+                cols_left,
+                clip,
+            };
+            shapes = shapes.saturating_add(outline_triangle(ui, &painter, fc, &sheet, row, i, &at));
+        }
     }
 
     // Séparateurs verticaux de colonnes, sur toute la hauteur visible.
@@ -492,12 +528,156 @@ pub fn paint_body(
     edit_cells(ui, fc, &sheet, edit, cursor, &at, clip);
 }
 
+/// Fond des lignes non sélectionnées de la table : bandes du style
+/// (H-UI-53, J8 lot L11), alignées sur celles du Gantt ; sans bandes, le
+/// zébrage de J7.
+struct RowFill {
+    /// Bandes du style.
+    banding: RowBanding,
+    /// Couleurs des deux bandes.
+    band: [planrs_render::style::Rgb; 2],
+    /// Fond du style (une bande de cette couleur n'est pas dessinée).
+    bg: planrs_render::style::Rgb,
+    /// Zébrage J7 (lignes impaires).
+    zebra: egui::Color32,
+    /// Phases du modèle (bandes de phase).
+    phases: std::sync::Arc<Vec<u8>>,
+    /// Couleurs de phase des tâches (H-UI-65, J8 lot L15).
+    phase_colors: std::sync::Arc<crate::theme::PhaseColors>,
+    /// Encres du texte (texte, appuyé, atténué) et seuil du style : la
+    /// teinte d'une ligne de phase les garde lisibles.
+    inks: [planrs_render::style::Rgb; 3],
+    /// Contraste minimal du texte (H-UI-45 : 7:1 en Contraste élevé).
+    min: u32,
+}
+
+impl RowFill {
+    /// Police des cellules (Inter si le style la demande, J8 lot L11) et
+    /// fonds des lignes de l'image.
+    fn of(ui: &egui::Ui, fc: &FrameCtx<'_>) -> (egui::FontId, Self) {
+        let mut font = cell_font(ui);
+        let screen = &fc.task_view.style;
+        if screen.inter() {
+            font.family = egui::FontFamily::Name(crate::theme::PLAN_FAMILY.into());
+        }
+        let tokens = screen.style.tokens(screen.variant);
+        let fill = Self {
+            banding: screen.style.grid.rows,
+            band: tokens.band,
+            bg: tokens.bg,
+            zebra: fc.palette.background.lerp_to_gamma(fc.palette.header_bg, 0.6),
+            phases: std::sync::Arc::clone(&screen.phases),
+            phase_colors: std::sync::Arc::clone(&screen.phase_colors),
+            inks: [tokens.text, tokens.text_strong, tokens.text_muted],
+            min: planrs_render::style::min_text_contrast(&screen.style),
+        };
+        (font, fill)
+    }
+
+    /// Fond de la ligne affichée `i` (`None` : fond de la table).
+    fn fill(&self, rows: VisibleRows<'_>, i: usize) -> Option<egui::Color32> {
+        // Ligne d'une tâche colorée (H-UI-65) : teinte lisible de sa couleur.
+        if !self.phase_colors.is_empty()
+            && let Some(row) = rows.row(crate::row_view::DisplayRow::at(i))
+            && let Some((rgb, true)) = self.phase_colors.get(&row.uid).copied()
+        {
+            let tint = planrs_render::style::readable_tint(rgb, self.bg, &self.inks, self.min);
+            return Some(egui::Color32::from_rgb(tint.0, tint.1, tint.2));
+        }
+        if self.banding == RowBanding::None {
+            return (!i.is_multiple_of(2)).then_some(self.zebra);
+        }
+        let band = super::gantt::band_of(self.banding, rows, i, &self.phases)?;
+        let rgb = if band == 0 { self.band[0] } else { self.band[1] };
+        (rgb != self.bg).then(|| egui::Color32::from_rgb(rgb.0, rgb.1, rgb.2))
+    }
+}
+
+/// Position du triangle de repli d'une ligne.
+struct TrianglePlace {
+    /// Rectangle écran de la ligne.
+    row_rect: Rect,
+    /// Bord gauche écran de la première colonne (défilement déduit).
+    cols_left: f32,
+    /// Zone visible de la table.
+    clip: Rect,
+}
+
+/// Triangle de repli d'une récapitulative (H-UI-34, J8 lot L9) : dans le
+/// cran de retrait qui précède son nom, pointe vers la droite si elle est
+/// repliée (à la main ou par le niveau affiché), vers le bas sinon ; un
+/// clic replie ou déplie (`TaskViewOp::ToggleCollapsed`). Libellé
+/// d'accessibilité « Déplier … » / « Replier … ». Rend le nombre de formes.
+fn outline_triangle(
+    ui: &egui::Ui,
+    painter: &Painter,
+    fc: &mut FrameCtx<'_>,
+    sheet: &TaskSheet<'_>,
+    row: &Row,
+    i: usize,
+    at: &TrianglePlace,
+) -> usize {
+    let metrics = fc.metrics;
+    let Some((left, w)) = column_span(sheet.columns(), at.cols_left, Column::Name) else {
+        return 0;
+    };
+    let x0 = left + metrics.pad_x + grid::name_indent(metrics.indent, row.level, w);
+    let rect = Rect::from_min_size(
+        pos2(x0, at.row_rect.top()),
+        vec2(metrics.indent, at.row_rect.height()),
+    );
+    let hit = rect.intersect(at.clip);
+    if !rect.is_finite() || !hit.is_positive() {
+        return 0;
+    }
+    let folded = fc.task_view.is_folded(row.uid, row.level);
+    let c = rect.center();
+    let r = 4.0_f32;
+    let points = if folded {
+        vec![
+            pos2(c.x - r * 0.6, c.y - r),
+            pos2(c.x - r * 0.6, c.y + r),
+            pos2(c.x + r * 0.8, c.y),
+        ]
+    } else {
+        vec![
+            pos2(c.x - r, c.y - r * 0.6),
+            pos2(c.x + r, c.y - r * 0.6),
+            pos2(c.x, c.y + r * 0.8),
+        ]
+    };
+    painter.add(egui::Shape::convex_polygon(points, fc.palette.text, Stroke::NONE));
+    let response = ui.interact(
+        hit,
+        ui.make_persistent_id(("planrs-outline", row.uid)),
+        Sense::click(),
+    );
+    let texts = fc.texts;
+    let name = sheet.rows.text(DisplayRow::at(i), Column::Name).to_owned();
+    response.widget_info(|| {
+        let id = if folded {
+            TextId::OutlineExpandRow
+        } else {
+            TextId::OutlineCollapseRow
+        };
+        let label = texts.get_args(id, &[("name", Arg::Str(name.clone().into()))]);
+        egui::WidgetInfo::labeled(egui::Role::Button, true, label)
+    });
+    if response.clicked() {
+        fc.actions
+            .push(Action::TaskView(super::task_view::TaskViewOp::ToggleCollapsed(
+                row.uid,
+            )));
+    }
+    1
+}
+
 /// Zone cliquable de la ligne `i` (ou de la ligne vide) et son libellé
 /// d'accessibilité (`row-label`, `blank-row-label`).
 fn row_widget(
     ui: &egui::Ui,
     fc: &FrameCtx<'_>,
-    rows: &RowModel,
+    rows: VisibleRows<'_>,
     hit: Rect,
     i: usize,
     selected: bool,
@@ -509,12 +689,13 @@ fn row_widget(
     );
     let texts = fc.texts;
     response.widget_info(|| {
-        let label = match rows.row(i) {
+        let d = DisplayRow::at(i);
+        let label = match rows.row(d) {
             Some(row) => texts.get_args(
                 TextId::RowLabel,
                 &[
                     ("id", Arg::Count(i64::from(row.id))),
-                    ("name", Arg::Str(rows.text(i, Column::Name).into())),
+                    ("name", Arg::Str(rows.text(d, Column::Name).into())),
                 ],
             ),
             None => texts.get(TextId::BlankRowLabel),
@@ -582,9 +763,10 @@ fn paint_cursor(
         let rows = sheet.rows;
         let column = texts.get(cursor.column.title());
         response.widget_info(|| {
-            let label = match rows.row(index) {
+            let d = DisplayRow::at(index);
+            let label = match rows.row(d) {
                 Some(row) => {
-                    let value = rows.text(index, cursor.column);
+                    let value = rows.text(d, cursor.column);
                     let value = if value.is_empty() {
                         texts.get(TextId::NavCursorEmptyValue)
                     } else {
@@ -648,11 +830,12 @@ fn row_clicked(
     }
 }
 
-/// Ouvre la saisie de la cellule (`uid`, `column`) avec son texte initial
-/// (F2, double-clic) ; rien sur une colonne calculée.
+/// Ouvre la saisie de la cellule (`uid`, `column`) de la ligne affichée
+/// `i` avec son texte initial (F2, double-clic) ; rien sur une colonne
+/// calculée.
 fn open_editor(
     fc: &FrameCtx<'_>,
-    rows: &RowModel,
+    rows: VisibleRows<'_>,
     edit: &mut TableEdit,
     column: Column,
     uid: Option<TaskUid>,
@@ -662,15 +845,16 @@ fn open_editor(
     if !editable(column) {
         return;
     }
-    let text = initial_text(doc, rows, i, column, fc.texts.language());
+    let model_index = rows.model_index_or_blank(DisplayRow::at(i));
+    let text = initial_text(doc, rows.model(), model_index, column, fc.texts.language());
     edit.start(EditState::open(uid, column, text));
 }
 
-/// Ligne courante pour la saisie : tâche sélectionnée, ou ligne vide sans
-/// sélection.
-fn current_row(fc: &FrameCtx<'_>, rows: &RowModel) -> Option<(Option<TaskUid>, usize)> {
+/// Ligne courante pour la saisie (ligne affichée) : tâche sélectionnée, ou
+/// ligne vide sans sélection.
+fn current_row(fc: &FrameCtx<'_>, rows: VisibleRows<'_>) -> Option<(Option<TaskUid>, usize)> {
     match fc.selection {
-        Some(uid) => rows.index_of(uid).map(|i| (Some(uid), i)),
+        Some(uid) => rows.display_of(uid).map(|d| (Some(uid), d.index())),
         None => Some((None, rows.len())),
     }
 }
@@ -913,6 +1097,8 @@ mod tests {
             baseline: None,
             finish_variance: None,
             stop: None,
+            manual: false,
+            active: true,
         }
     }
 

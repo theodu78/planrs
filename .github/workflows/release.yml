@@ -1,0 +1,300 @@
+# Release de planrs (J8, lot L1 ; contrats C-REL-01 à C-REL-08,
+# docs/features/release.md).
+#
+# - Tag `v*` poussé : contrôle tag = workspace = CHANGELOG (C-REL-01), build
+#   des quatre plateformes (`desktop-build.yml`, appelé), vérification de
+#   chaque artefact sur son OS (C-REL-02 à C-REL-06), publication
+#   (`SHA256SUMS`, attestations de provenance) puis contrôle de la release
+#   publiée (C-REL-07, C-REL-08). Tag `v*-test.*` : brouillon, non public ;
+#   autre tag avec `-` : pré-version.
+# - `workflow_dispatch` (depuis une branche) : contrôle, build et
+#   vérification seulement, rien n'est publié (« à blanc »).
+#
+# Jetons : lecture seule partout ; écriture (`contents`, `id-token`,
+# `attestations`) au seul job `publish`, qui fait aussi le contrôle après
+# publication (un brouillon n'est visible que d'un jeton en écriture).
+# Aucun secret ajouté : seul `github.token` est utilisé.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Tag, version, CHANGELOG (C-REL-01)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo xtask release-check
+        if: github.ref_type == 'tag'
+        run: cargo xtask release-check "$GITHUB_REF_NAME"
+
+      - name: Notes de la release
+        if: github.ref_type == 'tag'
+        run: |
+          cargo xtask release-notes "$GITHUB_REF_NAME" > release-notes.md
+          cat release-notes.md
+
+      - uses: actions/upload-artifact@v4
+        if: github.ref_type == 'tag'
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
+
+  build:
+    name: Build
+    needs: check
+    uses: ./.github/workflows/desktop-build.yml
+
+  verify-macos:
+    # Un binaire qui ouvrirait une fenêtre au lieu de sortir bloquerait le
+    # job : délai court.
+    timeout-minutes: 15
+    name: Vérification macOS (C-REL-02, C-REL-03)
+    needs: build
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: planrs-${{ needs.build.outputs.version }}-macos-universal.dmg
+
+      - name: DMG, architectures, signature, --version
+        run: |
+          dmg="planrs-$VERSION-macos-universal.dmg"
+          hdiutil verify "$dmg"
+          mnt="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$dmg"
+          trap 'hdiutil detach "$mnt" || true' EXIT
+          ls -la "$mnt" "$mnt/cli"
+          codesign --verify --deep --strict --verbose=2 "$mnt/planrs.app"
+          id="$(plutil -extract CFBundleIdentifier raw "$mnt/planrs.app/Contents/Info.plist")"
+          [ "$id" = "io.github.theodu78.planrs" ] || { echo "::error::CFBundleIdentifier $id"; exit 1; }
+          test -f "$mnt/planrs.app/Contents/Resources/planrs.icns"
+          test -f "$mnt/LISEZ-MOI.txt"
+          for bin in "$mnt/planrs.app/Contents/MacOS/planrs-desktop" "$mnt/cli/planrs"; do
+            archs="$(lipo -archs "$bin")"
+            read -r -a list <<< "$archs"
+            sorted="$(printf '%s\n' "${list[@]}" | LC_ALL=C sort | xargs)"
+            [ "$sorted" = "arm64 x86_64" ] || { echo "::error::$bin : architectures « $archs »"; exit 1; }
+            out="$("$bin" --version)"
+            [ "$out" = "planrs $VERSION" ] || { echo "::error::$bin --version : « $out »"; exit 1; }
+            # Tranche x86_64 aussi, si Rosetta est présent sur le runner.
+            if arch -x86_64 /usr/bin/true 2>/dev/null; then
+              out="$(arch -x86_64 "$bin" --version)"
+              [ "$out" = "planrs $VERSION" ] || { echo "::error::$bin (x86_64) --version : « $out »"; exit 1; }
+            fi
+          done
+          echo "C-REL-02, C-REL-03 (macOS) : OK"
+
+  verify-windows:
+    # Un binaire qui ouvrirait une fenêtre au lieu de sortir bloquerait le
+    # job : délai court.
+    timeout-minutes: 15
+    name: Vérification Windows (C-REL-03)
+    needs: build
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: planrs-${{ needs.build.outputs.version }}-windows-x86_64.zip
+
+      - name: Contenu du zip, --version
+        run: |
+          dir="planrs-$VERSION-windows-x86_64"
+          7z x "$dir.zip"
+          ls -la "$dir"
+          test -f "$dir/README.txt"
+          # planrs-desktop.exe est du sous-système fenêtré : sa sortie n'est
+          # lisible que redirigée, ce que fait la substitution de commande.
+          for exe in planrs-desktop.exe planrs.exe; do
+            out="$("./$dir/$exe" --version | tr -d '\r')"
+            [ "$out" = "planrs $VERSION" ] || { echo "::error::$exe --version : « $out »"; exit 1; }
+          done
+          echo "C-REL-03 (Windows) : OK"
+
+  verify-linux:
+    # Un binaire qui ouvrirait une fenêtre au lieu de sortir bloquerait le
+    # job : délai court.
+    timeout-minutes: 15
+    name: Vérification Linux (C-REL-03, C-REL-04)
+    needs: build
+    runs-on: ubuntu-24.04
+    # Lancés sur la plus ancienne glibc visée : la preuve que les binaires y
+    # tournent complète la lecture des symboles.
+    container: debian:bookworm
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: Outils du conteneur
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends binutils desktop-file-utils
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: planrs-${{ needs.build.outputs.version }}-linux-x86_64.tar.gz
+
+      - name: Contenu, glibc, --version
+        shell: bash
+        run: |
+          dir="planrs-$VERSION-linux-x86_64"
+          tar xzf "$dir.tar.gz"
+          ls -la "$dir"
+          test -f "$dir/planrs.png"
+          desktop-file-validate "$dir/planrs.desktop"
+          for bin in planrs-desktop planrs; do
+            path="$dir/$bin"
+            max="$(objdump -T "$path" | grep -o 'GLIBC_[0-9.]*' | sed 's/^GLIBC_//' | sort -V | tail -n 1)"
+            echo "$bin : GLIBC_$max au plus"
+            top="$(printf '%s\n2.36\n' "$max" | sort -V | tail -n 1)"
+            [ "$top" = "2.36" ] || { echo "::error::$bin exige GLIBC_$max (> 2.36)"; exit 1; }
+            out="$(timeout 60 "./$path" --version)"
+            [ "$out" = "planrs $VERSION" ] || { echo "::error::$bin --version : « $out »"; exit 1; }
+          done
+          echo "C-REL-03, C-REL-04 (Linux) : OK"
+
+  verify-web:
+    timeout-minutes: 15
+    name: Vérification web (C-REL-05, C-REL-06)
+    needs: build
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: planrs-${{ needs.build.outputs.version }}-web.tar.gz
+
+      - name: Taille du .wasm (gzip -9)
+        run: |
+          tar xzf "planrs-$VERSION-web.tar.gz"
+          ls -la dist
+          test -f dist/index.html
+          wasm="$(ls dist/*.wasm)"
+          raw="$(wc -c < "$wasm")"
+          gz="$(gzip -9 -c "$wasm" | wc -c)"
+          budget=$((4 * 1024 * 1024))
+          {
+            echo "### Web : taille du .wasm (C-REL-05)"
+            echo ""
+            echo "| Fichier | Octets | gzip -9 | Budget |"
+            echo "|---|---|---|---|"
+            echo "| $(basename "$wasm") | $raw | $gz | $budget |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "wasm : $raw octets, gzip -9 : $gz octets (budget $budget)"
+          # Porte bloquante depuis le lot L13 (C-REL-05) ; 4 Mio depuis le
+          # 2026-10-27 (ADR-0016, budget du web : 3,52 Mo mesurés).
+          if [ "$gz" -gt "$budget" ]; then
+            echo "::error::.wasm gzip -9 = $gz octets > 4 Mio (C-REL-05)"
+            exit 1
+          fi
+
+      - name: Démarrage du wasm dans Chromium headless
+        run: |
+          python3 -m http.server 8080 --bind 127.0.0.1 -d dist > server.log 2>&1 &
+          sleep 2
+          browser="$(command -v chromium || command -v chromium-browser || command -v google-chrome)"
+          echo "navigateur : $browser"
+          for attempt in 1 2 3; do
+            timeout 120 "$browser" --headless=new --no-sandbox --disable-gpu \
+              --virtual-time-budget=30000 --dump-dom http://127.0.0.1:8080/ > dom.html 2> chrome.log || true
+            if grep -q 'data-planrs-started="1"' dom.html; then
+              echo "C-REL-06 : OK (essai $attempt)"
+              exit 0
+            fi
+            echo "essai $attempt : attribut absent"
+          done
+          head -c 2000 dom.html; tail -n 40 chrome.log
+          echo "::error::data-planrs-started=\"1\" absent du DOM : le wasm n'a pas démarré"
+          exit 1
+
+  publish:
+    name: Publication et contrôle (C-REL-07, C-REL-08)
+    needs: [check, build, verify-macos, verify-windows, verify-linux, verify-web]
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: planrs-*
+          path: dist
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+
+      - name: SHA256SUMS
+        run: |
+          cd dist
+          ls -la
+          count="$(find . -maxdepth 1 -type f | wc -l)"
+          [ "$count" = "4" ] || { echo "::error::4 artefacts attendus, $count trouvés"; exit 1; }
+          sha256sum planrs-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/planrs-*
+            dist/SHA256SUMS
+
+      - name: gh release create
+        run: |
+          flags=()
+          case "$TAG" in *-test.*) flags+=(--draft) ;; esac
+          case "$TAG" in *-*) flags+=(--prerelease) ;; esac
+          echo "options : ${flags[*]}"
+          gh release create "$TAG" dist/* --verify-tag --title "planrs $VERSION" \
+            --notes-file release-notes.md "${flags[@]}"
+
+      # Contrôle de ce qui est réellement publié (pas des fichiers locaux).
+      - name: Contrôle après publication
+        run: |
+          mkdir published
+          gh release download "$TAG" --dir published
+          (cd published && sha256sum -c SHA256SUMS)
+          echo "C-REL-07 : OK"
+          names="$(gh release view "$TAG" --json assets --jq '[.assets[].name] | sort | join(" ")')"
+          expected="$(printf '%s\n' SHA256SUMS \
+            "planrs-$VERSION-linux-x86_64.tar.gz" \
+            "planrs-$VERSION-macos-universal.dmg" \
+            "planrs-$VERSION-web.tar.gz" \
+            "planrs-$VERSION-windows-x86_64.zip" | LC_ALL=C sort | xargs)"
+          [ "$names" = "$expected" ] || { echo "::error::artefacts « $names » ≠ « $expected »"; exit 1; }
+          gh attestation verify "published/planrs-$VERSION-linux-x86_64.tar.gz" --repo "$GH_REPO"
+          echo "C-REL-08 : OK"

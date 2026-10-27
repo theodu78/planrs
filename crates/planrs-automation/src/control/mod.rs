@@ -14,24 +14,32 @@
 //!    son document (`workspace::call_with`), toute écriture après la
 //!    validation de l'utilisateur ;
 //! 4. à la fermeture, le garde et la poignée suppriment fichier et socket.
+//!
+//! Transport (J8, lot L8, ADR-0016 D12) : socket Unix sous Unix, TCP en
+//! boucle locale sous Windows ([`tcp`], [`Endpoint`], [`Transport`]) ; même
+//! protocole, même jeton par document, client commun.
 
 mod client;
+mod endpoint;
 mod frame;
 mod listener;
 mod relay;
 mod rendezvous;
+pub mod tcp;
 
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub use client::{RELAY_MARGIN, RelayClient, RelayError};
+pub use endpoint::{ControlStream, Endpoint, Transport};
 pub use frame::{
     Frame, LineError, MAX_LINE_BYTES, Method, PROTOCOL_VERSION, Reply, WireError, codes, read_line_bounded,
-    to_line,
+    read_line_bounded_with, to_line,
 };
 pub use listener::{
     APPROVAL_TIMEOUT, ListenerHandle, ListenerOptions, RELAY_QUEUE, spawn_hello_listener,
-    spawn_hello_listener_in, spawn_listener_in, spawn_listener_with,
+    spawn_hello_listener_in, spawn_hello_listener_on, spawn_listener_in, spawn_listener_on,
+    spawn_listener_with,
 };
 pub use relay::{CallState, RelayCall, RelayKind, Waker};
 pub use rendezvous::{
@@ -60,6 +68,10 @@ pub enum ControlError {
     /// L'application a refusé la requête.
     #[error("canal de contrôle : refus {}", .0.code)]
     Refused(WireError),
+    /// Adresse de rendez-vous illisible ou hors boucle locale
+    /// (`control.bad_endpoint`, J8, C-CTL-11).
+    #[error("adresse du canal de contrôle invalide : {0}")]
+    BadEndpoint(String),
 }
 
 impl ControlError {
@@ -120,10 +132,6 @@ fn hex_value(d: u8) -> Option<u8> {
 }
 
 /// Comparaison en temps constant (boucle XOR sur les 32 octets).
-#[cfg_attr(
-    not(unix),
-    allow(dead_code, reason = "utilisée par l'écouteur, absent hors Unix en J4")
-)]
 fn token_matches(expected: &[u8; TOKEN_BYTES], given: &str) -> bool {
     // Un jeton mal formé est comparé à zéro pour garder la même boucle.
     let (well_formed, given) = match decode_token(given) {

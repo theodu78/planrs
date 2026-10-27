@@ -463,7 +463,7 @@ mod tests {
     #[test]
     fn insert_before_first_in_id_order_or_end() {
         let app = demo();
-        let rows = app.rows().unwrap();
+        let rows = app.visible_rows().unwrap();
         let (a, b) = (uid_at(&app, 4), uid_at(&app, 2));
         let mut sel = Selection::single(Some(a));
         sel.click(b, SelectMode::Toggle, rows);
@@ -483,7 +483,7 @@ mod tests {
     #[test]
     fn delete_summary_skips_its_block_and_asks() {
         let app = demo();
-        let rows = app.rows().unwrap();
+        let rows = app.visible_rows().unwrap();
         let s = first_summary(&app);
         let end = block_end(project(&app), s);
         assert!(end > s + 1);
@@ -544,7 +544,7 @@ mod tests {
     #[test]
     fn link_and_unlink_ops() {
         let app = demo();
-        let rows = app.rows().unwrap();
+        let rows = app.visible_rows().unwrap();
         let (a, b, c) = (uid_at(&app, 6), uid_at(&app, 2), uid_at(&app, 4));
         let mut sel = Selection::single(Some(a));
         sel.click(b, SelectMode::Toggle, rows);
@@ -609,7 +609,7 @@ mod tests {
     #[test]
     fn move_up_down_neighbour_sibling() {
         let app = demo();
-        let rows = app.rows().unwrap();
+        let rows = app.visible_rows().unwrap();
         let p = project(&app);
         let s = first_summary(&app);
         // Deux premières sous-tâches de la première récapitulative.

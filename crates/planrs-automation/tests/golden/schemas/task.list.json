@@ -3,6 +3,13 @@
   "additionalProperties": false,
   "description": "`task.list` : tâches dans l'ordre des ID, filtrées et paginées.",
   "properties": {
+    "active": {
+      "description": "Tâches actives (`true`) ou inactives (`false`) (J8, R-251).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "critical": {
       "description": "Tâches critiques seulement.",
       "type": "boolean"
@@ -24,6 +31,13 @@
         "null"
       ]
     },
+    "incomplete": {
+      "description": "Feuilles planifiées non achevées (< 100 %) seulement (`true`), ou\nles autres tâches (`false`) (J8, R-251).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "late": {
       "description": "Tâches en retard seulement : fin planifiée après l'échéance ou après\nla fin de la ligne de base 0, non achevée à fin passée ou non\ncommencée à début passé à la date d'état.",
       "type": "boolean"
@@ -35,6 +49,21 @@
       "minimum": 1,
       "type": [
         "integer",
+        "null"
+      ]
+    },
+    "milestone": {
+      "description": "Jalons seulement (`true`) ou hors jalons (`false`) (J8, R-251).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "name_contains": {
+      "description": "Nom contenant ce texte, sans casse ni accents (J8, R-251 ; au plus\n256 caractères).",
+      "maxLength": 256,
+      "type": [
+        "string",
         "null"
       ]
     },

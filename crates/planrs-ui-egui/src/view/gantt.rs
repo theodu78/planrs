@@ -1,33 +1,50 @@
-//! Corps du Gantt : grille, jours chômés, barres, jalons, récapitulatives,
-//! chemin critique, date d'état et liens ; Gantt de suivi (ligne de base 0,
-//! bande d'avancement) et infobulle `explain_date` d'une barre (J7, lot L7).
+//! Corps du Gantt : bandes, jours chômés, grille, barres, jalons,
+//! récapitulatives, chemin critique, date d'état, aujourd'hui, liens et
+//! textes autour des barres ; Gantt de suivi (ligne de base 0, bande
+//! d'avancement) et infobulle `explain_date` d'une barre (J7, lot L7).
 //!
-//! Ordre des couches : fond → jours chômés → grille → sélection → date
-//! d'état → liens → lignes de base → barres → bandes d'avancement. Le tracé
-//! d'un lien ([`link_path`]), la mise en page d'une ligne de suivi
-//! ([`tracking_layout`]) et la bande d'avancement ([`progress_span`]) sont
-//! des fonctions pures, testées sans egui. Aucune date n'est calculée ici :
-//! début, fin, ligne de base et `Stop` viennent du moteur (règle 3).
+//! Écran stylé (J8, lot L11, ADR-0016 D5) : le style effectif du document
+//! (`ScreenStyle`) donne les couleurs, la densité, la forme et la hauteur de
+//! chaque rôle de barre ; la géométrie vient des fonctions partagées avec le
+//! SVG et le PDF (`planrs_render::geometry` : rôle, forme, ordonnées et
+//! hauteurs en 1/16 px, choix du tracé des liens, placement des textes,
+//! hachures), les abscisses des instants de la projection `f32` de
+//! [`TimeAxis`] (même 1/16 px à l'arrondi près, P55). Le Gantt de suivi
+//! garde la mise en page en tiers de J7 (H-UI-22).
+//!
+//! Ordre des couches : fond → bandes → jours chômés → grille → traits de
+//! lignes → sélection → date d'état, aujourd'hui → liens → lignes de base →
+//! barres → motifs → bandes d'avancement → textes. Aucune date n'est
+//! calculée ici : début, fin, ligne de base et `Stop` viennent du moteur,
+//! les textes de `planrs_automation::render_text` (règle 3).
 
 use std::ops::Range;
 
-use egui::{Id, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, pos2};
+use egui::{Color32, FontFamily, FontId, Id, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, pos2};
 use planrs_automation::command::TaskRef;
 use planrs_automation::command::params::ExplainParams;
 use planrs_automation::gesture::GestureKind;
 use planrs_automation::json::SideJson;
+use planrs_automation::render_text::SessionTexts;
 use planrs_core::{LinkType, TaskUid, Weekday};
+use planrs_render::geometry::{
+    self, BarGeom as Geom16, FontRef, FontWeight, InterMetrics, Rect16, ResolvedTexts, RowGeomInput,
+};
+use planrs_render::style::{BarRole, BarShape, ColorTokens, Pattern, PlanStyle, Rgb, RowBanding, Variant};
 
 use super::{BarDrag, FrameCtx};
 use crate::app::OpenDocument;
 use crate::document::project_calendar;
 use crate::edit::text_language;
-use crate::geom::{BarZone, GanttHit, bar_zone, index_to_f32, near_polyline, row_at};
+use crate::geom::{
+    BarZone, GanttHit, bar_zone, f32_to_bounded_i64, i64_to_f32, index_to_f32, near_polyline, row_at,
+};
 use crate::i18n::{Arg, Language, Texts, error_text_id};
 use crate::query::{Query, QueryValue};
+use crate::row_view::{DisplayRow, VisibleRows};
 use crate::rows::{Row, RowKind, RowModel};
 use crate::state::GanttStyle;
-use crate::theme::Palette;
+use crate::theme::{PLAN_FAMILY, PLAN_FAMILY_STRONG};
 use crate::timescale::{TierUnit, TimeAxis, TimeScaleZoom, tier_spans};
 
 /// Extrémités écran d'une barre (ou d'un jalon : `start_x == finish_x`).
@@ -148,6 +165,20 @@ fn path_of(points: &[Pos2], dir: ArrowDir) -> LinkPath {
 /// non finie donne un tracé vide.
 #[must_use]
 pub fn link_path(kind: LinkType, p: BarEnds, s: BarEnds, m: &LinkMetrics) -> LinkPath {
+    link_path_with(kind, p, s, m, None)
+}
+
+/// [`link_path`] dont le choix direct / replié (FS et SF) est imposé par
+/// `folded` (choix de la géométrie partagée, J8 lot L11) ; `None` : choix
+/// sur les abscisses écran, comme J7.
+#[must_use]
+pub fn link_path_with(
+    kind: LinkType,
+    p: BarEnds,
+    s: BarEnds,
+    m: &LinkMetrics,
+    folded: Option<bool>,
+) -> LinkPath {
     let values = [
         p.start_x,
         p.finish_x,
@@ -172,7 +203,7 @@ pub fn link_path(kind: LinkType, p: BarEnds, s: BarEnds, m: &LinkMetrics) -> Lin
     match kind {
         LinkType::FinishToStart => {
             let xa = s0 + stub.min((s1 - s0) / 2.0);
-            if xa >= p1 + stub / 2.0 {
+            if folded.map_or(xa >= p1 + stub / 2.0, |f| !f) {
                 let edge = ys - dir * m.bar_half_h;
                 let arrow = if below { ArrowDir::Down } else { ArrowDir::Up };
                 path_of(&[pos2(p1, yp), pos2(xa, yp), pos2(xa, edge)], arrow)
@@ -208,7 +239,7 @@ pub fn link_path(kind: LinkType, p: BarEnds, s: BarEnds, m: &LinkMetrics) -> Lin
         }
         LinkType::StartToFinish => {
             let xl = p0 - stub;
-            if s1 + stub <= xl {
+            if folded.map_or(s1 + stub <= xl, |f| !f) {
                 path_of(
                     &[pos2(p0, yp), pos2(xl, yp), pos2(xl, ys), pos2(s1, ys)],
                     ArrowDir::Left,
@@ -311,163 +342,470 @@ pub fn progress_span(x0: f32, x1: f32, stop_x: f32) -> Option<(f32, f32)> {
     (right > x0).then_some((x0, right))
 }
 
-/// Géométrie écran d'une barre, déjà bornée et finie.
-#[derive(Clone, Copy, Debug)]
-struct BarGeom {
-    /// Début.
-    x0: f32,
-    /// Fin (≥ `x0 + 1` pour une barre, `= x0` pour un jalon).
-    x1: f32,
-    /// Centre vertical de la barre.
-    yc: f32,
-    /// Demi-hauteur de la barre.
-    half_h: f32,
-    /// Nature de la ligne.
-    kind: RowKind,
-    /// Chemin critique.
-    critical: bool,
+/// Débord admis d'une barre hors de la plage avant d'être rognée (64 px,
+/// comme la géométrie partagée).
+const OVERFLOW_PX: f32 = 64.0;
+
+/// Couleur egui d'une couleur du style.
+const fn color(c: Rgb) -> Color32 {
+    Color32::from_rgb(c.0, c.1, c.2)
 }
 
-impl BarGeom {
-    /// Barre d'une ligne dont le haut est à `top`, ou `None` (ligne vide,
-    /// pas de dates, valeurs non finies). Gantt de suivi et ligne de base
-    /// enregistrée : barre courante au-dessus du tiers inférieur
-    /// (H-UI-22) ; sinon centrée.
-    fn of(row: &Row, axis: &TimeAxis, top: f32, m: &LinkMetrics, tracking: bool) -> Option<Self> {
-        let (start, finish) = row.bar?;
-        if row.kind == RowKind::Null {
-            return None;
+/// Contexte de géométrie du Gantt à une image (J8, lot L11) : style
+/// effectif, variante, mode suivi, surbrillance du chemin critique.
+#[derive(Clone, Copy, Debug)]
+pub struct GanttGeo<'a> {
+    /// Style effectif du document.
+    pub style: &'a PlanStyle,
+    /// Variante (thème résolu).
+    pub variant: Variant,
+    /// Gantt de suivi (H-UI-22).
+    pub tracking: bool,
+    /// Surbrillance du chemin critique (H-UI-38) : sans elle, barres et
+    /// liens critiques prennent le style des non critiques.
+    pub highlight_critical: bool,
+}
+
+impl<'a> GanttGeo<'a> {
+    /// Contexte de l'image `fc`, sur le style `style` (copie du style de
+    /// `fc`, pour laisser `fc` modifiable pendant le dessin).
+    #[must_use]
+    pub fn new(fc: &FrameCtx<'_>, style: &'a PlanStyle) -> Self {
+        Self {
+            style,
+            variant: fc.task_view.style.variant,
+            tracking: fc.state.gantt_style == GanttStyle::Tracking,
+            highlight_critical: fc.task_view.state.highlight_critical,
         }
-        let x0 = axis.x(start);
-        let x1 = if row.kind == RowKind::Milestone {
-            x0
-        } else {
-            axis.x(finish).max(x0 + 1.0)
-        };
-        let (yc, half_h) = if tracking && row.baseline.is_some() {
-            let (a, b) = tracking_layout(top, m.row_h).current;
-            (f32::midpoint(a, b), (b - a) / 2.0)
-        } else {
-            (top + m.row_h / 2.0, m.bar_half_h)
-        };
-        (x0.is_finite() && x1.is_finite() && yc.is_finite() && half_h.is_finite()).then_some(Self {
-            x0,
-            x1,
-            yc,
-            half_h,
-            kind: row.kind,
-            critical: row.critical,
-        })
     }
 
-    /// Demi-diagonale du losange d'un jalon.
-    fn diamond_half(&self) -> f32 {
-        self.half_h + 1.0
+    /// Hauteur d'une ligne en 1/16 px (densité du style).
+    fn row_h16(&self) -> i64 {
+        geometry::row_h16(self.style)
     }
 
+    /// Hauteur d'une ligne (densité du style : 18, 22 ou 28 px).
+    #[must_use]
+    pub fn row_h(&self) -> f32 {
+        i64_to_f32(self.row_h16()) / 16.0
+    }
+
+    /// Couleurs de la variante.
+    fn tokens(&self) -> &'a ColorTokens {
+        self.style.tokens(self.variant)
+    }
+}
+
+/// Rôle de la barre d'une ligne (même ordre que
+/// `planrs_render::geometry::bar_role`) : exclue ⇒ `Inactive` (H-UI-37) ;
+/// récapitulative ; jalon ; manuelle ⇒ `Manual` (barre en contour,
+/// H-UI-36) ; critique ; tâche. Sans surbrillance du critique (H-UI-38),
+/// les rôles critiques deviennent leurs rôles ordinaires. Ligne vide :
+/// aucun rôle.
+#[must_use]
+pub const fn row_role(row: &Row, highlight_critical: bool) -> Option<BarRole> {
+    let critical = row.critical && highlight_critical;
+    Some(match row.kind {
+        RowKind::Null => return None,
+        RowKind::Excluded => BarRole::Inactive,
+        RowKind::Summary if critical => BarRole::SummaryCritical,
+        RowKind::Summary => BarRole::Summary,
+        RowKind::Milestone if critical => BarRole::MilestoneCritical,
+        RowKind::Milestone => BarRole::Milestone,
+        RowKind::Leaf if row.manual => BarRole::Manual,
+        RowKind::Leaf if critical => BarRole::Critical,
+        RowKind::Leaf => BarRole::Task,
+    })
+}
+
+/// Entrée de la géométrie partagée pour une ligne : les valeurs du moteur
+/// lues par `geometry::row_geom_input`, prises dans le modèle de lignes
+/// (P55). Ligne de base et avancement seulement dans le Gantt de suivi (vue
+/// standard : barres seules, comme J7).
+#[must_use]
+pub fn row_input(row: &Row, geo: &GanttGeo<'_>) -> Option<RowGeomInput> {
+    let role = row_role(row, geo.highlight_critical)?;
+    let tracking = geo.tracking;
+    Some(RowGeomInput {
+        uid: row.uid,
+        role,
+        start: row.bar.map(|(start, _)| start),
+        finish: row.bar.map(|(_, finish)| finish),
+        percent: if tracking {
+            u16::try_from(row.percent.get().clamp(0, 10_000)).unwrap_or(0)
+        } else {
+            0
+        },
+        stop: if tracking { row.stop } else { None },
+        baseline: if tracking { row.baseline } else { None },
+    })
+}
+
+/// Barre d'une ligne à l'écran : géométrie partagée et sa projection.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScreenBar {
+    /// Géométrie partagée (1/16 px ; abscisses depuis le début de la
+    /// plage, ordonnées depuis le haut de la ligne affichée 0).
+    pub g: Geom16,
+    /// Rectangle écran englobant (losange et crochets compris).
+    pub rect: Rect,
+    /// Centre vertical écran (attache des liens).
+    pub yc: f32,
+    /// Demi-hauteur de la barre (survol, découpe).
+    pub half: f32,
+    /// Demi-hauteur d'entrée d'une flèche par le dessus ou le dessous.
+    pub link_half: f32,
+    /// Nature de la ligne.
+    pub kind: RowKind,
+}
+
+impl ScreenBar {
     /// Extrémités vues par les liens (losange pour un jalon).
     fn ends(&self) -> BarEnds {
-        if self.kind == RowKind::Milestone {
-            let d = self.diamond_half();
-            BarEnds {
-                start_x: self.x0 - d,
-                finish_x: self.x0 + d,
-                y: self.yc,
-            }
-        } else {
-            BarEnds {
-                start_x: self.x0,
-                finish_x: self.x1,
-                y: self.yc,
-            }
+        BarEnds {
+            start_x: self.rect.left(),
+            finish_x: self.rect.right(),
+            y: self.yc,
         }
     }
 
-    /// Hors de la découpe horizontale (marge comprise).
+    /// Hors de la découpe horizontale (marge comprise, comme J7).
     fn culled(&self, clip: Rect) -> bool {
-        let d = self.diamond_half();
-        self.x1 + d < clip.left() - CULL_MARGIN || self.x0 - d > clip.right() + CULL_MARGIN
+        let d = if self.g.shape == BarShape::Diamond {
+            0.0
+        } else {
+            self.half + 1.0
+        };
+        self.rect.right() + d < clip.left() - CULL_MARGIN || self.rect.left() - d > clip.right() + CULL_MARGIN
     }
 
-    /// Zone de survol de l'infobulle : la barre (losange d'un jalon) et
-    /// 2 points autour.
+    /// Zone de survol de l'infobulle et du clic : la barre (losange d'un
+    /// jalon) et 2 points autour.
     fn hover_rect(&self) -> Rect {
-        let d = if self.kind == RowKind::Milestone {
-            self.diamond_half()
-        } else {
-            0.0
-        };
         Rect::from_min_max(
-            pos2(self.x0 - d - 2.0, self.yc - self.half_h - 2.0),
-            pos2(self.x1 + d + 2.0, self.yc + self.half_h + 2.0),
+            pos2(self.rect.left() - 2.0, self.yc - self.half - 2.0),
+            pos2(self.rect.right() + 2.0, self.yc + self.half + 2.0),
         )
     }
 }
 
-/// Haut écran de la ligne `i`.
-fn row_top(origin: Pos2, i: usize, row_h: f32) -> f32 {
-    origin.y + index_to_f32(i) * row_h
+/// Barre de la ligne affichée `i` (haut de la ligne 0 en `origin`).
+///
+/// Rôle, forme, ordonnées et hauteurs viennent de
+/// `geometry::bar_geom` sur l'axe entier de `axis` ; les abscisses des
+/// instants de la projection `f32` de `axis`, par les mêmes règles (rognage
+/// à 64 px hors de la plage, largeur d'au moins 1 px, losange centré sur le
+/// début). Gantt de suivi avec ligne de base : barre courante dans le haut
+/// de la ligne, en tiers comme J7 (H-UI-22). `None` : ligne vide ou sans
+/// dates, valeurs non finies.
+#[must_use]
+pub fn screen_bar(
+    row: &Row,
+    axis: &TimeAxis,
+    origin: Pos2,
+    i: usize,
+    geo: &GanttGeo<'_>,
+) -> Option<ScreenBar> {
+    let input = row_input(row, geo)?;
+    let start = input.start?;
+    let row_h16 = geo.row_h16();
+    let top16 = i64::try_from(i).ok()?.checked_mul(row_h16)?;
+    let g = geometry::bar_geom(&input, axis.axis16(), geo.style, top16);
+    let lo = axis.left() - OVERFLOW_PX;
+    let hi = axis.left() + axis.content_width() + OVERFLOW_PX;
+    let clamp_x = |x: f32| x.max(lo).min(hi);
+    let to_y = |v: i64| origin.y + i64_to_f32(v) / 16.0;
+    let x0 = clamp_x(axis.x(start));
+    let x1 = clamp_x(axis.x(input.finish.unwrap_or(start)));
+    let link_half = i64_to_f32(g.link_half16) / 16.0;
+    let (yc, half) = if geo.tracking && row.baseline.is_some() {
+        let row_top = origin.y + index_to_f32(i) * geo.row_h();
+        let (a, b) = tracking_layout(row_top, geo.row_h()).current;
+        (f32::midpoint(a, b), (b - a) / 2.0)
+    } else {
+        (to_y(g.yc16), link_half)
+    };
+    let rect = match (g.shape, geo.tracking && row.baseline.is_some()) {
+        (BarShape::Diamond, false) => {
+            let d = i64_to_f32(g.rect.w) / 32.0;
+            Rect::from_min_max(pos2(x0 - d, yc - d), pos2(x0 + d, yc + d))
+        }
+        (BarShape::Diamond, true) => {
+            let d = half + 1.0;
+            Rect::from_min_max(pos2(x0 - d, yc - d), pos2(x0 + d, yc + d))
+        }
+        (BarShape::Bracket, true) => {
+            Rect::from_min_max(pos2(x0, yc - half), pos2(x1.max(x0 + 1.0), yc + 0.6 * half))
+        }
+        (BarShape::Bar | BarShape::Line, true) => {
+            Rect::from_min_max(pos2(x0, yc - half), pos2(x1.max(x0 + 1.0), yc + half))
+        }
+        (BarShape::Bar | BarShape::Line | BarShape::Bracket, false) => Rect::from_min_max(
+            pos2(x0, to_y(g.rect.y)),
+            pos2(x1.max(x0 + 1.0), to_y(g.rect.bottom())),
+        ),
+    };
+    let finite = rect.is_finite() && yc.is_finite() && half.is_finite();
+    finite.then_some(ScreenBar {
+        g,
+        rect,
+        yc,
+        half,
+        link_half,
+        kind: row.kind,
+    })
 }
 
-/// Formes d'une barre (sans contrôle de culling).
-fn bar_shapes(b: &BarGeom, palette: &Palette, out: &mut Vec<Shape>) {
-    let h = b.half_h;
-    let fill = if b.critical { palette.critical } else { palette.bar };
-    match b.kind {
-        RowKind::Null => {}
-        RowKind::Leaf => {
-            let rect = Rect::from_min_max(pos2(b.x0, b.yc - h), pos2(b.x1, b.yc + h));
-            let outline = if b.critical {
-                palette.critical
-            } else {
-                palette.bar_outline
-            };
-            out.push(Shape::rect_filled(rect, 2.0, fill));
-            out.push(Shape::rect_stroke(
-                rect,
-                2.0,
-                Stroke::new(1.0, outline),
-                StrokeKind::Inside,
-            ));
-        }
-        RowKind::Summary => {
-            let top = b.yc - h;
-            let thick = (2.0 * h / 3.0).max(2.0);
-            let rect = Rect::from_min_max(pos2(b.x0, top), pos2(b.x1, top + thick));
-            // Récapitulative critique : rouge sombre (hypothèse H-UI).
-            let summary = if b.critical {
-                palette.summary_critical
-            } else {
-                palette.summary
-            };
-            out.push(Shape::rect_filled(rect, 0.0, summary));
-            let w = h.min((b.x1 - b.x0) / 2.0).max(1.0);
-            let depth = 1.6 * h;
-            let left = vec![pos2(b.x0, top), pos2(b.x0 + w, top), pos2(b.x0, top + depth)];
-            let right = vec![pos2(b.x1 - w, top), pos2(b.x1, top), pos2(b.x1, top + depth)];
-            out.push(Shape::convex_polygon(left, summary, Stroke::NONE));
-            out.push(Shape::convex_polygon(right, summary, Stroke::NONE));
-        }
-        RowKind::Milestone => {
-            let color = if b.critical {
-                palette.critical
-            } else {
-                palette.milestone
-            };
-            out.push(Shape::convex_polygon(
-                diamond(b.x0, b.yc, b.diamond_half()),
-                color,
-                Stroke::NONE,
-            ));
-        }
-        RowKind::Excluded => {
-            let stroke = Stroke::new(1.0, palette.text_weak);
-            if b.x1 - b.x0 <= 1.0 {
-                out.push(Shape::closed_line(diamond(b.x0, b.yc, b.diamond_half()), stroke));
-            } else {
-                let rect = Rect::from_min_max(pos2(b.x0, b.yc - h), pos2(b.x1, b.yc + h));
-                out.push(Shape::rect_stroke(rect, 2.0, stroke, StrokeKind::Inside));
+/// Tracé écran d'un lien entre deux barres : choix du tracé (direct ou
+/// replié) par la géométrie partagée, coordonnées par la projection de
+/// l'écran (J7, H-R7). `None` si la géométrie n'a pas de tracé.
+#[must_use]
+pub fn screen_link(kind: LinkType, p: &ScreenBar, s: &ScreenBar, row_h: f32) -> Option<LinkPath> {
+    let shared = geometry::link_path(&p.g, &s.g, kind);
+    if shared.points.is_empty() {
+        return None;
+    }
+    let folded = shared.points.len() >= 6;
+    let m = LinkMetrics {
+        row_h,
+        bar_half_h: s.link_half,
+        ..LinkMetrics::default()
+    };
+    Some(link_path_with(kind, p.ends(), s.ends(), &m, Some(folded)))
+}
+
+/// Parties d'une barre à crochets dans `r` : barre pleine des 5/12 de la
+/// hauteur (2 px au moins), pointes de 5/8 de la hauteur (bornées à la
+/// demi-largeur) jusqu'en bas (H-R14, comme la scène et J7).
+fn bracket_parts(r: Rect) -> (Rect, [Pos2; 3], [Pos2; 3]) {
+    let h = r.height();
+    let thick = (h * 5.0 / 12.0).max(2.0);
+    let w = (h * 5.0 / 8.0).min(r.width() / 2.0).max(1.0);
+    let (x0, x1, top) = (r.left(), r.right(), r.top());
+    let bar = Rect::from_min_max(pos2(x0, top), pos2(x1, top + thick));
+    let left = [pos2(x0, top), pos2(x0 + w, top), pos2(x0, top + h)];
+    let right = [pos2(x1 - w, top), pos2(x1, top), pos2(x1, top + h)];
+    (bar, left, right)
+}
+
+/// Contour d'une barre à crochets : barre pleine et pointes, d'un seul
+/// trait.
+fn bracket_outline(r: Rect) -> Vec<Pos2> {
+    let (bar, left, _) = bracket_parts(r);
+    let (x0, x1, top, bottom) = (r.left(), r.right(), r.top(), r.bottom());
+    let w = left[1].x - x0;
+    let h = (bottom - top).max(f32::EPSILON);
+    // Bord intérieur d'une pointe au bas de la barre pleine.
+    let inner = w - w * (bar.bottom() - top) / h;
+    vec![
+        pos2(x0, top),
+        pos2(x1, top),
+        pos2(x1, bottom),
+        pos2(x1 - inner, bar.bottom()),
+        pos2(x0 + inner, bar.bottom()),
+        pos2(x0, bottom),
+    ]
+}
+
+/// Formes d'une barre (sans contrôle de découpe) : couleurs et formes du
+/// rôle dans le style. Barre pleine : remplissage et trait intérieur de sa
+/// couleur de contour (sa couleur de remplissage à défaut), au moins 1 px,
+/// comme J7 ; motif « contour seul » : le trait seul (tâche manuelle,
+/// inactive) ; losange : rempli, ou contour seul.
+fn bar_shapes(b: &ScreenBar, geo: &GanttGeo<'_>, phase: Option<Rgb>, out: &mut Vec<Shape>) {
+    let c = geo.tokens();
+    let role = b.g.role;
+    let st = geo.style.bars.get(&role).copied();
+    let paint = c.bars.get(&role).copied();
+    // Couleur de phase (H-UI-65) : remplissage seulement, forme et contour
+    // du rôle gardés (comme la scène).
+    let phase = phase.filter(|_| planrs_render::geometry::phase_painted(role));
+    let fill_rgb = phase.unwrap_or_else(|| paint.map_or(c.text, |p| p.fill));
+    let fill = color(fill_rgb);
+    let outline = color(paint.and_then(|p| p.outline).unwrap_or(if phase.is_some() {
+        c.text_strong
+    } else {
+        fill_rgb
+    }));
+    let pattern = st.map_or(Pattern::Solid, |s| s.pattern);
+    let outline16 = st.map_or(0, |s| i64::from(s.outline16));
+    let stroke = Stroke::new(i64_to_f32(outline16.max(16)) / 16.0, outline);
+    let outline_only = pattern == Pattern::Outline;
+    let r = b.rect;
+    match b.g.shape {
+        BarShape::Bar | BarShape::Line => {
+            let radius = (i64_to_f32(st.map_or(0, |s| i64::from(s.radius16))) / 16.0).min(r.height() / 2.0);
+            if !outline_only {
+                out.push(Shape::rect_filled(r, radius, fill));
             }
+            out.push(Shape::rect_stroke(r, radius, stroke, StrokeKind::Inside));
+        }
+        BarShape::Bracket => {
+            if outline_only {
+                out.push(Shape::closed_line(bracket_outline(r), stroke));
+            } else {
+                let (bar, left, right) = bracket_parts(r);
+                out.push(Shape::rect_filled(bar, 0.0, fill));
+                out.push(Shape::convex_polygon(left.to_vec(), fill, Stroke::NONE));
+                out.push(Shape::convex_polygon(right.to_vec(), fill, Stroke::NONE));
+                if outline16 > 0 {
+                    out.push(Shape::closed_line(bracket_outline(r), stroke));
+                }
+            }
+        }
+        BarShape::Diamond => {
+            let points = diamond(r.center().x, r.center().y, r.width() / 2.0);
+            if outline_only {
+                out.push(Shape::closed_line(points, stroke));
+            } else {
+                let edge = if outline16 > 0 { stroke } else { Stroke::NONE };
+                out.push(Shape::convex_polygon(points, fill, edge));
+            }
+        }
+    }
+}
+
+/// Seizièmes de pixel d'une longueur écran (bornée, jamais de panique).
+fn to16(v: f32) -> i64 {
+    f32_to_bounded_i64(v * 16.0, i64::from(i32::MAX))
+}
+
+/// Hachures ou points d'une barre au motif `Hatch` ou `Dots` (H-UI-44) :
+/// segments de `geometry::pattern_segments` découpés dans la barre (dans
+/// la barre pleine d'une récapitulative, dans le losange d'un jalon),
+/// calculés sur la partie visible seulement (pas des hachures gardé : le
+/// motif ne glisse pas au défilement). Trait de 1 px de la couleur de
+/// contour du rôle (le fond à défaut), comme la scène.
+fn hatch_shapes(b: &ScreenBar, geo: &GanttGeo<'_>, clip: Rect, out: &mut Vec<Shape>) {
+    let role = b.g.role;
+    let pattern = geo.style.bars.get(&role).map_or(Pattern::Solid, |s| s.pattern);
+    if !matches!(pattern, Pattern::Hatch | Pattern::Dots) {
+        return;
+    }
+    let c = geo.tokens();
+    let ink = color(c.bars.get(&role).and_then(|p| p.outline).unwrap_or(c.bg));
+    let mut area = b.rect;
+    if b.g.shape == BarShape::Bracket {
+        area = bracket_parts(area).0;
+    }
+    let diamond = b.g.shape == BarShape::Diamond;
+    // Repère local : coin haut-gauche de la barre, en 1/16 px.
+    let (ox, oy) = (area.left(), area.top());
+    let step = 64_i64;
+    let mut x0 = 0_i64;
+    let mut x1 = to16(area.width());
+    if !diamond {
+        // Partie visible, bord gauche recalé sur un multiple du pas.
+        let skip = to16(clip.left() - CULL_MARGIN - ox).max(0);
+        x0 = skip.saturating_sub(skip.rem_euclid(step));
+        x1 = x1.min(to16(clip.right() + CULL_MARGIN - ox));
+    }
+    if x1 <= x0 {
+        return;
+    }
+    let r = Rect16 {
+        x: x0,
+        y: 0,
+        w: x1.saturating_sub(x0),
+        h: to16(area.height()),
+    };
+    let stroke = Stroke::new(1.0, ink);
+    let at = |x: i64, y: i64| pos2(ox + i64_to_f32(x) / 16.0, oy + i64_to_f32(y) / 16.0);
+    for (ax, ay, bx, by) in geometry::pattern_segments(r, pattern == Pattern::Dots, diamond) {
+        out.push(Shape::line_segment([at(ax, ay), at(bx, by)], stroke));
+    }
+}
+
+/// Contexte des textes autour des barres à une image.
+struct TextCtx<'a> {
+    /// Peintre du Gantt (mise en page des textes).
+    painter: &'a egui::Painter,
+    /// Source des textes (moteur, règle 3).
+    src: &'a SessionTexts<'a>,
+    /// Projection.
+    axis: &'a TimeAxis,
+    /// Découpe du Gantt.
+    clip: Rect,
+}
+
+/// Textes autour d'une barre (champs du style pour son rôle) : valeurs de
+/// la source du moteur (règle 3), placés par `geometry::place_texts` dans
+/// la partie visible du Gantt (H-UI-46 : bascule, « … », jamais rognés),
+/// mesurés en Inter (H-R11), dessinés dans la police du planning, centrés
+/// verticalement sur la barre.
+fn text_shapes(
+    tc: &TextCtx<'_>,
+    bar: &ScreenBar,
+    uid: TaskUid,
+    phase: Option<Rgb>,
+    geo: &GanttGeo<'_>,
+    out: &mut Vec<Shape>,
+) {
+    use planrs_render::geometry::BarTextSource as _;
+    let Some(fields) = geo.style.texts.get(&bar.g.role) else {
+        return;
+    };
+    let strong = matches!(bar.g.role, BarRole::Summary | BarRole::SummaryCritical);
+    let font = FontRef {
+        weight: if strong {
+            FontWeight::SemiBold
+        } else {
+            FontWeight::Regular
+        },
+        size16: geo.style.font.size16,
+    };
+    let field = |f: Option<planrs_render::style::BarField>| f.and_then(|f| tc.src.bar_text(uid, f));
+    let texts = ResolvedTexts {
+        left: field(fields.left),
+        right: field(fields.right),
+        inside: field(fields.inside),
+        font,
+    };
+    if texts.left.is_none() && texts.right.is_none() && texts.inside.is_none() {
+        return;
+    }
+    let base = tc.axis.left();
+    let clip16 = (to16(tc.clip.left() - base), to16(tc.clip.right() - base));
+    let mut drawn = bar.g;
+    // Barre telle que dessinée (projection de l'écran) : les textes la
+    // longent au même 1/16 px que la scène, à l'arrondi près.
+    drawn.rect.x = to16(bar.rect.left() - base);
+    drawn.rect.w = to16(bar.rect.width());
+    let placed = geometry::place_texts(&drawn, &texts, &InterMetrics, clip16);
+    let tokens = geo.tokens();
+    let ink_rgb = if strong { tokens.text_strong } else { tokens.text };
+    let ink = color(ink_rgb);
+    // Dedans : encre la plus contrastée sur le remplissage de la barre
+    // (H-UI-61, comme la scène `Class::TextOnBar`).
+    let bar_fill = phase
+        .filter(|_| planrs_render::geometry::phase_painted(bar.g.role))
+        .or_else(|| tokens.bars.get(&bar.g.role).map(|p| p.fill))
+        .unwrap_or(tokens.bg);
+    let inside_ink = color(planrs_render::style::ink_on(bar_fill, ink_rgb, tokens.bg));
+    let family = match geo.style.font.family {
+        planrs_render::style::FontChoice::Inter if strong => FontFamily::Name(PLAN_FAMILY_STRONG.into()),
+        planrs_render::style::FontChoice::Inter => FontFamily::Name(PLAN_FAMILY.into()),
+        planrs_render::style::FontChoice::Interface => FontFamily::Proportional,
+    };
+    let size = f32::from(font.size16) / 16.0;
+    let bg = color(tokens.bg);
+    for item in placed.items {
+        let halo = item.side != planrs_render::geometry::TextSide::Inside;
+        let item_ink = if halo { ink } else { inside_ink };
+        let galley = tc
+            .painter
+            .layout_no_wrap(item.text, FontId::new(size, family.clone()), item_ink);
+        let left = tc.axis.x_of16(item.x16);
+        let top = bar.yc - galley.size().y / 2.0;
+        if left.is_finite() && top.is_finite() {
+            // H-UI-64 : fond sous l'étiquette, au-dessus des liens et de la
+            // grille (même boîte que la scène, `label_halo`).
+            if halo {
+                let size = galley.size();
+                let r = Rect::from_min_size(pos2(left - 1.0, top), egui::vec2(size.x + 2.0, size.y));
+                out.push(Shape::rect_filled(r, 0.0, bg));
+            }
+            out.push(Shape::galley(pos2(left, top), galley, item_ink));
         }
     }
 }
@@ -482,7 +820,7 @@ fn baseline_shape(
     top: f32,
     row_h: f32,
     clip: Rect,
-    color: egui::Color32,
+    color: Color32,
 ) -> Option<Shape> {
     if matches!(row.kind, RowKind::Null | RowKind::Excluded) {
         return None;
@@ -504,15 +842,15 @@ fn baseline_shape(
     })
 }
 
-/// Bande d'avancement d'une barre de tâche feuille (H-UI-22) : sur
-/// [début, `Stop`] (fin de la partie réelle, R-204), dans la moitié centrale
-/// de la barre.
-fn progress_shape(row: &Row, bar: &BarGeom, axis: &TimeAxis, color: egui::Color32) -> Option<Shape> {
-    if bar.kind != RowKind::Leaf {
+/// Bande d'avancement d'une barre de tâche feuille (H-UI-22, Gantt de
+/// suivi) : sur [début, `Stop`] (fin de la partie réelle, R-204), dans la
+/// moitié centrale de la barre.
+fn progress_shape(row: &Row, bar: &ScreenBar, axis: &TimeAxis, color: Color32) -> Option<Shape> {
+    if bar.kind != RowKind::Leaf || bar.g.shape != BarShape::Bar {
         return None;
     }
-    let (a, b) = progress_span(bar.x0, bar.x1, axis.x(row.stop?))?;
-    let h = (bar.half_h / 2.0).max(1.0);
+    let (a, b) = progress_span(bar.rect.left(), bar.rect.right(), axis.x(row.stop?))?;
+    let h = (bar.half / 2.0).max(1.0);
     let rect = Rect::from_min_max(pos2(a, bar.yc - h), pos2(b, bar.yc + h));
     rect.is_finite().then(|| Shape::rect_filled(rect, 0.0, color))
 }
@@ -531,12 +869,40 @@ fn path_visible(path: &LinkPath, clip: Rect) -> bool {
     bbox.is_finite() && bbox.expand(CULL_MARGIN).intersects(clip)
 }
 
+/// Indice de bande (0 ou 1) des lignes affichées `range` (H-UI-53) :
+/// zébrage par rang affiché ; bandes de phase par récapitulative de niveau
+/// 1 (une phase commence à chaque ligne de niveau 1 du modèle, comme la
+/// scène) ; `None` sans bandes.
+pub(crate) fn band_of(banding: RowBanding, rows: VisibleRows<'_>, i: usize, phases: &[u8]) -> Option<u8> {
+    match banding {
+        RowBanding::None => None,
+        RowBanding::Zebra => Some(u8::from(i % 2 == 1)),
+        RowBanding::Phase => phases.get(rows.model_row(DisplayRow::at(i))?.index()).copied(),
+    }
+}
+
+/// Phase (0 ou 1) de chaque ligne du modèle : bascule à chaque ligne de
+/// niveau 1 ; les lignes avant la première phase sont en phase 0.
+#[must_use]
+pub fn phases(model: &RowModel) -> Vec<u8> {
+    let mut out = Vec::with_capacity(model.len());
+    let mut phase: Option<u8> = None;
+    for i in 0..model.len() {
+        if model.row(i).is_some_and(|r| r.level == 1) {
+            phase = Some(phase.map_or(0, |p| u8::from(p == 0)));
+        }
+        out.push(phase.unwrap_or(0));
+    }
+    out
+}
+
 /// Jours chômés du calendrier du projet grisés (N3), aux zooms Jour et
 /// Semaine seulement : jours visibles consécutifs fusionnés, donc au plus un
 /// rectangle par jour visible. Calendrier compilé une fois par génération
 /// (`OpenDocument::calendars`) ; calendrier du projet en échec ou hors
 /// budget : rien (le diagnostic du moteur est au panneau). Rend le nombre
-/// de rectangles.
+/// de rectangles. À l'écran, le grisage suit J7 quel que soit
+/// `scale.shade_non_working` (réglage du SVG et du PDF).
 fn non_working_shapes(
     fc: &FrameCtx<'_>,
     axis: &TimeAxis,
@@ -544,7 +910,11 @@ fn non_working_shapes(
     clip: Rect,
     out: &mut Vec<Shape>,
 ) -> usize {
-    if !matches!(fc.state.zoom, TimeScaleZoom::Day | TimeScaleZoom::Week) {
+    let fine = matches!(fc.state.zoom, TimeScaleZoom::Day | TimeScaleZoom::Week);
+    // Échelles larges (H-UI-62, J8 lot L15) : périodes chômées d'au moins
+    // `LONG_OFF_DAYS` jours, si le style grise les jours chômés.
+    let long_only = !fine && fc.task_view.style.style.scale.shade_non_working;
+    if !fine && !long_only {
         return 0;
     }
     let Some(doc) = fc.doc else {
@@ -565,25 +935,46 @@ fn non_working_shapes(
             count = count.saturating_add(1);
         }
     };
-    let mut run: Option<(f32, f32)> = None;
-    for (day, x0, x1) in tier_spans(axis, TierUnit::Day, week_start, (clip.left(), clip.right())) {
+    // Période en cours : abscisses et nombre de jours.
+    let mut run: Option<(f32, f32, i64)> = None;
+    let min_days = if long_only {
+        planrs_render::geometry::LONG_OFF_DAYS
+    } else {
+        1
+    };
+    // Aux échelles larges, une période commencée avant la zone visible
+    // compte ses jours depuis le début : la zone est élargie d'autant.
+    let margin = if long_only { axis.px_per_day() * 40.0 } else { 0.0 };
+    for (day, x0, x1) in tier_spans(
+        axis,
+        TierUnit::Day,
+        week_start,
+        (clip.left() - margin, clip.right() + margin),
+    ) {
         let off = calendar.day_ranges(day).is_ok_and(<[_]>::is_empty);
         if off {
-            run = Some(run.map_or((x0, x1), |(a, _)| (a, x1)));
-        } else if let Some(span) = run.take() {
-            push(span, out);
+            run = Some(run.map_or((x0, x1, 1), |(a, _, n)| (a, x1, n.saturating_add(1))));
+        } else if let Some((a, b, n)) = run.take()
+            && n >= min_days
+        {
+            push((a, b), out);
         }
     }
-    if let Some(span) = run {
-        push(span, out);
+    if let Some((a, b, n)) = run
+        && n >= min_days
+    {
+        push((a, b), out);
     }
     count
 }
 
-/// Fond, jours chômés, grille verticale aux frontières des deux niveaux de
-/// l'échelle, bande de sélection et ligne de la date d'état.
+/// Fond, bandes (H-UI-53), jours chômés, grille verticale aux frontières
+/// des deux niveaux de l'échelle (selon `grid.major_v`, `grid.minor_v`),
+/// traits de lignes (`grid.row_lines`), bande de sélection, ligne de la date
+/// d'état et trait d'aujourd'hui (H-UI-54, `scale.today_mark`).
 fn background_shapes(
     fc: &FrameCtx<'_>,
+    geo: &GanttGeo<'_>,
     axis: &TimeAxis,
     origin: Pos2,
     range: &Range<usize>,
@@ -591,14 +982,29 @@ fn background_shapes(
     out: &mut Vec<Shape>,
 ) {
     let palette = fc.palette;
+    let c = geo.tokens();
     let row_h = fc.metrics.row_h;
     out.push(Shape::rect_filled(clip, 0.0, palette.background));
+    let row_rect = |i: usize| {
+        let top = origin.y + index_to_f32(i) * row_h;
+        Rect::from_min_max(pos2(clip.left(), top), pos2(clip.right(), top + row_h))
+    };
+    // H-UI-62 (J8 lot L15) : ni bandes ni traits de lignes dans la zone
+    // graphique (table seulement) ; quadrillage vertical seul.
+    let _ = c;
     let week_start = fc
         .doc
         .map_or(Weekday::Monday, |doc| doc.project().options.week_start_day);
     non_working_shapes(fc, axis, week_start, clip, out);
     let (major, minor) = fc.state.zoom.tiers();
-    for (unit, color) in [(minor, palette.grid), (major, palette.grid_major)] {
+    let grid = geo.style.grid;
+    for (unit, color, show) in [
+        (minor, palette.grid, grid.minor_v),
+        (major, palette.grid_major, grid.major_v),
+    ] {
+        if !show {
+            continue;
+        }
         let stroke = Stroke::new(1.0, color);
         for (_, x0, _) in tier_spans(axis, unit, week_start, (clip.left(), clip.right())) {
             let x = x0.round() + 0.5;
@@ -610,11 +1016,13 @@ fn background_shapes(
             }
         }
     }
-    if let Some(rows) = fc.rows.filter(|_| !fc.selected.is_empty()) {
+    if let Some(rows) = fc.visible().filter(|_| !fc.selected.is_empty()) {
         for i in range.clone() {
-            if rows.row(i).is_some_and(|r| fc.selected.contains(r.uid)) {
-                let top = origin.y + index_to_f32(i) * row_h;
-                let rect = Rect::from_min_max(pos2(clip.left(), top), pos2(clip.right(), top + row_h));
+            if rows
+                .row(DisplayRow::at(i))
+                .is_some_and(|r| fc.selected.contains(r.uid))
+            {
+                let rect = row_rect(i);
                 if rect.is_finite() {
                     out.push(Shape::rect_filled(rect, 0.0, palette.selection));
                 }
@@ -622,9 +1030,10 @@ fn background_shapes(
         }
     }
     if let Some(doc) = fc.doc {
-        let x = axis.x(doc.project().effective_status_date()).round() + 0.5;
-        if x.is_finite() && x >= clip.left() && x <= clip.right() {
-            let line = [pos2(x, clip.top()), pos2(x, clip.bottom())];
+        let status = doc.project().effective_status_date();
+        let sx = axis.x(status).round() + 0.5;
+        if sx.is_finite() && sx >= clip.left() && sx <= clip.right() {
+            let line = [pos2(sx, clip.top()), pos2(sx, clip.bottom())];
             out.extend(Shape::dashed_line(
                 &line,
                 Stroke::new(1.5, palette.status_date),
@@ -632,10 +1041,25 @@ fn background_shapes(
                 4.0,
             ));
         }
+        // Aujourd'hui (H-UI-54) : trait pointillé distinct, sauf s'il tombe
+        // sur la date d'état.
+        if geo.style.scale.today_mark {
+            let today = doc.project().current_date;
+            let tx = axis.x(today).round() + 0.5;
+            if (tx - sx).abs() > 0.5 && tx.is_finite() && tx >= clip.left() && tx <= clip.right() {
+                let line = [pos2(tx, clip.top()), pos2(tx, clip.bottom())];
+                out.extend(Shape::dashed_line(
+                    &line,
+                    Stroke::new(1.0, color(c.today_line)),
+                    2.0,
+                    3.0,
+                ));
+            }
+        }
     }
 }
 
-/// Repère du corps : projection, coin de la ligne 0, découpe, mesures.
+/// Repère du corps : projection, coin de la ligne 0, découpe, style.
 #[derive(Clone, Copy)]
 struct Body<'a> {
     /// Projection temps → pixels.
@@ -644,57 +1068,45 @@ struct Body<'a> {
     origin: Pos2,
     /// Découpe du corps.
     clip: Rect,
-    /// Mesures des barres et des liens.
-    m: LinkMetrics,
-    /// Gantt de suivi (H-UI-22).
-    tracking: bool,
+    /// Style et mode.
+    geo: GanttGeo<'a>,
 }
 
 impl Body<'_> {
-    /// Barre de la ligne `i` du modèle.
-    fn bar(&self, rows: &RowModel, i: usize) -> Option<BarGeom> {
-        rows.row(i).and_then(|r| {
-            BarGeom::of(
-                r,
-                self.axis,
-                row_top(self.origin, i, self.m.row_h),
-                &self.m,
-                self.tracking,
-            )
-        })
+    /// Barre de la ligne affichée `i`.
+    fn bar(&self, rows: VisibleRows<'_>, i: usize) -> Option<ScreenBar> {
+        rows.row(DisplayRow::at(i))
+            .and_then(|r| screen_bar(r, self.axis, self.origin, i, &self.geo))
     }
 }
 
 /// Liens qui touchent les lignes `range` (intersection d'intervalles) ;
-/// rend le nombre de liens dessinés.
-fn link_shapes(
-    rows: &RowModel,
-    palette: &Palette,
-    body: &Body<'_>,
-    range: &Range<usize>,
-    out: &mut Vec<Shape>,
-) -> usize {
-    let m = &body.m;
+/// rend le nombre de liens dessinés. Lien critique en couleur critique
+/// seulement avec la surbrillance (H-UI-38).
+fn link_shapes(rows: VisibleRows<'_>, body: &Body<'_>, range: &Range<usize>, out: &mut Vec<Shape>) -> usize {
+    let c = body.geo.tokens();
+    let row_h = body.geo.row_h();
+    let arrow = LinkMetrics::default().arrow;
     let mut painted = 0_usize;
-    for link in rows.links_touching(range.clone()) {
-        let (Ok(from), Ok(to)) = (usize::try_from(link.from), usize::try_from(link.to)) else {
-            continue;
-        };
+    for (shown, link) in rows.links_touching(range.clone()) {
+        let (from, to) = (shown.from.index(), shown.to.index());
         let (Some(p), Some(s)) = (body.bar(rows, from), body.bar(rows, to)) else {
             continue;
         };
-        let path = link_path(link.kind, p.ends(), s.ends(), m);
+        let Some(path) = screen_link(link.kind, &p, &s, row_h) else {
+            continue;
+        };
         if path.len < 2 || !path_visible(&path, body.clip) {
             continue;
         }
-        let color = if link.critical {
-            palette.critical
+        let ink = color(if link.critical && body.geo.highlight_critical {
+            c.link_critical
         } else {
-            palette.link
-        };
-        out.push(Shape::line(path.points().to_vec(), Stroke::new(1.0, color)));
-        let tri = arrow_points(path.arrow_tip, path.arrow_dir, m.arrow);
-        out.push(Shape::convex_polygon(tri.to_vec(), color, Stroke::NONE));
+            c.link
+        });
+        out.push(Shape::line(path.points().to_vec(), Stroke::new(1.0, ink)));
+        let tri = arrow_points(path.arrow_tip, path.arrow_dir, arrow);
+        out.push(Shape::convex_polygon(tri.to_vec(), ink, Stroke::NONE));
         painted = painted.saturating_add(1);
     }
     painted
@@ -760,7 +1172,13 @@ pub fn explain_tip_text(doc: &OpenDocument, texts: &Texts, uid: TaskUid) -> Stri
 /// Infobulle de la barre sous le pointeur (H-UI-26), après le délai
 /// d'egui : une zone de survol (sans clic ni glisser, le fond garde
 /// sélection et défilement) posée seulement sur la barre survolée.
-fn bar_tooltip(ui: &mut egui::Ui, fc: &FrameCtx<'_>, rows: &RowModel, body: &Body<'_>, range: &Range<usize>) {
+fn bar_tooltip(
+    ui: &mut egui::Ui,
+    fc: &FrameCtx<'_>,
+    rows: VisibleRows<'_>,
+    body: &Body<'_>,
+    range: &Range<usize>,
+) {
     let Some(doc) = fc.doc else {
         return;
     };
@@ -770,10 +1188,11 @@ fn bar_tooltip(ui: &mut egui::Ui, fc: &FrameCtx<'_>, rows: &RowModel, body: &Bod
     if !ui.rect_contains_pointer(body.clip) {
         return;
     }
-    let Some(i) = row_at(p.y - body.origin.y, body.m.row_h, rows.len()).filter(|i| range.contains(i)) else {
+    let Some(i) = row_at(p.y - body.origin.y, body.geo.row_h(), rows.len()).filter(|i| range.contains(i))
+    else {
         return;
     };
-    let (Some(row), Some(bar)) = (rows.row(i), body.bar(rows, i)) else {
+    let (Some(row), Some(bar)) = (rows.row(DisplayRow::at(i)), body.bar(rows, i)) else {
         return;
     };
     let hover = bar.hover_rect();
@@ -809,12 +1228,12 @@ pub fn explain_tip_runs(ctx: &egui::Context) -> u64 {
 /// Corps du Gantt : lignes `range`, `origin` étant le coin haut-gauche écran
 /// de la ligne 0, découpe `clip`, projection `axis`.
 ///
-/// Couches : fond → jours chômés → grille → sélection → date d'état →
-/// liens → lignes de base (suivi) → barres → bandes d'avancement (suivi).
-/// Seules les lignes de `range` sont parcourues (liens : ceux dont
-/// l'intervalle de lignes coupe `range`) ; une barre hors de la découpe
-/// horizontale n'est pas dessinée. Infobulle `explain_date` sur la barre
-/// survolée.
+/// Couches : fond → bandes → jours chômés → grille → traits de lignes →
+/// sélection → date d'état, aujourd'hui → liens → lignes de base (suivi) →
+/// barres → motifs → bandes d'avancement (suivi) → textes. Seules les lignes
+/// de `range` sont parcourues (liens : ceux dont l'intervalle de lignes
+/// coupe `range`) ; une barre hors de la découpe horizontale n'est pas
+/// dessinée. Infobulle `explain_date` sur la barre survolée.
 pub fn paint_body(
     ui: &mut egui::Ui,
     fc: &mut FrameCtx<'_>,
@@ -827,35 +1246,38 @@ pub fn paint_body(
         return;
     }
     let painter = ui.painter_at(clip);
-    let m = LinkMetrics {
-        row_h: fc.metrics.row_h,
-        ..LinkMetrics::default()
-    };
-    let tracking = fc.state.gantt_style == GanttStyle::Tracking;
+    let screen = fc.task_view.style.clone();
+    let geo = GanttGeo::new(fc, &screen.style);
+    let c = geo.tokens();
     let mut shapes = Vec::new();
-    background_shapes(fc, axis, origin, &range, clip, &mut shapes);
+    background_shapes(fc, &geo, axis, origin, &range, clip, &mut shapes);
     let mut links = 0;
-    if let Some(rows) = fc.rows {
+    if let Some(rows) = fc.visible() {
         let body = Body {
             axis,
             origin,
             clip,
-            m,
-            tracking,
+            geo,
         };
-        links = link_shapes(rows, fc.palette, &body, &range, &mut shapes);
+        links = link_shapes(rows, &body, &range, &mut shapes);
+        let texts = fc.doc.map(|doc| SessionTexts {
+            session: &doc.session,
+            lang: text_language(fc.texts.language()),
+        });
+        let fill = |role: BarRole| color(c.bars.get(&role).map_or(c.text, |p| p.fill));
+        let mut labels = Vec::new();
         for i in range.clone() {
-            let Some(row) = rows.row(i) else {
+            let Some(row) = rows.row(DisplayRow::at(i)) else {
                 continue;
             };
-            if tracking
+            if geo.tracking
                 && let Some(shape) = baseline_shape(
                     row,
                     axis,
-                    row_top(origin, i, m.row_h),
-                    m.row_h,
+                    origin.y + index_to_f32(i) * geo.row_h(),
+                    geo.row_h(),
                     clip,
-                    fc.palette.baseline,
+                    fill(BarRole::Baseline),
                 )
             {
                 shapes.push(shape);
@@ -866,11 +1288,25 @@ pub fn paint_body(
             if bar.culled(clip) {
                 continue;
             }
-            bar_shapes(&bar, fc.palette, &mut shapes);
-            if tracking && let Some(shape) = progress_shape(row, &bar, axis, fc.palette.progress) {
+            let phase = screen.phase_colors.get(&row.uid).map(|(rgb, _)| *rgb);
+            bar_shapes(&bar, &geo, phase, &mut shapes);
+            hatch_shapes(&bar, &geo, clip, &mut shapes);
+            if geo.tracking
+                && let Some(shape) = progress_shape(row, &bar, axis, fill(BarRole::Progress))
+            {
                 shapes.push(shape);
             }
+            if let Some(src) = &texts {
+                let tc = TextCtx {
+                    painter: &painter,
+                    src,
+                    axis,
+                    clip,
+                };
+                text_shapes(&tc, &bar, row.uid, phase, &geo, &mut labels);
+            }
         }
+        shapes.extend(labels);
         bar_tooltip(ui, fc, rows, &body, &range);
     }
     fc.stats.gantt_rows = range;
@@ -886,35 +1322,31 @@ const LINK_HIT_TOL: f32 = 3.0;
 /// H-UI-21) : zone de la barre de sa ligne (bande verticale de la barre et
 /// 2 points autour ; losange d'un jalon), sinon tracé d'un lien qui
 /// traverse sa ligne, sinon rien. `origin` : coin haut-gauche écran de la
-/// ligne 0. Indices et UID seulement : aucune date.
+/// ligne 0 ; même géométrie que le dessin (`geo`). Indices (lignes
+/// affichées) et UID seulement : aucune date.
 #[must_use]
 pub fn hit_test(
-    rows: &RowModel,
+    rows: VisibleRows<'_>,
     axis: &TimeAxis,
     origin: Pos2,
-    row_h: f32,
-    tracking: bool,
+    geo: &GanttGeo<'_>,
     p: Pos2,
 ) -> GanttHit {
-    let Some(i) = row_at(p.y - origin.y, row_h, rows.len()) else {
+    let Some(i) = row_at(p.y - origin.y, geo.row_h(), rows.len()) else {
         return GanttHit::Empty;
     };
     let body = Body {
         axis,
         origin,
         clip: Rect::EVERYTHING,
-        m: LinkMetrics {
-            row_h,
-            ..LinkMetrics::default()
-        },
-        tracking,
+        geo: *geo,
     };
-    if let (Some(row), Some(bar)) = (rows.row(i), body.bar(rows, i)) {
+    if let (Some(row), Some(bar)) = (rows.row(DisplayRow::at(i)), body.bar(rows, i)) {
         let band = bar.hover_rect();
         let (left, right) = if bar.kind == RowKind::Milestone {
             (band.left(), band.right())
         } else {
-            (bar.x0, bar.x1)
+            (bar.rect.left(), bar.rect.right())
         };
         if band.y_range().contains(p.y) {
             match bar_zone(p.x, left, right, row.kind) {
@@ -925,17 +1357,17 @@ pub fn hit_test(
             }
         }
     }
-    for link in rows.links_touching(i..i.saturating_add(1)) {
-        let (Ok(from), Ok(to)) = (usize::try_from(link.from), usize::try_from(link.to)) else {
-            continue;
-        };
-        let (Some(pred), Some(succ)) = (rows.row(from), rows.row(to)) else {
+    for (shown, link) in rows.links_touching(i..i.saturating_add(1)) {
+        let (from, to) = (shown.from.index(), shown.to.index());
+        let (Some(pred), Some(succ)) = (rows.row(shown.from), rows.row(shown.to)) else {
             continue;
         };
         let (Some(pb), Some(sb)) = (body.bar(rows, from), body.bar(rows, to)) else {
             continue;
         };
-        let path = link_path(link.kind, pb.ends(), sb.ends(), &body.m);
+        let Some(path) = screen_link(link.kind, &pb, &sb, geo.row_h()) else {
+            continue;
+        };
         if near_polyline(p, path.points(), LINK_HIT_TOL) || path.arrow_tip.distance(p) <= LINK_HIT_TOL {
             return GanttHit::Link(pred.uid, succ.uid);
         }
@@ -956,19 +1388,20 @@ pub fn paint_drag(
     drag: &BarDrag,
     hover: Option<Pos2>,
 ) {
-    let Some(rows) = fc.rows else {
+    let Some(rows) = fc.visible() else {
         return;
     };
-    let Some(i) = rows.index_of(drag.uid) else {
+    let Some(d) = rows.display_of(drag.uid) else {
         return;
     };
+    let i = d.index();
     let row_h = fc.metrics.row_h;
-    let top = row_top(origin, i, row_h);
+    let top = origin.y + index_to_f32(i) * row_h;
     let yc = top + row_h / 2.0;
     let half = LinkMetrics::default().bar_half_h + 1.0;
     let painter = ui.painter_at(clip);
     let stroke = Stroke::new(1.5, fc.palette.text_strong);
-    let linking = drag.kind == GestureKind::Move && drag.over_row.is_some_and(|r| r != i);
+    let linking = drag.kind == GestureKind::Move && drag.over_row.is_some_and(|r| r != d);
     if linking {
         if let Some(p) = hover.filter(|p| p.is_finite()) {
             let from = pos2(clip.left() + drag.origin_x, yc);
@@ -1007,6 +1440,7 @@ pub fn paint_drag(
 )]
 mod tests {
     use super::*;
+    use crate::theme::Palette;
 
     const M: LinkMetrics = LinkMetrics {
         stub: 6.0,
@@ -1199,6 +1633,277 @@ mod tests {
         assert_eq!(cache.runs, 3);
     }
 
+    /// Document de test ouvert sur un projet généré.
+    fn generated_doc(summaries: usize, leaves: usize, links: usize, inactive_every: usize) -> OpenDocument {
+        use planrs_core::Moment;
+
+        use crate::app::DocOrigin;
+
+        let mut p = planrs_tests::generate::ui_network(summaries, leaves, links);
+        let uids: Vec<TaskUid> = p.tasks.uids().collect();
+        for (k, uid) in uids.into_iter().enumerate() {
+            if inactive_every > 0
+                && k % inactive_every == 2
+                && let Some(task) = p.tasks.get_mut(uid)
+            {
+                task.active = false;
+            }
+        }
+        let now: Moment = "2026-01-05T08:00".parse().unwrap();
+        let origin = DocOrigin {
+            name: String::new(),
+            path: None,
+            demo: false,
+        };
+        OpenDocument::new(crate::document::load_project(p, now), origin, 1)
+    }
+
+    /// Écart toléré entre une abscisse écran (`f32`, × 16) et celle de la
+    /// scène (1/16 px entier) : l'arrondi au 1/16 px, plus l'erreur du
+    /// `f32` sur de grandes abscisses.
+    fn close16(screen: f32, scene: i64) -> bool {
+        let x = screen * 16.0;
+        (x - crate::geom::i64_to_f32(scene)).abs() <= 0.5 + x.abs() * 1e-6
+    }
+
+    /// P55 sur un projet, un zoom et un modèle : barres (rôle, forme,
+    /// rectangle), liens et date d'état de l'écran égaux à ceux de la scène
+    /// au 1/16 px (ordonnées exactes, abscisses à l'arrondi près).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "barres, liens et date d'état, lus d'un bloc"
+    )]
+    fn check_p55(doc: &OpenDocument, zoom: TimeScaleZoom, id: planrs_render::style::TemplateId) {
+        use planrs_render::geometry::{Class, NoTexts, Prim, Viewport, layout};
+        use planrs_render::{Lang, RangeSpec};
+
+        use crate::i18n::{Language, Texts};
+        use crate::row_view::RowView;
+        use crate::timescale::render_zoom;
+
+        let style = planrs_render::style::template(id);
+        let texts = Texts::new(Language::Fr);
+        let model = RowModel::build(doc, texts.format_labels());
+        let view = RowView::unfiltered(&model);
+        let rows = VisibleRows::new(&model, &view);
+        let axis = TimeAxis::new(doc.range, zoom, 0.0);
+        let geo = GanttGeo {
+            style: &style,
+            variant: Variant::Light,
+            tracking: false,
+            highlight_critical: true,
+        };
+        let last = doc.range.end.checked_add_days(-1).unwrap();
+        let vp = Viewport {
+            range: RangeSpec::Span {
+                from: doc.range.start,
+                to: last.max(doc.range.start),
+            },
+            zoom: render_zoom(zoom),
+            ..Viewport::new(Variant::Light, Lang::Fr)
+        };
+        let (scene, _) = layout(doc.project(), doc.schedule(), &style, &NoTexts, &vp);
+        assert_eq!(scene.rows.len(), rows.len(), "{zoom:?} {id:?}");
+        let (dx, dy) = (scene.table16, scene.header16);
+        let mut screen_bars = Vec::new();
+        for (i, srow) in scene.rows.iter().enumerate() {
+            let row = rows.row(DisplayRow::at(i)).unwrap();
+            assert_eq!(srow.uid, Some(row.uid));
+            assert_eq!(
+                srow.y16,
+                dy + i64::try_from(i).unwrap() * geometry::row_h16(&style)
+            );
+            let screen = screen_bar(row, &axis, pos2(0.0, 0.0), i, &geo);
+            let drawn = srow.bar.filter(|b| b.rect.w != 0 || b.rect.h != 0);
+            match (screen, drawn) {
+                (None, None) => {}
+                (Some(s), Some(b)) => {
+                    let ctx = format!("{zoom:?} {id:?} ligne {i} : {s:?} / {b:?}");
+                    assert_eq!(s.g.role, b.role, "{ctx}");
+                    assert_eq!(s.g.shape, b.shape, "{ctx}");
+                    assert_eq!(
+                        s.rect.top() * 16.0,
+                        crate::geom::i64_to_f32(b.rect.y - dy),
+                        "{ctx}"
+                    );
+                    assert_eq!(
+                        s.rect.bottom() * 16.0,
+                        crate::geom::i64_to_f32(b.rect.bottom() - dy),
+                        "{ctx}"
+                    );
+                    assert_eq!(s.yc * 16.0, crate::geom::i64_to_f32(b.yc16 - dy), "{ctx}");
+                    assert!(close16(s.rect.left(), b.rect.x - dx), "{ctx}");
+                    assert!(close16(s.rect.right(), b.rect.right() - dx), "{ctx}");
+                }
+                (s, b) => panic!("{zoom:?} {id:?} ligne {i} : écran {s:?}, scène {b:?}"),
+            }
+            screen_bars.push((screen, drawn));
+        }
+        // Liens : même tracé (nombre de points, ordonnées exactes,
+        // abscisses à l'arrondi près) sur les barres de l'écran et de la
+        // scène.
+        for (to, task) in doc.project().tasks.iter().enumerate() {
+            for link in &task.predecessors {
+                let from = doc
+                    .project()
+                    .tasks
+                    .iter()
+                    .position(|t| t.uid() == link.predecessor)
+                    .unwrap();
+                let (Some((Some(sp), Some(bp))), Some((Some(ss), Some(bs)))) =
+                    (screen_bars.get(from), screen_bars.get(to))
+                else {
+                    continue;
+                };
+                let shared = geometry::link_path(bp, bs, link.kind);
+                let screen = screen_link(link.kind, sp, ss, geo.row_h());
+                let Some(screen) = screen else {
+                    assert_eq!(shared.points.len(), 0);
+                    continue;
+                };
+                assert_eq!(
+                    screen.points().len(),
+                    shared.points.len(),
+                    "{zoom:?} {id:?} {from}→{to}"
+                );
+                for (p, &(x16, y16)) in screen.points().iter().zip(&shared.points) {
+                    assert_eq!(
+                        p.y * 16.0,
+                        crate::geom::i64_to_f32(y16 - dy),
+                        "{zoom:?} {id:?} {from}→{to}"
+                    );
+                    assert!(
+                        close16(p.x, x16 - dx),
+                        "{zoom:?} {id:?} {from}→{to} : {p:?} / {x16}"
+                    );
+                }
+            }
+        }
+        // Date d'état.
+        let status = doc.project().effective_status_date();
+        let drawn: Vec<i64> = scene
+            .items
+            .iter()
+            .filter(|item| item.class == Class::StatusLine)
+            .filter_map(|item| match &item.prim {
+                Prim::Segments { segs } => segs.first().map(|seg| seg.0),
+                _ => None,
+            })
+            .collect();
+        if let Some(&x) = drawn.first() {
+            assert!(close16(axis.x(status), x - dx), "{zoom:?} date d'état");
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(512))]
+
+        /// P55 (écran, J8 lot L11) : pour tout projet généré, tout zoom et
+        /// tout modèle, rectangles de barre, points des liens et abscisse
+        /// de la date d'état calculés pour l'écran égalent ceux de la scène
+        /// (1/16 px ; abscisses à l'arrondi du 1/16 px près, l'écran
+        /// projetant les instants en `f32` comme J7).
+        #[test]
+        fn p55_screen_matches_scene(
+            summaries in 1_usize..5,
+            leaves in 1_usize..9,
+            links in 0_usize..40,
+            inactive in 0_usize..7,
+            zoom in 0_usize..4,
+            id in 0_usize..6,
+        ) {
+            let doc = generated_doc(summaries, leaves, links, inactive);
+            check_p55(&doc, TimeScaleZoom::ALL[zoom], planrs_render::style::TemplateId::ALL[id]);
+        }
+    }
+
+    /// H-UI-36 à H-UI-38 : rôle d'une ligne (inactive, manuelle avant
+    /// critique, critique seulement avec la surbrillance).
+    #[test]
+    fn h_ui_38_highlight_off_maps_roles() {
+        let mut row = Row {
+            uid: TaskUid::new(1),
+            id: 1,
+            level: 1,
+            kind: RowKind::Leaf,
+            critical: true,
+            bar: None,
+            percent: planrs_core::Percent::ZERO,
+            baseline: None,
+            finish_variance: None,
+            stop: None,
+            manual: false,
+            active: true,
+        };
+        assert_eq!(row_role(&row, true), Some(BarRole::Critical));
+        assert_eq!(row_role(&row, false), Some(BarRole::Task));
+        row.manual = true;
+        assert_eq!(row_role(&row, true), Some(BarRole::Manual));
+        row.kind = RowKind::Summary;
+        assert_eq!(row_role(&row, true), Some(BarRole::SummaryCritical));
+        assert_eq!(row_role(&row, false), Some(BarRole::Summary));
+        row.kind = RowKind::Milestone;
+        assert_eq!(row_role(&row, true), Some(BarRole::MilestoneCritical));
+        assert_eq!(row_role(&row, false), Some(BarRole::Milestone));
+        row.kind = RowKind::Excluded;
+        assert_eq!(row_role(&row, true), Some(BarRole::Inactive));
+        row.kind = RowKind::Null;
+        assert_eq!(row_role(&row, true), None);
+    }
+
+    /// Hachures (H-UI-44) : segments dans la barre, bornés à sa partie
+    /// visible, recalés sur le pas (le motif ne glisse pas).
+    #[test]
+    fn styled_hatch_segments_inside_bar() {
+        let style = planrs_render::style::template(planrs_render::style::TemplateId::Chantier);
+        let geo = GanttGeo {
+            style: &style,
+            variant: Variant::Light,
+            tracking: false,
+            highlight_critical: true,
+        };
+        let g = Geom16 {
+            role: BarRole::Critical,
+            shape: BarShape::Bar,
+            rect: Rect16::default(),
+            progress: None,
+            baseline: None,
+            yc16: 0,
+            link_half16: 80,
+            row_top16: 0,
+            row_h16: 288,
+        };
+        let bar = ScreenBar {
+            g,
+            rect: Rect::from_min_max(pos2(100.0, 10.0), pos2(900.0, 20.0)),
+            yc: 15.0,
+            half: 5.0,
+            link_half: 5.0,
+            kind: RowKind::Leaf,
+        };
+        let clip = Rect::from_min_max(pos2(300.0, 0.0), pos2(500.0, 100.0));
+        let mut out = Vec::new();
+        hatch_shapes(&bar, &geo, clip, &mut out);
+        assert_ne!(out.len(), 0);
+        let mut firsts = Vec::new();
+        for shape in &out {
+            let Shape::LineSegment { points, .. } = shape else {
+                panic!("{shape:?}");
+            };
+            for p in points {
+                assert!(bar.rect.expand(0.01).contains(*p), "{p:?}");
+                assert!(p.x >= clip.left() - CULL_MARGIN - 4.01 && p.x <= clip.right() + CULL_MARGIN + 0.01);
+            }
+            firsts.push(points[0].x + points[0].y);
+        }
+        // Droites x + y = c, c ≡ x0 + y0 (mod 4 px) : même famille quel que
+        // soit le défilement.
+        for c in firsts {
+            let k = (c - 110.0) / 4.0;
+            assert!((k - k.round()).abs() < 1e-3, "{c}");
+        }
+    }
+
     /// Fumée : en-tête et corps dessinés sur l'exemple, à tous les zooms, y
     /// compris avec une découpe dégénérée, sans panique ni `Rect` non fini
     /// (egui vérifie par `debug_assert!`).
@@ -1208,6 +1913,7 @@ mod tests {
 
         use crate::app::{DocOrigin, OpenDocument};
         use crate::i18n::{Language, Texts};
+        use crate::row_view::RowView;
         use crate::rows::RowModel;
         use crate::state::UiState;
         use crate::timescale::TimeScaleZoom;
@@ -1224,6 +1930,7 @@ mod tests {
         let doc = OpenDocument::new(loaded, origin, 1);
         let texts = Texts::new(Language::Fr);
         let rows = RowModel::build(&doc, texts.format_labels());
+        let row_view = RowView::unfiltered(&rows);
         let palette = Palette::LIGHT;
         let metrics = Metrics::default();
         let selection = rows.row(2).map(|r| r.uid);
@@ -1249,6 +1956,7 @@ mod tests {
                     state: &state,
                     doc: Some(&doc),
                     rows: Some(&rows),
+                    row_view: Some(&row_view),
                     texts: &texts,
                     palette: &palette,
                     metrics: &metrics,
@@ -1258,6 +1966,7 @@ mod tests {
                     actions: &mut actions,
                     stats: &mut stats,
                     window_open: false,
+                    task_view: crate::view::task_view::TaskViewFrame::default(),
                 };
                 let header = Rect::from_min_max(pos2(600.0, 0.0), pos2(1400.0, 44.0));
                 let clip = Rect::from_min_max(pos2(600.0, 44.0), pos2(1400.0, 700.0));

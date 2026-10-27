@@ -68,8 +68,16 @@ jobs:
       - name: Chaque règle R-xxx a ses tests (règle 4)
         run: cargo xtask rules
 
+      # Textes de l'interface (J8, lot L0) : chaque `TextId` utilisé, chaque
+      # clé présente en français et en anglais.
+      - name: Textes de l'interface (text-ids)
+        run: cargo xtask text-ids
+
       - name: planrs-core en WebAssembly
         run: cargo check -p planrs-core --target wasm32-unknown-unknown
+
+      - name: planrs-pdf en WebAssembly
+        run: cargo check -p planrs-pdf --target wasm32-unknown-unknown
 
       # Version web (et planrs-ui-egui) en WebAssembly : seule la compilation
       # est vérifiée, `trunk build` viendra avec le packaging web.
@@ -212,21 +220,87 @@ jobs:
       # (`edit_latency`) : médiane < 100 ms, p95 < 150 ms (porte). Les
       # scénarios tournent l'un après l'autre (en parallèle, ils se
       # perturberaient) et écrivent chacun leur rapport JSON dans
-      # `target/tmp/ui-perf/`, publié en artefact même en cas d'échec.
-      - name: Fluidité de l'interface (release)
+      # `target/tmp/ui-perf/<modèle>/`, publié en artefact même en cas
+      # d'échec. J8 (lot L16, vérification 3) : tous les scénarios en Sobre
+      # (défaut de l'application) **et** en Classique (apparence de J7).
+      - name: Fluidité de l'interface, Sobre (release)
         run: cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture --test-threads=1
+        env:
+          PLANRS_PERF_TEMPLATE: sobre
+          PLANRS_PERF_REPORT_DIR: ${{ github.workspace }}/target/tmp/ui-perf/sobre
+
+      - name: Fluidité de l'interface, Classique (release)
+        if: success() || failure()
+        run: cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture --test-threads=1
+        env:
+          PLANRS_PERF_TEMPLATE: classique
+          PLANRS_PERF_REPORT_DIR: ${{ github.workspace }}/target/tmp/ui-perf/classique
+
+      # Budget du PDF (§ 2.8, `pdf_5000`) : Sobre, A3 paysage, 1 page en
+      # largeur, < 10 s.
+      - name: PDF de 5 000 tâches (release)
+        run: cargo test -p planrs-pdf --release --test perf -- --ignored --nocapture
 
       - name: Rapport de fluidité
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: ui-perf-report
-          path: target/tmp/ui-perf/*.json
+          path: target/tmp/ui-perf/**/*.json
           if-no-files-found: warn
           retention-days: 30
 
       - name: Benchmark (informatif)
         run: cargo bench -p planrs-tests --bench schedule -- --warm-up-time 1 --measurement-time 5 --noplot
+
+  # Captures PDF des modèles de mise en page (J8, lot L16, vérification 4) :
+  # `project.export_pdf` sur le plan de suivi de J6 pour les six modèles et
+  # sur le réseau de 5 000 tâches en Sobre, A3 paysage ; pages rendues en
+  # PNG par `pdftoppm` (poppler-utils), publiées en artefact pour la
+  # relecture visuelle. Aucune référence d'image n'est comparée : les
+  # assertions portent sur le nombre de pages, les glyphes et le
+  # déterminisme (`tests/pdf_captures/main.rs`).
+  pdf-captures:
+    name: captures PDF (six modèles, 5 000 tâches)
+    runs-on: ubuntu-24.04
+    env:
+      PLANRS_PDF_CAPTURES: ${{ github.workspace }}/target/tmp/pdf-captures
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: poppler-utils (pdftoppm)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y poppler-utils
+
+      - name: PDF (release)
+        run: cargo test -p planrs-tests --release --test pdf_captures -- --include-ignored --nocapture --test-threads=1
+
+      # Plan de suivi : toutes les pages ; réseau : les trois premières et
+      # la dernière (le PDF entier reste dans l'artefact).
+      - name: Pages en PNG
+        run: |
+          cd "$PLANRS_PDF_CAPTURES"
+          for f in tracking_j6_*.pdf; do
+            pdftoppm -r 72 -png "$f" "${f%.pdf}"
+          done
+          pages="$(pdfinfo network_5000_sobre_a3.pdf | awk '/^Pages:/ {print $2}')"
+          pdftoppm -r 72 -png -f 1 -l 3 network_5000_sobre_a3.pdf network_5000_sobre_a3
+          pdftoppm -r 72 -png -f "$pages" -l "$pages" network_5000_sobre_a3.pdf network_5000_sobre_a3
+          ls -la
+
+      - name: Captures PDF
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pdf-captures
+          path: target/tmp/pdf-captures/
+          if-no-files-found: warn
+          retention-days: 30
 
   # Corpus public (ADR-0004, ADR-0009) : fichiers MSPDI enregistrés par MS
   # Project, téléchargés à chaque exécution (1,3 Mo, adresses figées sur un

@@ -140,13 +140,13 @@ fn registry_sorted_and_unique() {
         lookup("analysis.baseline_variance").unwrap().available,
         Availability::Now
     );
-    // Toutes les entrées J6 activées (lot L8) ; seules les cinq écritures
-    // J7 sont réservées (contrat J7 L0, `contract_j7.rs`).
+    // Toutes les entrées J6 et J7 activées ; seules les quatre entrées J8
+    // sont réservées (contrat J8 L0, `contract_j8.rs`).
     assert_eq!(lookup("baseline.set").unwrap().available, Availability::Now);
     assert!(
         REGISTRY
             .iter()
-            .all(|s| !matches!(s.available, Availability::Milestone(m) if m != 7))
+            .all(|s| !matches!(s.available, Availability::Milestone(m) if m != 8))
     );
     assert_eq!(lookup("resource.add").unwrap().available, Availability::Now);
     assert!(lookup("task.nope").is_none());

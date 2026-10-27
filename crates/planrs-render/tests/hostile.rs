@@ -97,8 +97,13 @@ proptest! {
         prop_assert!(!out.contains("<script"));
         let texts = xml_texts(&out);
         for n in names.iter().filter(|n| !n.is_empty()) {
+            // Coupé à `name_chars`, puis à la largeur de la colonne Nom
+            // (relecture finale de J8, F3) : un préfixe suivi de « … ».
             let want = visible(n, usize::from(name_chars));
-            prop_assert!(texts.contains(&want), "nom attendu absent : {:?}", want);
+            let shown = texts.iter().any(|t| {
+                *t == want || (t.ends_with('…') && want.starts_with(t.trim_end_matches('…')))
+            });
+            prop_assert!(shown, "nom attendu absent : {:?}", want);
         }
     }
 }
@@ -204,6 +209,9 @@ fn render_range_bounded_by_max_days() {
         Zoom::Quarter,
         Zoom::Auto { width_px: 0 },
         Zoom::Auto { width_px: u32::MAX },
+        Zoom::Fill { width_px: 0 },
+        Zoom::Fill { width_px: 1 },
+        Zoom::Fill { width_px: u32::MAX },
     ] {
         for limits in [
             RenderLimits {

@@ -220,6 +220,7 @@ const fn update(uid: TaskUid) -> TaskUpdate {
         task_type: Patch::Keep,
         effort_driven: Patch::Keep,
         work: Patch::Keep,
+        mode: Patch::Keep,
     }
 }
 
@@ -376,7 +377,8 @@ pub fn commit_edit(state: &EditState, session: &Session, lang: text::Language) -
                 | Column::ResourceNames
                 | Column::BaselineStart
                 | Column::BaselineFinish
-                | Column::FinishVariance => return Err(EditError::NotEditable),
+                | Column::FinishVariance
+                | Column::Mode => return Err(EditError::NotEditable),
             }
             vec![Command::TaskUpdate(op)]
         }
@@ -433,7 +435,8 @@ fn blank_row_ops(
         | Column::ResourceNames
         | Column::BaselineStart
         | Column::BaselineFinish
-        | Column::FinishVariance => return Err(EditError::NotEditable),
+        | Column::FinishVariance
+        | Column::Mode => return Err(EditError::NotEditable),
     }
     Ok(vec![Command::TaskAdd(add)])
 }

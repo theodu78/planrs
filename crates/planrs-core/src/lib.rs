@@ -36,6 +36,8 @@
 //! - [`baseline`] : capture des lignes de base et écarts (R-220 à R-225,
 //!   J6) ;
 //! - [`diagnostic`] : diagnostics typés, gravité et sujet déduits ;
+//! - [`diagnostic_args`] : arguments neutres des diagnostics, pour leur
+//!   traduction par code (N5, J8) ;
 //! - [`error`] : erreurs typées, codes stables.
 
 #![deny(
@@ -49,6 +51,7 @@ pub mod arena;
 pub mod baseline;
 pub mod calendar;
 pub mod diagnostic;
+pub mod diagnostic_args;
 pub mod duration;
 pub mod error;
 pub mod fixed;
@@ -64,6 +67,7 @@ pub mod time;
 pub use arena::{Arena, HasUid};
 pub use calendar::{BuiltinCalendarNames, CalendarSet, CompiledCalendar, Direction, Span, TimeScale};
 pub use diagnostic::{Diagnostic, Diagnostics, OverriddenBound, Pass, Severity, Subject};
+pub use diagnostic_args::DiagArg;
 pub use duration::{
     ConversionFactors, Duration, DurationUnit, Lag, LagValue, Minutes, TimeBasis, Work, percent_of,
 };
@@ -94,3 +98,11 @@ pub use time::{Day, DayRange, Moment, Month, TimeOfDay, Week, Weekday};
 /// endroits où il apparaît (noms de crates, binaires, fichiers) sont listés
 /// dans `docs/rename.md`.
 pub const PRODUCT_NAME: &str = "planrs";
+
+/// Version du produit : celle du workspace (`[workspace.package] version`).
+///
+/// Une seule version pour tout le dépôt : `planrs --version` et
+/// `planrs-desktop --version` l'impriment (`planrs <version>`, C-REL-03) et
+/// `cargo xtask release-check` exige qu'elle égale le tag publié et la
+/// première section de `CHANGELOG.md` (C-REL-01, `docs/features/release.md`).
+pub const PRODUCT_VERSION: &str = env!("CARGO_PKG_VERSION");

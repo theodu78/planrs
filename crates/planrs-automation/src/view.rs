@@ -31,15 +31,16 @@ use planrs_core::calendar::{CalendarSet, CompiledCalendar};
 use planrs_core::resource::usage::MAX_ASSIGNMENT_ROWS;
 use planrs_core::resource::{AssignmentUsageReport, UsageError, usage_by_assignment, usage_with};
 use planrs_core::{
-    Assignment, BaselineNumber, Decimal, Diagnostic, Duration, DurationUnit, HasUid, LagValue, Minutes,
-    Moment, Percent, ProgressState, Project, Resource, ResourceKind, ResourceUid, Schedule, Severity,
-    Subject, Task, TaskBaseline, TaskRole, TaskSchedule, TaskUid, TimeBasis, Units, Work, round_div,
+    Assignment, Decimal, Diagnostic, Duration, DurationUnit, HasUid, LagValue, Minutes, Moment, Percent,
+    ProgressState, Project, Resource, ResourceKind, ResourceUid, Schedule, Severity, Subject, Task,
+    TaskBaseline, TaskRole, TaskSchedule, TaskUid, TimeBasis, Units, Work, round_div,
 };
 use serde::Serialize;
 
 use crate::command::params::{ResourceListParams, TaskListParams, UsageParams};
 use crate::diff::{ScheduleDiff, TaskChange};
 use crate::error::{CommandError, CommandErrorKind, MAX_MESSAGE_CHARS, codes};
+use crate::filter::{FilterCtx, TaskFilter};
 use crate::json::{
     ConstraintKindJson, DurationJson, GranularityJson, LagJson, LinkTypeJson, PercentJson, ResourceKindJson,
     TaskTypeJson, UnitsJson,
@@ -1319,24 +1320,33 @@ fn invalid(field: &str, why: &str) -> CommandError {
     .with_field(field)
 }
 
+/// Plafond de `name_contains` de `task.list`, en caractères (requête de
+/// recherche, `docs/plans/j8.md` règle 10).
+pub const MAX_NAME_CONTAINS_CHARS: usize = 256;
+
 /// Page de `task.list` : tâches dans l'ordre des ID (lignes vides
-/// exclues), filtrées puis coupées après le curseur.
+/// exclues), filtrées par [`TaskFilter::hits`] (R-251, sans récapitulatives
+/// liées) puis coupées après le curseur.
 ///
 /// Filtres : `critical` (critique selon le moteur), `late` (R-236 :
 /// échéance ou fin de la ligne 0 dépassée, ou retard à la date d'état),
 /// `from`/`to` (dates planifiées qui touchent
 /// la plage de jours, bornes comprises : début au plus tard le jour `to`,
-/// fin au plus tôt le jour `from`), `outline_max`, `summary`. Une tâche non
-/// planifiée n'est retenue par aucun filtre de dates ni par `critical` ou
-/// `late`.
+/// fin au plus tôt le jour `from`), `outline_max`, `summary` ; J8 (R-251) :
+/// `incomplete` (feuille planifiée à moins de 100 %), `milestone`, `active`,
+/// `name_contains` (sans casse ni accents). Une tâche non planifiée n'est
+/// retenue par aucun filtre de dates ni par `critical`, `late` ou
+/// `incomplete`. `resource` (UID, J5) reste comparé par UID, hors de
+/// [`TaskFilter`] (qui nomme la ressource) : deux ressources homonymes ne
+/// se confondent pas.
 ///
 /// # Errors
 ///
-/// `limit.exceeded` au-delà de [`MAX_LIST_TASKS`] ; `param.invalid` pour
-/// `limit` 0, `outline_max` 0, `from` après `to` ; `task.not_found`
-/// (champ `cursor`) si le curseur ne désigne aucune tâche ;
-/// `resource.not_found` (champ `resource`) si `resource` ne désigne
-/// aucune ressource.
+/// `limit.exceeded` au-delà de [`MAX_LIST_TASKS`] ou de
+/// [`MAX_NAME_CONTAINS_CHARS`] ; `param.invalid` pour `limit` 0,
+/// `outline_max` 0, `from` après `to` ; `task.not_found` (champ `cursor`)
+/// si le curseur ne désigne aucune tâche ; `resource.not_found` (champ
+/// `resource`) si `resource` ne désigne aucune ressource.
 pub fn list(session: &Session, p: &TaskListParams) -> Result<ListView, CommandError> {
     let resource = match p.resource {
         None => None,
@@ -1348,14 +1358,7 @@ pub fn list(session: &Session, p: &TaskListParams) -> Result<ListView, CommandEr
         Some(n) => {
             let n = usize::try_from(n).unwrap_or(usize::MAX);
             if n > MAX_LIST_TASKS {
-                return Err(CommandError::new(
-                    codes::LIMIT_EXCEEDED,
-                    CommandErrorKind::Limit {
-                        what: "limit",
-                        max: u64::try_from(MAX_LIST_TASKS).unwrap_or(u64::MAX),
-                    },
-                )
-                .with_field("limit"));
+                return Err(self::limit("limit", MAX_LIST_TASKS, "limit"));
             }
             n
         }
@@ -1367,6 +1370,16 @@ pub fn list(session: &Session, p: &TaskListParams) -> Result<ListView, CommandEr
         && from > to
     {
         return Err(invalid("from", "« from » est après « to »"));
+    }
+    if p.name_contains
+        .as_ref()
+        .is_some_and(|n| n.chars().count() > MAX_NAME_CONTAINS_CHARS)
+    {
+        return Err(self::limit(
+            "name_contains",
+            MAX_NAME_CONTAINS_CHARS,
+            "name_contains",
+        ));
     }
     let ctx = ViewCtx::new(session);
     let project = session.project();
@@ -1381,22 +1394,28 @@ pub fn list(session: &Session, p: &TaskListParams) -> Result<ListView, CommandEr
             pos.saturating_add(1)
         }
     };
-    let schedule = session.schedule();
-    let status = project.effective_status_date();
+    let filter = TaskFilter {
+        critical: p.critical.then_some(true),
+        late: p.late.then_some(true),
+        incomplete: p.incomplete,
+        milestone: p.milestone,
+        summary: p.summary,
+        active: p.active,
+        resource: None,
+        from: p.from,
+        to: p.to,
+        outline_max: p.outline_max,
+        name_contains: p.name_contains.clone(),
+        show_related_summaries: false,
+    };
+    let hits = filter.hits(&FilterCtx {
+        project,
+        schedule: session.schedule(),
+        status: project.effective_status_date(),
+    });
     let keep = |pos: usize, t: &Task| -> bool {
-        let s = schedule.scheduled(t.uid());
-        let critical_ok = !p.critical || s.is_some_and(|s| s.critical);
-        let late_ok = !p.late || s.is_some_and(|s| is_late(t, s, status));
-        let from_ok = p
-            .from
-            .is_none_or(|from| s.is_some_and(|s| s.finish.day() >= from));
-        let to_ok = p.to.is_none_or(|to| s.is_some_and(|s| s.start.day() <= to));
-        let outline_ok = p.outline_max.is_none_or(|m| t.outline_level.get() <= m);
-        let resource_ok = resource.is_none_or(|r| ctx.task_has_resource(t.uid(), r));
-        if !(critical_ok && late_ok && from_ok && to_ok && outline_ok && resource_ok) {
-            return false;
-        }
-        p.summary.is_none_or(|want| ctx.is_summary_at(pos) == want)
+        hits.shown.get(pos).copied().unwrap_or(false)
+            && resource.is_none_or(|r| ctx.task_has_resource(t.uid(), r))
     };
     let mut total = 0usize;
     let mut tasks = Vec::new();
@@ -1420,24 +1439,6 @@ pub fn list(session: &Session, p: &TaskListParams) -> Result<ListView, CommandEr
         next_cursor,
         total,
     })
-}
-
-/// R-236 : tâche planifiée en retard. Vrai si sa fin planifiée dépasse son
-/// échéance (J4) ou la fin de sa ligne de base 0, ou si, à la date d'état
-/// effective `status` (R-034), elle n'est pas achevée alors que sa fin
-/// planifiée est atteinte, ou pas commencée alors que son début planifié
-/// est passé. État d'avancement lu dans le `Schedule` (R-200, R-210).
-fn is_late(t: &Task, s: &TaskSchedule, status: Moment) -> bool {
-    let past_deadline = t.deadline.is_some_and(|d| s.finish > d);
-    let past_baseline = t
-        .baselines
-        .get(&BaselineNumber::PRIMARY)
-        .and_then(|b| b.finish)
-        .is_some_and(|f| s.finish > f);
-    let state = s.progress.map_or(ProgressState::NotStarted, |g| g.state);
-    let unfinished = state != ProgressState::Complete && s.finish <= status;
-    let unstarted = state == ProgressState::NotStarted && s.start < status;
-    past_deadline || past_baseline || unfinished || unstarted
 }
 
 /// Ressource `uid` du projet, sinon `resource.not_found` sur `field`.

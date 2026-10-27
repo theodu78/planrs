@@ -3,10 +3,15 @@
 //!
 //! Sens unique : un `Moment` donne une abscisse, jamais l'inverse (aucune date
 //! produite à partir d'un pixel, règle 3). L'écart à l'origine se calcule en
-//! minutes entières (`i64`), converti une seule fois en `f32` pour le dessin.
+//! minutes entières (`i64`), converti une seule fois en `f32` pour le dessin ;
+//! l'axe entier du rendu (`planrs_render::geometry::Axis16`, même plage et
+//! même échelle) accompagne la projection pour la géométrie partagée (J8,
+//! lot L11).
 
 use chrono::{Datelike, NaiveDate};
 use planrs_core::{Day, Moment, Project, Schedule, Weekday};
+use planrs_render::Zoom;
+use planrs_render::geometry::Axis16;
 use serde::{Deserialize, Serialize};
 
 use crate::format::{DateOrder, FormatLabels};
@@ -269,7 +274,27 @@ fn day_minutes(d: Day) -> i64 {
     i64::from(d.index()).saturating_mul(MINUTES_PER_DAY)
 }
 
+/// Zoom du rendu correspondant à un zoom de l'interface (mêmes échelles,
+/// H-R2 : 36, 12, 3,5 et 1,2 px par jour).
+#[must_use]
+pub const fn render_zoom(zoom: TimeScaleZoom) -> Zoom {
+    match zoom {
+        TimeScaleZoom::Day => Zoom::Day,
+        TimeScaleZoom::Week => Zoom::Week,
+        TimeScaleZoom::Month => Zoom::Month,
+        TimeScaleZoom::Quarter => Zoom::Quarter,
+    }
+}
+
 /// Projection temps → pixels, figée pour une image. Aucune méthode inverse.
+///
+/// Enveloppe `f32` de l'axe entier du rendu ([`Axis16`], ADR-0016 D5, J8
+/// lot L11) : même plage, même échelle exacte ; la géométrie partagée
+/// (`planrs_render::geometry`) travaille sur [`TimeAxis::axis16`], l'écran
+/// projette les instants en `f32` (écart entier en minutes converti une
+/// seule fois, comme J7). Les deux tombent au même 1/16 px, à l'arrondi
+/// près (P55) ; l'écran garde la précision `f32` pour que le modèle
+/// Classique reproduise J7 au pixel près.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TimeAxis {
     /// Premier jour de la plage.
@@ -286,6 +311,8 @@ pub struct TimeAxis {
     px_per_minute: f32,
     /// Abscisse écran du début de la plage (défilement horizontal inclus).
     left: f32,
+    /// Axe entier partagé avec le rendu, début de plage en 0.
+    axis16: Axis16,
 }
 
 impl TimeAxis {
@@ -305,7 +332,15 @@ impl TimeAxis {
             px_per_day,
             px_per_minute: px_per_day / i64_to_f32(MINUTES_PER_DAY),
             left: if left.is_finite() { left } else { 0.0 },
+            axis16: Axis16::for_days(range.start, end, render_zoom(zoom), 0),
         }
+    }
+
+    /// Axe entier partagé avec le rendu (même plage, même échelle, début
+    /// de plage en 0) : entrée des fonctions de géométrie (P55).
+    #[must_use]
+    pub const fn axis16(&self) -> &Axis16 {
+        &self.axis16
     }
 
     /// Abscisse écran d'une minute absolue. Hors de la plage, l'abscisse est
@@ -327,6 +362,15 @@ impl TimeAxis {
     #[must_use]
     pub fn x_day(&self, d: Day) -> f32 {
         self.x_minutes(day_minutes(d))
+    }
+
+    /// Abscisse écran d'une abscisse de l'axe entier (1/16 px depuis le
+    /// début de la plage) : décalages de la géométrie partagée (marges,
+    /// pointes), jamais un instant.
+    #[must_use]
+    pub fn x_of16(&self, x16: i64) -> f32 {
+        let x = self.left + i64_to_f32(x16) / 16.0;
+        if x.is_finite() { x } else { self.left }
     }
 
     /// Largeur totale du contenu, en pixels.

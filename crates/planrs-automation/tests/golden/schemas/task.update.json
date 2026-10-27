@@ -109,6 +109,29 @@
         "null"
       ]
     },
+    "mode": {
+      "anyOf": [
+        {
+          "description": "Mode de planification d'une tâche en JSON (J8, R-253).",
+          "oneOf": [
+            {
+              "const": "auto",
+              "description": "Planification automatique.",
+              "type": "string"
+            },
+            {
+              "const": "manual",
+              "description": "Planification manuelle (dates figées, S73).",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Mode de planification (J8, R-253) : vers manuel, dates planifiées\ncourantes figées ; vers automatique, valeurs manuelles retirées.\nSur une feuille manuelle, `start`, `finish` et `duration` écrivent\nles valeurs manuelles, sans contrainte (R-254)."
+    },
     "name": {
       "description": "Nom (`null` refusé).",
       "type": [

@@ -23,6 +23,7 @@ use egui::{Key, KeyboardShortcut, Modifiers};
 use crate::action::Action;
 use crate::nav::NavMove;
 use crate::structure::StructureOp;
+use crate::view::task_view::TaskViewOp;
 
 /// Raccourci de navigation dans la table.
 const fn nav(modifiers: Modifiers, key: Key, mv: NavMove, extend: bool) -> (KeyContext, Shortcut, Binding) {
@@ -91,6 +92,20 @@ pub enum UiBinding {
     ZoomFiner,
     /// Unités de temps plus grossières (Ctrl+-, H-UI-18).
     ZoomCoarser,
+    /// F3 : retire le filtre (J8, H-UI-30, S79).
+    ClearFilter,
+    /// Maj+F3 : ordre des ID (J8, H-UI-31, S75).
+    SortById,
+    /// Ctrl/Cmd+F : barre de recherche (J8, H-UI-33, S61).
+    Find,
+    /// Ctrl/Cmd+G : correspondance suivante (J8, H-UI-33).
+    FindNext,
+    /// Ctrl/Cmd+Maj+G : correspondance précédente (J8, H-UI-33).
+    FindPrevious,
+    /// Alt+Maj+− : masque les sous-tâches (J8, H-UI-34, S61).
+    HideSubtasks,
+    /// Alt+Maj++ ou = : affiche les sous-tâches (J8, H-UI-34, S61).
+    ShowSubtasks,
 }
 
 /// Liaison d'un raccourci.
@@ -273,7 +288,92 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
     doc_ui(COMMAND, Key::Equals, UiBinding::ZoomFiner),
     doc_ui(COMMAND, Key::Plus, UiBinding::ZoomFiner),
     doc_ui(COMMAND, Key::Minus, UiBinding::ZoomCoarser),
+    // --- J8 L9 : filtres, tri, recherche, repli (S61, S75, S79 ; H-UI-30 à
+    // H-UI-34). Maj+F3 avant F3 ; Ctrl/Cmd+Maj+G avant Ctrl/Cmd+G.
+    doc_ui(SHIFT, Key::F3, UiBinding::SortById),
+    doc_ui(NONE, Key::F3, UiBinding::ClearFilter),
+    doc_ui(COMMAND, Key::F, UiBinding::Find),
+    doc_ui(COMMAND_SHIFT, Key::G, UiBinding::FindPrevious),
+    doc_ui(COMMAND, Key::G, UiBinding::FindNext),
+    doc_ui(ALT_SHIFT, Key::Minus, UiBinding::HideSubtasks),
+    doc_ui(ALT_SHIFT, Key::Plus, UiBinding::ShowSubtasks),
+    doc_ui(ALT_SHIFT, Key::Equals, UiBinding::ShowSubtasks),
+    // --- J8 L10 ---
+    // --- J8 L12 ---
+    // --- J8 L13 ---
+    // --- J8 L15 ---
 ];
+
+/// Raccourcis que le navigateur ne rend jamais à la page (Ctrl/Cmd+N, W,
+/// T, Tab : H-UI-55) : jamais marqués interceptables.
+pub const WEB_NEVER: &[Key] = &[Key::N, Key::W, Key::T, Key::Tab];
+
+/// Vrai si l'entrée de [`KEYMAP`] doit être retenue au navigateur sur le
+/// web (H-UI-55 : Ctrl/Cmd+F, G, F3, Alt+←/→, Ctrl/Cmd+=…), pour que
+/// planrs la reçoive au lieu de l'action du navigateur (recherche dans la
+/// page, page précédente, zoom de la page…).
+///
+/// Écart au contrat écrit (« `Binding` gagne `web_interceptable` ») :
+/// `Binding` est une énumération et [`KEYMAP`] une table de triplets lus
+/// par les tests ; le drapeau est cette fonction (lot L13). Toute entrée
+/// l'est, sauf :
+/// - les touches de [`WEB_NEVER`] (Ctrl/Cmd+N, W, T, Tab) : le navigateur
+///   les garde de toute façon (nouvelle fenêtre, onglet), Tab reste à
+///   eframe ;
+/// - « Quitter » : une page ne ferme pas son onglet, et Ctrl/Cmd+Q doit
+///   rester au navigateur.
+#[must_use]
+pub fn web_interceptable(shortcut: &Shortcut, binding: Binding) -> bool {
+    !WEB_NEVER.contains(&shortcut.logical_key) && binding != Binding::Ui(UiBinding::Quit)
+}
+
+/// Raccourcis lus par l'image courante, vus du navigateur (H-UI-55) :
+/// photographie de [`crate::App::key_scope`] après chaque image, lue par
+/// la garde `keydown` de la version web.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KeyScope {
+    /// Aucun raccourci lu (saisie de texte, fenêtre modale, cellule en
+    /// cours d'édition) : tout reste au navigateur.
+    #[default]
+    Nothing,
+    /// Fenêtre non modale ouverte : seuls les raccourcis gardés à côté
+    /// d'elle (enregistrer, annuler, ouvrir…).
+    BesideWindow(KeyState),
+    /// Tous les raccourcis des contextes actifs.
+    All(KeyState),
+}
+
+impl KeyScope {
+    /// L'entrée est-elle lue par l'image dans ce périmètre ?
+    #[must_use]
+    pub fn reads(self, context: KeyContext, binding: Binding) -> bool {
+        match self {
+            Self::Nothing => false,
+            Self::BesideWindow(keys) => keys.allows(context) && BESIDE_WINDOW.contains(&binding),
+            Self::All(keys) => keys.allows(context),
+        }
+    }
+}
+
+/// Garde des raccourcis du web (H-UI-55) : vrai si l'appui `key` avec
+/// `modifiers` (tels qu'eframe les lit dans l'évènement `keydown`) doit
+/// être retenu au navigateur (`preventDefault`). La première entrée de
+/// [`KEYMAP`] lue dans `scope` qui correspond décide, comme
+/// [`dispatch`] (comparaison « logique » d'egui : Maj et Alt en trop
+/// ignorés) ; aucune entrée ⇒ faux, le navigateur garde la touche
+/// (Ctrl/Cmd+C, V, X compris : le presse-papiers passe par ses
+/// évènements).
+#[must_use]
+pub fn web_intercepts(scope: KeyScope, modifiers: Modifiers, key: Key) -> bool {
+    KEYMAP
+        .iter()
+        .find(|(context, shortcut, binding)| {
+            scope.reads(*context, *binding)
+                && shortcut.logical_key == key
+                && modifiers.matches_logically(shortcut.modifiers)
+        })
+        .is_some_and(|(_, shortcut, binding)| web_interceptable(shortcut, *binding))
+}
 
 /// État du clavier pour une image : contextes actifs de [`KEYMAP`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -346,6 +446,13 @@ pub const fn ui_action(binding: UiBinding) -> Action {
         UiBinding::TimescaleToEnd => Action::TimescaleToEnd,
         UiBinding::ZoomFiner => Action::ZoomBy(1),
         UiBinding::ZoomCoarser => Action::ZoomBy(-1),
+        UiBinding::ClearFilter => Action::TaskView(TaskViewOp::ClearFilter),
+        UiBinding::SortById => Action::TaskView(TaskViewOp::ResetSort),
+        UiBinding::Find => Action::TaskView(TaskViewOp::OpenSearch),
+        UiBinding::FindNext => Action::TaskView(TaskViewOp::SearchNext),
+        UiBinding::FindPrevious => Action::TaskView(TaskViewOp::SearchPrev),
+        UiBinding::HideSubtasks => Action::TaskView(TaskViewOp::HideSubtasks),
+        UiBinding::ShowSubtasks => Action::TaskView(TaskViewOp::ShowSubtasks),
     }
 }
 

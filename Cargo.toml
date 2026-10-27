@@ -6,6 +6,7 @@ members = [
     "crates/planrs-core",
     "crates/planrs-mspdi",
     "crates/planrs-render",
+    "crates/planrs-pdf",
     "crates/planrs-automation",
     "crates/planrs-mcp",
     "crates/planrs-ui-egui",
@@ -17,7 +18,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0-rc.1"
 edition = "2024"
 # eframe/egui 0.37 exigent Rust 1.95.
 rust-version = "1.95"
@@ -27,12 +28,13 @@ repository = "https://github.com/theodu78/planrs"
 
 [workspace.dependencies]
 # Crates internes (version explicite : pas de dépendance « wildcard » pour cargo-deny).
-planrs-core = { path = "crates/planrs-core", version = "0.1.0" }
-planrs-mspdi = { path = "crates/planrs-mspdi", version = "0.1.0" }
-planrs-render = { path = "crates/planrs-render", version = "0.1.0" }
-planrs-automation = { path = "crates/planrs-automation", version = "0.1.0" }
-planrs-mcp = { path = "crates/planrs-mcp", version = "0.1.0" }
-planrs-ui-egui = { path = "crates/planrs-ui-egui", version = "0.1.0" }
+planrs-core = { path = "crates/planrs-core", version = "1.0.0-rc.1" }
+planrs-mspdi = { path = "crates/planrs-mspdi", version = "1.0.0-rc.1" }
+planrs-render = { path = "crates/planrs-render", version = "1.0.0-rc.1" }
+planrs-pdf = { path = "crates/planrs-pdf", version = "1.0.0-rc.1" }
+planrs-automation = { path = "crates/planrs-automation", version = "1.0.0-rc.1" }
+planrs-mcp = { path = "crates/planrs-mcp", version = "1.0.0-rc.1" }
+planrs-ui-egui = { path = "crates/planrs-ui-egui", version = "1.0.0-rc.1" }
 
 # Dates en heure locale du projet, sans fuseau. On ne demande pas `clock`, mais
 # cela ne garantit rien : les features s'unifient sur le workspace et rmcp
@@ -114,6 +116,9 @@ cab = "0.6.0"
 # AND BSD-3-Clause), plutôt que des décodeurs faits main.
 csv = "1.4.0"
 encoding_rs = "0.8.42"
+# Repli des noms pour le filtre partagé (R-251, ADR-0016 D2) : NFD puis
+# marques combinantes retirées (MIT OR Apache-2.0, lot J8 L2).
+unicode-normalization = { version = "0.1.25", default-features = false, features = ["std"] }
 # Dépendances de développement de planrs-core (ADR-0008) : JSON de référence et
 # aller-retour serde, tests de propriétés. proptest sans `fork` ni `timeout`
 # (inutiles ici, et autant de crates en moins).
@@ -124,6 +129,11 @@ proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 # `tests/benches/schedule.rs`, exécuté par le job CI `perf`). Sans rayon ni
 # plotters : ni parallélisme ni graphiques, autant de crates en moins.
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+# Export PDF (planrs-pdf, ADR-0016 D8) : krilla épinglé exactement, sans
+# fonctions par défaut (ni rustybuzz, ni images matricielles : essai L0
+# consigné dans ADR-0016). skrifa à la version tirée par krilla (cmap).
+krilla = { version = "=0.8.2", default-features = false }
+skrifa = { version = "0.42.1", default-features = false, features = ["std"] }
 # Validation XSD des documents écrits (P26, ADR-0010 D17) : dépendance de
 # développement de planrs-tests, Rust pur, BSD-2-Clause.
 uppsala = "0.12.0"
@@ -159,3 +169,14 @@ allow_attributes_without_reason = "deny"
 # ramène sous ce seuil sans toucher aux assertions de débordement.
 [profile.test.package.planrs-core]
 opt-level = 1
+
+# Version web (J8, lot L13, C-REL-05) : `cargo_profile` de
+# `apps/planrs-web/Trunk.toml`. LTO complet et une seule unité de code
+# (taille du .wasm) ; `panic` inchangé (le crochet de panique d'eframe
+# reste actif). `opt-level` : « z » mesuré contre « s » (ADR-0016, budget
+# du web : 3 518 979 contre 3 960 257 octets gzip -9 après wasm-opt -Oz).
+[profile.wasm-release]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+opt-level = "z"

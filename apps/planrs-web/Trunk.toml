@@ -9,3 +9,9 @@ dist = "dist"
 public_url = "./"
 # Noms de fichiers suffixés par leur empreinte (cache navigateur sûr).
 filehash = true
+# Profil cargo du web (J8, lot L13) : `[profile.wasm-release]` du
+# Cargo.toml racine (LTO complet, une unité de code, optimisé en taille ;
+# budget C-REL-05 : .wasm gzip -9 ≤ 4 Mio ; SIMD 128 par
+# `.cargo/config.toml`). S'applique aussi à
+# `trunk serve` : construction plus lente, mais même binaire qu'en release.
+cargo_profile = "wasm-release"

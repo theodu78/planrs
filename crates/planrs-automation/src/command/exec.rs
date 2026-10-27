@@ -9,7 +9,9 @@ use std::collections::BTreeMap;
 use planrs_core::calendar::{Calendar, CalendarSet};
 use planrs_core::{Arena, CalendarUid, Diagnostic, Project, ResourceUid, Schedule, Subject, TaskUid};
 
-use super::{Command, assignment, baseline, calendar, constraint, link, progress, project, resource, task};
+use super::{
+    Command, assignment, baseline, calendar, constraint, link, progress, project, resource, style, task,
+};
 use crate::error::{CommandError, CommandErrorKind, codes};
 use crate::outcome::SideEffect;
 use crate::text::TextContext;
@@ -79,6 +81,12 @@ pub(crate) struct BatchCache {
     spent: u64,
     /// Calendriers (et calendrier du projet) et leur compilation.
     calendars: Option<(Arena<CalendarUid, Calendar>, CalendarUid, CalendarSet)>,
+    /// Planning de référence d'une suite de passages en manuel purs
+    /// (`task.update { mode: manual }` seul, R-253 ; relecture finale de
+    /// J8) : figer une tâche à ses dates courantes ne déplace aucune autre
+    /// tâche, la suite lit donc ce planning sans recalcul ; retiré par toute
+    /// autre opération.
+    freeze: Option<Schedule>,
 }
 
 impl BatchCache {
@@ -90,6 +98,7 @@ impl BatchCache {
             fresh: false,
             spent: 0,
             calendars: None,
+            freeze: None,
         }
     }
 }
@@ -141,6 +150,19 @@ impl Ctx<'_> {
         Ok(())
     }
 
+    /// Planning de référence de la suite de passages en manuel purs en
+    /// cours (voir `BatchCache::freeze`).
+    pub(crate) const fn freeze_schedule(&self) -> Option<&Schedule> {
+        self.cache.freeze.as_ref()
+    }
+
+    /// Garde le planning courant comme référence des passages en manuel
+    /// purs qui suivent.
+    pub(crate) fn keep_freeze_schedule(&mut self) {
+        let s = self.schedule().clone();
+        self.cache.freeze = Some(s);
+    }
+
     /// Planning courant posé par le dernier [`Ctx::ensure_schedule`].
     pub(crate) fn schedule(&self) -> &Schedule {
         match &self.cache.last {
@@ -178,6 +200,11 @@ pub(crate) trait Exec {
 
 impl Exec for Command {
     fn exec(&self, ctx: &mut Ctx<'_>) -> Result<(), CommandError> {
+        // Toute opération autre qu'un passage en manuel pur retire le
+        // planning de référence de la suite (R-253, relecture finale J8).
+        if !matches!(self, Self::TaskUpdate(op) if task::is_pure_freeze(op)) {
+            ctx.cache.freeze = None;
+        }
         match self {
             Self::TaskAdd(op) => task::add(op, ctx),
             Self::TaskUpdate(op) => task::update(op, ctx),
@@ -209,6 +236,9 @@ impl Exec for Command {
             Self::CalendarSetWeek(op) => calendar::set_week(op, ctx),
             Self::CalendarDelete(op) => calendar::delete(op, ctx),
             Self::BaselineClear(op) => baseline::clear(op, ctx),
+            Self::StyleApply(op) => style::apply(op, ctx),
+            Self::StyleSetBarRole(op) => style::set_bar_role(op, ctx),
+            Self::StyleResetToTemplate(op) => style::reset_to_template(op, ctx),
         }
     }
 }

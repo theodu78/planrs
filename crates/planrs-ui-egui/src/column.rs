@@ -44,6 +44,9 @@ pub enum Column {
     /// Variation de fin par rapport à la ligne de base 0, en jours ouvrés
     /// signés (J7).
     FinishVariance,
+    /// Mode de planification, « Manuelle » / « Automatique » (J8, lot L11,
+    /// H-UI-36 ; lecture seule, masquée par défaut).
+    Mode,
 }
 
 /// Alignement horizontal du texte d'une cellule.
@@ -59,7 +62,7 @@ pub enum CellAlign {
 
 impl Column {
     /// Toutes les colonnes, dans l'ordre d'affichage.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Id,
         Self::Name,
         Self::Duration,
@@ -73,6 +76,7 @@ impl Column {
         Self::BaselineStart,
         Self::BaselineFinish,
         Self::FinishVariance,
+        Self::Mode,
     ];
 
     /// Nombre de colonnes (longueur de [`Column::ALL`]).
@@ -101,6 +105,7 @@ impl Column {
             Self::BaselineStart => 10,
             Self::BaselineFinish => 11,
             Self::FinishVariance => 12,
+            Self::Mode => 13,
         }
     }
 
@@ -113,7 +118,7 @@ impl Column {
             Self::Name => 220,
             Self::Duration | Self::TotalSlack | Self::FinishVariance => 80,
             Self::Start | Self::Finish | Self::BaselineStart | Self::BaselineFinish => 96,
-            Self::Predecessors => 110,
+            Self::Predecessors | Self::Mode => 110,
             Self::Critical | Self::PercentComplete => 60,
             Self::ResourceNames => 140,
         }
@@ -132,6 +137,7 @@ impl Column {
                 | Self::BaselineStart
                 | Self::BaselineFinish
                 | Self::FinishVariance
+                | Self::Mode
         )
     }
 
@@ -157,7 +163,8 @@ impl Column {
             | Self::Predecessors
             | Self::ResourceNames
             | Self::BaselineStart
-            | Self::BaselineFinish => CellAlign::Left,
+            | Self::BaselineFinish
+            | Self::Mode => CellAlign::Left,
         }
     }
 
@@ -178,6 +185,7 @@ impl Column {
             Self::BaselineStart => TextId::ColBaselineStart,
             Self::BaselineFinish => TextId::ColBaselineFinish,
             Self::FinishVariance => TextId::ColFinishVariance,
+            Self::Mode => TextId::ColMode,
         }
     }
 }
@@ -222,7 +230,7 @@ mod tests {
 
     #[test]
     fn column_ordinal_matches_all() {
-        assert_eq!(Column::COUNT, 13);
+        assert_eq!(Column::COUNT, 14);
         for (index, column) in Column::ALL.iter().enumerate() {
             assert_eq!(column.ordinal(), index, "{column:?}");
         }
@@ -231,7 +239,10 @@ mod tests {
     #[test]
     fn column_default_widths() {
         let widths: Vec<u16> = Column::ALL.iter().map(|c| c.default_width()).collect();
-        assert_eq!(widths, [40, 220, 80, 96, 96, 110, 80, 60, 60, 140, 96, 96, 80]);
+        assert_eq!(
+            widths,
+            [40, 220, 80, 96, 96, 110, 80, 60, 60, 140, 96, 96, 80, 110]
+        );
         for column in Column::ALL {
             let width = column.default_width();
             assert!((Column::MIN_WIDTH..=Column::MAX_WIDTH).contains(&width));
@@ -251,6 +262,7 @@ mod tests {
                 Column::BaselineStart,
                 Column::BaselineFinish,
                 Column::FinishVariance,
+                Column::Mode,
             ]
         );
         assert_eq!(Column::default(), Column::Name);

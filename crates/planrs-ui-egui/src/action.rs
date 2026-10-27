@@ -8,6 +8,7 @@ use planrs_automation::Batch;
 use planrs_automation::gesture::GestureError;
 use planrs_core::TaskUid;
 
+use crate::clipboard::ClipboardOp;
 use crate::column::Column;
 use crate::nav::NavMove;
 use crate::selection::SelectMode;
@@ -15,6 +16,8 @@ use crate::state::{GanttStyle, LanguagePref, ThemePref, ViewKind};
 use crate::structure::StructureOp;
 use crate::timescale::TimeScaleZoom;
 use crate::view::Pane;
+use crate::view::side_panel::SideOp;
+use crate::view::task_view::TaskViewOp;
 
 /// Intention de l'utilisateur, appliquée en fin d'image. Pas `Copy` :
 /// [`Action::Exec`] porte un lot de commandes (ADR-0012 D11).
@@ -160,6 +163,80 @@ pub enum Action {
     /// Geste du Gantt refusé au lâcher (J7, lot L8 : barre commencée,
     /// jalon, écart hors limites) : message au bandeau.
     GestureRefused(GestureError),
+    // --- J8 L9 : vue des tâches (filtres, tri, repli, recherche).
+    /// Commande de la vue des tâches (aucune écriture dans le document,
+    /// P50).
+    TaskView(TaskViewOp),
+    // --- J8 L10 : presse-papiers et import CSV (H-UI-39, H-UI-40).
+    /// Couper, copier, coller ou « Collage spécial… » des lignes
+    /// sélectionnées (menu Édition ; les touches arrivent en
+    /// `Event::Cut/Copy/Paste`).
+    Clipboard(ClipboardOp),
+    /// Fichier → Importer CSV… : sélecteur de fichiers, puis aperçu.
+    ImportCsv,
+    // --- J8 L13 : exports téléchargés (web) ou enregistrés (desktop).
+    /// Fichier → Exporter → PDF, SVG ou CSV : octets produits par
+    /// `planrs_automation`, remis au `FileService` (boîte « Enregistrer
+    /// sous » sur le desktop, téléchargement sur le web).
+    Export(crate::io::SaveKind),
+    // --- J8 L12 : volet latéral (H-UI-41, H-UI-58).
+    /// Ouvre, referme ou change d'onglet le volet latéral.
+    SidePanel(SideOp),
+    // --- J8 L15 : menu Tâche, barre d'outils, mise en forme.
+    /// Commande de tâche sur la sélection (menu Tâche, barre d'outils) :
+    /// un seul lot, une entrée d'annulation (R-252, R-253, R-255).
+    TaskCmd(TaskCmd),
+    /// Mise en forme : volet des barres, modèles personnels (H-UI-52,
+    /// H-UI-59 à H-UI-61, H-UI-65).
+    Format(FormatOp),
+    /// Affichage → « Graphique seul » (H-UI-64) : table réduite au N° et
+    /// au Nom à l'écran.
+    SetChartOnly(bool),
+    /// Affichage → surbrillance du chemin critique (H-UI-38).
+    SetHighlightCritical(bool),
+    /// Aide → À propos : nom et version au bandeau.
+    About,
+}
+
+/// Commande de tâche du menu Tâche et de la barre d'outils (J8 lot L15).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaskCmd {
+    /// Marquer n % (H-UI-35, R-252).
+    MarkPercent(planrs_automation::helpers::PercentStep),
+    /// Basculer manuel ↔ automatique (H-UI-36, R-253).
+    ToggleMode,
+    /// Activer ou désactiver (R-255).
+    ToggleActive,
+}
+
+/// Opération de mise en forme (J8 lot L15).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FormatOp {
+    /// Ouvre le volet de mise en forme des barres d'un type (H-UI-59) ;
+    /// `task` : tâche cliquée (couleur de phase d'une récapitulative,
+    /// H-UI-65).
+    OpenBars {
+        /// Type de barre.
+        role: planrs_render::style::BarRole,
+        /// Tâche de la barre cliquée.
+        task: Option<TaskUid>,
+    },
+    /// Referme le volet.
+    CloseBars,
+    /// Change le type de barre du volet.
+    SetRole(planrs_render::style::BarRole),
+    /// « Enregistrer comme modèle personnel » : style du document sous ce
+    /// nom (H-UI-52, H-UI-61).
+    SaveUserTemplate(String),
+    /// Applique le modèle personnel d'indice donné (une entrée
+    /// d'annulation).
+    ApplyUserTemplate(usize),
+    /// Modèle des documents sans style (H-UI-43).
+    SetDefaultTemplate(planrs_render::style::TemplateId),
+    /// Mois relatifs M1… en haut de l'échelle (H-UI-67, « en option » :
+    /// case du menu Format, relecture finale de J8) ; une entrée
+    /// d'annulation.
+    SetRelativeMonths(bool),
 }
 
 /// Fenêtre à ouvrir (J7, ADR-0015 D6 ; `Action::OpenDialog` reste le
@@ -185,6 +262,20 @@ pub enum DialogKind {
     Reschedule,
     /// « Affecter des ressources » (lot L13).
     AssignResources,
+    /// « Collage spécial… » (J8, lot L10) : options du collage du tampon
+    /// interne.
+    PasteSpecial,
+    /// Aperçu de l'import CSV (J8, lot L10, H-UI-40), ouvert à l'arrivée
+    /// du fichier choisi.
+    CsvImport,
+    /// Galerie des modèles de mise en forme (J8, lot L15, H-UI-52).
+    Gallery,
+    /// « Mise en page » ; `print_mode` : ouverte en mode impression
+    /// (H-UI-68), colonnes d'impression appliquées à l'aperçu.
+    PageSetup {
+        /// Mode impression.
+        print_mode: bool,
+    },
 }
 
 /// Action d'interface d'un agent (`app.ui`, J7) : sans historique, sans

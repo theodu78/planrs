@@ -12,7 +12,16 @@
 //! Gantt ([`GanttStyle`]) et fichiers récents ([`RecentFile`]), champs
 //! ajoutés avec valeur par défaut : la version reste 1 (un état J6 se lit
 //! sans avertissement).
+//!
+//! J8 (ADR-0016, contrat L0) : préférences de la vue des tâches
+//! ([`TaskViewPrefs`] : niveau affiché, surbrillance du critique), modèle
+//! de mise en forme par défaut, modèles personnels ([`NamedStyle`]) et
+//! écriture du style dans le fichier ; même règle, la version reste 1 (un
+//! état J7 se lit sans avertissement). Filtre, tri et repli sont des vues
+//! non persistées ([`TaskViewState`]).
 
+use planrs_automation::filter::{FilterPreset, TaskFilter};
+use planrs_render::style::{DocStyle, TemplateId};
 use serde::{Deserialize, Serialize};
 
 use crate::column::{Column, ColumnState};
@@ -39,6 +48,16 @@ pub const TABLE_WIDTH_DEFAULT: u16 = 642;
 /// Fichiers récents gardés au plus (H-UI-28).
 pub const MAX_RECENT_FILES: usize = 10;
 
+/// Modèles personnels gardés au plus (J8).
+pub const MAX_USER_TEMPLATES: usize = 32;
+
+/// Longueur maximale du nom d'un modèle personnel, en caractères (J8).
+pub const MAX_USER_TEMPLATE_NAME: usize = 64;
+
+/// Niveau hiérarchique affiché au plus par « Afficher jusqu'au niveau n »
+/// (H-UI-34).
+pub const MAX_OUTLINE_LEVEL: u8 = 9;
+
 /// Préférences d'interface persistées.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -64,6 +83,184 @@ pub struct UiState {
     /// Fichiers récents, le plus récent en tête, [`MAX_RECENT_FILES`] au
     /// plus (J7, H-UI-28).
     pub recent: Vec<RecentFile>,
+    /// Préférences de la vue des tâches (J8).
+    pub task_view: TaskViewPrefs,
+    /// Modèle des documents sans style (J8, H-UI-43 : Classique jusqu'au
+    /// lot L15, Sobre ensuite).
+    pub default_template: TemplateId,
+    /// Modèles personnels, [`MAX_USER_TEMPLATES`] au plus (J8).
+    pub user_templates: Vec<NamedStyle>,
+    /// Écrire le style choisi dans le fichier (`<?planrs-style?>`, J8,
+    /// H-R12) ; faux : jamais.
+    pub write_style_to_file: bool,
+    /// « Graphique seul » à l'écran (J8 lot L15, H-UI-64) : la table est
+    /// réduite au N° et au Nom, les colonnes choisies sont gardées.
+    pub chart_only: bool,
+}
+
+/// Préférences persistées de la vue des tâches (J8, ADR-0016 D2) : seul
+/// « Afficher jusqu'au niveau n » et la surbrillance du critique sont
+/// gardés ; filtre, tri et repli ne le sont pas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskViewPrefs {
+    /// Niveau affiché (1 à 9 ; `None` : tous).
+    pub outline_level: Option<u8>,
+    /// Surbrillance du chemin critique (H-UI-38, vrai par défaut).
+    pub highlight_critical: bool,
+}
+
+impl Default for TaskViewPrefs {
+    fn default() -> Self {
+        Self {
+            outline_level: None,
+            highlight_critical: true,
+        }
+    }
+}
+
+/// Modèle personnel : nom et style (modèle de base et surcharges).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NamedStyle {
+    /// Nom affiché (≤ [`MAX_USER_TEMPLATE_NAME`] caractères).
+    pub name: String,
+    /// Style.
+    pub style: DocStyle,
+}
+
+/// Choix de filtre de la vue des tâches.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FilterChoice {
+    /// Filtre prédéfini.
+    Preset(FilterPreset),
+    /// Filtre personnalisé.
+    Custom(TaskFilter),
+}
+
+impl Default for FilterChoice {
+    fn default() -> Self {
+        Self::Preset(FilterPreset::All)
+    }
+}
+
+/// Clé de tri (H-UI-31).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SortKey {
+    /// Ordre des ID (Maj+F3).
+    #[default]
+    Id,
+    /// Nom.
+    Name,
+    /// Début.
+    Start,
+    /// Fin.
+    Finish,
+    /// Durée.
+    Duration,
+    /// % achevé.
+    PercentComplete,
+    /// Marge totale.
+    TotalSlack,
+}
+
+impl SortKey {
+    /// Clés proposées par la fenêtre « Trier » (J8, lot L9), dans l'ordre.
+    pub const ALL: [Self; 7] = [
+        Self::Id,
+        Self::Name,
+        Self::Start,
+        Self::Finish,
+        Self::Duration,
+        Self::PercentComplete,
+        Self::TotalSlack,
+    ];
+
+    /// Colonne dont le titre nomme la clé.
+    #[must_use]
+    pub const fn column(self) -> Column {
+        match self {
+            Self::Id => Column::Id,
+            Self::Name => Column::Name,
+            Self::Start => Column::Start,
+            Self::Finish => Column::Finish,
+            Self::Duration => Column::Duration,
+            Self::PercentComplete => Column::PercentComplete,
+            Self::TotalSlack => Column::TotalSlack,
+        }
+    }
+}
+
+/// Tri de la vue des tâches (sans renumérotation).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SortSpec {
+    /// Clé.
+    pub key: SortKey,
+    /// Décroissant.
+    pub descending: bool,
+    /// « Conserver la structure » (tri des frères, coché par défaut).
+    pub keep_outline: bool,
+}
+
+/// État de la vue des tâches (J8, ADR-0016 D2) : une vue, rien d'écrit
+/// (P50). Contrat posé par le lot L0, lu par `RowView` en L5.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskViewState {
+    /// Filtre.
+    pub filter: FilterChoice,
+    /// Tri (`None` : ordre des ID).
+    pub sort: Option<SortSpec>,
+    /// Niveau affiché (`None` : tous).
+    pub outline_level: Option<u8>,
+    /// Surbrillance du chemin critique.
+    pub highlight_critical: bool,
+}
+
+impl TaskViewState {
+    /// Filtre effectif (préréglage déplié).
+    #[must_use]
+    pub fn task_filter(&self) -> TaskFilter {
+        match &self.filter {
+            FilterChoice::Preset(preset) => TaskFilter::from_preset(preset),
+            FilterChoice::Custom(filter) => filter.clone(),
+        }
+    }
+
+    /// Un filtre est posé (autre que « Toutes les tâches »).
+    #[must_use]
+    pub fn is_filtered(&self) -> bool {
+        match &self.filter {
+            FilterChoice::Preset(FilterPreset::All) => false,
+            FilterChoice::Preset(_) => true,
+            FilterChoice::Custom(filter) => !filter.is_empty(),
+        }
+    }
+
+    /// Un tri est posé (autre que l'ordre des ID croissant).
+    #[must_use]
+    pub fn is_sorted(&self) -> bool {
+        self.sort
+            .is_some_and(|spec| spec.key != SortKey::Id || spec.descending)
+    }
+
+    /// Sous tri ou filtre, les opérations de structure qui déplacent des
+    /// lignes sont grisées (H-UI-32, J8 lot L9).
+    #[must_use]
+    pub fn reorder_locked(&self) -> bool {
+        self.is_filtered() || self.is_sorted()
+    }
+}
+
+impl Default for TaskViewState {
+    fn default() -> Self {
+        let prefs = TaskViewPrefs::default();
+        Self {
+            filter: FilterChoice::default(),
+            sort: None,
+            outline_level: prefs.outline_level,
+            highlight_critical: prefs.highlight_critical,
+        }
+    }
 }
 
 /// Vue principale (J7, ADR-0015 D6).
@@ -168,6 +365,13 @@ impl Default for UiState {
             view: ViewKind::default(),
             gantt_style: GanttStyle::default(),
             recent: Vec::new(),
+            task_view: TaskViewPrefs::default(),
+            // Sobre retouché (H-UI-62 à H-UI-64) après les retours du
+            // propriétaire du 2026-10-26 (J8 lot L15, H-UI-43).
+            default_template: TemplateId::Sobre,
+            user_templates: Vec::new(),
+            write_style_to_file: true,
+            chart_only: false,
         }
     }
 }
@@ -223,6 +427,11 @@ impl UiState {
             view: reader.field("view", defaults.view),
             gantt_style: reader.field("gantt_style", defaults.gantt_style),
             recent: reader.field("recent", defaults.recent),
+            task_view: reader.field("task_view", defaults.task_view),
+            default_template: reader.field("default_template", defaults.default_template),
+            user_templates: reader.list("user_templates", defaults.user_templates),
+            write_style_to_file: reader.field("write_style_to_file", defaults.write_style_to_file),
+            chart_only: reader.field("chart_only", defaults.chart_only),
         };
         let warning = (!reader.bad.is_empty()).then_some(StateLoadError::Fields(reader.bad));
         (state.normalized(), warning)
@@ -250,6 +459,16 @@ impl UiState {
             },
         );
         self.recent.truncate(MAX_RECENT_FILES);
+        self.user_templates.truncate(MAX_USER_TEMPLATES);
+        for t in &mut self.user_templates {
+            if t.name.chars().count() > MAX_USER_TEMPLATE_NAME {
+                t.name = t.name.chars().take(MAX_USER_TEMPLATE_NAME).collect();
+            }
+        }
+        self.task_view.outline_level = self
+            .task_view
+            .outline_level
+            .map(|n| n.clamp(1, MAX_OUTLINE_LEVEL));
     }
 
     /// Retire `path` des fichiers récents (fichier introuvable, H-UI-28).
@@ -267,6 +486,16 @@ impl UiState {
     pub fn normalized(mut self) -> Self {
         self.version = UI_STATE_VERSION;
         self.recent.truncate(MAX_RECENT_FILES);
+        self.user_templates.truncate(MAX_USER_TEMPLATES);
+        for t in &mut self.user_templates {
+            if t.name.chars().count() > MAX_USER_TEMPLATE_NAME {
+                t.name = t.name.chars().take(MAX_USER_TEMPLATE_NAME).collect();
+            }
+        }
+        self.task_view.outline_level = self
+            .task_view
+            .outline_level
+            .map(|n| n.clamp(1, MAX_OUTLINE_LEVEL));
         self.table_width = self.table_width.clamp(TABLE_WIDTH_MIN, TABLE_WIDTH_MAX);
         let columns = Column::ALL
             .iter()
@@ -296,7 +525,26 @@ impl UiState {
 
     /// Colonnes visibles, dans l'ordre d'affichage.
     pub fn visible_columns(&self) -> impl Iterator<Item = ColumnState> + '_ {
-        self.columns.iter().copied().filter(|state| state.visible)
+        let chart_only = self.chart_only;
+        self.columns
+            .iter()
+            .copied()
+            .filter(move |state| state.visible && (!chart_only || !state.column.hideable()))
+    }
+
+    /// Largeur de la table à l'écran : celle choisie, ou la somme des
+    /// colonnes N° et Nom en « graphique seul » (H-UI-64), séparateurs
+    /// compris.
+    #[must_use]
+    pub fn effective_table_width(&self) -> u16 {
+        if self.chart_only {
+            let sum: u32 = self.visible_columns().map(|c| u32::from(c.width)).sum();
+            u16::try_from(sum.saturating_add(2))
+                .unwrap_or(u16::MAX)
+                .clamp(TABLE_WIDTH_MIN, TABLE_WIDTH_MAX)
+        } else {
+            self.table_width
+        }
     }
 
     /// Affiche ou masque `column` (J7, lot L6) ; l'ID et le Nom restent
@@ -351,6 +599,35 @@ impl FieldReader<'_> {
         }
     }
 
+    /// Champ liste `name` (J8, modèles personnels) : chaque entrée est lue
+    /// seule ; une entrée illisible est écartée et le champ relevé une
+    /// fois. Pas un tableau → `default`, relevé.
+    fn list<T: serde::de::DeserializeOwned>(&mut self, name: &'static str, default: Vec<T>) -> Vec<T> {
+        let Some(raw) = self.object.get(name) else {
+            return default;
+        };
+        let Some(entries) = raw.as_array() else {
+            log::warn!("état d'interface : champ « {name} » ignoré : tableau attendu");
+            self.bad.push(name);
+            return default;
+        };
+        let mut out = Vec::new();
+        let mut skipped = false;
+        for entry in entries {
+            match T::deserialize(entry) {
+                Ok(v) => out.push(v),
+                Err(error) => {
+                    log::warn!("état d'interface : entrée de « {name} » ignorée : {error}");
+                    skipped = true;
+                }
+            }
+        }
+        if skipped {
+            self.bad.push(name);
+        }
+        out
+    }
+
     /// Champ `columns` : un tableau dont chaque entrée est lue seule ; une
     /// entrée illisible (colonne inconnue d'une version future, largeur hors
     /// type…) est écartée et le champ relevé une fois. Pas un tableau →
@@ -383,6 +660,65 @@ impl FieldReader<'_> {
     }
 }
 
+/// Refus d'enregistrement d'un modèle personnel (J8, H-UI-61).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum UserTemplateError {
+    /// Nom vide ou de plus de [`MAX_USER_TEMPLATE_NAME`] caractères.
+    #[error("nom de modèle de 1 à {MAX_USER_TEMPLATE_NAME} caractères attendu")]
+    BadName,
+    /// [`MAX_USER_TEMPLATES`] modèles déjà enregistrés (un nom existant
+    /// reste remplaçable).
+    #[error("{MAX_USER_TEMPLATES} modèles personnels au plus")]
+    Full,
+}
+
+/// Style du document et modèles (J8, lot L6 ; ADR-0016 D7).
+impl UiState {
+    /// Style effectif d'un document (H-UI-43) : son style s'il en a un
+    /// lisible, sinon le modèle par défaut des préférences.
+    #[must_use]
+    pub fn effective_style(&self, project: &planrs_core::Project) -> planrs_render::style::PlanStyle {
+        planrs_automation::command::style::effective_style(project, self.default_template)
+    }
+
+    /// Options d'écriture MSPDI selon les préférences : style du document
+    /// écrit (`<?planrs-style?>`) seulement si `write_style_to_file`.
+    #[must_use]
+    pub fn write_options(&self) -> planrs_mspdi::write::WriteOptions {
+        planrs_mspdi::write::WriteOptions {
+            style: self.write_style_to_file,
+            ..planrs_mspdi::write::WriteOptions::default()
+        }
+    }
+
+    /// Enregistre un modèle personnel (« Enregistrer comme modèle »,
+    /// H-UI-61) : nom rogné, un modèle de même nom est remplacé sur place,
+    /// sinon ajouté en fin de liste.
+    ///
+    /// # Errors
+    ///
+    /// [`UserTemplateError::BadName`], [`UserTemplateError::Full`].
+    pub fn save_user_template(&mut self, name: &str, style: DocStyle) -> Result<(), UserTemplateError> {
+        let name = name.trim();
+        let n = name.chars().count();
+        if n == 0 || n > MAX_USER_TEMPLATE_NAME {
+            return Err(UserTemplateError::BadName);
+        }
+        if let Some(t) = self.user_templates.iter_mut().find(|t| t.name == name) {
+            t.style = style;
+            return Ok(());
+        }
+        if self.user_templates.len() >= MAX_USER_TEMPLATES {
+            return Err(UserTemplateError::Full);
+        }
+        self.user_templates.push(NamedStyle {
+            name: name.to_owned(),
+            style,
+        });
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -392,9 +728,13 @@ impl FieldReader<'_> {
     reason = "tests : un échec doit s'arrêter net et lisiblement"
 )]
 mod tests {
+    use planrs_automation::filter::FilterPreset;
+    use planrs_render::style::TemplateId;
+
     use super::{
-        GanttStyle, LanguagePref, MAX_RECENT_FILES, RecentFile, StateLoadError, TABLE_WIDTH_DEFAULT,
-        TABLE_WIDTH_MAX, TABLE_WIDTH_MIN, ThemePref, UI_STATE_VERSION, UiState, ViewKind,
+        FilterChoice, GanttStyle, LanguagePref, MAX_OUTLINE_LEVEL, MAX_RECENT_FILES, MAX_USER_TEMPLATE_NAME,
+        MAX_USER_TEMPLATES, NamedStyle, RecentFile, StateLoadError, TABLE_WIDTH_DEFAULT, TABLE_WIDTH_MAX,
+        TABLE_WIDTH_MIN, TaskViewPrefs, TaskViewState, ThemePref, UI_STATE_VERSION, UiState, ViewKind,
     };
     use crate::column::{Column, ColumnState};
     use crate::timescale::TimeScaleZoom;
@@ -428,9 +768,10 @@ mod tests {
         assert_eq!(state.view, ViewKind::Gantt);
         assert_eq!(state.gantt_style, GanttStyle::Standard);
         assert_eq!(state.recent.len(), 0);
-        let j7: Vec<ColumnState> = state.columns.iter().copied().skip(8).collect();
-        assert_eq!(j7.len(), 5);
-        assert!(j7.iter().all(|c| !c.visible));
+        // Colonnes J7 et colonne « Mode » (J8, lot L11) ajoutées masquées.
+        let added: Vec<ColumnState> = state.columns.iter().copied().skip(8).collect();
+        assert_eq!(added.len(), 6);
+        assert!(added.iter().all(|c| !c.visible));
     }
 
     /// Champs J7 relus ; fichiers récents coupés à 10 (H-UI-28).
@@ -457,6 +798,93 @@ mod tests {
         let (read, warning) = UiState::from_json_lenient(r#"{"view":"calendar"}"#);
         assert_eq!(read.view, ViewKind::Gantt);
         assert!(matches!(warning, Some(StateLoadError::Fields(f)) if f == ["view"]));
+    }
+
+    /// État J7 (sans les champs J8) : lu sans avertissement, champs J8 à
+    /// leur défaut (contrat J8 L0 : la version reste 1).
+    #[test]
+    fn ui_state_v1_j7_reads_without_new_fields() {
+        const J7: &str = include_str!("../tests/fixtures/ui_state_v1_j7.json");
+        assert!(!J7.contains("task_view") && !J7.contains("default_template"));
+        let (state, warning) = UiState::from_json_lenient(J7);
+        assert!(warning.is_none(), "{warning:?}");
+        assert_eq!(state, UiState::default());
+        // J8 lot L15 : Sobre devient le modèle par défaut (H-UI-43).
+        assert_eq!(state.default_template, TemplateId::Sobre);
+        assert!(state.task_view.highlight_critical && state.write_style_to_file);
+        assert!(!state.chart_only);
+    }
+
+    /// Champs J8 relus à l'identique ; bornes appliquées ; une entrée de
+    /// modèle personnel illisible est écartée seule.
+    #[test]
+    fn ui_state_v1_roundtrip() {
+        let sobre = planrs_render::style::parse_doc_style(r#"{"base":"sobre","v":1}"#).unwrap();
+        let state = UiState {
+            task_view: TaskViewPrefs {
+                outline_level: Some(2),
+                highlight_critical: false,
+            },
+            default_template: TemplateId::Sobre,
+            user_templates: vec![NamedStyle {
+                name: "Agence".to_owned(),
+                style: sobre.clone(),
+            }],
+            write_style_to_file: false,
+            ..UiState::default()
+        };
+        let (read, warning) = UiState::from_json_lenient(&state.to_json().unwrap());
+        assert!(warning.is_none(), "{warning:?}");
+        assert_eq!(read, state);
+
+        let json = r#"{"task_view":{"outline_level":40,"highlight_critical":true},
+            "user_templates":[{"name":"A","style":{"v":1,"base":"sobre"}},{"name":"B","style":{"v":1,"base":"inconnu"}}]}"#;
+        let (read, warning) = UiState::from_json_lenient(json);
+        assert_eq!(read.task_view.outline_level, Some(MAX_OUTLINE_LEVEL));
+        assert_eq!(read.user_templates.len(), 1);
+        assert_eq!(read.user_templates[0].style, sobre);
+        assert!(matches!(warning, Some(StateLoadError::Fields(f)) if f == ["user_templates"]));
+        let many: Vec<NamedStyle> = (0..40)
+            .map(|i| NamedStyle {
+                name: format!("{i}{}", "x".repeat(100)),
+                style: sobre.clone(),
+            })
+            .collect();
+        let state = UiState {
+            user_templates: many,
+            ..UiState::default()
+        }
+        .normalized();
+        assert_eq!(state.user_templates.len(), MAX_USER_TEMPLATES);
+        assert!(
+            state
+                .user_templates
+                .iter()
+                .all(|t| t.name.chars().count() == MAX_USER_TEMPLATE_NAME)
+        );
+        assert_eq!(
+            TaskViewState::default().filter,
+            FilterChoice::Preset(FilterPreset::All)
+        );
+    }
+
+    /// H-UI-64 : « graphique seul » réduit la table au N° et au Nom sans
+    /// toucher aux colonnes choisies ; relu à l'identique.
+    #[test]
+    fn h_ui_64_chart_only_keeps_columns() {
+        let mut state = UiState::default();
+        let before: Vec<ColumnState> = state.columns.clone();
+        state.chart_only = true;
+        let shown: Vec<Column> = state.visible_columns().map(|c| c.column).collect();
+        assert_eq!(shown, [Column::Id, Column::Name]);
+        assert_eq!(state.effective_table_width(), 40 + 220 + 2);
+        assert_eq!(state.columns, before);
+        let (read, warning) = UiState::from_json_lenient(&state.to_json().unwrap());
+        assert!(warning.is_none(), "{warning:?}");
+        assert!(read.chart_only);
+        state.chart_only = false;
+        assert_eq!(state.visible_columns().count(), 6);
+        assert_eq!(state.effective_table_width(), TABLE_WIDTH_DEFAULT);
     }
 
     #[test]
@@ -722,5 +1150,86 @@ mod tests {
         assert!(warning.is_none(), "{warning:?}");
         assert_eq!(read, state);
         assert_eq!(read.to_json().unwrap(), json);
+    }
+
+    fn project() -> planrs_core::Project {
+        let now: planrs_core::Moment = "2026-10-19T08:00".parse().unwrap();
+        planrs_core::Project::new(planrs_core::ProjectInit {
+            name: "P".to_owned(),
+            anchor: planrs_core::ScheduleAnchor::FromStart(now),
+            current_date: now,
+            calendar_names: planrs_core::BuiltinCalendarNames::default(),
+        })
+    }
+
+    /// H-UI-43 : document sans style ⇒ modèle par défaut des préférences
+    /// (Sobre depuis le lot L15) ; document stylé ⇒ son style.
+    #[test]
+    fn h_ui_43_default_template_applied() {
+        use planrs_render::style::template;
+        let mut state = UiState::default();
+        let mut p = project();
+        assert_eq!(state.effective_style(&p), template(TemplateId::Sobre));
+        state.default_template = TemplateId::Classique;
+        assert_eq!(state.effective_style(&p), template(TemplateId::Classique));
+        state.default_template = TemplateId::Sobre;
+        assert_eq!(state.effective_style(&p), template(TemplateId::Sobre));
+        planrs_mspdi::style_pi::set(&mut p.extras, Some(r#"{"base":"chantier","v":1}"#.to_owned()));
+        assert_eq!(state.effective_style(&p), template(TemplateId::Chantier));
+        // Style illisible : modèle par défaut.
+        planrs_mspdi::style_pi::set(&mut p.extras, Some("{".to_owned()));
+        assert_eq!(state.effective_style(&p), template(TemplateId::Sobre));
+    }
+
+    #[test]
+    fn write_options_follow_preference() {
+        let mut state = UiState::default();
+        assert!(state.write_options().style);
+        state.write_style_to_file = false;
+        assert!(!state.write_options().style);
+    }
+
+    #[test]
+    fn save_user_template_bounds() {
+        use super::UserTemplateError;
+        use planrs_render::style::DocStyle;
+        let doc = |base| DocStyle {
+            v: 1,
+            base,
+            over: planrs_render::style::StylePatch::default(),
+        };
+        let mut state = UiState::default();
+        state
+            .save_user_template("  Client  ", doc(TemplateId::Sobre))
+            .unwrap();
+        state
+            .save_user_template("Client", doc(TemplateId::Chantier))
+            .unwrap();
+        assert_eq!(state.user_templates.len(), 1);
+        assert_eq!(state.user_templates[0].name, "Client");
+        assert_eq!(state.user_templates[0].style.base, TemplateId::Chantier);
+        assert_eq!(
+            state.save_user_template(" ", doc(TemplateId::Sobre)),
+            Err(UserTemplateError::BadName)
+        );
+        let long = "x".repeat(MAX_USER_TEMPLATE_NAME + 1);
+        assert_eq!(
+            state.save_user_template(&long, doc(TemplateId::Sobre)),
+            Err(UserTemplateError::BadName)
+        );
+        for i in 1..MAX_USER_TEMPLATES {
+            state
+                .save_user_template(&format!("M{i}"), doc(TemplateId::Sobre))
+                .unwrap();
+        }
+        assert_eq!(
+            state.save_user_template("Un de plus", doc(TemplateId::Sobre)),
+            Err(UserTemplateError::Full)
+        );
+        // Un nom existant reste remplaçable.
+        state
+            .save_user_template("M1", doc(TemplateId::Presentation))
+            .unwrap();
+        assert_eq!(state.user_templates.len(), MAX_USER_TEMPLATES);
     }
 }

@@ -17,11 +17,11 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::command::params::{
-    ApplyBatchParams, ExplainParams, ExportMspdiParams, ImportCsvParams, NewProjectParams, NoParams,
-    OpenProjectParams, RenderGanttParams, ResourceListParams, SaveProjectParams, TaskGetParams,
+    ApplyBatchParams, ExplainParams, ExportMspdiParams, ExportPdfParams, ImportCsvParams, NewProjectParams,
+    NoParams, OpenProjectParams, RenderGanttParams, ResourceListParams, SaveProjectParams, TaskGetParams,
     TaskListParams, UsageParams, VarianceParams, WhatIfParams, ZoomJson,
 };
-use crate::command::{AnchorSpec, Batch, Command, parse_params};
+use crate::command::{AnchorSpec, Batch, Command, parse_params, style};
 use crate::error::{CommandError, CommandErrorKind, HistoryError, codes};
 use crate::history::EditSource;
 use crate::outcome::ApplyOutcome;
@@ -135,6 +135,10 @@ fn route(session: Option<&mut Session>, env: &CallEnv, id: &str, params: Value) 
             let p = parse_params::<ExportMspdiParams>(params).map_err(cmd)?;
             save(need(session, lang)?, env, Some(&p.path), false)
         }
+        "project.export_pdf" => {
+            let p = parse_params::<ExportPdfParams>(params).map_err(cmd)?;
+            export_pdf(need(session, lang)?, env, &p)
+        }
         "history.list" => {
             parse_params::<NoParams>(params).map_err(cmd)?;
             to_value(&need(session, lang)?.history())
@@ -235,6 +239,21 @@ fn read(session: Option<&Session>, lang: Language, id: &str, params: Value) -> R
         "render.gantt" => {
             let p = parse_params::<RenderGanttParams>(params).map_err(cmd)?;
             render(need(session, lang)?, lang, &p)
+        }
+        "style.get" => {
+            parse_params::<NoParams>(params).map_err(cmd)?;
+            let project = need(session, lang)?.project();
+            to_value(&style::style_view(project, style::HEADLESS_DEFAULT))
+        }
+        "style.list" => {
+            parse_params::<NoParams>(params).map_err(cmd)?;
+            let project = need(session, lang)?.project();
+            to_value(&style::list_view(project, style::HEADLESS_DEFAULT))
+        }
+        "style.save_as_template" => {
+            let p = parse_params::<style::StyleSaveAsTemplate>(params).map_err(cmd)?;
+            let project = need(session, lang)?.project();
+            to_value(&style::save_as_template(project, &p, style::HEADLESS_DEFAULT).map_err(cmd)?)
         }
         _ => Err(unknown_command(id, lang)),
     }
@@ -348,7 +367,15 @@ fn render(s: &Session, lang: Language, p: &RenderGanttParams) -> Result<Value, T
             ..planrs_render::RenderLimits::default()
         },
     };
-    let (svg, report) = planrs_render::svg(s.project(), sched, &req);
+    // Style : modèle demandé, sinon celui du document (L6, H-R12), sinon
+    // Classique (modèle par défaut de J8 jusqu'au lot visible) ; textes
+    // autour des barres formatés ici (règle 3).
+    let style = p.style.map_or_else(
+        || style::effective_style(s.project(), style::HEADLESS_DEFAULT),
+        |t| planrs_render::style::template(t.into()),
+    );
+    let texts = crate::render_text::SessionTexts { session: s, lang };
+    let (svg, report) = planrs_render::svg_styled(s.project(), sched, &req, &style, &texts);
     to_value(&RenderView {
         svg,
         shown: report.shown,
@@ -853,6 +880,31 @@ fn save(session: &mut Session, env: &CallEnv, path: Option<&str>, mark: bool) ->
     })
 }
 
+/// Résultat d'un export PDF (`project.export_pdf`).
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Serialize)]
+struct PdfView {
+    path: String,
+    bytes: usize,
+    #[serde(flatten)]
+    report: crate::pdf::PdfExportReport,
+}
+
+/// Exporte le planning en PDF vers `p.path` (écriture atomique ; le
+/// document et son historique ne changent pas).
+#[cfg(not(target_arch = "wasm32"))]
+fn export_pdf(session: &Session, env: &CallEnv, p: &ExportPdfParams) -> Result<Value, ToolError> {
+    let lang = env.lang;
+    let target = resolve_in(env.root.as_deref(), lang, &p.path, "path")?;
+    let out = crate::pdf::export(session, p, lang)?;
+    crate::files::write_atomic(&target, &out.bytes).map_err(|e| file_error(&e, lang).with_field("path"))?;
+    to_value(&PdfView {
+        path: target.display().to_string(),
+        bytes: out.bytes.len(),
+        report: out.report,
+    })
+}
+
 /// Erreur d'outil d'une erreur de fichier.
 #[cfg(not(target_arch = "wasm32"))]
 fn file_error(e: &crate::files::FileError, lang: Language) -> ToolError {
@@ -880,6 +932,27 @@ impl Workspace {
     fn import_csv(&mut self, _: &ImportCsvParams) -> Result<Value, ToolError> {
         Err(self.no_files(codes::FILE_READ))
     }
+}
+
+/// Export PDF : pas de système de fichiers en wasm (l'interface web passe
+/// par `crate::pdf::export` et rend les octets au navigateur).
+#[cfg(target_arch = "wasm32")]
+fn export_pdf(_: &Session, env: &CallEnv, _: &ExportPdfParams) -> Result<Value, ToolError> {
+    save_unavailable(env.lang)
+}
+
+/// Erreur `file.write` de la version web.
+#[cfg(target_arch = "wasm32")]
+fn save_unavailable(lang: Language) -> Result<Value, ToolError> {
+    Err(ToolError::simple(
+        codes::FILE_WRITE,
+        tr(
+            lang,
+            "pas de système de fichiers dans cette version",
+            "no file system in this build",
+        )
+        .to_owned(),
+    ))
 }
 
 /// Enregistrement : pas de système de fichiers en wasm.

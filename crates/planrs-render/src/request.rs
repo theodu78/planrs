@@ -53,6 +53,15 @@ pub enum Zoom {
         /// Largeur visée en pixels.
         width_px: u32,
     },
+    /// Remplie (impression ajustée « N pages en largeur », J8 lot L16) :
+    /// échelle continue qui occupe exactement `width_px` sur la plage, au
+    /// plus 36 px par jour ; niveaux de l'en-tête d'un cran plus fins que
+    /// l'échelle discrète atteinte (H-R4). Le Gantt imprimé remplit la page
+    /// au lieu de s'arrêter à l'échelle discrète inférieure.
+    Fill {
+        /// Largeur à remplir en pixels.
+        width_px: u32,
+    },
 }
 
 /// Filtre des lignes.

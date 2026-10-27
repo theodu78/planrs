@@ -7,15 +7,21 @@
 
 use planrs_core::Severity;
 
+use planrs_automation::helpers::PercentStep;
+use planrs_render::style::BarRole;
+
 use crate::action::Action;
-use crate::action::{ConfirmChoice, DialogKind};
+use crate::action::{ConfirmChoice, DialogKind, FormatOp, TaskCmd};
 use crate::app::{MAX_MESSAGES, UserMessage};
 use crate::format::format_date;
 use crate::i18n::{Arg, Language, TextId};
+use crate::io::SaveKind;
 use crate::keymap::{Binding, UiBinding, shortcut_for_os, shortcut_text};
+use crate::state::FilterChoice;
 use crate::state::{GanttStyle, LanguagePref, ThemePref, ViewKind};
 use crate::theme::Palette;
 use crate::timescale::TimeScaleZoom;
+use crate::view::side_panel::SideOp;
 
 use super::FrameCtx;
 
@@ -39,42 +45,93 @@ const GANTT_STYLE_CHOICES: [(GanttStyle, TextId); 2] = [
     (GanttStyle::Tracking, TextId::MenuGanttTracking),
 ];
 
-/// Barre de menus (Fichier, Édition, Affichage).
-pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+/// Barre de menus (Fichier, Édition, Affichage, Tâche, Projet, Format,
+/// Aide) ; `side_open` : volet latéral ouvert (case du menu Affichage, J8
+/// lot L12).
+pub fn menu_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, side_open: bool) {
     let texts = fc.texts;
-    let has_doc = fc.doc.is_some();
     egui::Panel::top("planrs_menu_bar").show(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button(texts.get(TextId::MenuFile), |ui| file_menu(ui, fc));
             ui.menu_button(texts.get(TextId::MenuEdit), |ui| edit_menu(ui, fc));
-            ui.menu_button(texts.get(TextId::MenuView), |ui| {
-                ui.add_enabled_ui(has_doc, |ui| gantt_style_choices(ui, fc));
-                ui.separator();
-                ui.menu_button(texts.get(TextId::MenuZoom), |ui| {
-                    ui.add_enabled_ui(has_doc, |ui| {
-                        zoom_choices(ui, fc);
-                        ui.separator();
-                        if ui.button(texts.get(TextId::ToolbarFit)).clicked() {
-                            fc.actions.push(Action::FitZoom);
-                        }
-                    });
-                });
-                ui.menu_button(texts.get(TextId::MenuTheme), |ui| theme_choices(ui, fc));
-                ui.menu_button(texts.get(TextId::MenuLanguage), |ui| language_choices(ui, fc));
-                ui.separator();
-                // Bascule du panneau des diagnostics : les compteurs de la
-                // barre d'état l'ouvrent aussi, mais rien ne les signale comme
-                // cliquables. Toujours active : un panneau resté ouvert après
-                // « Fermer » doit pouvoir se refermer.
-                let mut open = fc.state.diagnostics_open;
-                if ui
-                    .checkbox(&mut open, texts.get(TextId::MenuDiagnostics))
-                    .changed()
-                {
-                    fc.actions.push(Action::ToggleDiagnostics);
+            view_menu(ui, fc, side_open);
+            // --- J8 L15 : menus Tâche, Projet, Format, Aide ---
+            ui.menu_button(texts.get(TextId::MenuTask), |ui| task_menu(ui, fc));
+            ui.menu_button(texts.get(TextId::MenuProject), |ui| project_menu(ui, fc));
+            ui.menu_button(texts.get(TextId::MenuFormat), |ui| format_menu(ui, fc));
+            ui.menu_button(texts.get(TextId::MenuHelp), |ui| {
+                let label = texts.get_args(
+                    TextId::MenuAbout,
+                    &[("product", Arg::Str(planrs_core::PRODUCT_NAME.into()))],
+                );
+                if ui.button(label).clicked() {
+                    fc.actions.push(Action::About);
                 }
             });
         });
+    });
+}
+
+/// Menu Affichage : vues, zoom, thème, langue, vue des tâches, volet IA,
+/// graphique seul, surbrillance du critique, diagnostics.
+fn view_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, side_open: bool) {
+    let texts = fc.texts;
+    let has_doc = fc.doc.is_some();
+    ui.menu_button(texts.get(TextId::MenuView), |ui| {
+        ui.add_enabled_ui(has_doc, |ui| gantt_style_choices(ui, fc));
+        ui.separator();
+        ui.menu_button(texts.get(TextId::MenuZoom), |ui| {
+            ui.add_enabled_ui(has_doc, |ui| {
+                zoom_choices(ui, fc);
+                ui.separator();
+                if ui.button(texts.get(TextId::ToolbarFit)).clicked() {
+                    fc.actions.push(Action::FitZoom);
+                }
+            });
+        });
+        ui.menu_button(texts.get(TextId::MenuTheme), |ui| theme_choices(ui, fc));
+        ui.menu_button(texts.get(TextId::MenuLanguage), |ui| language_choices(ui, fc));
+        // --- J8 L9 : filtres, tri, niveau ---
+        super::task_view::view_menu(ui, fc);
+        // --- J8 L11 : surbrillance du critique ---
+        let mut highlight = fc.task_view.state.highlight_critical;
+        if ui
+            .checkbox(&mut highlight, texts.get(TextId::MenuHighlightCritical))
+            .changed()
+        {
+            fc.actions.push(Action::SetHighlightCritical(highlight));
+        }
+        // --- J8 L15 : graphique seul (H-UI-64) ---
+        let mut chart_only = fc.state.chart_only;
+        if ui
+            .checkbox(&mut chart_only, texts.get(TextId::MenuChartOnly))
+            .changed()
+        {
+            fc.actions.push(Action::SetChartOnly(chart_only));
+        }
+        // --- J8 L12 : volet IA, « Pourquoi cette date ? » ---
+        // Bascule du volet latéral (H-UI-41) : sans document aussi
+        // (l'historique de session reste lisible).
+        let mut side_open = side_open;
+        if ui
+            .checkbox(&mut side_open, texts.get(TextId::MenuAiPanel))
+            .changed()
+        {
+            fc.actions.push(Action::SidePanel(SideOp::Toggle));
+        }
+        // --- J8 L15 : galerie, mise en page ---
+        ui.separator();
+        // Bascule du panneau des diagnostics : les compteurs de la
+        // barre d'état l'ouvrent aussi, mais rien ne les signale comme
+        // cliquables. Toujours active : un panneau resté ouvert après
+        // « Fermer » doit pouvoir se refermer.
+        let mut open = fc.state.diagnostics_open;
+        if ui
+            .checkbox(&mut open, texts.get(TextId::MenuDiagnostics))
+            .changed()
+        {
+            fc.actions.push(Action::ToggleDiagnostics);
+        }
     });
 }
 
@@ -99,6 +156,31 @@ fn file_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     menu_item(ui, fc, TextId::MenuSave, Some(save), has_doc, Action::Save);
     let save_as = Binding::Ui(UiBinding::SaveAs);
     menu_item(ui, fc, TextId::MenuSaveAs, Some(save_as), has_doc, Action::SaveAs);
+    // --- J8 L7 : Exporter en PDF ---
+    // --- J8 L15 : mise en page, mode impression (H-UI-68) ---
+    let setup = Action::ShowDialog(DialogKind::PageSetup { print_mode: false });
+    menu_item(ui, fc, TextId::MenuPageSetup, None, has_doc, setup);
+    let print = Action::ShowDialog(DialogKind::PageSetup { print_mode: true });
+    menu_item(ui, fc, TextId::MenuPrintMode, None, has_doc, print);
+    // --- J8 L10 : Importer CSV ---
+    // Fichier → Importer CSV… (H-UI-40) : sans document aussi (le résultat
+    // est un nouveau document).
+    menu_item(ui, fc, TextId::MenuImportCsv, None, true, Action::ImportCsv);
+    // --- J8 L13 ---
+    // Fichier → Exporter (PDF, SVG, CSV) : téléchargement sur le web,
+    // boîte « Enregistrer sous » sur le desktop.
+    let texts = fc.texts;
+    ui.add_enabled_ui(has_doc, |ui| {
+        ui.menu_button(texts.get(TextId::MenuExport), |ui| {
+            for (id, kind) in [
+                (TextId::MenuExportPdf, SaveKind::Pdf),
+                (TextId::MenuExportSvg, SaveKind::Svg),
+                (TextId::MenuExportCsv, SaveKind::Csv),
+            ] {
+                menu_item(ui, fc, id, None, true, Action::Export(kind));
+            }
+        });
+    });
     ui.separator();
     menu_item(ui, fc, TextId::MenuClose, None, has_doc, Action::CloseDocument);
     // Quitter : le navigateur ne laisse pas une page fermer son onglet.
@@ -141,10 +223,9 @@ fn recent_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     }
 }
 
-/// Sous-menu Édition → Projet (J7, lot L12) : informations sur le projet,
-/// temps de travail, ligne de base, replanifier le travail restant ; grisé
-/// sans document. Sous-menu plutôt qu'un menu de la barre : la barre de
-/// menus figure dans toutes les captures de référence (écart consigné).
+/// Menu Projet (J7, lot L12 ; dans la barre depuis J8 lot L15) :
+/// informations sur le projet, temps de travail, ligne de base,
+/// replanifier le travail restant ; grisé sans document.
 fn project_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let has_doc = fc.doc.is_some();
     for (label, kind) in [
@@ -225,8 +306,17 @@ fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
         if let Some(shortcut) = shortcut_for_os(Binding::Command(id), ui.ctx().os()) {
             button = button.shortcut_text(shortcut_text(ui.ctx(), shortcut));
         }
-        let enabled = has_doc && (has_selection || !needs_selection);
-        if ui.add_enabled(enabled, button).clicked() {
+        // H-UI-32 (J8, lot L9) : sous tri ou filtre, déplacer, hausser et
+        // abaisser sont grisés.
+        let locked = super::task_view::reorders(op) && fc.task_view.state.reorder_locked();
+        let enabled = has_doc && (has_selection || !needs_selection) && !locked;
+        let response = ui.add_enabled(enabled, button);
+        let response = if locked {
+            response.on_disabled_hover_text(texts.get(TextId::ViewReorderLocked))
+        } else {
+            response
+        };
+        if response.clicked() {
             fc.actions.push(Action::Structure(op));
         }
     }
@@ -234,12 +324,128 @@ fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     // « Affecter des ressources » (J7, lot L13) : aucun raccourci (S61).
     let assign = Action::ShowDialog(DialogKind::AssignResources);
     menu_item(ui, fc, TextId::MenuAssignResources, None, has_doc, assign);
-    ui.menu_button(texts.get(TextId::MenuProject), |ui| project_menu(ui, fc));
+    // --- J8 L9 : rechercher ---
+    ui.separator();
+    super::search::edit_menu_entries(ui, fc);
+    // --- J8 L10 : couper, copier, coller ---
+    ui.separator();
+    clipboard_items(ui, fc);
+    // --- J8 L15 : menu Tâche (%, mode, actif) ---
 }
 
-/// Barre d'outils : exemple, ouvrir, zoom, ajuster, thème, langue. Toujours
-/// visible (le zoom est grisé sans document) : le zoom reste découvrable
-/// sans connaître Ctrl+molette.
+/// Pas de « marquer n % », dans l'ordre des boutons (H-UI-35).
+const PERCENT_STEPS: [(PercentStep, i64); 5] = [
+    (PercentStep::P0, 0),
+    (PercentStep::P25, 25),
+    (PercentStep::P50, 50),
+    (PercentStep::P75, 75),
+    (PercentStep::P100, 100),
+];
+
+/// Menu Tâche (J8 lot L15) : marquer n %, basculer le mode, activer ou
+/// désactiver, informations, lier et délier ; grisé sans sélection.
+fn task_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    let texts = fc.texts;
+    let enabled = fc.doc.is_some() && fc.selection.is_some();
+    for (step, pct) in PERCENT_STEPS {
+        let label = texts.get_args(TextId::MenuMarkPercent, &[("percent", Arg::Count(pct))]);
+        if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+            fc.actions.push(Action::TaskCmd(TaskCmd::MarkPercent(step)));
+        }
+    }
+    ui.separator();
+    menu_item(
+        ui,
+        fc,
+        TextId::MenuToggleMode,
+        None,
+        enabled,
+        Action::TaskCmd(TaskCmd::ToggleMode),
+    );
+    menu_item(
+        ui,
+        fc,
+        TextId::MenuToggleActive,
+        None,
+        enabled,
+        Action::TaskCmd(TaskCmd::ToggleActive),
+    );
+    ui.separator();
+    let info = Binding::Ui(UiBinding::TaskInformation);
+    menu_item(
+        ui,
+        fc,
+        TextId::TaskInfoMenu,
+        Some(info),
+        enabled,
+        Action::ShowTaskInformation,
+    );
+    for (op, label, id, _) in super::main_view::CONTEXT_ENTRIES {
+        if matches!(
+            op,
+            crate::structure::StructureOp::Link | crate::structure::StructureOp::Unlink
+        ) {
+            menu_item(
+                ui,
+                fc,
+                label,
+                Some(Binding::Command(id)),
+                enabled,
+                Action::Structure(op),
+            );
+        }
+    }
+}
+
+/// Menu Format (J8 lot L15) : galerie des modèles, mise en forme des
+/// barres, mise en page.
+fn format_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    let has_doc = fc.doc.is_some();
+    menu_item(
+        ui,
+        fc,
+        TextId::MenuGallery,
+        None,
+        has_doc,
+        Action::ShowDialog(DialogKind::Gallery),
+    );
+    // Type de la barre de la tâche active, sinon les barres de tâches.
+    let role = fc
+        .selection
+        .and_then(|uid| {
+            let rows = fc.visible()?;
+            let row = (0..rows.len()).find_map(|i| {
+                rows.row(crate::row_view::DisplayRow::at(i))
+                    .filter(|r| r.uid == uid)
+            })?;
+            super::gantt::row_role(row, fc.task_view.state.highlight_critical)
+        })
+        .unwrap_or(BarRole::Task);
+    let bars = Action::Format(FormatOp::OpenBars {
+        role,
+        task: fc.selection,
+    });
+    menu_item(ui, fc, TextId::MenuFormatBars, None, has_doc, bars);
+    // H-UI-67 : mois relatifs en option, quel que soit le modèle (relecture
+    // finale de J8 ; seul « Planning travaux » les avait).
+    if let Some(doc) = fc.doc {
+        let mut on = fc.state.effective_style(doc.project()).scale.relative_months;
+        if ui
+            .checkbox(&mut on, fc.texts.get(TextId::MenuRelativeMonths))
+            .changed()
+        {
+            fc.actions.push(Action::Format(FormatOp::SetRelativeMonths(on)));
+        }
+    }
+    ui.separator();
+    let setup = Action::ShowDialog(DialogKind::PageSetup { print_mode: false });
+    menu_item(ui, fc, TextId::MenuPageSetup, None, has_doc, setup);
+}
+
+/// Barre d'outils : exemple, ouvrir, zoom, ajuster, thème, langue ;
+/// deuxième rangée (J8 lot L15) : 0 à 100 %, mode, actif, filtre,
+/// recherche, mode impression. Toujours visible (le zoom est grisé sans
+/// document) : le zoom reste découvrable sans connaître Ctrl+molette.
 pub fn toolbar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let texts = fc.texts;
     let has_doc = fc.doc.is_some();
@@ -279,6 +485,74 @@ pub fn toolbar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
                 }
             }
         });
+        // --- J8 L15 : %, mode, actif, filtre, recherche, impression, sur
+        // une deuxième rangée (la première reste celle de J7).
+        ui.horizontal(|ui| task_tools(ui, fc));
+    });
+}
+
+/// Outils de tâche de la barre (J8 lot L15) : boutons 0 à 100 % (H-UI-35),
+/// bascules du mode (H-UI-36) et de l'activité, filtre, recherche, mode
+/// impression (H-UI-68).
+fn task_tools(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    let texts = fc.texts;
+    let has_doc = fc.doc.is_some();
+    let enabled = has_doc && fc.selection.is_some();
+    ui.add_enabled_ui(enabled, |ui| {
+        for (step, pct) in PERCENT_STEPS {
+            let label = texts.get_args(TextId::ToolbarPercent, &[("percent", Arg::Count(pct))]);
+            let hint = texts.get_args(TextId::ToolbarPercentHint, &[("percent", Arg::Count(pct))]);
+            if ui.button(label).on_hover_text(hint).clicked() {
+                fc.actions.push(Action::TaskCmd(TaskCmd::MarkPercent(step)));
+            }
+        }
+        if ui
+            .button(texts.get(TextId::ToolbarMode))
+            .on_hover_text(texts.get(TextId::ToolbarModeHint))
+            .clicked()
+        {
+            fc.actions.push(Action::TaskCmd(TaskCmd::ToggleMode));
+        }
+        if ui
+            .button(texts.get(TextId::ToolbarActive))
+            .on_hover_text(texts.get(TextId::ToolbarActiveHint))
+            .clicked()
+        {
+            fc.actions.push(Action::TaskCmd(TaskCmd::ToggleActive));
+        }
+    });
+    ui.add_enabled_ui(has_doc, |ui| {
+        let current = super::task_view::PRESETS
+            .iter()
+            .find(|(preset, _)| fc.task_view.state.filter == FilterChoice::Preset(preset.clone()))
+            .map_or(TextId::ToolbarFilter, |(_, label)| *label);
+        let mut chosen = None;
+        egui::ComboBox::from_id_salt("planrs.toolbar-filter")
+            .selected_text(texts.get(current))
+            .show_ui(ui, |ui| {
+                for (preset, label) in super::task_view::PRESETS {
+                    let on = fc.task_view.state.filter == FilterChoice::Preset(preset.clone());
+                    if ui.selectable_label(on, texts.get(label)).clicked() {
+                        chosen = Some(preset);
+                    }
+                }
+            })
+            .response
+            .on_hover_text(texts.get(TextId::ToolbarFilter));
+        if let Some(preset) = chosen {
+            fc.actions
+                .push(Action::TaskView(super::task_view::TaskViewOp::SetFilter(
+                    FilterChoice::Preset(preset),
+                )));
+        }
+        if ui.button(texts.get(TextId::ToolbarSearch)).clicked() {
+            fc.actions
+                .push(Action::TaskView(super::task_view::TaskViewOp::OpenSearch));
+        }
+        if ui.button(texts.get(TextId::ToolbarPrintMode)).clicked() {
+            fc.actions
+                .push(Action::ShowDialog(DialogKind::PageSetup { print_mode: true }));
+        }
     });
 }
 
@@ -478,6 +752,8 @@ pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
                     fc.actions.push(Action::ToggleDiagnostics);
                 }
             }
+            // --- J8 L9 : « Filtre : Critiques » (rien sans filtre).
+            super::task_view::status_indicator(ui, fc);
         });
     });
     message_banner(ui, fc, messages);
@@ -590,6 +866,44 @@ fn message_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
                 });
             });
         });
+}
+
+// --- J8 L10 : couper, copier, coller ---
+
+/// Entrées Couper, Copier, Coller et « Collage spécial… » du menu Édition
+/// (H-UI-39, lot L10). Les raccourcis affichés sont ceux qu'egui livre en
+/// `Event::Cut/Copy/Paste` (pas des entrées de `KEYMAP`) ; Couper et Copier
+/// demandent une sélection, Coller et « Collage spécial… » un document.
+fn clipboard_items(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    use crate::clipboard::ClipboardOp;
+    let has_doc = fc.doc.is_some();
+    let has_selection = has_doc && fc.selection.is_some();
+    let entries = [
+        (
+            TextId::MenuCut,
+            Some(egui::Key::X),
+            has_selection,
+            ClipboardOp::Cut,
+        ),
+        (
+            TextId::MenuCopy,
+            Some(egui::Key::C),
+            has_selection,
+            ClipboardOp::Copy,
+        ),
+        (TextId::MenuPaste, Some(egui::Key::V), has_doc, ClipboardOp::Paste),
+        (TextId::MenuPasteSpecial, None, has_doc, ClipboardOp::PasteSpecial),
+    ];
+    for (label, key, enabled, op) in entries {
+        let mut button = egui::Button::new(fc.texts.get(label));
+        if let Some(key) = key {
+            let shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, key);
+            button = button.shortcut_text(shortcut_text(ui.ctx(), &shortcut));
+        }
+        if ui.add_enabled(enabled, button).clicked() {
+            fc.actions.push(Action::Clipboard(op));
+        }
+    }
 }
 
 #[cfg(test)]

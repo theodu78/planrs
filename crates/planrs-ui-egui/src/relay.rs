@@ -22,6 +22,14 @@
 //! `project.new`, `project.import_csv` : `control.not_relayable`
 //! (C-CTL-05). Le web n'a pas de canal : ce module n'y est pas compilé.
 //!
+//! Panneau d'opérations IA (J8 lot L12, H-UI-41) : à l'arrivée d'une
+//! écriture, le diff affiché ([`DiffView`], au plus 200 lignes) est calculé
+//! **une fois** sur l'état simulé du même lot ([`Session::simulate`], diff
+//! détaillé) et gardé dans [`PendingApproval::diff`] ; le volet latéral
+//! s'ouvre sur l'onglet « Opérations IA ». Chaque issue (acceptée, refusée,
+//! expirée, périmée, échouée) entre dans l'historique de session
+//! ([`Relay::history`], 50 entrées au plus).
+//!
 //! Capture (`app.screenshot`, C-CTL-08, lot L14) : permise seulement si
 //! l'application l'active ([`App::enable_screenshots`], desktop) ; sinon,
 //! et sous kittest, `control.screenshot_unavailable` aussitôt.
@@ -40,14 +48,19 @@ use std::sync::mpsc::{Receiver, SyncSender};
 use std::time::Duration;
 
 use base64::Engine as _;
+use planrs_automation::command::params::ApplyBatchParams;
 use planrs_automation::command::params::{
     ScreenshotParams, ThemeJson, UiActionParams, UiLanguageJson, ViewJson, ZoomJson,
 };
 use planrs_automation::control::{CallState, RelayCall, RelayKind, Reply};
+use planrs_automation::diff::{DiffSide, DiffView};
 use planrs_automation::error::codes;
 use planrs_automation::registry::{Kind, lookup};
+use planrs_automation::text::{Language as ToolLanguage, TextContext};
 use planrs_automation::workspace::relayable;
-use planrs_automation::{CallEnv, EditSource, Patch, ToolError, call_with};
+use planrs_automation::{
+    ApplyOptions, Batch, CallEnv, Command, EditSource, Patch, Session, ToolError, call_with,
+};
 use planrs_core::{Moment, TaskUid};
 use serde_json::{Map, Value, json};
 
@@ -56,13 +69,15 @@ use crate::app::{App, DocOrigin};
 use crate::geom;
 use crate::state::{LanguagePref, ThemePref, ViewKind};
 use crate::timescale::TimeScaleZoom;
-use crate::view::{self, ApprovalBanner, ApprovalSummary};
+use crate::view::side_panel::{AiHistoryEntry, AiOutcome, AiPanelInput, SideOp, SideTab, push_history};
+use crate::view::{ApprovalBanner, ApprovalSummary};
 
 /// Écritures qui demandent une validation sans être du genre `Write`.
-const APPROVED_TOOLS: [&str; 4] = [
+const APPROVED_TOOLS: [&str; 5] = [
     "history.redo",
     "history.undo",
     "project.export_mspdi",
+    "project.export_pdf",
     "project.save",
 ];
 
@@ -77,6 +92,12 @@ pub struct PendingApproval {
     pub params: Value,
     /// Résumé du `dry_run` (`None` : appel sans aperçu).
     pub preview: Option<ApprovalSummary>,
+    /// Diff affiché par le panneau d'opérations IA (H-UI-41), calculé une
+    /// fois à l'arrivée (et à chaque nouvel aperçu) ; `None` : appel sans
+    /// aperçu, ou lot non simulable.
+    pub diff: Option<DiffView>,
+    /// Nom du document visé à l'arrivée (historique du panneau).
+    pub document: String,
     /// Génération de la session à l'aperçu.
     pub generation: u64,
     /// Numéro d'ouverture du document visé.
@@ -141,6 +162,12 @@ pub struct Relay {
     control_dir: Option<PathBuf>,
     /// Capture permise (desktop) ; `None` : `control.screenshot_unavailable`.
     screenshots: Option<ScreenshotConfig>,
+    /// Historique de session du panneau d'opérations IA (H-UI-41), le
+    /// plus ancien d'abord, 50 entrées au plus.
+    history: VecDeque<AiHistoryEntry>,
+    /// Diffs affichés calculés depuis le branchement (H-UI-41 : un par
+    /// aperçu, jamais par image).
+    diff_builds: u64,
 }
 
 impl Relay {
@@ -148,6 +175,32 @@ impl Relay {
     #[must_use]
     pub const fn pending(&self) -> &VecDeque<PendingApproval> {
         &self.pending
+    }
+
+    /// Historique de session du panneau (le plus ancien d'abord).
+    #[must_use]
+    pub const fn history(&self) -> &VecDeque<AiHistoryEntry> {
+        &self.history
+    }
+
+    /// Diffs affichés calculés depuis le branchement du relais.
+    #[must_use]
+    pub const fn diff_builds(&self) -> u64 {
+        self.diff_builds
+    }
+
+    /// Inscrit l'issue de `pending` dans l'historique.
+    fn record(&mut self, pending: &PendingApproval, outcome: AiOutcome, undo: Option<(u64, u64)>) {
+        push_history(
+            &mut self.history,
+            AiHistoryEntry {
+                tool: pending.tool.clone(),
+                document: pending.document.clone(),
+                at: pending.now,
+                outcome,
+                undo,
+            },
+        );
     }
 
     /// Retire l'écriture affichée au bandeau (tête de file) si c'est
@@ -301,6 +354,8 @@ impl App {
             pending: VecDeque::new(),
             control_dir: None,
             screenshots: None,
+            history: VecDeque::new(),
+            diff_builds: 0,
         });
     }
 
@@ -350,8 +405,10 @@ impl App {
             return;
         };
         let mut kept = VecDeque::new();
-        for pending in relay.pending.drain(..) {
+        let drained: Vec<PendingApproval> = relay.pending.drain(..).collect();
+        for pending in drained {
             if !pending.state.is_pending() {
+                relay.record(&pending, AiOutcome::Expired, None);
                 continue;
             }
             if Some(pending.opening) == opening {
@@ -362,6 +419,7 @@ impl App {
                     "document fermé ou remplacé : rien n'a été appliqué",
                 );
                 send(&pending.reply, tool_reply(pending.id, &e));
+                relay.record(&pending, AiOutcome::Stale, None);
             }
         }
         relay.pending = kept;
@@ -376,8 +434,10 @@ impl App {
             reply,
         } = call;
         if let RelayKind::Cancel(target) = kind {
-            if let Some(relay) = &mut self.relay {
-                drop(relay.take_cancelled(target, &state));
+            if let Some(relay) = &mut self.relay
+                && let Some(cancelled) = relay.take_cancelled(target, &state)
+            {
+                relay.record(&cancelled, AiOutcome::Expired, None);
             }
             return;
         }
@@ -541,11 +601,16 @@ impl App {
                 Err(e) => return self.reply_now(&state, &reply, id, Err(e)),
             },
         };
+        let diff = preview
+            .as_ref()
+            .and_then(|_| preview_diff(&document.session, &tool, &params, env.lang));
         let pending = PendingApproval {
             id,
             tool,
             params,
             preview,
+            diff,
+            document: document.origin.name.clone(),
             generation: document.generation(),
             opening: document.opening,
             now,
@@ -554,14 +619,23 @@ impl App {
         };
         send(&pending.reply, Reply::PendingApproval { id });
         if let Some(relay) = &mut self.relay {
+            if pending.preview.is_some() {
+                relay.diff_builds = relay.diff_builds.saturating_add(1);
+            }
             relay.pending.push_back(pending);
         }
+        // Volet ouvert d'office à chaque demande (H-UI-41), sans prendre le
+        // focus clavier.
+        self.side.apply(SideOp::Open(SideTab::AiOperations));
     }
 
     /// Garde ADR-0002 d'un enregistrement relayé vers un chemin choisi par
     /// l'agent : refus si une autre application tient ce fichier.
     fn guard_save_path(&self, tool: &str, params: &Value) -> Result<(), ToolError> {
-        if !matches!(tool, "project.save" | "project.export_mspdi") {
+        if !matches!(
+            tool,
+            "project.save" | "project.export_mspdi" | "project.export_pdf"
+        ) {
             return Ok(());
         }
         let Some(path) = params.get("path").and_then(Value::as_str) else {
@@ -630,9 +704,11 @@ impl App {
         }
         let mut selection: Vec<u32> = self.selected.click_order().iter().map(|uid| uid.get()).collect();
         selection.sort_unstable();
-        let visible = self.rows.as_ref().map(|rows| {
+        // Lignes affichées (J8, lot L5 : la vue filtrée, triée ou repliée).
+        let visible = self.visible_rows().map(|rows| {
             let top = self.view.last_scroll_y;
-            let range = geom::visible_rows(top, top + self.view.last_body_height, view::ROW_H, rows.len(), 0);
+            let range =
+                geom::visible_rows(top, top + self.view.last_body_height, self.row_h(), rows.len(), 0);
             json!([range.start, range.end.saturating_sub(1).max(range.start)])
         });
         json!({
@@ -656,24 +732,40 @@ impl App {
             return;
         };
         if !pending.state.is_pending() {
+            relay.record(&pending, AiOutcome::Expired, None);
             return;
         }
         let lang = self.text_language();
         let Some(document) = &mut self.document else {
-            return self.reject_pending(&pending, "aucun document : rien n'a été appliqué");
+            return self.reject_pending(
+                &pending,
+                "aucun document : rien n'a été appliqué",
+                AiOutcome::Stale,
+            );
         };
         if document.opening != pending.opening {
-            return self.reject_pending(&pending, "document fermé ou remplacé : rien n'a été appliqué");
+            return self.reject_pending(
+                &pending,
+                "document fermé ou remplacé : rien n'a été appliqué",
+                AiOutcome::Stale,
+            );
         }
         if document.generation() != pending.generation {
-            // Aperçu périmé : nouvel aperçu, rien d'appliqué.
+            // Aperçu périmé : nouvel aperçu (diff affiché compris), rien
+            // d'appliqué.
             let env = CallEnv::new(pending.now, lang);
             if let Some(dry) = dry_params(&pending.tool, &pending.params) {
                 match call_with(&mut document.session, &env, &pending.tool, dry) {
-                    Ok(outcome) => pending.preview = Some(summary_of(&outcome)),
+                    Ok(outcome) => {
+                        pending.preview = Some(summary_of(&outcome));
+                        pending.diff = preview_diff(&document.session, &pending.tool, &pending.params, lang);
+                    }
                     Err(e) => {
                         if pending.state.claim() {
                             send(&pending.reply, tool_reply(pending.id, &e));
+                            if let Some(relay) = &mut self.relay {
+                                relay.record(&pending, AiOutcome::Failed(e.code.to_owned()), None);
+                            }
                         }
                         return;
                     }
@@ -681,11 +773,17 @@ impl App {
             }
             pending.generation = document.generation();
             if let Some(relay) = &mut self.relay {
+                if pending.preview.is_some() {
+                    relay.diff_builds = relay.diff_builds.saturating_add(1);
+                }
                 relay.pending.push_front(pending);
             }
             return;
         }
         if !pending.state.claim() {
+            if let Some(relay) = &mut self.relay {
+                relay.record(&pending, AiOutcome::Expired, None);
+            }
             return;
         }
         let env = CallEnv {
@@ -695,6 +793,11 @@ impl App {
         let before = document.generation();
         let result = call_with(&mut document.session, &env, &pending.tool, pending.params.clone());
         let changed = document.generation() != before;
+        let undo = changed.then(|| (document.opening, document.session.history_position()));
+        let outcome = match &result {
+            Ok(_) => AiOutcome::Accepted,
+            Err(e) => AiOutcome::Failed(e.code.to_owned()),
+        };
         let origin = document.session.origin().clone();
         if origin.path != document.origin.path {
             document.origin = DocOrigin {
@@ -710,6 +813,9 @@ impl App {
                 Err(e) => tool_reply(id, &e),
             },
         );
+        if let Some(relay) = &mut self.relay {
+            relay.record(&pending, outcome, undo);
+        }
         if changed {
             self.refresh();
         } else {
@@ -726,16 +832,27 @@ impl App {
         let Some(pending) = relay.take_front(id) else {
             return;
         };
-        self.reject_pending(&pending, "refusé par l'utilisateur : rien n'a été appliqué");
+        self.reject_pending(
+            &pending,
+            "refusé par l'utilisateur : rien n'a été appliqué",
+            AiOutcome::Rejected,
+        );
     }
 
-    /// Répond `control.rejected` à une écriture en attente.
-    fn reject_pending(&mut self, pending: &PendingApproval, message: &str) {
-        if pending.state.claim() {
+    /// Répond `control.rejected` à une écriture en attente ; l'issue
+    /// `outcome` entre dans l'historique (expirée si l'appel l'était déjà).
+    fn reject_pending(&mut self, pending: &PendingApproval, message: &str, outcome: AiOutcome) {
+        let outcome = if pending.state.claim() {
             send(
                 &pending.reply,
                 tool_reply(pending.id, &error(codes::CONTROL_REJECTED, message)),
             );
+            outcome
+        } else {
+            AiOutcome::Expired
+        };
+        if let Some(relay) = &mut self.relay {
+            relay.record(pending, outcome, None);
         }
         self.after_banner();
     }
@@ -881,6 +998,69 @@ pub fn encode_screenshot(
         (rgba, width, height) = halve(&rgba, width, height);
         halvings = halvings.saturating_add(1);
         extra = extra.saturating_add(1);
+    }
+}
+
+/// Lot d'un appel d'écriture relayé (`batch.apply` ou une commande du
+/// genre `Write`), lu comme le routeur de `call_with` le lit ; `None` pour
+/// tout autre appel ou des paramètres mal formés (le `dry_run` les a déjà
+/// refusés).
+fn relayed_batch(tool: &str, params: &Value) -> Option<Batch> {
+    let mut map = match params {
+        Value::Object(map) => map.clone(),
+        Value::Null => Map::new(),
+        _ => return None,
+    };
+    map.remove("dry_run");
+    map.remove("detail");
+    if tool == "batch.apply" {
+        let p: ApplyBatchParams = serde_json::from_value(Value::Object(map)).ok()?;
+        return Some(p.into_batch());
+    }
+    if !lookup(tool).is_some_and(|spec| spec.kind == Kind::Write) || map.contains_key("op") {
+        return None;
+    }
+    map.insert("op".to_owned(), Value::String(tool.to_owned()));
+    let op: Command = serde_json::from_value(Value::Object(map)).ok()?;
+    Some(Batch {
+        format_version: Batch::FORMAT_VERSION,
+        lang: None,
+        ops: vec![op],
+        label: None,
+    })
+}
+
+/// Diff affiché d'une écriture proposée (H-UI-41) : le même lot simulé sur
+/// une copie ([`Session::simulate`], diff détaillé), comparé à l'état
+/// courant ; `None` si l'appel n'est pas un lot ou si la simulation échoue
+/// (le résumé du bandeau reste).
+fn preview_diff(session: &Session, tool: &str, params: &Value, lang: ToolLanguage) -> Option<DiffView> {
+    let batch = relayed_batch(tool, params)?;
+    let options = ApplyOptions {
+        detail: true,
+        ..ApplyOptions::default()
+    };
+    let sim = session.simulate(&batch, options).ok()?;
+    let before = DiffSide {
+        project: session.project(),
+        schedule: session.schedule(),
+    };
+    let after = DiffSide {
+        project: &sim.project,
+        schedule: &sim.schedule,
+    };
+    let text = TextContext::for_project(session.project(), lang);
+    Some(DiffView::new(&sim.outcome.diff, before, after, &text))
+}
+
+/// Données du panneau d'opérations IA : tête de file (`banner`), son diff
+/// affiché et l'historique de session.
+#[must_use]
+pub fn panel_input<'a>(relay: &'a Relay, banner: Option<ApprovalBanner<'a>>) -> AiPanelInput<'a> {
+    AiPanelInput {
+        banner,
+        diff: relay.pending.front().and_then(|p| p.diff.as_ref()),
+        history: Some(&relay.history),
     }
 }
 

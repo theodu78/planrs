@@ -178,7 +178,6 @@ status-no-document = No document open
 
 ## Ouverture de fichiers
 
-open-in-progress = Opening…
 open-error-title = Could not open the file
 open-error-read = Could not read the file: { $detail }
 open-error-mspdi = Unreadable MSPDI file: { $detail }
@@ -623,3 +622,490 @@ recovery-kept = Journal from another planrs version, or too large: it cannot be 
 recovered-file-name = { $stem } (recovered)
 
 # --- J7 L16 ---
+
+# --- J8 L0 : codes de refus du contrat (ADR-0016) ---
+error-paste-unrecognized = Pasted text not recognized: { $detail }
+error-paste-too_large = Pasted text too large: { $detail }
+error-paste-links_dropped = Links not copied: { $detail }
+error-style-ignored = File formatting ignored: { $detail }
+error-style-invalid = Invalid formatting: { $detail }
+error-pdf-too_many_pages = PDF too long: { $detail }
+error-pdf-glyph_missing = Character missing from the PDF fonts: { $detail }
+error-pdf-logo_invalid = Unreadable logo: { $detail }
+error-task-manual_finish_before_start = Manual task finish before its start: { $detail }
+error-control-bad_endpoint = Invalid control channel address: { $detail }
+
+# --- J8 L1 ---
+
+# --- J8 L2 ---
+
+# --- J8 L3 ---
+
+# --- J8 L4 ---
+
+# --- J8 L5 ---
+
+# --- J8 L6 ---
+
+# --- J8 L7 ---
+
+# --- J8 L8 ---
+
+# --- J8 L9 ---
+menu-filter = Filter
+filter-all = All tasks
+filter-critical = Critical tasks
+filter-late = Late tasks
+filter-incomplete = Incomplete tasks
+filter-milestones = Milestones
+filter-summaries = Summary tasks
+filter-using-resource = Using resource…
+filter-date-range = Date range…
+filter-custom = Custom filter…
+filter-reapply = Reapply filter
+filter-clear = Clear filter
+filter-using-named = Using { $name }
+status-filter = Filter: { $name }
+filter-custom-title = Custom filter
+filter-resource-title = Using resource
+filter-date-range-title = Date range
+filter-apply = Apply
+filter-resource = Resource
+filter-no-resource = No resource in the project
+filter-use-resource = Assigned to the resource
+filter-from = From
+filter-to = To
+filter-active-only = Active tasks
+filter-outline-max = Outline level at most
+filter-name-contains = Name containing
+filter-related = Show related summary rows
+filter-date-order = The first day is after the last one.
+filter-dates-required = Enter the first and the last day.
+filter-resource-missing = Choose a resource.
+menu-sort = Sort…
+menu-sort-by-id = Sort by ID
+sort-title = Sort
+sort-by = Sort by
+sort-ascending = Ascending
+sort-descending = Descending
+sort-keep-outline = Keep outline structure
+sort-apply = Sort tasks
+sort-reset = Reset (ID order)
+menu-outline-level = Outline level
+outline-level-n = Level { $count }
+outline-all = All levels
+menu-hide-subtasks = Hide subtasks
+menu-show-subtasks = Show subtasks
+outline-expand-row = Expand { $name }
+outline-collapse-row = Collapse { $name }
+view-reorder-locked = Remove the sort or the filter to move, indent or outdent tasks.
+menu-find = Find…
+search-label = Find
+search-previous = Previous
+search-next = Next
+search-all-columns = Visible columns
+search-close = Close search
+search-none = No match
+search-counter = { $id }/{ $count }
+search-hidden =
+    { $count ->
+        [one] ({ $count } hidden by the filter)
+       *[other] ({ $count } hidden by the filter)
+    }
+
+# --- J8 L10 ---
+menu-cut = Cut
+menu-copy = Copy
+menu-paste = Paste
+menu-paste-special = Paste Special…
+menu-import-csv = Import CSV…
+paste-report-title = Paste
+paste-report-tasks = { $count ->
+        [one] { $count } task pasted
+       *[other] { $count } tasks pasted
+    }
+paste-report-links = { $count ->
+        [one] { $count } link not copied (one end outside the copy)
+       *[other] { $count } links not copied (one end outside the copy)
+    }
+paste-report-assignments = { $count ->
+        [one] { $count } assignment skipped (missing resource)
+       *[other] { $count } assignments skipped (missing resources)
+    }
+paste-report-resources = { $count ->
+        [one] { $count } resource created
+       *[other] { $count } resources created
+    }
+paste-hint-unrecognized = paste a header row (Name, Duration…) followed by the rows, or a single column of names
+paste-hint-too-large = 10,000 lines and 4 MiB at most
+paste-use-shortcut = The browser does not give the clipboard to a menu: paste with Ctrl+V (Cmd+V on Mac).
+ps-title = Paste Special
+ps-source = { $count ->
+        [one] Last copy: { $count } task
+       *[other] Last copy: { $count } tasks
+    }
+ps-links = Recreate the links between the pasted tasks
+ps-resources = Assignments
+ps-res-match = By resource name (skipped if the resource does not exist)
+ps-res-create = By name, creating missing resources
+ps-res-drop = Do not paste assignments
+ps-nothing = Nothing to paste: copy rows first (Ctrl+C).
+ci-pick-title = Import a CSV file
+ci-pick-filter = CSV files
+ci-title = Import CSV
+ci-file = File: { $name }
+ci-separator = Separator
+ci-encoding = Encoding
+ci-language = Language
+ci-auto = Automatic
+ci-sep-semicolon = Semicolon (;)
+ci-sep-comma = Comma (,)
+ci-sep-tab = Tab
+ci-enc-utf8 = UTF-8
+ci-enc-utf16le = UTF-16 LE
+ci-enc-utf16be = UTF-16 BE
+ci-enc-windows1252 = Windows-1252
+ci-detected = Using: { $detail }
+ci-columns = Columns
+ci-rows = { $count ->
+        [one] Preview ({ $count } row)
+       *[other] Preview ({ $count } rows)
+    }
+ci-recognized = recognized
+ci-unknown = ignored (unknown)
+ci-unsupported = not supported
+ci-duplicate = ignored (duplicate)
+ci-diagnostics = { $count ->
+        [one] { $count } remark on the rows shown
+       *[other] { $count } remarks on the rows shown
+    }
+ci-diagnostic-line = Line { $count }: { $detail }
+ci-import = Import
+ci-imported = { $count ->
+        [one] “{ $name }” imported with { $count } remark (default value or ignored column).
+       *[other] “{ $name }” imported with { $count } remarks (default values or ignored columns).
+    }
+error-csv-error-too_large = CSV file too large (64 MiB at most).
+error-csv-error-empty = Empty CSV file.
+error-csv-error-no_header = No header row in the file.
+error-csv-error-no_known_column = No Name or Duration column in the header.
+error-csv-error-too_many_rows = Too many rows (200,000 at most).
+error-csv-error-too_many_columns = Too many columns (256 at most).
+error-csv-error-encoding = The file is not in the selected encoding.
+error-csv-error-not_yet_available = Feature not available yet.
+
+# --- J8 L11 ---
+col-mode = Task Mode
+fmt-mode-manual = Manually Scheduled
+fmt-mode-auto = Auto Scheduled
+gantt-status-label = Status { $date }
+
+# --- J8 L12 ---
+menu-ai-panel = AI operations
+side-tab-ai = AI operations
+side-tab-why = Why this date?
+side-close = Close the panel
+ai-no-pending = No pending proposal from an agent.
+ai-more =
+    { $count ->
+        [one] { $count } more changed task
+       *[other] { $count } more changed tasks
+    }
+ai-critical-entered = becomes critical
+ai-critical-left = no longer critical
+ai-added = + { $name }
+ai-removed = deleted: { $name }
+ai-no-preview = No preview for this operation: { $detail }
+ai-history = Session history
+ai-history-empty = No proposal handled yet.
+ai-history-line = { $value } — { $name } on "{ $document }": { $detail }
+ai-outcome-accepted = accepted
+ai-outcome-rejected = rejected
+ai-outcome-expired = expired
+ai-outcome-stale = stale (document closed or replaced)
+ai-outcome-failed = failed ({ $detail })
+ai-undo-entry = Undo this operation
+why-no-task = Select a task to see what sets its dates.
+why-drivers = Drivers (click to select)
+why-unavailable = No explanation: { $detail }
+
+# --- J8 L13 ---
+web-start-failed = { $product } cannot start in this browser (WebGL2 or WebGPU unavailable?). Try a recent browser or the desktop version. Detail: { $detail }
+dropped-first-only = { $count } files dropped: only "{ $name }" is opened.
+menu-export = Export
+menu-export-pdf = PDF…
+menu-export-svg = SVG…
+menu-export-csv = Tasks CSV…
+export-done = Exported: { $name }
+export-error-title = Cannot export
+export-error-failed = The export failed: { $detail }
+
+# --- J8 L14 ---
+diag-calendar-unknown = unknown calendar { $calendar }, referenced by { $referenced_by }
+diag-calendar-base_missing = calendar { $calendar } inherits from calendar { $base }, which does not exist
+diag-calendar-base_not_base = calendar { $calendar } inherits from calendar { $base }, which is not a base calendar
+diag-calendar-inheritance_cycle = inheritance loop between calendars: { $chain }
+diag-calendar-no_working_time = calendar { $calendar } has no working time: no duration can be placed on it
+diag-calendar-internal = calendar { $calendar } could not be compiled (internal inconsistency, please report)
+diag-calendar-exceptions_overlap = calendar { $calendar }: exceptions #{ $kept } and #{ $ignored } overlap; #{ $kept } wins on the shared days
+diag-calendar-work_weeks_overlap = calendar { $calendar }: work weeks #{ $kept } and #{ $ignored } overlap; #{ $kept } wins on the shared days
+diag-calendar-recurrence_unsupported = calendar { $calendar }: the recurrence of exception #{ $exception } is not supported; the exception is ignored
+diag-project-calendar_not_base = the project calendar ({ $calendar }) is not a base calendar
+diag-task-reserved_uid = a task has UID 0, reserved for the project summary task
+diag-task-outline_jump = task { $task } skips an outline level (or the first level is not 1)
+diag-task-null_with_data = blank row { $task } carries links or assignments, ignored
+diag-task-negative_progress = task { $task } has a negative actual or remaining duration
+diag-link-self = task { $task } is linked to itself
+diag-link-duplicate = several links from task { $predecessor } to task { $successor }
+diag-link-unknown_task = task { $successor } is linked to task { $predecessor }, which does not exist
+diag-assignment-unknown_task = assignment { $assignment } refers to task { $task }, which does not exist
+diag-assignment-unknown_resource = assignment { $assignment } refers to resource { $resource }, which does not exist
+diag-conversion-out_of_domain = calendar { $calendar }: { $minutes } min from { $from } fall outside the date range (1984-2149)
+diag-link-cycle = circular links between tasks { $tasks }
+diag-link-ignored_in_cycle = the link { $predecessor } -> { $successor } is ignored to break a cycle
+diag-link-summary_descendant = the link { $predecessor } -> { $successor } joins a summary task to one of its subtasks: ignored
+diag-link-finish_to_summary = the link { $predecessor } -> { $successor } (finish-to-finish or start-to-finish) to a summary task applies to each of its subtasks
+diag-link-expansion_limit = { $ignored ->
+        [one] { $ignored } finish-to-finish or start-to-finish link to a summary task ignored
+       *[other] { $ignored } finish-to-finish or start-to-finish links to a summary task ignored
+    }: expanding them to the subtasks would exceed { $limit } arcs
+diag-link-start_from_summary = the link { $predecessor } -> { $successor } (start-to-start or start-to-finish) from a summary task caps the start of each of its subtasks (scheduled from finish)
+diag-link-inactive = the link { $predecessor } -> { $successor } starts from an inactive task: no effect
+diag-link-excluded_endpoint = the link { $predecessor } -> { $successor } touches an unscheduled task: ignored
+diag-link-manual_not_honored = manual task { $successor } does not honor its link with task { $predecessor }
+diag-link-unschedulable = the link { $predecessor } -> { $successor } to a summary task cannot be applied ({ $cause }): ignored
+diag-task-manual_undated = manual task { $task } has neither start nor finish: not scheduled
+diag-task-manual_dates_inverted = manual task { $task } finishes before it starts: finish moved to the start
+diag-task-calendar_fallback = calendar { $calendar } of task { $task } is unusable: project calendar used
+diag-project-calendar_fallback = the project calendar ({ $calendar }) is unusable: built-in Standard calendar used
+diag-task-unschedulable = task { $task } cannot be scheduled ({ $pass }: { $cause })
+diag-constraint-override = the "{ $kind }" constraint of task { $task } is honored despite { $bound }
+diag-constraint-not_honored = the "{ $kind }" constraint on { $date } of task { $task } is not honored: links take precedence
+diag-constraint-summary_ignored = the "{ $kind }" constraint of summary task { $task } is ignored
+diag-constraint-manual_ignored = the "{ $kind }" constraint of manual task { $task } is ignored by scheduling
+diag-task-deadline_missed = task { $task } finishes on { $finish }, after its deadline of { $deadline }
+diag-resource-overallocated = resource { $resource } is overallocated from { $from } to { $to } (peak { $peak }%)
+diag-resource-availability_ignored = dated availability of resource { $resource } is ignored: constant capacity
+diag-assignment-contour_unsupported = contour { $contour } of assignment { $assignment } is placed as flat
+diag-assignment-zero_units = assignment { $assignment } has zero units: the task duration is kept
+diag-assignment-duration_out_of_domain = the duration of assignment { $assignment } is out of range
+diag-assignment-calendar_empty = calendars { $task_calendar } (task) and { $resource_calendar } (resource) of assignment { $assignment } share no working time
+diag-task-fixed_work_effort_driven = task { $task } is fixed work without being effort driven
+diag-calendar-too_many_segments = the combination of calendars { $calendar } and { $other } exceeds { $limit } segments
+diag-assignment-too_many_parts = task { $task } has { $parts } work assignments (more than { $limit }): its duration is that of the longest
+diag-progress-link_ignored = the link { $predecessor } -> { $successor } has no effect: in-progress task { $successor } is not split
+diag-progress-link_overridden = the actual dates of completed task { $successor } override its link with task { $predecessor }
+diag-progress-option_unsupported = progress option { $option } is not followed: default values used
+diag-progress-from_finish_in_progress = in-progress task { $task } in a project scheduled from finish: its remaining work is placed as soon as possible
+diag-progress-actual_start_missing = started task { $task } has no actual start: its scheduled start is used
+diag-progress-milestone_rounded = milestone { $task } is set to 100% complete
+diag-constraint-ignored_in_progress = the "{ $kind }" constraint of in-progress task { $task } is ignored for its dates
+diag-baseline-cost_not_computed = baseline { $number }: costs copied as is, not recalculated
+diag-baseline-task_skipped = { $count ->
+        [one] { $count } unscheduled task without a baseline
+       *[other] { $count } unscheduled tasks without a baseline
+    }
+diag-baseline-nothing_to_clear = baseline { $number }: nothing to clear
+diag-schedule-internal = internal scheduling inconsistency (please report): { $detail }
+diag-mspdi-invalid_value = unreadable or out-of-range value: default applied
+diag-mspdi-unknown_code = unknown code ({ $code }): default applied
+diag-mspdi-missing_required = required element missing
+diag-mspdi-duplicate = duplicate element: the first one is kept
+diag-mspdi-dangling_reference = reference to a missing UID
+diag-mspdi-link_ignored = link ignored ({ $reason })
+diag-mspdi-rounded = value rounded to the minute
+diag-mspdi-unsupported = unsupported feature ({ $what })
+diag-mspdi-inconsistent = tolerated inconsistency
+diag-mspdi-truncated = { $dropped ->
+        [one] { $dropped } diagnostic dropped beyond the limit
+       *[other] { $dropped } diagnostics dropped beyond the limit
+    }
+diag-mspdi-not_preserved = content not read, lost on save
+diag-mspdi-honor_constraints_off = "Honor constraints" turned off: links take precedence over constraints
+diag-mspdi-progress_inconsistent = { $count ->
+        [one] { $count } remaining value read from the file replaced by the calculation
+       *[other] { $count } remaining values read from the file replaced by the calculation
+    }
+diag-style-ignored = document style ignored ({ $reason }): default template applied
+diag-mspdi-error-empty = empty document
+diag-mspdi-error-too_large = document too large: { $size } bytes (limit { $max })
+diag-mspdi-error-utf16_not_supported = UTF-16 document: only UTF-8 is supported
+diag-mspdi-error-invalid_utf8 = invalid UTF-8 at { $at }
+diag-mspdi-error-xml = malformed XML at { $at }: { $message }
+diag-mspdi-error-unexpected_eof = unexpected end of document at { $at }{ $depth ->
+        [0] {""}
+       *[other] {" "}(open elements: { $open })
+    }
+diag-mspdi-error-doctype_not_allowed = DOCTYPE declaration refused at { $at }
+diag-mspdi-error-too_deep = nesting too deep at { $at } (limit { $max } levels)
+diag-mspdi-error-too_many_elements = too many elements (limit { $max })
+diag-mspdi-error-too_many_retained = too many retained elements at { $at } (limit { $max })
+diag-mspdi-error-text_too_long = text too long at { $at } (limit { $max } bytes)
+diag-mspdi-error-not_mspdi = not an MSPDI document: root "{ $root }" instead of "Project"
+diag-location = line { $line }, column { $column } (byte { $byte })
+diag-subject-project = the project
+diag-subject-calendar = calendar { $id }
+diag-subject-task = task { $id }
+diag-subject-link = link { $predecessor } -> { $successor }
+diag-subject-resource = resource { $id }
+diag-subject-assignment = assignment { $id }
+diag-pass-forward = forward pass
+diag-pass-backward = backward pass
+diag-bound-project-start = the project start
+diag-bound-project-finish = the project finish
+diag-bound-summary-gate = the bound of summary task { $summary }
+diag-bound-summary-cap = the cap of summary task { $summary }
+diag-bound-predecessor = the link from task { $predecessor }
+diag-bound-successor = the link to task { $successor }
+diag-with-element = { $head }: { $element }
+diag-with-value = { $head } = "{ $value }"
+diag-with-detail = { $head }, { $detail }
+template-classique = Classic
+template-sobre = Clean
+template-contraste-eleve = High contrast
+template-presentation = Presentation
+template-chantier = Works schedule
+template-impression-nb = Black and white print
+token-project = Project name
+token-status-date = Status date
+token-page = Page number
+token-pages = Page count
+token-print-date = Print date
+token-file = File name
+
+# --- J8 L15 ---
+menu-task = Task
+menu-format = Format
+menu-help = Help
+menu-mark-percent = Mark { $percent }% complete
+toolbar-percent = { $percent }%
+toolbar-percent-hint = Mark the selection { $percent }% complete
+menu-toggle-mode = Toggle manual / auto scheduling
+toolbar-mode = Mode
+toolbar-mode-hint = Switch the selection between manual and auto scheduling
+menu-toggle-active = Activate / inactivate
+toolbar-active = Active
+toolbar-active-hint = Activate or inactivate the selection
+toolbar-filter = Custom filter
+toolbar-search = Find
+toolbar-print-mode = Print mode
+menu-page-setup = Page Setup…
+menu-print-mode = Print mode
+menu-gallery = Layout templates…
+menu-format-bars = Format bars…
+menu-chart-only = Chart only
+menu-highlight-critical = Highlight the critical path
+menu-about = About { $product }
+about-text = { $product } { $version } — free software (MIT or Apache-2.0)
+context-format-bars = Format bars of this type
+task-cmd-nothing = Nothing to change in the selection.
+task-cmd-no-selection = Select one or more tasks first.
+gallery-title = Layout templates
+gallery-apply = Apply
+gallery-current = Current template
+gallery-default = Default
+gallery-make-default = Set as default
+gallery-default-hint = Template of documents without a chosen layout
+gallery-user-templates = Personal templates
+gallery-no-user-template = No personal template.
+gallery-save-name = Template name
+gallery-save = Save as personal template
+gallery-saved = Personal template “{ $name }” saved.
+gallery-name-invalid = A name of 1 to 64 characters is expected.
+gallery-full = 32 personal templates at most: replace one (same name).
+gallery-close = Close
+gallery-preview-empty = No preview
+page-setup-title = Page Setup
+print-mode-title = Print mode
+ps-paper = Paper
+ps-landscape = Landscape
+ps-portrait = Portrait
+ps-margins = Margins (mm)
+ps-margin-top = Top
+ps-margin-right = Right
+ps-margin-bottom = Bottom
+ps-margin-left = Left
+ps-fit = Fit
+ps-fit-scale = Scale (%)
+ps-fit-wide = Pages wide
+ps-fit-wide-tall = Pages wide and tall
+ps-pages-tall = Pages tall
+ps-repeat-table = Table repeated on every page
+ps-header = Header
+ps-footer = Footer
+ps-zone-left = Left
+ps-zone-center = Center
+ps-zone-right = Right
+ps-insert-token = Insert into the header center
+ps-title-block = Title block: first center line as a title
+ps-columns = Printed columns
+ps-chart-only = Chart only (table hidden)
+ps-preview = Preview
+ps-page-of = Page { $page } of { $pages }
+ps-prev = Previous page
+ps-next = Next page
+ps-scale = Scale: { $scale }%
+ps-export-pdf = Export to PDF…
+ps-export-svg = Export to SVG…
+ps-save = Save with the project
+ps-close = Close
+ps-error = Page layout failed: { $detail }
+ps-column-name = Name
+fp-title = Format: { $role }
+fp-role = Bar type
+fp-role-task = Task bars
+fp-role-critical = Critical bars
+fp-role-summary = Summary bars
+fp-role-summary-critical = Critical summary bars
+fp-role-milestone = Milestones
+fp-role-milestone-critical = Critical milestones
+fp-role-progress = Progress
+fp-role-baseline = Baseline
+fp-role-inactive = Inactive tasks
+fp-role-manual = Manually scheduled tasks
+fp-role-slack = Slack
+fp-role-deadline = Deadline
+fp-color = Color
+fp-custom-color = Custom color
+fp-swatch = Color { $color }
+fp-phase-swatch = Phase color { $color }
+fp-thickness = Thickness (% of the row)
+fp-ends = Ends
+fp-ends-square = Square
+fp-ends-rounded = Rounded
+fp-text-left = Text on the left
+fp-text-right = Text on the right
+fp-text-inside = Text inside
+fp-none = None
+fp-duration-after-name = Duration after the name
+fp-details = Details
+fp-contrast-low = Contrast too low on the background: { $ratio }:1 (3:1 at least).
+fp-use-suggestion = Use { $color }
+fp-revert = Revert to template
+fp-save-template = Save as template…
+fp-close = Close
+fp-phase = Phase color of “{ $name }”
+fp-phase-children = Applied to subtasks
+fp-phase-remove = Remove the color
+field-name = Name
+field-name-duration = Name (duration)
+field-resources = Resources
+field-start = Start
+field-finish = Finish
+field-start-short = Start (short)
+field-finish-short = Finish (short)
+field-duration = Duration
+field-duration-short = Duration (short)
+field-percent = % complete
+field-total-slack = Total slack
+field-start-finish = Start – finish
+
+# --- J8 L16 ---
+
+# --- J8 relecture finale ---
+paste-report-tracking = { $count ->
+        [one] { $count } task pasted without its progress, baseline or calendar
+       *[other] { $count } tasks pasted without their progress, baseline or calendar
+    }
+token-schedule-title = Title “Provisional schedule”
+menu-relative-months = Relative months (M1, M2…)

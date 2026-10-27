@@ -311,11 +311,11 @@ pub fn show(
     for (uid, zone) in &found {
         let id = Id::unique("planrs.timeline").with(uid.get());
         let response = ui.interact(zone.intersect(rect), id, Sense::click());
-        let name = project
-            .tasks
-            .get(*uid)
-            .map_or_else(String::new, |t| t.name.clone());
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name.clone()));
+        // Nom lu seulement quand l'accessibilité le demande.
+        response.widget_info(|| {
+            let name = project.tasks.get(*uid).map_or("", |t| t.name.as_str());
+            egui::WidgetInfo::labeled(egui::Role::Button, true, name)
+        });
         if response.clicked() {
             fc.actions.push(Action::Timeline(TimelineOp::Activate(*uid)));
         }

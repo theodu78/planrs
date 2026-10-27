@@ -5,7 +5,7 @@
 //! lot L5) sur le projet « P » du cahier (UID = ID ; 1 ⊃ 2, 3, 4 ; 5 ⊃ 6,
 //! 7), 1 440 × 900. Les tâches de la frise sont posées par un lot
 //! `style.apply { patch: { timeline } }` (même écriture que le geste
-//! « Ajouter à la chronologie » du lot L3). Relevé de la frise :
+//! « Ajouter à la chronologie »). Relevé de la frise :
 //! `ViewTransient::timeline` (disposition en cache, rectangles peints,
 //! zones cliquables, partie visible du Gantt).
 
@@ -176,14 +176,6 @@ fn row_rect(harness: &Harness<'static, App>, n: u32, name: &str) -> Rect {
     harness.get_by_label(&label).rect()
 }
 
-/// Lot L3 pas encore fusionné : l'opération de la frise est refusée avec
-/// « pas encore disponible » ; fusionnée, la liste change. Le geste est
-/// vérifié jusqu'à l'action dans les deux cas.
-fn op_reached(app: &App, done: bool) -> bool {
-    let refused = fr(TextId::NotAvailableYet);
-    done || app.messages().iter().any(|m| m.text == refused)
-}
-
 /// H-UI-78 : P ⇒ « Début lun 19/10/26 » à gauche, « Fin mar 17/11/26 » à
 /// droite, graduation « nov. » ; frise de 72 points sur toute la largeur,
 /// sous le ruban.
@@ -310,12 +302,8 @@ fn h_ui_79_context_menu_entry() {
         .unwrap()
         .click();
     harness.run();
-    let done = timeline_tasks(harness.state()) == [3];
-    assert!(op_reached(harness.state(), done));
+    assert_eq!(timeline_tasks(harness.state()), [3]);
     assert_eq!(menu_entries(&harness, TextId::TimelineAdd), 0, "menu refermé");
-    if !done {
-        put(&mut harness, &[3]);
-    }
     assert!(drawn(&harness).elements.iter().any(|(u, _)| *u == uid(3)));
     assert!(frise_texts(&harness).iter().any(|t| t == "Murs"));
     harness.get_by_label(&row_label(3, "Murs")).click_secondary();
@@ -482,8 +470,7 @@ fn h_ui_81_right_click_removes() {
     harness.run();
     harness.get_by_label(&fr(TextId::TimelineRemove)).click();
     harness.run();
-    let done = timeline_tasks(harness.state()) == [4];
-    assert!(op_reached(harness.state(), done));
+    assert_eq!(timeline_tasks(harness.state()), [4]);
     assert!(
         harness.query_by_label(&fr(TextId::TimelineRemove)).is_none(),
         "menu refermé"

@@ -1213,6 +1213,7 @@ ribbon-reason-no-document = Open or create a project.
 ribbon-reason-no-selection = Select at least one task.
 ribbon-reason-nothing-to-undo = Nothing to undo.
 ribbon-reason-nothing-to-redo = Nothing to redo.
+ribbon-reason-task-view = Switch to a task view (Gantt Chart).
 menu-insert-summary = Insert Summary Task
 menu-insert-milestone = Insert Milestone
 menu-task-notes = Notes…

@@ -1145,6 +1145,7 @@ text_ids! {
     RibbonReasonNoSelection => "ribbon-reason-no-selection",
     RibbonReasonNothingToUndo => "ribbon-reason-nothing-to-undo",
     RibbonReasonNothingToRedo => "ribbon-reason-nothing-to-redo",
+    RibbonReasonTaskView => "ribbon-reason-task-view",
     MenuInsertSummary => "menu-insert-summary",
     MenuInsertMilestone => "menu-insert-milestone",
     MenuTaskNotes => "menu-task-notes",

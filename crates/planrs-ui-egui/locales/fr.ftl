@@ -1212,6 +1212,7 @@ ribbon-reason-no-document = Ouvrez ou créez un projet.
 ribbon-reason-no-selection = Sélectionnez au moins une tâche.
 ribbon-reason-nothing-to-undo = Rien à annuler.
 ribbon-reason-nothing-to-redo = Rien à rétablir.
+ribbon-reason-task-view = Affichez une vue des tâches (Diagramme de Gantt).
 menu-insert-summary = Insérer une tâche récapitulative
 menu-insert-milestone = Insérer un jalon
 menu-task-notes = Notes…

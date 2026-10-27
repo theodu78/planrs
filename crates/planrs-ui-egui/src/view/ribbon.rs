@@ -390,10 +390,13 @@ fn group_plan(
     }
 }
 
-/// Paliers des groupes pour tenir dans `available` (H-UI-75) : tous les
-/// groupes d'abord sans libellés de petits boutons, par rang de réduction
-/// croissant (de droite à gauche dans la table), puis repliés dans le même
-/// ordre ; on s'arrête dès que la largeur tient.
+/// Paliers des groupes pour tenir dans `available` (H-UI-75), par rang de
+/// réduction croissant (de droite à gauche dans la table), avec un rang
+/// d'écart entre les deux paliers : le groupe de rang k est replié juste
+/// après que celui de rang k + 1 a perdu ses libellés de petits boutons ;
+/// on s'arrête dès que la largeur tient. Les groupes de rang élevé
+/// (Planification, Insérer…) gardent ainsi leurs libellés tant qu'un
+/// groupe de rang plus faible peut encore être replié.
 #[must_use]
 pub fn choose_stages(ranks: &[u8], widths: &[[f32; 3]], available: f32) -> Vec<Stage> {
     let mut stages = vec![Stage::Full; widths.len()];
@@ -412,14 +415,26 @@ pub fn choose_stages(ranks: &[u8], widths: &[[f32; 3]], available: f32) -> Vec<S
     };
     let mut order: Vec<usize> = (0..widths.len()).collect();
     order.sort_by_key(|&i| (ranks.get(i).copied().unwrap_or(u8::MAX), i));
-    for target in [Stage::Compact, Stage::Folded] {
-        for &i in &order {
-            if total(&stages) <= available {
-                return stages;
-            }
-            if let Some(stage) = stages.get_mut(i) {
-                *stage = target;
-            }
+    // Pas : (r1, compact), (r2, compact), (r1, replié), (r3, compact),
+    // (r2, replié)… : un groupe n'est replié qu'après que le suivant a
+    // perdu ses libellés de petits boutons.
+    let mut steps: Vec<(usize, Stage)> = Vec::with_capacity(order.len().saturating_mul(2));
+    let mut previous = None;
+    for &i in &order {
+        steps.push((i, Stage::Compact));
+        if let Some(p) = previous.replace(i) {
+            steps.push((p, Stage::Folded));
+        }
+    }
+    if let Some(p) = previous {
+        steps.push((p, Stage::Folded));
+    }
+    for (i, target) in steps {
+        if total(&stages) <= available {
+            return stages;
+        }
+        if let Some(stage) = stages.get_mut(i) {
+            *stage = target;
         }
     }
     stages
@@ -1086,8 +1101,8 @@ mod tests {
         assert_eq!(split_label("Informations", &mut m), vec!["Informations"]);
     }
 
-    /// H-UI-75 : réduction par rang croissant, d'abord sans libellés, puis
-    /// repliés ; rien si la largeur tient.
+    /// H-UI-75 : réduction par rang croissant, un rang d'écart entre
+    /// « sans libellés » et « replié » ; rien si la largeur tient.
     #[test]
     fn h_ui_75_choose_stages_by_rank() {
         let widths = [[100.0, 80.0, 50.0], [100.0, 60.0, 50.0], [100.0, 90.0, 50.0]];
@@ -1097,6 +1112,12 @@ mod tests {
         assert_eq!(
             choose_stages(&ranks, &widths, 274.0),
             vec![Stage::Full, Stage::Compact, Stage::Full]
+        );
+        // 254 : rangs 1 et 2 sans libellés (274 puis 264), puis rang 1
+        // replié (254) ; le rang 3 garde ses libellés.
+        assert_eq!(
+            choose_stages(&ranks, &widths, 254.0),
+            vec![Stage::Full, Stage::Folded, Stage::Compact]
         );
         let tight = choose_stages(&ranks, &widths, 180.0);
         assert_eq!(tight[1], Stage::Folded);

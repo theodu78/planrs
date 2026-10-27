@@ -318,6 +318,11 @@ impl RibbonCmd {
         if fc.doc.is_none() {
             return Enabled::no(TextId::RibbonReasonNoDocument);
         }
+        // Commandes des tâches hors du Gantt (vues des ressources) : le
+        // réducteur les ignore ou viserait des tâches invisibles.
+        if self.needs_task_view() && fc.state.view != ViewKind::Gantt {
+            return Enabled::no(TextId::RibbonReasonTaskView);
+        }
         let locked = fc.task_view.state.reorder_locked();
         if locked
             && matches!(
@@ -331,6 +336,35 @@ impl RibbonCmd {
             return Enabled::no(TextId::RibbonReasonNoSelection);
         }
         Enabled::YES
+    }
+
+    /// Commande qui vise les tâches (structure, commandes de tâche,
+    /// fenêtres d'une tâche, chronologie, défilement, presse-papiers) :
+    /// grisée hors de la vue des tâches (Gantt), car les vues des
+    /// ressources n'affichent pas la sélection des tâches.
+    #[must_use]
+    pub const fn needs_task_view(self) -> bool {
+        matches!(
+            self,
+            Self::MarkPercent(_)
+                | Self::Link
+                | Self::Unlink
+                | Self::Indent
+                | Self::Outdent
+                | Self::Inactivate
+                | Self::ManualSchedule
+                | Self::InsertTask
+                | Self::InsertSummary
+                | Self::InsertMilestone
+                | Self::TaskInformation
+                | Self::TaskNotes
+                | Self::AddToTimeline
+                | Self::ScrollToTask
+                | Self::Cut
+                | Self::Copy
+                | Self::Paste
+                | Self::PasteSpecial
+        )
     }
 
     /// Commande qui agit sur la sélection (grisée sans tâche active).

@@ -24,7 +24,7 @@ use planrs_ui_egui::keymap::{Binding, shortcut_for_os};
 use planrs_ui_egui::ribbon::spec::{QUICK_ACCESS, RIBBON, RibbonCmd, percent_value};
 use planrs_ui_egui::ribbon::{RibbonOp, RibbonTab};
 use planrs_ui_egui::selection::SelectMode;
-use planrs_ui_egui::state::{SortKey, SortSpec};
+use planrs_ui_egui::state::{SortKey, SortSpec, ViewKind};
 use planrs_ui_egui::view::ribbon::{Kind, RibbonDrawn, Stage, TAB_BAND_H, drawn, label_of};
 use planrs_ui_egui::view::task_view::TaskViewOp;
 use planrs_ui_egui::{Action, App, LanguagePref, UiState};
@@ -485,6 +485,48 @@ fn h_ui_70_disabled_without_selection() {
     assert!(!disabled(&node(&harness, &fr(TextId::RibbonLink))));
 }
 
+/// H-UI-70 : tâche 3 sélectionnée, Feuille des ressources puis onglet
+/// Tâche ⇒ les commandes des tâches sont grisées (ruban et menu, même
+/// prédicat) avec la raison « vue des tâches » ; un clic sur 50 % ne
+/// modifie pas la tâche invisible. Retour au Gantt ⇒ actives.
+#[test]
+fn h_ui_70_task_cmds_disabled_in_resource_views() {
+    let mut harness = p();
+    select(&mut harness, 3, &[]);
+    for view in [ViewKind::ResourceSheet, ViewKind::ResourceUsage] {
+        dispatch(&mut harness, Action::SetView(view));
+        dispatch(&mut harness, Action::Ribbon(RibbonOp::Select(RibbonTab::Task)));
+        for id in [
+            TextId::RibbonLink,
+            TextId::RibbonIndent,
+            TextId::RibbonInactivate,
+            TextId::RibbonManualSchedule,
+            TextId::TimelineAdd,
+        ] {
+            assert!(disabled(&node(&harness, &fr(id))), "{view:?} {id:?}");
+        }
+        assert!(disabled(&node(&harness, "50 %")), "{view:?}");
+        node(&harness, "50 %").click();
+        harness.run();
+        let pct = project(harness.state())
+            .tasks
+            .get(uid(3))
+            .unwrap()
+            .progress
+            .percent_complete
+            .get();
+        assert_eq!(pct, 0, "{view:?}");
+        assert_eq!(undoable(harness.state()), 0);
+        menu(&harness, &fr(TextId::MenuTask)).click();
+        harness.run();
+        assert!(disabled(&menu(&harness, &fr(TextId::StructureLink))), "{view:?}");
+        harness.key_press(Key::Escape);
+        harness.run();
+    }
+    dispatch(&mut harness, Action::SetView(ViewKind::Gantt));
+    assert!(!disabled(&node(&harness, &fr(TextId::RibbonLink))));
+}
+
 /// Rectangle de l'élément de nom `label` dans le relevé.
 fn item_rect(d: &RibbonDrawn, label: &str) -> Rect {
     d.items
@@ -833,6 +875,33 @@ fn h_ui_75_no_overflow_widths() {
     }
 }
 
+/// H-UI-75 : la réduction avance par rang avec un rang d'écart entre
+/// « sans libellés » et « replié ». À 1 280 px, Planification, Insérer et
+/// Presse-papiers gardent leurs libellés ; à 1 024 px (fenêtre réduite,
+/// web), Presse-papiers et Mise en forme les gardent et Planification
+/// n'est pas repliée (l'onglet entier demande ~1 540 px).
+#[test]
+fn h_ui_75_task_tab_keeps_labels_when_narrow() {
+    for width in [1280.0, 1024.0] {
+        let harness = p_at(width);
+        let d = ribbon(&harness);
+        let stage = |name: TextId| {
+            d.groups
+                .iter()
+                .find(|(n, _, _)| *n == fr(name))
+                .map(|(_, s, _)| *s)
+                .unwrap()
+        };
+        assert_eq!(stage(TextId::RibbonGroupClipboard), Stage::Full, "{width}");
+        assert_eq!(stage(TextId::RibbonGroupFormatting), Stage::Full, "{width}");
+        assert_ne!(stage(TextId::RibbonGroupSchedule), Stage::Folded, "{width}");
+        if width >= 1280.0 {
+            assert_eq!(stage(TextId::RibbonGroupSchedule), Stage::Full, "{width}");
+            assert_eq!(stage(TextId::RibbonGroupInsert), Stage::Full, "{width}");
+        }
+    }
+}
+
 /// H-UI-75 : onglet Tâche à 800 px ⇒ Édition et Propriétés (et, mesuré,
 /// Insérer, Tâches, Planification) repliés en boutons ; « Propriétés ▾ » →
 /// Informations ⇒ fenêtre ouverte.
@@ -850,9 +919,9 @@ fn h_ui_75_collapsed_group_menu_runs_action() {
     };
     assert_eq!(stage(TextId::RibbonGroupEditing), Stage::Folded);
     assert_eq!(stage(TextId::RibbonGroupProperties), Stage::Folded);
-    // Les groupes de gauche gardent leurs grands boutons (petits sans
-    // libellé) : Affichage, Presse-papiers, Mise en forme.
-    assert_eq!(stage(TextId::RibbonGroupClipboard), Stage::Compact);
+    // Les groupes de gauche ne sont pas repliés : Affichage,
+    // Presse-papiers, Mise en forme.
+    assert_ne!(stage(TextId::RibbonGroupClipboard), Stage::Folded);
     node(&harness, &fr(TextId::RibbonGroupProperties)).click();
     harness.run();
     let info = named(&harness, &fr(TextId::RibbonInformation));

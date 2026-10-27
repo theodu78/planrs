@@ -6,7 +6,10 @@
 #   2.36 : les binaires tournent sur toute distribution plus récente) ;
 # - web : `dist` de trunk.
 # Chaque artefact s'appelle `planrs-<version>-<plateforme>.<ext>`, version du
-# workspace (job `version`).
+# workspace (job `version`). Chacun porte un dossier `licenses/` : textes de
+# la licence du code (MIT, Apache-2.0), `NOTICE` et licences des composants
+# tiers embarqués, aux chemins que cite `NOTICE` (police Inter, OFL ; icônes
+# Lucide, ISC et MIT ; ADR-0017, lot L6), vérifié par `release.yml`.
 #
 # Deux usages, une seule définition des builds :
 # - préversions : tag `ui-*` poussé, ou lancement manuel (`workflow_dispatch`,
@@ -100,6 +103,10 @@ jobs:
           iconutil -c icns planrs.iconset -o "$app/Contents/Resources/planrs.icns"
           cp universal/planrs stage/cli/planrs
           cp packaging/macos/LISEZ-MOI.txt stage/LISEZ-MOI.txt
+          mkdir -p "stage/licenses/assets/fonts" "stage/licenses/assets/icons/lucide"
+          cp LICENSE-MIT LICENSE-APACHE NOTICE "stage/licenses/"
+          cp assets/fonts/OFL.txt "stage/licenses/assets/fonts/"
+          cp assets/icons/lucide/LICENSE "stage/licenses/assets/icons/lucide/"
           ln -s /Applications stage/Applications
           codesign --force -s - stage/cli/planrs
           codesign --force --deep -s - "$app"
@@ -140,6 +147,10 @@ jobs:
           cp target/x86_64-pc-windows-msvc/release/planrs-desktop.exe \
             target/x86_64-pc-windows-msvc/release/planrs.exe \
             packaging/windows/README.txt "$dir/"
+          mkdir -p "$dir/licenses/assets/fonts" "$dir/licenses/assets/icons/lucide"
+          cp LICENSE-MIT LICENSE-APACHE NOTICE "$dir/licenses/"
+          cp assets/fonts/OFL.txt "$dir/licenses/assets/fonts/"
+          cp assets/icons/lucide/LICENSE "$dir/licenses/assets/icons/lucide/"
           7z a -tzip "$dir.zip" "$dir"
 
       - uses: actions/upload-artifact@v4
@@ -182,6 +193,10 @@ jobs:
           mkdir "$dir"
           cp target/release/planrs-desktop target/release/planrs packaging/linux/planrs.desktop "$dir/"
           cp assets/icon/planrs-256.png "$dir/planrs.png"
+          mkdir -p "$dir/licenses/assets/fonts" "$dir/licenses/assets/icons/lucide"
+          cp LICENSE-MIT LICENSE-APACHE NOTICE "$dir/licenses/"
+          cp assets/fonts/OFL.txt "$dir/licenses/assets/fonts/"
+          cp assets/icons/lucide/LICENSE "$dir/licenses/assets/icons/lucide/"
           chmod +x "$dir/planrs-desktop" "$dir/planrs"
           tar czf "$dir.tar.gz" "$dir"
 
@@ -223,6 +238,10 @@ jobs:
             echo "Par exemple, depuis le dossier qui contient dist : python3 -m http.server -d dist 8080"
             echo "Puis ouvrir http://localhost:8080 dans un navigateur récent (WebGPU ou WebGL2)."
           } > "$dist/README.txt"
+          mkdir -p "$dist/licenses/assets/fonts" "$dist/licenses/assets/icons/lucide"
+          cp LICENSE-MIT LICENSE-APACHE NOTICE "$dist/licenses/"
+          cp assets/fonts/OFL.txt "$dist/licenses/assets/fonts/"
+          cp assets/icons/lucide/LICENSE "$dist/licenses/assets/icons/lucide/"
           tar czf "planrs-$VERSION-web.tar.gz" -C apps/planrs-web dist
 
       - uses: actions/upload-artifact@v4

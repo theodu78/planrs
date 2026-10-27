@@ -14,6 +14,8 @@ Une release `vX.Y.Z[-pre]` porte exactement cinq fichiers (C-REL-08) :
 | `planrs-<v>-web.tar.gz` | `dist` de trunk (`index.html`, `.wasm`, JS de colle généré par wasm-bindgen) |
 | `SHA256SUMS` | Empreintes SHA-256 des quatre fichiers ci-dessus |
 
+Chacune des quatre archives porte aussi un dossier `licenses/` (ADR-0017, lot L6) : `LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE`, et les licences des composants tiers embarqués aux chemins que cite `NOTICE` (`assets/fonts/OFL.txt` pour Inter, `assets/icons/lucide/LICENSE` pour Lucide, ISC et MIT de Feather). Les jobs `verify-*` échouent si l'un manque ou est vide.
+
 Tags `v*-test.*` ⇒ brouillon (non public) ; un tag d'essai `vX.Y.Z-test.N` éprouve la version du workspace qu'il prépare (même noyau `X.Y.Z`, par exemple `v1.0.0-test.1` pour `1.0.0-rc.1` : C-REL-01, notes et noms des artefacts sont ceux de cette version, lot L16) ; autres pré-versions ⇒ pré-version ; jetons `contents: write`, `id-token: write`, `attestations: write` au seul job `publish`.
 
 ## 2. Contrats (C-REL)

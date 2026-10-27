@@ -1219,6 +1219,7 @@ menu-task-notes = Notes…
 timeline-add = Ajouter à la chronologie
 timeline-remove = Retirer de la chronologie
 timeline-too-many = La chronologie compte au plus { $max } tâches : rien n'a été ajouté.
+timeline-empty-hint = Clic droit sur une tâche, puis « Ajouter à la chronologie »
 
 # --- RUBAN L1 ---
 

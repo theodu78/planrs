@@ -1152,6 +1152,7 @@ text_ids! {
     TimelineAdd => "timeline-add",
     TimelineRemove => "timeline-remove",
     TimelineTooMany => "timeline-too-many",
+    TimelineEmptyHint => "timeline-empty-hint",
     // --- RUBAN L3 ---
     NewMilestoneName => "new-milestone-name",
     NewSummaryName => "new-summary-name",

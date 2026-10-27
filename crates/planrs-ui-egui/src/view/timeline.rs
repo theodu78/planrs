@@ -304,6 +304,16 @@ pub fn show(
     ));
     fc.stats.shapes = fc.stats.shapes.saturating_add(shapes.len());
     painter.extend(shapes);
+    // Frise vide : comment y ajouter des tâches (découverte).
+    if found.is_empty() {
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            fc.texts.get(TextId::TimelineEmptyHint),
+            egui::FontId::proportional(12.0),
+            fc.palette.text_weak,
+        );
+    }
 
     // Zones cliquables : une par élément, au nom de la tâche.
     let project = doc.project();

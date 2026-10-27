@@ -1220,6 +1220,7 @@ menu-task-notes = Notes…
 timeline-add = Add to Timeline
 timeline-remove = Remove from Timeline
 timeline-too-many = The timeline holds at most { $max } tasks: nothing was added.
+timeline-empty-hint = Right-click a task, then “Add to Timeline”
 
 # --- RUBAN L1 ---
 

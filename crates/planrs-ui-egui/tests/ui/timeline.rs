@@ -206,6 +206,17 @@ fn h_ui_78_timeline_shows_project_bounds() {
     assert!(x_of("Fin mar 17/11/26") > d.rect.center().x);
 }
 
+/// H-UI-78 : frise vide ⇒ texte atténué au centre qui dit comment y
+/// ajouter des tâches ; retiré dès qu'une tâche y est.
+#[test]
+fn h_ui_78_empty_timeline_hint() {
+    let hint = fr(TextId::TimelineEmptyHint);
+    let mut harness = p();
+    assert!(frise_texts(&harness).contains(&hint), "{:?}", frise_texts(&harness));
+    put(&mut harness, &[3]);
+    assert!(!frise_texts(&harness).contains(&hint));
+}
+
 /// H-UI-78 : case décochée ⇒ frise retirée, table remontée de 72 points ;
 /// cochée à nouveau ⇒ redescendue.
 #[test]

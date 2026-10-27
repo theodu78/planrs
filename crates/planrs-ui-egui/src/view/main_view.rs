@@ -36,7 +36,7 @@ use egui::{
 use planrs_automation::gesture::{self, GestureKind};
 use planrs_core::TaskUid;
 
-use super::{BarDrag, FrameCtx, OVERSCAN, Pane, ViewTransient, gantt, table, timescale};
+use super::{BarDrag, FrameCtx, OVERSCAN, Pane, ViewTransient, gantt, table, timeline, timescale};
 use crate::action::{Action, DialogKind};
 use crate::app::OpenDocument;
 use crate::geom::{self, GanttHit, MainLayout};
@@ -83,11 +83,20 @@ struct GanttInput {
 
 /// Affiche la vue principale dans la place restante de `ui`.
 pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) {
-    let avail = ui.available_rect_before_wrap();
+    let full = ui.available_rect_before_wrap();
+    // Chronologie (ADR-0017, H-UI-78) : bande fixe de 72 points en tête,
+    // sur toute la largeur ; la table et le Gantt commencent dessous et
+    // défilent sans elle.
+    let timeline_rect = (timeline::wanted(fc) && full.height() >= 2.0 * timeline::TIMELINE_H)
+        .then(|| Rect::from_min_size(full.min, vec2(full.width(), timeline::TIMELINE_H)));
+    let avail = timeline_rect.map_or(full, |r| {
+        Rect::from_min_max(pos2(full.left(), r.bottom()), full.max)
+    });
     let metrics = *fc.metrics;
     let layout = geom::main_layout(avail, f32::from(fc.state.effective_table_width()), &metrics);
     let Some(doc) = fc.doc else {
-        ui.advance_cursor_after_rect(avail);
+        view.timeline.drawn = None;
+        ui.advance_cursor_after_rect(full);
         return;
     };
     let gantt_w = layout.gantt_clip.width();
@@ -98,6 +107,10 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
     let scroll_x = clamp_scroll(view.gantt_scroll_x, max_scroll);
     view.gantt_scroll_x = scroll_x;
     let axis = TimeAxis::new(doc.range, fc.state.zoom, layout.gantt_clip.left() - scroll_x);
+    match timeline_rect {
+        Some(rect) => timeline::show(ui, fc, &mut view.timeline, rect, Some((&axis, layout.gantt_clip))),
+        None => view.timeline.drawn = None,
+    }
     // Défilement horizontal de la table (J7, lot L6) : borné à chaque image
     // (une colonne masquée ou rétrécie réduit le maximum).
     let table_w = layout.table_clip.width();
@@ -174,7 +187,7 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
     if dx.abs() > f32::EPSILON {
         fc.actions.push(Action::ScrollGanttX(dx));
     }
-    ui.advance_cursor_after_rect(avail);
+    ui.advance_cursor_after_rect(full);
 }
 
 /// Saisie ouverte (F2, frappe, double-clic) : sa ligne, si elle n'est pas
@@ -683,6 +696,23 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
     let ctx = ui.ctx().clone();
     let mut chosen = None;
     let mut information = false;
+    let mut timeline_toggle = false;
+    // Chronologie (ADR-0017, H-UI-79) : entrée de l'habillage ruban,
+    // libellé selon la tâche active (H-UI-74).
+    let timeline_label = (fc.chrome == crate::ribbon::Chrome::Ribbon).then(|| {
+        let active = click.and_then(|c| c.uid).or(fc.selection);
+        let on = active.is_some_and(|uid| {
+            fc.task_view
+                .style
+                .style
+                .timeline
+                .tasks
+                .binary_search(&uid.get())
+                .is_ok()
+        });
+        let (add, remove) = super::timeline::CONTEXT_LABELS;
+        if on { remove } else { add }
+    });
     Popup::new(
         Id::unique("planrs.structure-menu"),
         ctx.clone(),
@@ -728,7 +758,18 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
         if ui.add_enabled(has_selection, button).clicked() {
             information = true;
         }
+        if let Some(label) = timeline_label
+            && ui
+                .add_enabled(has_selection, egui::Button::new(texts.get(label)))
+                .clicked()
+        {
+            timeline_toggle = true;
+        }
     });
+    if timeline_toggle {
+        fc.actions
+            .push(Action::Timeline(crate::action::TimelineOp::ToggleSelection));
+    }
     if let Some(op) = chosen {
         fc.actions.push(Action::Structure(op));
     }

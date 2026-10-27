@@ -1160,7 +1160,11 @@ text_ids! {
     TimelineAdd => "timeline-add",
     TimelineRemove => "timeline-remove",
     TimelineTooMany => "timeline-too-many",
-    NotAvailableYet => "not-available-yet",
+    // --- RUBAN L3 ---
+    NewMilestoneName => "new-milestone-name",
+    NewSummaryName => "new-summary-name",
+    InsertSummaryNotAdjacent => "insert-summary-not-adjacent",
+    ScrollTaskHidden => "scroll-task-hidden",
 }
 
 /// Clé fluent du refus de code `code` : `error-<code>`, points changés en

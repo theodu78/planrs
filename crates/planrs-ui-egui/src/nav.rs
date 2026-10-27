@@ -207,15 +207,76 @@ pub fn page_rows(view: f32, extent: f32) -> usize {
     f32_to_index((view / extent).floor())
 }
 
+/// Défilement horizontal du Gantt qui place l'abscisse `x` (pixels depuis
+/// l'origine de l'échelle, [`crate::timescale::TimeAxis::x`] d'un axe sans
+/// décalage) au huitième de la largeur visible `width` (H-UI-84) ; `None`
+/// si une valeur n'est pas finie ou si la largeur est nulle. Non borné :
+/// l'appelant ramène le défilement dans `[0, max]`.
+#[must_use]
+pub fn scroll_for_x(x: f32, width: f32) -> Option<f32> {
+    if !x.is_finite() || !width.is_finite() || width <= 0.0 {
+        return None;
+    }
+    let target = x - width / 8.0;
+    target.is_finite().then_some(target)
+}
+
 impl crate::App {
-    /// « Défiler jusqu'à la tâche » active (ADR-0017, H-UI-84) : le Gantt
-    /// défile pour placer le début de sa barre à 1/8 de la largeur visible
-    /// (`TimeAxis::x`, date → pixel), la table jusqu'à sa ligne. Le
-    /// réducteur borne ensuite le défilement horizontal.
-    ///
-    /// Lot L0 (squelette) : rien ; servi en L3.
-    pub(crate) const fn scroll_to_task(&mut self) {
-        let _ = self;
+    /// « Défiler jusqu'à la tâche » active (ADR-0017, H-UI-84) : la table
+    /// défile jusqu'à sa ligne (marge d'une ligne, [`ensure_visible`]) et
+    /// le Gantt place le début de sa barre (jalon : son instant ; tâche
+    /// inactive : son placement d'affichage, R-062) à 1/8 de la largeur
+    /// visible, par `TimeAxis::x` (date → pixel, dates du moteur). Le
+    /// réducteur borne ensuite le défilement horizontal. Tâche masquée par
+    /// la vue (filtre, mode plan, récapitulative repliée) : message, rien
+    /// ne bouge. Sans tâche active, hors des vues Gantt : rien.
+    pub(crate) fn scroll_to_task(&mut self) {
+        use planrs_core::schedule::TaskOutcome;
+
+        if self.state.view != crate::state::ViewKind::Gantt {
+            return;
+        }
+        let Some(uid) = self.selection else {
+            return;
+        };
+        let Some((row, len)) = self.visible_rows().map(|rows| {
+            (
+                rows.display_of(uid).map(crate::row_view::DisplayRow::index),
+                rows.len(),
+            )
+        }) else {
+            return;
+        };
+        let Some(row) = row else {
+            let text = self.texts.get(crate::i18n::TextId::ScrollTaskHidden);
+            self.push_message(planrs_core::Severity::Info, text);
+            return;
+        };
+        if let Some(y) = ensure_visible(
+            self.view.last_scroll_y,
+            row,
+            self.row_h(),
+            self.view.last_body_height,
+            len.saturating_add(1),
+        ) {
+            self.view.pending_scroll_y = Some(y);
+            self.view.last_scroll_y = y;
+        }
+        let Some(document) = &self.document else {
+            return;
+        };
+        let start = match document.schedule().get(uid) {
+            Some(TaskOutcome::Scheduled(s)) => Some(s.start),
+            Some(TaskOutcome::Excluded { display, .. }) => display.map(|span| span.start),
+            None => None,
+        };
+        let Some(start) = start else {
+            return;
+        };
+        let axis = crate::timescale::TimeAxis::new(document.range, self.state.zoom, 0.0);
+        if let Some(x) = scroll_for_x(axis.x(start), self.view.last_gantt_width) {
+            self.view.gantt_scroll_x = x;
+        }
     }
 }
 
@@ -230,7 +291,9 @@ impl crate::App {
 mod tests {
     use proptest::prelude::*;
 
-    use super::{CellCursor, GridPos, GridShape, NavMove, RowRef, ensure_visible, page_rows, step};
+    use super::{
+        CellCursor, GridPos, GridShape, NavMove, RowRef, ensure_visible, page_rows, scroll_for_x, step,
+    };
 
     const fn shape(rows: usize, cols: usize, page: usize) -> GridShape {
         GridShape { rows, cols, page }
@@ -358,6 +421,17 @@ mod tests {
         assert_eq!(page_rows(f32::NAN, 22.0), 0);
         assert_eq!(page_rows(440.0, 0.0), 0);
         assert_eq!(page_rows(f32::INFINITY, 22.0), 0);
+    }
+
+    /// H-UI-84 : le début de la barre arrive au huitième de la largeur.
+    #[test]
+    fn h_ui_84_scroll_for_x() {
+        assert_eq!(scroll_for_x(1_000.0, 800.0), Some(900.0));
+        // Non borné ici : le réducteur ramène à 0.
+        assert_eq!(scroll_for_x(50.0, 800.0), Some(-50.0));
+        assert_eq!(scroll_for_x(f32::NAN, 800.0), None);
+        assert_eq!(scroll_for_x(10.0, 0.0), None);
+        assert_eq!(scroll_for_x(10.0, f32::INFINITY), None);
     }
 
     fn move_strategy() -> impl Strategy<Value = NavMove> {

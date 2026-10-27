@@ -1228,13 +1228,16 @@ menu-task-notes = Notes…
 timeline-add = Ajouter à la chronologie
 timeline-remove = Retirer de la chronologie
 timeline-too-many = La chronologie compte au plus { $max } tâches : rien n'a été ajouté.
-not-available-yet = Cette commande n'est pas encore disponible.
 
 # --- RUBAN L1 ---
 
 # --- RUBAN L2 ---
 
 # --- RUBAN L3 ---
+new-milestone-name = Nouveau jalon
+new-summary-name = Nouvelle tâche récapitulative
+insert-summary-not-adjacent = Sélectionnez des tâches voisines, de même niveau, pour les regrouper sous une récapitulative.
+scroll-task-hidden = La tâche active est masquée par la vue (filtre ou mode plan).
 
 # --- RUBAN L4 ---
 

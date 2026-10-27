@@ -212,7 +212,11 @@ fn h_ui_78_timeline_shows_project_bounds() {
 fn h_ui_78_empty_timeline_hint() {
     let hint = fr(TextId::TimelineEmptyHint);
     let mut harness = p();
-    assert!(frise_texts(&harness).contains(&hint), "{:?}", frise_texts(&harness));
+    assert!(
+        frise_texts(&harness).contains(&hint),
+        "{:?}",
+        frise_texts(&harness)
+    );
     put(&mut harness, &[3]);
     assert!(!frise_texts(&harness).contains(&hint));
 }

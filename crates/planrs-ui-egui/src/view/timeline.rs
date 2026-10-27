@@ -223,6 +223,18 @@ impl TimelineView {
     }
 }
 
+/// Frise sans tâche dessinée : comment y ajouter des tâches (texte
+/// atténué au centre, découverte).
+fn empty_hint(painter: &egui::Painter, fc: &FrameCtx<'_>, rect: Rect) {
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        fc.texts.get(TextId::TimelineEmptyHint),
+        egui::FontId::proportional(12.0),
+        fc.palette.text_weak,
+    );
+}
+
 /// Dessine la frise dans `rect` (en tête de la vue Gantt : habillage
 /// ruban, frise visible, vue Gantt ou Gantt de suivi, voir [`wanted`]) ;
 /// `gantt` : axe et rectangle visible du Gantt de cette image, pour le
@@ -304,15 +316,8 @@ pub fn show(
     ));
     fc.stats.shapes = fc.stats.shapes.saturating_add(shapes.len());
     painter.extend(shapes);
-    // Frise vide : comment y ajouter des tâches (découverte).
     if found.is_empty() {
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            fc.texts.get(TextId::TimelineEmptyHint),
-            egui::FontId::proportional(12.0),
-            fc.palette.text_weak,
-        );
+        empty_hint(&painter, fc, rect);
     }
 
     // Zones cliquables : une par élément, au nom de la tâche.

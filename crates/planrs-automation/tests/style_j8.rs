@@ -535,13 +535,24 @@ fn h_ui_79_deleted_uid_dropped_on_reopen() {
     s.apply(&delete, ApplyMode::Commit).unwrap();
     let (mut opened, _) = reopen(xml(&s).as_bytes());
     assert_eq!(
-        style::effective_style(opened.project(), HEADLESS_DEFAULT).timeline.tasks,
+        style::effective_style(opened.project(), HEADLESS_DEFAULT)
+            .timeline
+            .tasks,
         vec![1]
     );
     opened.apply(&add, ApplyMode::Commit).unwrap();
-    assert!(opened.project().tasks.get(planrs_core::TaskUid::new(last)).is_some(), "UID repris");
+    assert!(
+        opened
+            .project()
+            .tasks
+            .get(planrs_core::TaskUid::new(last))
+            .is_some(),
+        "UID repris"
+    );
     assert_eq!(
-        style::effective_style(opened.project(), HEADLESS_DEFAULT).timeline.tasks,
+        style::effective_style(opened.project(), HEADLESS_DEFAULT)
+            .timeline
+            .tasks,
         vec![1]
     );
 }
@@ -568,7 +579,11 @@ fn style_apply_template_keeps_timeline() {
     let resolved = style::effective_style(s.project(), HEADLESS_DEFAULT);
     assert_eq!(resolved.timeline.tasks, vec![2]);
     call(&mut s, "style.apply", json!({ "reset": true }));
-    assert!(style::effective_style(s.project(), HEADLESS_DEFAULT).timeline.is_empty());
+    assert!(
+        style::effective_style(s.project(), HEADLESS_DEFAULT)
+            .timeline
+            .is_empty()
+    );
 }
 
 /// ADR-0017 (lot L0) : 201 UID ou doublons ⇒ `style.apply` refusé

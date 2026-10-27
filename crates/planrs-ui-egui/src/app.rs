@@ -3138,7 +3138,8 @@ fn dropped_name(file: &egui::DroppedFileHandle) -> String {
 /// SVG du planning de `session` (J8, lot L13) : style affiché à l'écran
 /// (`UiState::effective_style`), plage du projet, largeur automatique,
 /// textes formatés par `SessionTexts` (règle 3), lignes de la vue affichée
-/// (`rows`, relecture finale de J8, F1).
+/// (`rows`, relecture finale de J8, F1) ; frise de la chronologie en tête
+/// si `page.timeline` (H-UI-82, comme l'aperçu et le PDF).
 fn export_svg(
     session: &Session,
     state: &UiState,
@@ -3161,8 +3162,16 @@ fn export_svg(
         limits: planrs_render::RenderLimits::default(),
     };
     let texts = planrs_automation::render_text::SessionTexts { session, lang };
-    let (svg, _report) =
-        planrs_render::svg_styled(session.project(), session.schedule(), &req, &style, &texts);
+    // H-UI-82 : frise en tête quand la mise en page la demande, comme le PDF.
+    let timeline = planrs_automation::timeline::print_input(session, &style, lang);
+    let (svg, _report) = planrs_render::svg_styled_timeline(
+        session.project(),
+        session.schedule(),
+        &req,
+        &style,
+        &texts,
+        timeline.as_ref(),
+    );
     svg
 }
 
@@ -3280,6 +3289,28 @@ mod tests {
     fn frame(ctx: &egui::Context, app: &mut App) {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| crate::ui(ui, app));
         output.textures_delta.clear();
+    }
+
+    /// H-UI-82 : Exporter → SVG imprime la frise quand la case
+    /// Chronologie de Mise en page est enregistrée (comme le PDF).
+    #[test]
+    fn h_ui_82_svg_export_prints_timeline() {
+        let mut app = test_app();
+        app.open_demo();
+        let lang = planrs_automation::text::Language::Fr;
+        let doc = app.document.as_mut().unwrap();
+        let env = planrs_automation::CallEnv::new((app.env.now)(), lang);
+        let mut page = app.state.effective_style(doc.session.project()).page;
+        let mut export = |timeline: bool| {
+            page.timeline = timeline;
+            let params = serde_json::json!({ "patch": { "page": serde_json::to_value(&page).unwrap() } });
+            planrs_automation::call_with(&mut doc.session, &env, "style.apply", params).unwrap();
+            super::export_svg(&doc.session, &app.state, lang, None)
+        };
+        let without = export(false);
+        let with = export(true);
+        assert!(with.len() > without.len(), "frise absente du SVG");
+        assert!(with.contains("Début") && !without.contains("Début"));
     }
 
     #[test]

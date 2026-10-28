@@ -152,11 +152,15 @@ pub enum DeleteTarget {
     Contents,
 }
 
-/// Cible de Suppr : lignes entières, ou cellule active dans l'ID ou le Nom
-/// ⇒ supprimer les tâches ; sinon ⇒ effacer le contenu du bloc (H-UI-97).
+/// Cible de Suppr : lignes entières, ou bloc d'**une** cellule dans l'ID
+/// ou le Nom ⇒ supprimer les tâches ; tout autre bloc (plusieurs cellules,
+/// colonne entière du Nom comprise, quelle que soit la cellule active) ⇒
+/// effacer son contenu (H-UI-97, relecture finale n° 3).
 #[must_use]
 pub fn delete_target(block: &Block) -> DeleteTarget {
-    if block.kind == SelectionKind::Rows || matches!(block.active.1, Column::Id | Column::Name) {
+    if block.kind == SelectionKind::Rows
+        || (block.is_single() && matches!(block.active.1, Column::Id | Column::Name))
+    {
         DeleteTarget::Tasks
     } else {
         DeleteTarget::Contents
@@ -717,7 +721,8 @@ impl crate::App {
         }
     }
 
-    /// Suppr sur des lignes entières, l'ID ou le Nom : supprime les tâches
+    /// Suppr sur des lignes entières, ou une seule cellule de l'ID ou du
+    /// Nom : supprime les tâches
     /// (confirmation des récapitulatives inchangée), puis le message
     /// « n tâche(s) supprimée(s) — Ctrl/Cmd+Z annule » (H-UI-97).
     fn delete_tasks_with_notice(&mut self, ctx: &egui::Context) {
@@ -1522,7 +1527,7 @@ mod tests {
         }
     }
 
-    /// H-UI-97 : lignes entières, ou cellule active dans l'ID ou le Nom ⇒
+    /// H-UI-97 : lignes entières, ou une seule cellule de l'ID ou du Nom ⇒
     /// supprimer les tâches ; Durée (et toute autre colonne) ⇒ effacer.
     #[test]
     fn h_ui_97_delete_target() {
@@ -1555,6 +1560,39 @@ mod tests {
                 DeleteTarget::Contents
             );
         }
+        // Relecture finale n° 3 : plusieurs cellules ⇒ effacer, quelle que
+        // soit la cellule active (colonne du Nom entière ; bloc Durée-Nom
+        // glissé vers le Nom ou vers la Durée) ; lignes entières de
+        // plusieurs lignes ⇒ supprimer.
+        let rows = vec![DisplayRow(2), DisplayRow(3), DisplayRow(4), DisplayRow(5)];
+        let wide = |kind, columns: Vec<Column>, active| Block {
+            kind,
+            rows: rows.clone(),
+            columns,
+            active: (RowRef::Item(TaskUid::new(5)), active),
+        };
+        assert_eq!(
+            delete_target(&wide(SelectionKind::Cells, vec![Column::Name], Column::Name)),
+            DeleteTarget::Contents
+        );
+        for active in [Column::Name, Column::Duration] {
+            assert_eq!(
+                delete_target(&wide(
+                    SelectionKind::Cells,
+                    vec![Column::Name, Column::Duration],
+                    active
+                )),
+                DeleteTarget::Contents
+            );
+        }
+        assert_eq!(
+            delete_target(&wide(
+                SelectionKind::Rows,
+                vec![Column::Id, Column::Name, Column::Duration],
+                Column::Duration
+            )),
+            DeleteTarget::Tasks
+        );
     }
 
     /// Contrat L0 : chaque refus et chaque compte rendu a son message ;

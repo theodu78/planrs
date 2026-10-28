@@ -41,8 +41,8 @@ Ces couleurs suivent le modèle de mise en forme et le thème (clair ou sombre) 
 |---|---|
 | Recopier la première cellule de chaque colonne du bloc vers le bas | **Ctrl+D**, ou Tâche → Édition → **Remplir ▾ → Vers le bas**, ou Édition → Remplir vers le bas, ou clic droit |
 | Écrire la même valeur dans tout le bloc | Taper la valeur puis **Ctrl+Entrée** |
-| Vider des cellules sans supprimer les tâches | **Ctrl+Suppr**, ou Tâche → Édition → **Effacer ▾ → Contenu** ; Suppr sur une cellule hors N° et Nom fait de même |
-| Supprimer des tâches | **Suppr** avec des lignes entières, ou la cellule active dans le N° ou le Nom (un message rappelle Ctrl+Z) |
+| Vider des cellules sans supprimer les tâches | **Ctrl+Suppr**, ou Tâche → Édition → **Effacer ▾ → Contenu** ; Suppr fait de même sur une cellule hors N° et Nom, et sur tout bloc de plusieurs cellules (colonne entière comprise) |
+| Supprimer des tâches | **Suppr** avec des lignes entières (clic sur le N°), ou une seule cellule du Nom sélectionnée (un message rappelle Ctrl+Z) |
 
 Chaque geste (coller, remplir, effacer, déplacer) est **une seule** entrée d'annulation : Ctrl+Z le défait d'un coup.
 

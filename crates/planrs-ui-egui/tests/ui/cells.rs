@@ -354,6 +354,47 @@ fn h_ui_97_delete_on_name_deletes_with_message() {
     assert_eq!(task_count(harness.state()), 4);
 }
 
+/// Relecture finale n° 3 : un bloc de plusieurs cellules s'efface, quelle
+/// que soit sa cellule active : colonne entière du Nom (clic sur son titre)
+/// ⇒ noms effacés, aucune tâche supprimée, une annulation ; bloc glissé de
+/// (2, Durée) vers (5, Nom) ⇒ aucune tâche supprimée.
+#[test]
+fn h_ui_97_delete_multi_cell_block_clears() {
+    let mut harness = p_harness();
+    let before = names(harness.state());
+    harness.state_mut().dispatch(Action::SelectOp(SelectOp::Press {
+        row: RowRef::Blank,
+        column: Column::Name,
+        target: PressTarget::ColumnHeader,
+        mode: PressMode::Replace,
+    }));
+    harness.state_mut().dispatch(Action::FocusPane(Pane::Table));
+    harness.run();
+    key(&mut harness, Modifiers::NONE, Key::Delete);
+    let app = harness.state();
+    assert_eq!(task_count(app), 7, "{:?}", app.messages());
+    assert_eq!(history_len(app), 1);
+    assert!(names(app).iter().all(String::is_empty), "{:?}", names(app));
+    key(&mut harness, Modifiers::COMMAND, Key::Z);
+    assert_eq!(names(harness.state()), before);
+    press(
+        &mut harness,
+        2,
+        Column::Duration,
+        PressTarget::Cell,
+        PressMode::Replace,
+    );
+    press(
+        &mut harness,
+        5,
+        Column::Name,
+        PressTarget::Cell,
+        PressMode::Extend,
+    );
+    key(&mut harness, Modifiers::NONE, Key::Delete);
+    assert_eq!(task_count(harness.state()), 7);
+}
+
 /// U14 : Retour arrière puis Entrée sur Prédécesseurs ⇒ liens retirés ;
 /// sur la Durée ⇒ saisie gardée avec le message.
 #[test]

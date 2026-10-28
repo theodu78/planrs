@@ -20,8 +20,8 @@ use planrs_core::TaskUid;
 use planrs_render::style::RowBanding;
 
 use super::main_view::HBarSpec;
-use super::{FrameCtx, Pane};
-use crate::action::{Action, CellOp, DialogKind};
+use super::{FrameCtx, Pane, SelectDrag};
+use crate::action::{Action, CellOp, DialogKind, PressMode, PressTarget, SelectOp};
 use crate::column::{CellAlign, Column};
 use crate::edit::{EditState, TableEdit, commit_edit, editable, initial_text, text_language};
 use crate::geom::index_to_f32;
@@ -33,7 +33,7 @@ use crate::grid::{
 #[cfg(test)]
 use crate::grid::{NAME_MIN_TEXT_ROOM, name_indent};
 use crate::i18n::{Arg, TextId, Texts};
-use crate::nav::{CellCursor, RowRef};
+use crate::nav::{CellCursor, InBlockMove, NavMove, RowRef};
 use crate::row_view::{DisplayRow, VisibleRows};
 use crate::rows::{Row, RowKind};
 use crate::state::UiState;
@@ -202,11 +202,19 @@ const RESIZE_GRIP: f32 = 3.0;
 /// tronqués), séparateurs verticaux et trait bas, décalés de `scroll_x`
 /// (défilement horizontal de la table, J7 lot L6).
 ///
-/// Chaque titre est une zone cliquable (« Colonne Durée ») dont le clic
-/// droit ouvre le menu des colonnes ([`column_menu`]) ; le bord droit de
+/// Chaque titre est une zone d'appui et de glisser (« Colonne Durée ») :
+/// l'appui sélectionne la colonne entière, le glisser plusieurs colonnes,
+/// le titre de l'ID tout (H-UI-90, `drag` : glisser de sélection) ; son
+/// clic droit ouvre le menu des colonnes ([`column_menu`]) ; le bord droit de
 /// chaque titre se glisse pour changer la largeur de la colonne
 /// (`Action::SetColumnWidth`, bornée par `UiState::set_column_width`).
-pub fn paint_header(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, rect: Rect, scroll_x: f32) {
+pub fn paint_header(
+    ui: &mut egui::Ui,
+    fc: &mut FrameCtx<'_>,
+    rect: Rect,
+    scroll_x: f32,
+    drag: &mut Option<SelectDrag>,
+) {
     if !rect.is_finite() || !rect.is_positive() {
         return;
     }
@@ -236,9 +244,10 @@ pub fn paint_header(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, rect: Rect, scroll
     for &(column, left, right) in &edges {
         let cell = Rect::from_min_max(pos2(left, rect.top()), pos2(right, rect.bottom())).intersect(clip);
         if cell.is_positive() {
-            header_cell(ui, fc, column, cell);
+            header_cell(ui, fc, column, cell, drag);
         }
     }
+    drag_over_headers(ui, fc, &edges, drag);
     painter.hline(
         rect.x_range(),
         rect.bottom() - 0.5,
@@ -252,15 +261,67 @@ pub fn paint_header(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, rect: Rect, scroll
     }
 }
 
-/// Zone d'un titre de colonne : nœud d'accessibilité et menu des colonnes
-/// au clic droit.
-fn header_cell(ui: &egui::Ui, fc: &mut FrameCtx<'_>, column: Column, cell: Rect) {
+/// Mode d'un appui de sélection d'après les modificateurs (H-UI-87) :
+/// Ctrl/Cmd ajoute ou retire, Maj étend, sinon remplace.
+const fn press_mode(modifiers: Modifiers) -> PressMode {
+    if modifiers.command {
+        PressMode::Toggle
+    } else if modifiers.shift {
+        PressMode::Extend
+    } else {
+        PressMode::Replace
+    }
+}
+
+/// Appui du bouton principal sur `response` dans cette image (ADR-0018
+/// D1 : l'appui sélectionne, sans attendre le relâcher) : appui vu par egui
+/// sur ce widget, ou appui et relâcher dans la même image (clic éclair).
+fn pressed_now(ui: &egui::Ui, response: &Response) -> bool {
+    ui.input(|i| i.pointer.primary_pressed()) && (response.is_pointer_button_down_on() || response.clicked())
+}
+
+/// Zone d'un titre de colonne : nœud d'accessibilité, menu des colonnes
+/// au clic droit, appui de sélection (H-UI-90 : colonne entière ; Maj :
+/// de l'ancre de colonnes à celle-ci ; titre de l'ID : tout) qui laisse le
+/// clavier à la table (H-UI-101).
+fn header_cell(
+    ui: &egui::Ui,
+    fc: &mut FrameCtx<'_>,
+    column: Column,
+    cell: Rect,
+    drag: &mut Option<SelectDrag>,
+) {
     let texts = fc.texts;
     let response = ui.interact(
         cell,
         ui.make_persistent_id(("planrs.table.header", column)),
-        Sense::click(),
+        Sense::click_and_drag(),
     );
+    let pressed = pressed_now(ui, &response);
+    // Clic sans appui vu (accessibilité) : même geste.
+    if pressed || (response.clicked() && drag.is_none()) {
+        let mode = match press_mode(ui.input(|i| i.modifiers)) {
+            PressMode::Extend => PressMode::Extend,
+            PressMode::Replace | PressMode::Toggle => PressMode::Replace,
+        };
+        if column == Column::Id {
+            fc.actions.push(Action::SelectOp(SelectOp::All));
+        } else {
+            fc.actions.push(Action::SelectOp(SelectOp::Press {
+                row: RowRef::Blank,
+                column,
+                target: PressTarget::ColumnHeader,
+                mode,
+            }));
+            if pressed {
+                *drag = Some(SelectDrag {
+                    target: PressTarget::ColumnHeader,
+                    last: (RowRef::Blank, column),
+                });
+            }
+        }
+        fc.actions.push(Action::FocusPane(Pane::Table));
+    }
     response.widget_info(|| {
         let label = texts.get_args(
             TextId::ColumnHeaderLabel,
@@ -272,6 +333,55 @@ fn header_cell(ui: &egui::Ui, fc: &mut FrameCtx<'_>, column: Column, cell: Rect)
     response.context_menu(|ui| chosen = column_menu(ui, fc, column));
     if let Some(action) = chosen {
         fc.actions.push(action);
+    }
+}
+
+/// Glisser commencé sur un titre de colonne (H-UI-90) : la colonne sous le
+/// pointeur (bornée aux titres dessinés) étend la sélection de colonnes
+/// depuis l'ancre (`Press { ColumnHeader, Extend }`), poussé seulement
+/// quand elle change.
+fn drag_over_headers(
+    ui: &egui::Ui,
+    fc: &mut FrameCtx<'_>,
+    edges: &[(Column, f32, f32)],
+    drag: &mut Option<SelectDrag>,
+) {
+    let Some(d) = drag.as_mut().filter(|d| d.target == PressTarget::ColumnHeader) else {
+        return;
+    };
+    let Some(x) = ui
+        .input(|i| {
+            i.pointer
+                .primary_down()
+                .then(|| i.pointer.interact_pos())
+                .flatten()
+        })
+        .map(|p| p.x)
+        .filter(|x| x.is_finite())
+    else {
+        return;
+    };
+    let (Some(first), Some(last)) = (edges.first(), edges.last()) else {
+        return;
+    };
+    let column = if x < first.1 {
+        first.0
+    } else if x >= last.2 {
+        last.0
+    } else {
+        edges
+            .iter()
+            .find(|(_, left, right)| x >= *left && x < *right)
+            .map_or(d.last.1, |(column, _, _)| *column)
+    };
+    if column != d.last.1 {
+        d.last.1 = column;
+        fc.actions.push(Action::SelectOp(SelectOp::Press {
+            row: RowRef::Blank,
+            column,
+            target: PressTarget::ColumnHeader,
+            mode: PressMode::Extend,
+        }));
     }
 }
 
@@ -330,6 +440,10 @@ fn resize_grip(
         egui::WidgetInfo::labeled(egui::Role::Splitter, true, label)
     });
     let response = response.on_hover_and_drag_cursor(egui::CursorIcon::ResizeColumn);
+    // H-UI-101 : la poignée laisse le clavier à la table.
+    if pressed_now(ui, &response) {
+        fc.actions.push(Action::FocusPane(Pane::Table));
+    }
     if !response.dragged() {
         return;
     }
@@ -399,8 +513,10 @@ pub fn paint_hbar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, track: Rect, scroll_
 /// Fond alterné léger, ligne sélectionnée surlignée, texte en couleur
 /// normale (rouge seulement dans la colonne « Critique »), nom indenté par
 /// niveau, récapitulative en texte appuyé, ligne vide sans texte. Chaque
-/// ligne est une zone cliquable (`Action::Select`, colonne courante posée
-/// dans `cursor`) qui porte le libellé d'accessibilité `row-label`. La ligne
+/// ligne est une zone d'appui et de glisser (ADR-0018 D1 : l'appui
+/// sélectionne, `SelectOp::Press` ; le glisser étend, `SelectOp::DragTo`,
+/// suivi par `select_drag` de l'appui au relâcher, voir [`row_pointer`] et
+/// [`track_select_drag`]) qui porte le libellé d'accessibilité `row-label`. La ligne
 /// d'indice `rows.len()` est la ligne vide de fin (création d'une tâche,
 /// libellé `blank-row-label`). La table entière est un widget focalisable
 /// ([`table_id`]) ; la cellule courante porte un cadre de 2 px et un nœud
@@ -409,13 +525,15 @@ pub fn paint_hbar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, track: Rect, scroll_
 /// écrit `gantt_rows`).
 #[allow(
     clippy::too_many_arguments,
-    reason = "contexte d'image découpé en emprunts disjoints"
+    clippy::too_many_lines,
+    reason = "contexte d'image découpé en emprunts disjoints ; suite d'étapes du dessin d'une image"
 )]
 pub fn paint_body(
     ui: &mut egui::Ui,
     fc: &mut FrameCtx<'_>,
     edit: &mut TableEdit,
     cursor: &mut TableCursor,
+    select_drag: &mut Option<SelectDrag>,
     origin: Pos2,
     range: Range<usize>,
     clip: Rect,
@@ -496,7 +614,12 @@ pub fn paint_body(
         let hit = row_rect.intersect(clip);
         if hit.is_positive() {
             let response = row_widget(ui, fc, rows, hit, i, selected);
-            deferred = row_clicked(fc, &sheet, edit, cursor, &response, i, cols_left).or(deferred);
+            let at = RowHit {
+                response: &response,
+                i,
+                left: cols_left,
+            };
+            deferred = row_pointer(ui, fc, &sheet, edit, cursor, select_drag, &at).or(deferred);
         }
         // Triangle de repli (J8, lot L9, H-UI-34), interactif au-dessus de
         // la ligne : déclaré après elle.
@@ -512,6 +635,16 @@ pub fn paint_body(
             shapes = shapes.saturating_add(outline_triangle(ui, &painter, fc, &sheet, row, i, &at));
         }
     }
+
+    // Glisser de sélection (H-UI-88, H-UI-89) : suivi d'après la position
+    // du pointeur, bornée au corps, que la ligne appuyée soit encore
+    // dessinée ou non (défilement automatique, H-UI-91).
+    let body_at = BodyPlace {
+        origin,
+        cols_left,
+        clip,
+    };
+    track_select_drag(ui, fc, &sheet, select_drag, &body_at);
 
     // Séparateurs verticaux de colonnes, sur toute la hauteur visible.
     shapes = shapes.saturating_add(grid::paint_column_lines(
@@ -689,7 +822,7 @@ fn row_widget(
     let response = ui.interact(
         hit,
         ui.make_persistent_id(("planrs-table-row", i)),
-        Sense::click(),
+        Sense::click_and_drag(),
     );
     let texts = fc.texts;
     response.widget_info(|| {
@@ -808,48 +941,215 @@ struct EditClick {
     column: Option<Column>,
 }
 
-/// Clic sur la ligne `i` (ou sur la ligne vide) : sélection, focus de la
-/// table, colonne courante sous le pointeur ; double-clic : ouverture de la
-/// saisie. Saisie ouverte : rien de tout cela, le clic est rendu à
+/// Ligne sous le pointeur dans une image : réponse de sa zone, indice
+/// affiché, bord gauche écran de la première colonne.
+struct RowHit<'r> {
+    /// Réponse de la zone de la ligne.
+    response: &'r Response,
+    /// Ligne affichée (`rows.len()` : la ligne vide).
+    i: usize,
+    /// Bord gauche écran de la première colonne (défilement déduit).
+    left: f32,
+}
+
+/// Cible d'un appui dans la colonne `column` : l'ID est l'en-tête de ligne
+/// (H-UI-89), le reste une cellule.
+fn press_target(column: Column) -> PressTarget {
+    if column == Column::Id {
+        PressTarget::RowHeader
+    } else {
+        PressTarget::Cell
+    }
+}
+
+/// Appui sans modificateur sur l'ID d'une ligne déjà sélectionnée en lignes
+/// entières : différé (ADR-0018 D6, H-UI-89). Relâché sans glisser, il la
+/// sélectionne seule ; glissé, il commence le déplacement des lignes (lot
+/// L3 ; d'ici là, une sélection de lignes depuis cette ligne).
+fn defers_press(fc: &FrameCtx<'_>, uid: Option<TaskUid>, target: PressTarget, mode: PressMode) -> bool {
+    target == PressTarget::RowHeader
+        && mode == PressMode::Replace
+        && fc.selected.kind() == crate::selection::SelectionKind::Rows
+        && uid.is_some_and(|uid| fc.selected.contains(uid))
+}
+
+/// Appui, clic et double-clic sur la ligne `hit.i` (ou sur la ligne vide),
+/// ADR-0018 D1 :
+/// - **appui** (image de l'appui, H-UI-88) : `SelectOp::Press` sur la
+///   cellule sous le point d'appui (ID : lignes entières, H-UI-89 ; mode
+///   selon Maj et Ctrl/Cmd), focus de la table, glisser de sélection
+///   ouvert (`select_drag`) ; un bougé sous le seuil reste la même cellule ;
+/// - **clic sans appui vu** (accessibilité) ou appui différé relâché
+///   ([`defers_press`]) : même appui au relâcher ;
+/// - **double-clic** : sur l'ID, « Informations sur la tâche » (H-UI-19) ;
+///   ailleurs, la saisie de la cellule.
+///
+/// Saisie ouverte : rien de tout cela, l'appui (ou le clic) est rendu à
 /// [`edit_cells`] qui valide d'abord (H-UI-86 : jamais de saisie ouverte
-/// sur une autre cellule que la cellule active).
-fn row_clicked(
+/// sur une autre cellule que la cellule active ; aucun glisser).
+fn row_pointer(
+    ui: &egui::Ui,
     fc: &mut FrameCtx<'_>,
     sheet: &TaskSheet<'_>,
     edit: &mut TableEdit,
     cursor: &mut TableCursor,
-    response: &Response,
-    i: usize,
-    left: f32,
+    select_drag: &mut Option<SelectDrag>,
+    hit: &RowHit<'_>,
 ) -> Option<EditClick> {
-    if !response.clicked() {
-        return None;
-    }
-    let uid = sheet.key(i);
-    let column = response
-        .interact_pointer_pos()
-        .and_then(|p| column_at(sheet.columns(), left, p.x));
+    let response = hit.response;
+    let uid = sheet.key(hit.i);
+    let row = RowRef::from_selection(uid);
+    let column_of = |p: Option<Pos2>| p.and_then(|p| column_at(sheet.columns(), hit.left, p.x));
     if edit.editing.is_some() {
-        return Some(EditClick { uid, column });
+        // Dès l'appui (ou au clic sans appui vu) : la saisie est validée
+        // d'abord, sans glisser de sélection.
+        let pressed = pressed_now(ui, response);
+        return (pressed || response.clicked()).then(|| EditClick {
+            uid,
+            column: column_of(if pressed {
+                ui.input(|i| i.pointer.press_origin())
+            } else {
+                response.interact_pointer_pos()
+            }),
+        });
     }
-    fc.actions.push(Action::Select(uid));
-    fc.actions.push(Action::FocusPane(Pane::Table));
-    if let Some(column) = column {
-        cursor.column = column;
+    let (modifiers, press_origin) = ui.input(|i| (i.modifiers, i.pointer.press_origin()));
+    let mode = press_mode(modifiers);
+    if pressed_now(ui, response) {
+        let column = column_of(press_origin).unwrap_or(cursor.column);
+        let target = press_target(column);
+        if !defers_press(fc, uid, target, mode) {
+            fc.actions.push(Action::SelectOp(SelectOp::Press {
+                row,
+                column,
+                target,
+                mode,
+            }));
+            *select_drag = Some(SelectDrag {
+                target,
+                last: (row, column),
+            });
+        }
+        fc.actions.push(Action::FocusPane(Pane::Table));
+    } else if response.clicked() && select_drag.is_none() {
+        let column = column_of(response.interact_pointer_pos()).unwrap_or(cursor.column);
+        let target = press_target(column);
+        fc.actions.push(Action::SelectOp(SelectOp::Press {
+            row,
+            column,
+            target,
+            mode,
+        }));
+        fc.actions.push(Action::FocusPane(Pane::Table));
+    } else if response.drag_started_by(egui::PointerButton::Primary)
+        && select_drag.is_none()
+        && defers_press(
+            fc,
+            uid,
+            press_target(column_of(press_origin).unwrap_or(Column::Name)),
+            mode,
+        )
+    {
+        // Appui différé puis glisser : point d'accroche du déplacement de
+        // lignes (lot L3) ; en L1, sélection de lignes depuis cette ligne.
+        let column = column_of(press_origin).unwrap_or(Column::Id);
+        let target = press_target(column);
+        fc.actions.push(Action::SelectOp(SelectOp::Press {
+            row,
+            column,
+            target,
+            mode: PressMode::Replace,
+        }));
+        *select_drag = Some(SelectDrag {
+            target,
+            last: (row, column),
+        });
     }
     // Double-clic (ou triple : deux clics suivant de près un premier) :
     // sur l'ID, « Informations sur la tâche » (H-UI-19, J7 lot L9) ;
     // ailleurs, la saisie de la cellule.
-    if (response.double_clicked() || response.triple_clicked()) && edit.editing.is_none() && !fc.window_open {
+    if (response.double_clicked() || response.triple_clicked()) && !fc.window_open {
+        if let Some(column) = column_of(response.interact_pointer_pos()) {
+            cursor.column = column;
+        }
         match uid {
             Some(uid) if cursor.column == Column::Id => {
                 fc.actions
                     .push(Action::ShowDialog(DialogKind::TaskInformation(uid)));
             }
-            _ => open_editor(fc, sheet.rows, edit, cursor.column, uid, i),
+            _ => open_editor(fc, sheet.rows, edit, cursor.column, uid, hit.i),
         }
     }
     None
+}
+
+/// Position du corps à l'écran pour une image.
+struct BodyPlace {
+    /// Coin haut-gauche écran de la ligne 0.
+    origin: Pos2,
+    /// Bord gauche écran de la première colonne (défilement déduit).
+    cols_left: f32,
+    /// Zone visible du corps.
+    clip: Rect,
+}
+
+/// `v` ramené dans `[lo, hi]` sans jamais paniquer (`hi < lo` ⇒ `lo`).
+fn bounded(v: f32, lo: f32, hi: f32) -> f32 {
+    v.min(hi).max(lo)
+}
+
+/// Glisser de sélection ouvert par un appui sur une cellule ou un ID
+/// (H-UI-88, H-UI-89) : tant que le bouton est tenu, la cellule sous le
+/// pointeur, **bornée au corps** (au-dessus : première ligne visible ; au-
+/// dessous ou sur la ligne vide : dernière ligne ; à gauche, à droite : la
+/// colonne du bord), devient l'extrémité du bloc (`SelectOp::DragTo`,
+/// poussé seulement quand elle change). Un glisser commencé sur l'ID reste
+/// en lignes entières (colonne ID). Toute valeur non finie : rien.
+fn track_select_drag(
+    ui: &egui::Ui,
+    fc: &mut FrameCtx<'_>,
+    sheet: &TaskSheet<'_>,
+    select_drag: &mut Option<SelectDrag>,
+    at: &BodyPlace,
+) {
+    let Some(d) = select_drag
+        .as_mut()
+        .filter(|d| matches!(d.target, PressTarget::Cell | PressTarget::RowHeader))
+    else {
+        return;
+    };
+    let Some(p) = ui
+        .input(|i| {
+            i.pointer
+                .primary_down()
+                .then(|| i.pointer.interact_pos())
+                .flatten()
+        })
+        .filter(|p| p.is_finite())
+    else {
+        return;
+    };
+    let row_h = fc.metrics.row_h;
+    let len = sheet.len().saturating_add(1);
+    let y = bounded(p.y, at.clip.top(), at.clip.bottom() - 0.5);
+    let index = crate::geom::row_at(y - at.origin.y, row_h, len).unwrap_or(len.saturating_sub(1));
+    let row = grid::row_ref(sheet, index);
+    let column = if d.target == PressTarget::RowHeader {
+        d.last.1
+    } else {
+        let width: f32 = sheet.columns().iter().map(|(_, w)| f32::from(*w)).sum();
+        let x = bounded(
+            p.x,
+            at.cols_left.max(at.clip.left()),
+            (at.cols_left + width).min(at.clip.right()) - 0.5,
+        );
+        column_at(sheet.columns(), at.cols_left, x).unwrap_or(d.last.1)
+    };
+    if (row, column) != d.last {
+        d.last = (row, column);
+        fc.actions
+            .push(Action::SelectOp(SelectOp::DragTo { row, column }));
+    }
 }
 
 /// Ouvre la saisie de la cellule (`uid`, `column`) de la ligne affichée
@@ -933,10 +1233,32 @@ fn open_from_keys(
         edit.start(EditState::typed(uid, column, ""));
         return;
     }
+    // Maj+Espace (lignes entières, H-UI-92) : l'espace de l'appui n'ouvre
+    // pas de saisie.
+    drop_chorded_space(ctx);
     let typed = take_typed(ctx);
     if !typed.is_empty() {
         edit.start(EditState::typed(uid, column, &typed));
     }
+}
+
+/// Retire de l'image le texte espace d'un Espace frappé avec Maj (ou Ctrl,
+/// Cmd) : raccourci de sélection, jamais une frappe (H-UI-92).
+fn drop_chorded_space(ctx: &egui::Context) {
+    ctx.input_mut(|input| {
+        let chorded = input.raw.events.iter().any(|event| {
+            matches!(
+                event,
+                Event::Key { key: Key::Space, pressed: true, modifiers, .. }
+                    if modifiers.shift || modifiers.ctrl || modifiers.command
+            )
+        });
+        if chorded {
+            input
+                .events
+                .retain(|event| !matches!(event, Event::Text(text) if text == " "));
+        }
+    });
 }
 
 /// Saisie de la cellule ouverte : zone de saisie dessinée dans la cellule
@@ -1087,6 +1409,19 @@ fn close_editor(ui: &egui::Ui, edit: &mut TableEdit) {
     grid::surrender_editor(ui);
 }
 
+/// Déplacement après une saisie validée par Entrée, Tab et leurs Maj :
+/// dans un bloc de plus d'une cellule, la cellule suivante du bloc
+/// (H-UI-93, `NavMove::Within`) ; ailleurs, comme avant (H-UI-13, H-UI-14).
+const fn within_block(motion: Move) -> Option<NavMove> {
+    match motion {
+        Move::Down => Some(NavMove::Within(InBlockMove::Down)),
+        Move::Up => Some(NavMove::Within(InBlockMove::Up)),
+        Move::Next => Some(NavMove::Within(InBlockMove::Right)),
+        Move::Previous => Some(NavMove::Within(InBlockMove::Left)),
+        Move::Stay => None,
+    }
+}
+
 /// Valide la saisie : refus → message sous la cellule, saisie gardée (la
 /// sélection ne bouge pas, H-UI-86) ; accord → lot poussé (s'il n'est pas
 /// vide), saisie fermée, curseur posé sur la cellule éditée puis déplacé
@@ -1128,7 +1463,7 @@ fn commit(
     cursor.column = column;
     // La ligne éditée est la ligne courante (sélection, ou ligne vide) :
     // le curseur en part.
-    if let Some(mv) = motion.nav() {
+    if let Some(mv) = within_block(motion) {
         fc.actions.push(Action::Nav { mv, extend: false });
         fc.actions.push(Action::FocusPane(Pane::Table));
     }

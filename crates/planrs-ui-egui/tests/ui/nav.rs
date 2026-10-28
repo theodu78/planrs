@@ -572,7 +572,8 @@ fn nav_after_open_focuses_table() {
     assert_eq!(at(harness.state()), (0, Column::Name));
     press(&mut harness, Modifiers::NONE, Key::ArrowDown);
     assert_eq!(at(harness.state()), (1, Column::Name));
-    // Un clic dans le Gantt rend le clavier : ↓ ne fait plus rien.
+    // Un clic dans le Gantt laisse le clavier à la table (ADR-0018 D8,
+    // H-UI-101, remplace J7 L1) : Fin agit sur la ligne cliquée.
     let gantt = {
         let app = harness.state();
         pos2(app.view().last_gantt_left + 50.0, 300.0)
@@ -587,11 +588,12 @@ fn nav_after_open_focuses_table() {
         });
     }
     harness.run();
-    assert!(!table_focused(&harness));
-    let before = at(harness.state());
+    assert!(table_focused(&harness));
+    let (row, _) = at(harness.state());
     press(&mut harness, Modifiers::NONE, Key::End);
-    assert_eq!(at(harness.state()), before);
-    // Échap rend aussi le focus ; un clic dans la table le reprend.
+    let last = *visible(harness.state()).last().unwrap();
+    assert_eq!(at(harness.state()), (row, last));
+    // Échap rend le focus ; un clic dans la table le reprend.
     click_cell(&mut harness, 2, Column::Name);
     press(&mut harness, Modifiers::NONE, Key::Escape);
     assert!(!table_focused(&harness));

@@ -21,7 +21,7 @@
 use egui::{Key, KeyboardShortcut, Modifiers};
 
 use crate::action::{Action, CellOp, SelectOp};
-use crate::nav::NavMove;
+use crate::nav::{InBlockMove, NavMove};
 use crate::structure::StructureOp;
 use crate::view::task_view::TaskViewOp;
 
@@ -308,10 +308,12 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
     nav(COMMAND, Key::ArrowRight, NavMove::RowEnd, false),
     nav(SHIFT, Key::ArrowRight, NavMove::Right, true),
     nav(NONE, Key::ArrowRight, NavMove::Right, false),
-    nav(SHIFT, Key::Tab, NavMove::Left, false),
-    nav(NONE, Key::Tab, NavMove::Right, false),
-    nav(SHIFT, Key::Enter, NavMove::Up, false),
-    nav(NONE, Key::Enter, NavMove::Down, false),
+    // Entrée et Tab circulent dans un bloc de plus d'une cellule (ADR-0018,
+    // H-UI-93, lot L1) ; ailleurs, comme ↓, ↑, →, ← (`NavMove::base`).
+    nav(SHIFT, Key::Tab, NavMove::Within(InBlockMove::Left), false),
+    nav(NONE, Key::Tab, NavMove::Within(InBlockMove::Right), false),
+    nav(SHIFT, Key::Enter, NavMove::Within(InBlockMove::Up), false),
+    nav(NONE, Key::Enter, NavMove::Within(InBlockMove::Down), false),
     doc_ui(ALT, Key::Home, UiBinding::TimescaleToStart),
     // S61 : « Extend the selection to the first field of the first row. »
     // (Ctrl+Maj+Origine), « … to the first field in a row. » (Maj+Origine).

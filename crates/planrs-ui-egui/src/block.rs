@@ -48,8 +48,10 @@ pub struct Block {
 /// - Lignes : celles de la sélection affichées (ordre de la vue) ; la ligne
 ///   active si elle n'y est pas (sélection vide, ligne vide) ; la ligne
 ///   vide est toujours seule, en bloc d'une cellule.
-/// - Colonnes : `Rows` ⇒ toutes les visibles ; `Cells` ⇒ de l'ancre de
-///   colonnes (`anchor_column`, ignorée si masquée) à la colonne active.
+/// - Colonnes : `Rows` ⇒ toutes les visibles ; `Cells` ⇒ la plage figée de
+///   la sélection (`Selection::column_span`, H-UI-93) si ses bornes sont
+///   visibles et encadrent la colonne active, sinon de l'ancre de colonnes
+///   (`anchor_column`, ignorée si masquée) à la colonne active.
 #[must_use]
 pub fn resolve(sel: &Selection, cursor: &TableCursor, rows: VisibleRows<'_>, visible: &[Column]) -> Block {
     let blank = DisplayRow::at(rows.len());
@@ -98,8 +100,20 @@ pub fn resolve(sel: &Selection, cursor: &TableCursor, rows: VisibleRows<'_>, vis
                 .anchor_column
                 .filter(|c| !on_blank && visible.contains(c))
                 .unwrap_or(active_column);
-            let a = visible.iter().position(|c| *c == anchor);
-            let b = visible.iter().position(|c| *c == active_column);
+            let mut a = visible.iter().position(|c| *c == anchor);
+            let mut b = visible.iter().position(|c| *c == active_column);
+            // Plage figée (H-UI-93, Ctrl+Espace) : gardée si ses deux bornes
+            // sont visibles et encadrent la colonne active.
+            if let Some((from, to)) = sel.column_span().filter(|_| !on_blank) {
+                let from = visible.iter().position(|c| *c == from);
+                let to = visible.iter().position(|c| *c == to);
+                if let (Some(from), Some(to), Some(active)) = (from, to, b)
+                    && from.min(to) <= active
+                    && active <= from.max(to)
+                {
+                    (a, b) = (Some(from), Some(to));
+                }
+            }
             match (a, b) {
                 (Some(a), Some(b)) => {
                     let (low, high) = if a <= b { (a, b) } else { (b, a) };

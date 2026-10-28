@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`custom_field.rename` (R-264) : pose l'alias d'un champ personnalisé\n(« Lot » pour Texte1) ou le retire.",
+  "properties": {
+    "alias": {
+      "description": "Alias, 50 caractères au plus ; `null` ou vide : le champ reprend\nson nom (Texte1…).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "field": {
+      "description": "Champ : `text1` … `text30`, `number1` … `number20`, `date1` …\n`date10`, `flag1` … `flag20`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "field"
+  ],
+  "title": "CustomFieldRename",
+  "type": "object"
+}

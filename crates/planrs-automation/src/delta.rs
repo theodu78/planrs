@@ -13,8 +13,9 @@ use std::io;
 
 use planrs_core::calendar::Calendar;
 use planrs_core::{
-    Arena, Assignment, AssignmentUid, CalendarUid, EntityUid, Extras, HasUid, ModelError, Moment, Project,
-    ProjectInfo, ProjectOptions, Resource, ResourceUid, ScheduleAnchor, Task, TaskUid,
+    Arena, Assignment, AssignmentUid, CalendarUid, CustomFieldDef, CustomFieldId, EntityUid, Extras, HasUid,
+    ModelError, Moment, Project, ProjectInfo, ProjectOptions, Resource, ResourceUid, ScheduleAnchor, Task,
+    TaskUid,
 };
 use serde::Serialize;
 
@@ -63,6 +64,10 @@ pub(crate) struct ProjectHeader {
     pub calendar: CalendarUid,
     pub options: ProjectOptions,
     pub summary_task: Option<Task>,
+    /// Définitions des champs personnalisés (R-264 : `custom_field.rename`
+    /// s'annule ; absentes de la taille mesurée quand il n'y en a pas).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub custom_fields: BTreeMap<CustomFieldId, CustomFieldDef>,
     pub extras: Extras,
 }
 
@@ -76,6 +81,7 @@ impl ProjectHeader {
             calendar: p.calendar,
             options: p.options,
             summary_task: p.summary_task.clone(),
+            custom_fields: p.custom_fields.clone(),
             extras: p.extras.clone(),
         }
     }
@@ -89,6 +95,7 @@ impl ProjectHeader {
             && self.calendar == p.calendar
             && self.options == p.options
             && self.summary_task == p.summary_task
+            && self.custom_fields == p.custom_fields
             && self.extras == p.extras
     }
 
@@ -100,6 +107,7 @@ impl ProjectHeader {
         p.calendar = self.calendar;
         p.options = self.options;
         p.summary_task.clone_from(&self.summary_task);
+        p.custom_fields.clone_from(&self.custom_fields);
         p.extras.clone_from(&self.extras);
     }
 }

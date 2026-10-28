@@ -15,6 +15,7 @@ mod assignment;
 mod baseline;
 mod calendar;
 mod constraint;
+mod custom;
 pub(crate) mod exec;
 mod extras_invalidation;
 mod link;
@@ -30,6 +31,7 @@ mod task;
 pub use outline::is_summary_at;
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 use planrs_core::{CalendarUid, Day, Moment, ResourceUid, TaskUid, TimeOfDay};
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
@@ -38,6 +40,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub use self::baseline::{BaselineClear, BaselineSet};
 pub use self::calendar::{CalendarAdd, CalendarDelete, CalendarSetWeek, CalendarUpdate};
+pub use self::custom::{CustomFieldRename, parse_custom_number};
 pub use self::progress::{ProgressReschedule, ProgressUpdate};
 use self::refs::label_refusal;
 pub use self::refs::{LABEL_PATTERN, define_label, is_valid_label, resolve_task};
@@ -240,6 +243,10 @@ pub enum Command {
     /// Retire les surcharges du style (« Revenir au modèle », J8, H-UI-61).
     #[serde(rename = "style.reset_to_template")]
     StyleResetToTemplate(style::StyleResetToTemplate),
+    /// Renomme un champ personnalisé (alias) ou lui rend son nom (R-264,
+    /// seconde passe UX).
+    #[serde(rename = "custom_field.rename")]
+    CustomFieldRename(CustomFieldRename),
 }
 
 impl Command {
@@ -280,6 +287,7 @@ impl Command {
             Self::StyleApply(_) => "style.apply",
             Self::StyleSetBarRole(_) => "style.set_bar_role",
             Self::StyleResetToTemplate(_) => "style.reset_to_template",
+            Self::CustomFieldRename(_) => "custom_field.rename",
         }
     }
 }
@@ -487,6 +495,14 @@ pub struct TaskUpdate {
     /// les valeurs manuelles, sans contrainte (R-254).
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
     pub mode: Patch<ModeJson>,
+    /// Champs personnalisés (R-264, seconde passe UX) : clé `text1` …
+    /// `text30`, `number1` … `number20`, `date1` … `date10`, `flag1` …
+    /// `flag20` ; valeur : texte (≤ 255 caractères) ; nombre en texte dans
+    /// la langue du lot (« 12,5 » ou « 12.5 ») ou nombre JSON ; date ISO
+    /// locale comme `start` (« 2026-11-02T08:00 ») ; booléen ; `null`
+    /// efface. Aucune date calculée.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub custom: BTreeMap<String, serde_json::Value>,
 }
 
 /// Mode de planification d'une tâche en JSON (J8, R-253).

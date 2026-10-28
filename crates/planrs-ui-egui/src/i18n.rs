@@ -633,6 +633,10 @@ text_ids! {
     ErrorPdfLogoInvalid => "error-pdf-logo_invalid",
     ErrorTaskManualFinishBeforeStart => "error-task-manual_finish_before_start",
     ErrorControlBadEndpoint => "error-control-bad_endpoint",
+    ErrorCustomUnknownField => "error-custom-unknown_field",
+    ErrorCustomValueType => "error-custom-value_type",
+    ErrorCustomTooLong => "error-custom-too_long",
+    ErrorCustomReadOnly => "error-custom-read_only",
     // --- J8 L1 ---
     // --- J8 L2 ---
     // --- J8 L3 ---
@@ -1850,6 +1854,7 @@ mod tests {
             ("start", Arg::Str("lun 02/11/26".into())),
             ("finish", Arg::Str("lun 17/05/27".into())),
             ("detail", Arg::Str("détail".into())),
+            ("field", Arg::Str("Text1".into())),
             ("id", Arg::Str("3".into())),
             ("name", Arg::Str("Plans".into())),
             ("column", Arg::Str("Durée".into())),

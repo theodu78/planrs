@@ -633,6 +633,10 @@ error-pdf-glyph_missing = Character missing from the PDF fonts: { $detail }
 error-pdf-logo_invalid = Unreadable logo: { $detail }
 error-task-manual_finish_before_start = Manual task finish before its start: { $detail }
 error-control-bad_endpoint = Invalid control channel address: { $detail }
+error-custom-unknown_field = Unknown custom field: { $detail }
+error-custom-value_type = Custom field value refused: { $detail }
+error-custom-too_long = Text too long: { $detail }
+error-custom-read_only = Field defined by the file: { $detail }
 
 # --- J8 L1 ---
 

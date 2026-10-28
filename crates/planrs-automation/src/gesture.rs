@@ -216,6 +216,7 @@ fn task_update(uid: TaskUid) -> TaskUpdate {
         effort_driven: Patch::Keep,
         work: Patch::Keep,
         mode: Patch::Keep,
+        custom: std::collections::BTreeMap::new(),
     }
 }
 

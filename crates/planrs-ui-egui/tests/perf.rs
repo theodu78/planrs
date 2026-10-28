@@ -758,7 +758,7 @@ fn measure_edit_latency(name: &str, baseline: bool) {
         assert!(matches!(row.kind, RowKind::Leaf | RowKind::Milestone), "{index}");
         let uid = row.uid;
         app.dispatch(Action::ScrollToRow(index));
-        app.dispatch(Action::Select(Some(uid)));
+        select_rows(&mut app, uid, uid);
         bench.settle(&mut app);
         // Décomposition, hors image, sur une copie du document.
         let doc = app.document.as_ref().unwrap();
@@ -1413,11 +1413,9 @@ fn paste_1000() {
     let (mut app, mut bench) = nav_bench();
     let first = app.rows().unwrap().row(0).unwrap().uid;
     let last = app.rows().unwrap().row(999).unwrap().uid;
-    app.dispatch(Action::Select(Some(first)));
-    app.dispatch(Action::SelectWith {
-        uid: last,
-        mode: planrs_ui_egui::selection::SelectMode::Range,
-    });
+    // Lignes entières (H-UI-95 : le tampon de lignes suit les lignes
+    // entières depuis la passe UX).
+    select_rows(&mut app, first, last);
     bench.settle(&mut app);
     bench.frame(&mut app, vec![Event::Copy]);
     let slot = app.clipboard().expect("rien copié").clone();
@@ -1442,7 +1440,7 @@ fn paste_1000() {
         let index = 2_500 + k * 100;
         let uid = app.rows().unwrap().row(index).unwrap().uid;
         app.dispatch(Action::ScrollToRow(index));
-        app.dispatch(Action::Select(Some(uid)));
+        select_rows(&mut app, uid, uid);
         bench.settle(&mut app);
         // Décomposition, hors image, sur une copie du document.
         let (batch, apply, build) = paste_parts(app.document.as_ref().unwrap(), &slot, uid, &labels);
@@ -1766,4 +1764,143 @@ fn timeline_5000() {
 // leur lot (budgets du cahier `docs/plans/ux.md` § 2.5).
 // --- UX L1 --- (`select_drag_5000`, image de Ctrl+A de `select_all_copy_5000`)
 // --- UX L2 --- (`fill_down_1000`, `paste_cells_1000`, copie de `select_all_copy_5000`)
+
+/// Lignes entières `first` à `last` (appui sur l'ID puis Maj+appui).
+fn select_rows(app: &mut App, first: planrs_core::TaskUid, last: planrs_core::TaskUid) {
+    use planrs_ui_egui::action::{PressMode, PressTarget, SelectOp};
+    for (uid, mode) in [(first, PressMode::Replace), (last, PressMode::Extend)] {
+        app.dispatch(Action::SelectOp(SelectOp::Press {
+            row: RowRef::Item(uid),
+            column: Column::Name,
+            target: PressTarget::RowHeader,
+            mode,
+        }));
+    }
+}
+
+/// Bloc de la colonne `column`, lignes affichées `first` à `last`.
+fn select_cells(app: &mut App, first: usize, last: usize, column: Column) {
+    use planrs_ui_egui::action::{PressMode, PressTarget, SelectOp};
+    for (i, mode) in [(first, PressMode::Replace), (last, PressMode::Extend)] {
+        let uid = app.rows().unwrap().row(i).unwrap().uid;
+        app.dispatch(Action::SelectOp(SelectOp::Press {
+            row: RowRef::Item(uid),
+            column,
+            target: PressTarget::Cell,
+            mode,
+        }));
+    }
+}
+
+/// Mesure d'un geste d'édition sur sélection (5 répétitions annulées) :
+/// image du geste et image suivante (lot appliqué) ; budget de
+/// `paste_1000` (objectif 500 ms, garde bloquante 1 s).
+fn measure_cell_gesture(label: &str, app: &mut App, bench: &mut Bench, events: &dyn Fn() -> Vec<Event>) {
+    let mut samples = Vec::new();
+    for k in 0..5 {
+        let generation = app.document.as_ref().unwrap().generation();
+        let gesture = bench.frame(app, events());
+        let next = bench.frame(app, Vec::new());
+        assert_eq!(
+            app.document.as_ref().unwrap().generation(),
+            generation + 1,
+            "{label} non appliqué ({k})"
+        );
+        samples.push(gesture + next);
+        app.dispatch(Action::Undo);
+        bench.settle(app);
+    }
+    samples.sort();
+    let median = percentile(&samples, 50);
+    eprintln!(
+        "perf UI {label} : médiane {:.1} ms, max {:.1} ms ; objectif {} ms, garde {} ms",
+        ms(median),
+        ms(*samples.last().unwrap()),
+        PASTE_BUDGET.as_millis(),
+        PASTE_GUARD.as_millis()
+    );
+    report(
+        label,
+        &samples,
+        bench.last,
+        serde_json::json!({ "budget_median_ms": PASTE_BUDGET.as_millis(), "guard_median_ms": PASTE_GUARD.as_millis() }),
+    );
+    if median >= PASTE_BUDGET {
+        eprintln!("perf UI {label} : HORS OBJECTIF (médiane {median:?}), non bloquant");
+    }
+    assert!(
+        median < PASTE_GUARD,
+        "{label} : médiane {median:?} ≥ {PASTE_GUARD:?}"
+    );
+}
+
+/// UX L2 : Ctrl+D sur la Durée de 1 000 lignes (R-258), dans 5 000 tâches.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn fill_down_1000() {
+    let (mut app, mut bench) = nav_bench();
+    select_cells(&mut app, 1_000, 1_999, Column::Duration);
+    bench.settle(&mut app);
+    measure_cell_gesture("fill_down_1000", &mut app, &mut bench, &|| {
+        key_events(Key::D, Modifiers::COMMAND)
+    });
+}
+
+/// UX L2 : collage d'un texte 1 000 × 2 (Nom, Durée) à partir d'une
+/// cellule (R-257), dans 5 000 tâches.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn paste_cells_1000() {
+    let (mut app, mut bench) = nav_bench();
+    select_cells(&mut app, 2_000, 2_000, Column::Name);
+    bench.settle(&mut app);
+    let mut text = String::new();
+    for i in 0..1_000 {
+        std::fmt::Write::write_fmt(&mut text, format_args!("Tâche collée {i}\t{}j\n", 1 + i % 5)).unwrap();
+    }
+    measure_cell_gesture("paste_cells_1000", &mut app, &mut bench, &|| {
+        vec![Event::Paste(text.clone())]
+    });
+}
+
+/// UX L2 : copie d'un bloc 5 000 × 3 (Nom, Durée, Début) après Ctrl+A
+/// (durée de la copie < 200 ms ; l'image de Ctrl+A est mesurée par L1).
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn select_all_copy_5000() {
+    let (app, _bench) = nav_bench();
+    let doc = app.document.as_ref().unwrap();
+    let rows = app.visible_rows().unwrap();
+    let block = planrs_ui_egui::block::Block {
+        kind: planrs_ui_egui::selection::SelectionKind::Cells,
+        rows: (0..rows.len())
+            .map(planrs_ui_egui::row_view::DisplayRow::at)
+            .collect(),
+        columns: vec![Column::Name, Column::Duration, Column::Start],
+        active: (RowRef::Blank, Column::Name),
+    };
+    let mut samples = Vec::new();
+    for _ in 0..5 {
+        let t0 = Instant::now();
+        let text = planrs_ui_egui::cells::copy_text(&block, doc, rows, planrs_automation::text::Language::Fr);
+        samples.push(t0.elapsed());
+        assert_eq!(black_box(text).lines().count(), rows.len());
+    }
+    samples.sort();
+    let median = percentile(&samples, 50);
+    eprintln!(
+        "perf UI select_all_copy_5000 (copie) : médiane {:.1} ms ; budget 200 ms",
+        ms(median)
+    );
+    report(
+        "select_all_copy_5000_copy",
+        &samples,
+        Counts::default(),
+        serde_json::json!({ "budget_median_ms": 200 }),
+    );
+    assert!(
+        median < Duration::from_millis(200),
+        "copie 5 000 × 3 : {median:?}"
+    );
+}
 // --- UX L3 --- (`row_drag_5000`, `best_fit_5000`)

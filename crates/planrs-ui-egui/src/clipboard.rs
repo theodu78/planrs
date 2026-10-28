@@ -26,11 +26,22 @@
 //!   accepté à l'image suivante même si la table n'a plus le focus. Le
 //!   navigateur ne rend pas le presse-papiers à un menu : sur le web, Coller
 //!   colle le tampon interne, ou invite à Ctrl+V.
+//!
+//! Passe UX (ADR-0018 D3, H-UI-95, lot L2) : le geste suit le type de la
+//! sélection ([`ClipKind`]). Lignes entières : tout ce qui précède (tampon
+//! `RowClip`, H-UI-39). Bloc de cellules : copier écrit le texte tabulé du
+//! bloc (`cells::copy_text`), couper = copier puis effacer le contenu
+//! (R-259, une entrée d'annulation). Coller : tampon de lignes reconnu par
+//! son empreinte ⇒ lignes (R-244) ; texte à en-tête reconnu ⇒ R-256 a ;
+//! lignes entières sélectionnées, ou texte d'une colonne sur la ligne vide
+//! ⇒ R-256 ; sinon cellules à partir du coin du bloc (R-257). Le clavier
+//! reste à la table après un clic dans le Gantt (H-UI-101) : les trois
+//! événements y sont pris aussi.
 
 use planrs_automation::clip::{
     self, ClipError, MAX_PASTE_BYTES, PasteOptions, PasteReport, RowClip, paste_batch, paste_text,
 };
-use planrs_automation::csv::CsvColumn;
+use planrs_automation::csv::{self, CsvColumn, Recognized};
 use planrs_automation::text::TextContext;
 use planrs_automation::{Batch, Placement, TaskRef};
 use planrs_core::{Severity, TaskUid};
@@ -38,9 +49,10 @@ use planrs_core::{Severity, TaskUid};
 use crate::app::{App, EditOrigin};
 use crate::column::Column;
 use crate::i18n::{Arg, TextId, error_text_id};
-use crate::selection::Selection;
+use crate::selection::{Selection, SelectionKind};
 use crate::state::UiState;
 use crate::structure::{self, StructureOp};
+use crate::view::Pane;
 
 /// Dernière copie de l'application : tampon et empreinte du texte écrit
 /// dans le presse-papiers du système.
@@ -53,6 +65,10 @@ pub struct ClipboardSlot {
     /// Ce qui a été copié : lignes entières (tampon `clip`, H-UI-39) ou
     /// cellules d'un bloc (texte seul, H-UI-95 ; ADR-0018 D3, lot L2).
     pub kind: ClipKind,
+    /// Texte émis pour un bloc de cellules (collé par le menu Coller du
+    /// web et « Collage spécial… », qui n'ont pas le presse-papiers du
+    /// système) ; vide pour des lignes entières (le tampon `clip` suffit).
+    pub text: String,
 }
 
 /// Contenu de la dernière copie (ADR-0018 D3, H-UI-95).
@@ -112,6 +128,17 @@ pub fn tsv_columns(state: &UiState) -> Vec<CsvColumn> {
         .collect()
 }
 
+/// Première ligne non vide du texte à en-tête reconnu (une cellule lue
+/// comme Nom, R-144) : collage de lignes par l'import (R-256 a).
+fn has_name_header(text: &str) -> bool {
+    text.lines()
+        .find(|line| !line.trim().is_empty())
+        .is_some_and(|line| {
+            line.split('\t')
+                .any(|h| csv::recognize(h) == Recognized::Column(CsvColumn::Name))
+        })
+}
+
 /// Images après une demande de collage par le menu pendant lesquelles
 /// l'événement `Paste` est accepté hors du focus de la table.
 const MENU_PASTE_FRAMES: u64 = 2;
@@ -142,6 +169,9 @@ impl App {
         {
             self.menu_paste_at = None;
         }
+        // H-UI-101 : un clic dans le Gantt laisse le clavier à la table ;
+        // le presse-papiers y agit sur la cellule active.
+        let table = table || self.gantt_keeps_table_keys(ctx);
         if !table && !menu_paste {
             return;
         }
@@ -174,6 +204,20 @@ impl App {
         }
     }
 
+    /// Le Gantt a le focus, sans saisie, menu, fenêtre ni confirmation :
+    /// le clavier appartient à la table (H-UI-101).
+    fn gantt_keeps_table_keys(&self, ctx: &egui::Context) -> bool {
+        self.document.is_some()
+            && self.view.focus == Pane::Gantt
+            && !ctx.text_edit_focused()
+            && !ctx.any_popup_open()
+            && self.view.edit.editing.is_none()
+            && self.view.dialog.is_none()
+            && self.pending_delete.is_none()
+            && self.view.resources.edit.editing.is_none()
+            && self.view.resources.pending_delete.is_none()
+    }
+
     /// Commande du menu Édition.
     pub(crate) fn clipboard_op(&mut self, op: ClipboardOp, ctx: &egui::Context) {
         if self.document.is_none() {
@@ -204,21 +248,23 @@ impl App {
         }
     }
 
-    /// Copie la sélection : tampon interne et texte tabulé des colonnes
-    /// visibles écrit dans le presse-papiers. Rend vrai si quelque chose a
-    /// été copié (sélection vide ou ligne vide : rien).
-    pub(crate) fn copy_selection(&mut self, ctx: &egui::Context) -> bool {
+    /// Copie la sélection : lignes entières ⇒ tampon interne et texte
+    /// tabulé des colonnes visibles ; bloc de cellules ⇒ texte tabulé des
+    /// cellules (H-UI-95). Rend le type copié (`None` : rien, sélection
+    /// vide ou ligne vide).
+    pub(crate) fn copy_selection(&mut self, ctx: &egui::Context) -> Option<ClipKind> {
         self.sync_selection();
+        if self.selected.kind() == SelectionKind::Cells {
+            return self.copy_cells(ctx).then_some(ClipKind::Cells);
+        }
         let lang = self.text_language();
-        let Some(document) = &self.document else {
-            return false;
-        };
+        let document = self.document.as_ref()?;
         let uids: Vec<TaskUid> = self.selected.uids().iter().copied().collect();
         if uids.is_empty() {
-            return false;
+            return None;
         }
         match RowClip::capture(&document.session, &uids) {
-            Ok(clip) if clip.tasks.is_empty() => false,
+            Ok(clip) if clip.tasks.is_empty() => None,
             Ok(clip) => {
                 let text_ctx = TextContext::for_project(document.project(), lang);
                 let text = clip.to_tsv(&tsv_columns(&self.state), &text_ctx);
@@ -228,35 +274,74 @@ impl App {
                     clip,
                     fingerprint,
                     kind: ClipKind::Rows,
+                    text: String::new(),
                 });
-                true
+                Some(ClipKind::Rows)
             }
             Err(error) => {
                 self.report_clip_error(&error);
-                false
+                None
             }
         }
     }
 
-    /// Coupe la sélection : copie, puis suppression dans un lot à part
-    /// (annulable seul). Une récapitulative part avec son bloc, sans
-    /// confirmation (le bloc est dans le tampon).
-    pub(crate) fn cut_selection(&mut self, ctx: &egui::Context) {
-        if !self.copy_selection(ctx) {
-            return;
+    /// Copie le bloc de cellules (`cells::copy_text`) ; la ligne vide seule
+    /// ne copie rien.
+    fn copy_cells(&mut self, ctx: &egui::Context) -> bool {
+        let lang = self.text_language();
+        let Some(block) = self.table_block() else {
+            return false;
+        };
+        let (Some(document), Some(rows)) = (&self.document, self.visible_rows()) else {
+            return false;
+        };
+        if block.rows.iter().all(|d| rows.row(*d).is_none()) {
+            return false;
         }
-        let Some(document) = &self.document else {
-            return;
-        };
-        let Some(plan) = structure::plan(StructureOp::Delete, document.project(), &self.selected) else {
-            return;
-        };
-        // Un refus est affiché par `execute`.
-        drop(self.execute(&plan.batch, EditOrigin::User));
+        if block.cells() > crate::block::MAX_BLOCK_CELLS {
+            self.report_cell_error(&crate::cells::CellError::TooLarge);
+            return false;
+        }
+        let text = crate::cells::copy_text(&block, document, rows, lang);
+        let fingerprint = clip::fingerprint(&text);
+        ctx.copy_text(text.clone());
+        self.clipboard = Some(ClipboardSlot {
+            clip: RowClip::default(),
+            fingerprint,
+            kind: ClipKind::Cells,
+            text,
+        });
+        true
     }
 
-    /// Colle un texte reçu du presse-papiers du système : tampon interne si
-    /// l'empreinte est celle du dernier texte émis, sinon collage externe.
+    /// Coupe la sélection : copie, puis, pour des lignes entières,
+    /// suppression dans un lot à part (annulable seul ; une récapitulative
+    /// part avec son bloc, sans confirmation : le bloc est dans le tampon) ;
+    /// pour un bloc de cellules, effacement du contenu (R-259, une entrée
+    /// d'annulation).
+    pub(crate) fn cut_selection(&mut self, ctx: &egui::Context) {
+        match self.copy_selection(ctx) {
+            None => {}
+            Some(ClipKind::Cells) => self.clear_cells(),
+            Some(ClipKind::Rows) => {
+                let Some(document) = &self.document else {
+                    return;
+                };
+                let Some(plan) = structure::plan(StructureOp::Delete, document.project(), &self.selected)
+                else {
+                    return;
+                };
+                // Un refus est affiché par `execute`.
+                drop(self.execute(&plan.batch, EditOrigin::User));
+            }
+        }
+    }
+
+    /// Colle un texte reçu du presse-papiers du système (H-UI-95) : tampon
+    /// de lignes si l'empreinte est celle des dernières lignes copiées
+    /// (R-244) ; texte à en-tête reconnu, lignes entières sélectionnées ou
+    /// colonne de texte sur la ligne vide ⇒ collage de lignes (R-256) ;
+    /// sinon cellules à partir du coin du bloc (R-257).
     pub(crate) fn paste_clipboard_text(&mut self, text: &str) {
         let Some(document) = &self.document else {
             return;
@@ -265,18 +350,41 @@ impl App {
             self.report_clip_error(&ClipError::TooLarge);
             return;
         }
-        let at = self.paste_placement();
         let print = clip::fingerprint(text);
-        let result = match self.clipboard.as_ref().filter(|slot| slot.fingerprint == print) {
+        let slot = self.clipboard.as_ref().filter(|slot| slot.fingerprint == print);
+        let rows_clip = slot.filter(|slot| slot.kind == ClipKind::Rows);
+        let cells_clip = slot.is_some_and(|slot| slot.kind == ClipKind::Cells);
+        let on_blank = self.selection.is_none();
+        let as_rows = rows_clip.is_none()
+            && !cells_clip
+            && (has_name_header(text)
+                || self.selected.kind() == SelectionKind::Rows
+                || (on_blank && !text.contains('\t')));
+        let at = self.paste_placement();
+        let result = match rows_clip {
             Some(slot) => paste_batch(&document.session, &slot.clip, &at, &PasteOptions::default()),
-            None => paste_text(&document.session, text, &at, self.text_language()),
+            None if as_rows => paste_text(&document.session, text, &at, self.text_language()),
+            None => {
+                self.paste_cells(text);
+                return;
+            }
         };
         self.apply_paste(result);
     }
 
     /// Colle le tampon interne avec `options` (« Collage spécial… », menu
-    /// Coller sur le web). Sans tampon : rien.
+    /// Coller sur le web). Sans tampon : rien. Tampon de cellules : collage
+    /// de cellules (R-257 ; options sans objet).
     pub(crate) fn paste_internal(&mut self, options: PasteOptions) {
+        if let Some(slot) = self
+            .clipboard
+            .as_ref()
+            .filter(|slot| slot.kind == ClipKind::Cells)
+        {
+            let text = slot.text.clone();
+            self.paste_cells(&text);
+            return;
+        }
         let (Some(document), Some(slot)) = (&self.document, &self.clipboard) else {
             return;
         };
@@ -308,8 +416,10 @@ impl App {
             return;
         };
         if let Some(first) = outcome.created.first() {
+            // Lignes collées : la première, en ligne entière (un second
+            // collage insère encore des lignes, H-UI-95).
             self.selection = Some(*first);
-            self.selected = Selection::single(Some(*first));
+            self.selected = Selection::single(Some(*first)).with_kind(SelectionKind::Rows);
             self.sync_selection();
         }
         self.report_paste(&report);

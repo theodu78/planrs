@@ -56,7 +56,14 @@ pub fn check_keymap_entry(i: usize) {
     harness.run();
     let app = harness.state();
     assert!(app.view().edit.editing.is_none(), "{shortcut:?}");
-    assert_eq!(app.document.as_ref().unwrap().generation(), 0, "{shortcut:?}");
+    // Ctrl/Cmd+D et Ctrl/Cmd+Suppr écrivent un lot depuis le lot L2 ;
+    // les gestes de sélection n'écrivent rien.
+    let writes = matches!(binding, Binding::Ui(UiBinding::FillDown | UiBinding::ClearCells));
+    assert_eq!(
+        app.document.as_ref().unwrap().generation(),
+        u64::from(writes),
+        "{shortcut:?}"
+    );
     match binding {
         Binding::Ui(UiBinding::SelectAll) => {
             let rows = app.rows().unwrap().len();
@@ -72,9 +79,11 @@ pub fn check_keymap_entry(i: usize) {
             );
         }
         Binding::Ui(UiBinding::FillDown | UiBinding::ClearCells) => {
+            // Lot L2 : servis (Nom de la ligne 3 rempli depuis la ligne 2,
+            // ou vidé), une entrée d'annulation.
             let text = Texts::new(Language::Fr).get(TextId::UxNotAvailable);
             assert!(
-                app.messages().iter().any(|m| m.text == text),
+                !app.messages().iter().any(|m| m.text == text),
                 "{shortcut:?} : {:?}",
                 app.messages()
             );

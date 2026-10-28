@@ -636,6 +636,41 @@ fn h_ui_102_bar_drag_keeps_multi_selection() {
     assert_eq!(app.selected().click_order(), [uc]);
 }
 
+/// Relecture finale n° 4 : bloc 2-5 × Durée-Début, cellule active sur la
+/// ligne 5 ; un clic simple sur la ligne 5 du Gantt réduit la sélection à
+/// (5, Début), comme dans la table ; Maj+clic sur la ligne 3 étend de
+/// l'ancre (5) à 3.
+#[test]
+fn gantt_click_collapses_block() {
+    let mut harness = demo();
+    let from = cell_point(&harness, 2, DUR);
+    let to = cell_point(&harness, 5, START);
+    drag(&mut harness, from, to);
+    assert_eq!(block(harness.state()).cells(), 8);
+    let x = harness.state().view().last_gantt_left + 3.0;
+    let y = cell_point(&harness, 5, Column::Name).y;
+    click_at(&mut harness, pos2(x, y), Modifiers::NONE);
+    let app = harness.state();
+    let b = block(app);
+    assert!(b.is_single(), "{b:?}");
+    assert_eq!(b.active, (RowRef::Item(uid_at(app, 5)), START));
+    assert!(table_focused(&harness));
+    // Maj tenue jusqu'au relâcher (le Gantt sélectionne au clic).
+    let p = pos2(x, cell_point(&harness, 3, Column::Name).y);
+    press_at(&mut harness, p, Modifiers::SHIFT);
+    let release = Event::PointerButton {
+        pos: p,
+        button: PointerButton::Primary,
+        pressed: false,
+        modifiers: Modifiers::SHIFT,
+    };
+    harness.event_modifiers(release, Modifiers::SHIFT);
+    harness.run();
+    let b = block(harness.state());
+    assert_eq!(b.rows, display(3..=5));
+    assert_eq!(b.columns, [START]);
+}
+
 /// U24 (non-régression) : Maj+clic, Ctrl+clic, Maj+↓, clic droit dans une
 /// multi-sélection (gardée), Inser.
 #[test]

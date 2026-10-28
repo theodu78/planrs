@@ -405,7 +405,19 @@ fn paint_rows(
             } else {
                 None
             };
-            fc.actions.push(Action::Select(uid));
+            // Ligne du Gantt : même appui qu'une cellule de la table, dans
+            // la colonne active (relecture finale, n° 4) : un clic simple
+            // réduit toujours la sélection, Maj étend, Ctrl/Cmd ajoute.
+            let action = match uid {
+                Some(uid) => Action::SelectOp(SelectOp::Press {
+                    row: RowRef::Item(uid),
+                    column: cursor.column,
+                    target: PressTarget::Cell,
+                    mode: table::press_mode(ui.input(|i| i.modifiers)),
+                }),
+                None => Action::Select(None),
+            };
+            fc.actions.push(action);
             // Clavier unique (ADR-0018 D8, H-UI-101) : un clic dans le Gantt
             // laisse le clavier à la table.
             fc.actions.push(Action::FocusPane(Pane::Table));

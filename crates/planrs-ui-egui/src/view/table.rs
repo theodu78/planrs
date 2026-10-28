@@ -264,7 +264,7 @@ pub fn paint_header(
 
 /// Mode d'un appui de sélection d'après les modificateurs (H-UI-87) :
 /// Ctrl/Cmd ajoute ou retire, Maj étend, sinon remplace.
-const fn press_mode(modifiers: Modifiers) -> PressMode {
+pub(crate) const fn press_mode(modifiers: Modifiers) -> PressMode {
     if modifiers.command {
         PressMode::Toggle
     } else if modifiers.shift {

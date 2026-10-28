@@ -868,6 +868,7 @@ text_ids! {
     DiagMspdiNotPreserved => "diag-mspdi-not_preserved",
     DiagMspdiHonorConstraintsOff => "diag-mspdi-honor_constraints_off",
     DiagMspdiProgressInconsistent => "diag-mspdi-progress_inconsistent",
+    DiagMspdiCustomUnreadable => "diag-mspdi-custom_unreadable",
     DiagStyleIgnored => "diag-style-ignored",
     DiagMspdiErrorEmpty => "diag-mspdi-error-empty",
     DiagMspdiErrorTooLarge => "diag-mspdi-error-too_large",

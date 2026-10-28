@@ -2,17 +2,26 @@
 //! calendriers, tâches, ressources, affectations et `Extras` du projet
 //! (R-120, R-123, R-130, R-132).
 
+use std::collections::BTreeSet;
+
 use planrs_core::{ProgressOptions, Project, ScheduleAnchor};
 
 use super::computed::Values;
 use super::emit::Emitter;
-use super::{WriteOptions, assignment, calendar, children, max_len, plan, resource, task, unscoped};
+use super::{
+    Planned, WriteCode, WriteOptions, assignment, calendar, children, max_len, plan, resource, task, unscoped,
+};
 use crate::codes;
+use crate::custom::{self, WritePlan};
 use crate::extras::Anchor;
 use crate::scalar::{format_bool, format_datetime, format_time};
 use crate::schema::Parent;
 
 /// Écrit les enfants de `Project`.
+#[allow(
+    clippy::too_many_lines,
+    reason = "un bras par élément de `Project`, rien à factoriser"
+)]
 pub(crate) fn write(em: &mut Emitter, p: &Project, values: Option<&Values>, options: &WriteOptions) {
     // Les enfants de `Project` s'écrivent sous la racine déjà ouverte.
     let profile = options.profile;
@@ -25,7 +34,11 @@ pub(crate) fn write(em: &mut Emitter, p: &Project, values: Option<&Values>, opti
     let has_currency = planned
         .iter()
         .any(|x| x.key.name == "CurrencyCode" && x.key.anchor == Anchor::None);
-    let top = unscoped(&planned);
+    let custom_plan = custom_plan(em, p, &planned);
+    let mut top = unscoped(&planned);
+    if custom_plan.owns_container() {
+        top.retain(|x| !is_container(x));
+    }
     children(em, Parent::Project, profile, &top, |em, name| {
         if let Some(v) = progress_option(o.progress, name) {
             return em.leaf(name, format_bool(v));
@@ -98,9 +111,12 @@ pub(crate) fn write(em: &mut Emitter, p: &Project, values: Option<&Values>, opti
                     em.close();
                 }
             }
+            "ExtendedAttributes" if custom_plan.owns_container() => {
+                write_definitions(em, p, &custom_plan);
+            }
             "Tasks" => {
                 em.open(name);
-                task::write_all(em, p, values, profile);
+                task::write_all(em, p, values, profile, &custom_plan.foreign);
                 em.close();
             }
             "Resources" if !p.resources.is_empty() => {
@@ -118,6 +134,66 @@ pub(crate) fn write(em: &mut Emitter, p: &Project, values: Option<&Values>, opti
             _ => {}
         }
     });
+}
+
+/// `Extras` du conteneur des définitions des champs personnalisés.
+fn is_container(x: &Planned<'_>) -> bool {
+    x.key.name == custom::CONTAINER && x.key.anchor == Anchor::None && x.key.scope.is_none()
+}
+
+/// R-266 : plan d'écriture des champs personnalisés ; une valeur ou un
+/// alias du modèle sur un champ défini par le fichier (formule, table de
+/// choix) n'est pas écrit, `mspdi.write.extra_invalid`.
+fn custom_plan(em: &mut Emitter, p: &Project, planned: &[Planned<'_>]) -> WritePlan {
+    let containers: Vec<&str> = planned
+        .iter()
+        .filter(|x| is_container(x))
+        .map(|x| x.payload)
+        .collect();
+    let single = match containers.as_slice() {
+        [one] => Some(*one),
+        _ => None,
+    };
+    let plan = WritePlan::new(p, single, containers.len() > 1);
+    for id in custom::written_fields(p, &BTreeSet::new()) {
+        if plan.foreign.contains(&id) {
+            em.report(
+                WriteCode::ExtraInvalid,
+                custom::CONTAINER,
+                Some(format!(
+                    "{id} (champ défini par le fichier : formule ou table de choix)"
+                )),
+            );
+        }
+    }
+    plan
+}
+
+/// R-266 : conteneur des définitions écrit par le modèle : une définition
+/// par champ qui a un alias ou une valeur (`FieldID`, `FieldName` canonique,
+/// `Alias` s'il existe), dans l'ordre des `FieldID`, puis les définitions
+/// gardées en `Extras` (formules, tables de choix, autres champs) telles
+/// quelles.
+fn write_definitions(em: &mut Emitter, p: &Project, plan: &WritePlan) {
+    em.open(custom::CONTAINER);
+    for id in &plan.written {
+        em.open(custom::ATTRIBUTE);
+        em.leaf_int("FieldID", custom::field_id(*id));
+        em.leaf("FieldName", &custom::field_name(*id));
+        if let Some(alias) = p
+            .custom_fields
+            .get(id)
+            .and_then(|d| d.alias.as_deref())
+            .filter(|a| !a.is_empty())
+        {
+            em.text("Alias", alias, Some(50));
+        }
+        em.close();
+    }
+    for payload in &plan.residue {
+        em.raw(payload);
+    }
+    em.close();
 }
 
 /// R-218 : valeur de l'option d'avancement `name` (réécrite telle quelle),

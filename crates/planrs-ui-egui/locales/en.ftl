@@ -926,6 +926,7 @@ diag-mspdi-progress_inconsistent = { $count ->
         [one] { $count } remaining value read from the file replaced by the calculation
        *[other] { $count } remaining values read from the file replaced by the calculation
     }
+diag-mspdi-custom_unreadable = unreadable custom field value: kept as is in the file
 diag-style-ignored = document style ignored ({ $reason }): default template applied
 diag-mspdi-error-empty = empty document
 diag-mspdi-error-too_large = document too large: { $size } bytes (limit { $max })

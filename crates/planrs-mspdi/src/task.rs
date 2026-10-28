@@ -13,6 +13,7 @@ use planrs_core::{
 
 use crate::baseline;
 use crate::codes::{self, ConstraintKind, DurationCode};
+use crate::custom;
 use crate::diag::{ImportCode, LinkIgnoredReason, Sink};
 use crate::extras;
 use crate::fields::Fields;
@@ -86,6 +87,7 @@ pub(crate) fn import(
     project: &mut Project,
     recorded: &mut RecordedSchedule,
     replaced: &mut Replaced,
+    foreign: &BTreeSet<planrs_core::CustomFieldId>,
     sink: &mut Sink<'_>,
 ) {
     let options = project.options;
@@ -114,6 +116,17 @@ pub(crate) fn import(
         task.baselines = baselines.map;
         let mut kept = extras::collect(&element.children, Parent::Task, None);
         kept.extend(baselines.extras);
+        // R-265 : valeurs des champs personnalisés modélisés.
+        let subject = f.subject();
+        custom::lift_task(&mut kept, &mut task.custom, foreign, |payload| {
+            sink.push(
+                ImportCode::CustomUnreadable,
+                subject,
+                element.at,
+                "Tasks/Task/ExtendedAttribute",
+                Some(payload),
+            );
+        });
         task.extras = planrs_core::Extras(kept);
         extras::canonical_order(&mut task.extras, Parent::Task);
         recorded.tasks.insert(uid, rec);

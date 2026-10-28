@@ -925,6 +925,7 @@ diag-mspdi-progress_inconsistent = { $count ->
         [one] { $count } reste relu remplacé par le calcul
        *[other] { $count } restes relus remplacés par le calcul
     }
+diag-mspdi-custom_unreadable = valeur de champ personnalisé illisible : gardée telle quelle dans le fichier
 diag-style-ignored = style du document ignoré ({ $reason }) : modèle par défaut appliqué
 diag-mspdi-error-empty = document vide
 diag-mspdi-error-too_large = document trop grand : { $size } octets (limite { $max })

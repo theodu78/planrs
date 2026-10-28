@@ -254,7 +254,7 @@ mod tests {
         for e in MspdiError::examples() {
             check(e.code(), dfr.mspdi_error(&e), den.mspdi_error(&e), e.to_string());
         }
-        assert_eq!(seen, 61 + 14 + 12);
+        assert_eq!(seen, 61 + 15 + 12);
     }
 
     /// Le français traduit par code reprend le texte du moteur (dates mises

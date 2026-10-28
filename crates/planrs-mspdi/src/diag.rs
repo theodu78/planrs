@@ -108,6 +108,10 @@ pub enum ImportCode {
         /// Raison.
         reason: crate::style_pi::StyleIgnoredReason,
     },
+    /// Valeur illisible d'un champ personnalisé modélisé (nombre, date,
+    /// indicateur, texte de plus de 255 caractères, `Value` absente) :
+    /// gardée telle quelle en `Extras` (R-265). Info.
+    CustomUnreadable,
 }
 
 impl ImportCode {
@@ -130,6 +134,7 @@ impl ImportCode {
             Self::HonorConstraintsOff => "mspdi.honor_constraints_off".to_owned(),
             Self::ProgressInconsistent { .. } => "mspdi.progress_inconsistent".to_owned(),
             Self::StyleIgnored { .. } => "style.ignored".to_owned(),
+            Self::CustomUnreadable => "mspdi.custom_unreadable".to_owned(),
         }
     }
 
@@ -151,6 +156,7 @@ impl ImportCode {
             Self::HonorConstraintsOff => 12,
             Self::ProgressInconsistent { .. } => 13,
             Self::StyleIgnored { .. } => 14,
+            Self::CustomUnreadable => 15,
         }
     }
 
@@ -168,9 +174,10 @@ impl ImportCode {
             | Self::Unsupported { .. }
             | Self::StyleIgnored { .. } => Severity::Warning,
             Self::MissingRequired | Self::DanglingReference => Severity::Error,
-            Self::NotPreserved | Self::HonorConstraintsOff | Self::ProgressInconsistent { .. } => {
-                Severity::Info
-            }
+            Self::NotPreserved
+            | Self::HonorConstraintsOff
+            | Self::ProgressInconsistent { .. }
+            | Self::CustomUnreadable => Severity::Info,
             Self::Core(d) => d.severity(),
         }
     }
@@ -260,7 +267,7 @@ impl fmt::Display for ImportDiagnostic {
 }
 
 /// Nombre de rangs de [`ImportCode`] (plafond par code).
-const RANKS: usize = 15;
+const RANKS: usize = 16;
 
 /// Collecteur de diagnostics, avec l'index des lignes de l'entrée ; borné
 /// par [`MAX_DIAGNOSTICS`] et [`MAX_DIAGNOSTICS_PER_CODE`].
@@ -347,7 +354,8 @@ impl ImportCode {
             | Self::Rounded
             | Self::Inconsistent
             | Self::NotPreserved
-            | Self::HonorConstraintsOff => Vec::new(),
+            | Self::HonorConstraintsOff
+            | Self::CustomUnreadable => Vec::new(),
         }
     }
 
@@ -377,6 +385,7 @@ impl ImportCode {
             Self::StyleIgnored {
                 reason: crate::style_pi::StyleIgnoredReason::TooLarge,
             },
+            Self::CustomUnreadable,
         ]
     }
 }
@@ -484,7 +493,7 @@ mod tests {
     fn n5_import_examples_cover_every_variant() {
         let examples = ImportCode::examples();
         let ranks: Vec<usize> = examples.iter().map(ImportCode::rank).collect();
-        let mut expected: Vec<usize> = (0..15).collect();
+        let mut expected: Vec<usize> = (0..16).collect();
         expected.retain(|r| *r != ImportCode::Core(planrs_core::Diagnostic::TaskReservedUid).rank());
         assert_eq!(ranks, expected);
         let codes: std::collections::BTreeSet<String> = examples.iter().map(ImportCode::code).collect();

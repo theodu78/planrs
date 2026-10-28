@@ -80,7 +80,7 @@ fn r263_validate_type_mismatch() {
         .insert(id(CustomKind::Text, 1), CustomValue::Text("Lot A".to_owned()));
     t.custom
         .insert(id(CustomKind::Number, 1), CustomValue::Number(125_000));
-    assert!(p.validate().finish().is_empty());
+    assert_eq!(p.validate().finish(), Vec::new());
 
     // Nombre rangé sous Texte2, texte trop long sous Texte3, nombre hors
     // bornes sous Nombre2 : une erreur chacun.

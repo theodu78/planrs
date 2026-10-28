@@ -264,7 +264,9 @@ fn h_ui_38_highlight_off() {
 }
 
 /// Densité : hauteur de ligne de la table et du Gantt (Aérée 28 px,
-/// Compacte 18 px), sélection comprise.
+/// Compacte 18 px), sélection comprise (passe UX, lot L5 : une cellule
+/// seule n'est pas teintée, son ID appuyé et sa ligne du Gantt prennent
+/// `header_selected`, H-UI-103).
 #[test]
 fn styled_density_row_height() {
     for (id, expected) in [(TemplateId::Presentation, 28.0), (TemplateId::Chantier, 18.0)] {
@@ -278,7 +280,7 @@ fn styled_density_row_height() {
             .state_mut()
             .dispatch(Action::Select(Some(planrs_core::TaskUid::new(uid))));
         harness.run();
-        let selection = Palette::from_style(&template(id), Variant::Light).selection;
+        let selection = Palette::from_style(&template(id), Variant::Light).header_selected;
         let rows = filled(&harness, selection);
         assert_ne!(rows.len(), 0, "{id:?}");
         for r in rows {

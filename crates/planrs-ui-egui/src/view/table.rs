@@ -620,6 +620,21 @@ pub fn paint_body(
         pad: metrics.pad_x,
         indent: metrics.indent,
     };
+    // Bloc de la sélection (H-UI-103) : une résolution par image, lue par
+    // le dessin de chaque ligne ; survol hors de tout glisser.
+    let marks = BlockMarks::of(fc, &sheet, cursor, cols_left);
+    let hover = hovered_row(
+        ui,
+        clip,
+        origin,
+        row_h,
+        blank,
+        select_drag.is_none() && row_drag.is_none(),
+    );
+    let mut drawn = SelectionDrawn {
+        hover,
+        ..SelectionDrawn::default()
+    };
     for i in range.clone() {
         let top = origin.y + index_to_f32(i) * row_h;
         let row_rect = Rect::from_min_size(pos2(left, top), vec2(clip.width(), row_h));
@@ -634,15 +649,12 @@ pub fn paint_body(
             Some(row) => fc.selected.contains(row.uid),
             None => fc.selection.is_none(),
         };
-        let fill = if selected {
-            Some(palette.selection)
+        let base = if hover == Some(i) && !marks.full_row(i) {
+            Some(palette.hover_row)
         } else {
             bands.fill(rows, i)
         };
-        if let Some(fill) = fill {
-            painter.rect_filled(row_rect, 0.0, fill);
-            shapes = shapes.saturating_add(1);
-        }
+        shapes = shapes.saturating_add(marks.paint_row(&painter, palette, i, row_rect, base, &mut drawn));
         painter.hline(
             row_rect.x_range(),
             row_rect.bottom() - 0.5,
@@ -707,6 +719,10 @@ pub fn paint_body(
         clip,
         palette.grid,
     ));
+    // Bordure du bloc, au-dessus des séparateurs, sous le cadre actif.
+    shapes = shapes.saturating_add(marks.paint_borders(&painter, palette, origin, row_h, &range, &mut drawn));
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(selection_drawn_id(), drawn));
     let at = Place {
         origin,
         cols_left,
@@ -717,6 +733,238 @@ pub fn paint_body(
     fc.stats.shapes = fc.stats.shapes.saturating_add(shapes);
     edit_cells(ui, fc, &sheet, edit, cursor, &at, clip, deferred);
 }
+
+/// Ce que la table a dessiné de la sélection à la dernière image
+/// (H-UI-103), relu par les tests ([`selection_drawn`]) : lignes affichées
+/// et colonnes, jamais de pixels.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SelectionDrawn {
+    /// Cellules teintées d'un bloc de cellules (ligne affichée, colonne).
+    pub tinted: Vec<(usize, Column)>,
+    /// Lignes entières teintées sur toute la largeur.
+    pub full_rows: Vec<usize>,
+    /// Lignes dont l'ID est appuyé (`header_selected`).
+    pub pressed_ids: Vec<usize>,
+    /// Cellule active d'un bloc de plus d'une cellule, laissée non teintée
+    /// dans son cadre : ligne affichée, colonne, fond dessiné.
+    pub active: Option<(usize, Column, egui::Color32)>,
+    /// Bordures de 2 px du bloc (une par suite de lignes voisines).
+    pub borders: Vec<Rect>,
+    /// Ligne survolée (fond `hover_row`), jamais pendant un glisser.
+    pub hover: Option<usize>,
+}
+
+/// Clé de [`SelectionDrawn`] dans la mémoire d'egui.
+fn selection_drawn_id() -> Id {
+    Id::unique("planrs.table.selection_drawn")
+}
+
+/// Dessin de la sélection de la table à la dernière image (tests,
+/// H-UI-103).
+#[must_use]
+pub fn selection_drawn(ctx: &egui::Context) -> SelectionDrawn {
+    ctx.data(|data| data.get_temp::<SelectionDrawn>(selection_drawn_id()))
+        .unwrap_or_default()
+}
+
+/// Ligne sous le pointeur (ligne vide comprise), si `idle` (aucun glisser
+/// de la table), aucun bouton tenu (barre, lien, poignée, défilement) et
+/// le pointeur sur le corps sans fenêtre ni menu par-dessus. Toute valeur
+/// non finie : aucune.
+fn hovered_row(
+    ui: &egui::Ui,
+    clip: Rect,
+    origin: Pos2,
+    row_h: f32,
+    blank: usize,
+    idle: bool,
+) -> Option<usize> {
+    if !idle {
+        return None;
+    }
+    let (pos, down) = ui.input(|i| (i.pointer.hover_pos(), i.pointer.any_down()));
+    let pos = pos.filter(|p| !down && p.is_finite() && clip.contains(*p))?;
+    if !ui.rect_contains_pointer(clip) {
+        return None;
+    }
+    crate::geom::row_at(pos.y - origin.y, row_h, blank.saturating_add(1))
+}
+
+/// Bloc de la sélection prêt à dessiner pour une image (H-UI-103) : lignes
+/// affichées du bloc, abscisses de ses colonnes, cellule active.
+struct BlockMarks {
+    /// Bloc résolu (`block::resolve`, seule résolution).
+    block: crate::block::Block,
+    /// Plus d'une cellule : teinte et bordure ; sinon seul l'ID est appuyé
+    /// et le cadre de la cellule active la montre.
+    multi: bool,
+    /// Ligne affichée de la cellule active (ligne vide : `rows.len()`).
+    active_row: Option<usize>,
+    /// Abscisses écran (gauche, largeur) de la colonne active.
+    active_x: Option<(f32, f32)>,
+    /// Abscisses écran (gauche, droite) des colonnes du bloc.
+    span_x: Option<(f32, f32)>,
+    /// Abscisses écran (gauche, largeur) de la colonne ID.
+    id_x: Option<(f32, f32)>,
+}
+
+impl BlockMarks {
+    /// Bloc de la sélection de `fc` et du curseur `cursor` sur la grille
+    /// `sheet`, colonnes à partir de l'abscisse `cols_left`.
+    fn of(fc: &FrameCtx<'_>, sheet: &TaskSheet<'_>, cursor: &TableCursor, cols_left: f32) -> Self {
+        let visible: Vec<Column> = sheet.columns().iter().map(|(c, _)| *c).collect();
+        let block = crate::block::resolve(fc.selected, cursor, sheet.rows, &visible);
+        let span = |c: Column| column_span(sheet.columns(), cols_left, c);
+        let span_x = match (block.columns.first(), block.columns.last()) {
+            (Some(first), Some(last)) => span(*first).zip(span(*last)).map(|((l, _), (r, w))| (l, r + w)),
+            _ => None,
+        };
+        let active_row = match block.active.0 {
+            RowRef::Item(uid) => sheet.rows.display_of(uid).map(DisplayRow::index),
+            RowRef::Blank => Some(sheet.rows.len()),
+        };
+        Self {
+            multi: !block.is_single(),
+            active_x: span(block.active.1),
+            id_x: span(Column::Id),
+            span_x,
+            active_row,
+            block,
+        }
+    }
+
+    /// La ligne affichée `i` est dans le bloc.
+    fn contains(&self, i: usize) -> bool {
+        self.block.rows.binary_search(&DisplayRow::at(i)).is_ok()
+    }
+
+    /// La ligne `i` est teintée sur toute la largeur (lignes entières).
+    fn full_row(&self, i: usize) -> bool {
+        self.multi && self.block.kind == crate::selection::SelectionKind::Rows && self.contains(i)
+    }
+
+    /// Fonds de la ligne `i` (`row_rect`) : fond de base `base` (bande,
+    /// survol), teinte du bloc (lignes entières : toute la largeur ;
+    /// cellules : colonnes du bloc), cellule active laissée au fond de
+    /// base, ID appuyé. Rend le nombre de formes.
+    fn paint_row(
+        &self,
+        painter: &Painter,
+        palette: &Palette,
+        i: usize,
+        row_rect: Rect,
+        base: Option<egui::Color32>,
+        drawn: &mut SelectionDrawn,
+    ) -> usize {
+        let mut shapes = 0_usize;
+        let mut fill = |rect: Rect, color: egui::Color32| {
+            if rect.is_finite() && rect.is_positive() {
+                painter.rect_filled(rect, 0.0, color);
+                shapes = shapes.saturating_add(1);
+            }
+        };
+        let cell =
+            |(l, w): (f32, f32)| Rect::from_min_max(pos2(l, row_rect.top()), pos2(l + w, row_rect.bottom()));
+        let in_block = self.contains(i);
+        if self.full_row(i) {
+            fill(row_rect, palette.selection);
+            drawn.full_rows.push(i);
+        } else if let Some(color) = base {
+            fill(row_rect, color);
+        }
+        if in_block && self.multi && self.block.kind == crate::selection::SelectionKind::Cells {
+            if let Some((l, r)) = self.span_x {
+                fill(cell((l, r - l)), palette.selection);
+            }
+            drawn.tinted.extend(self.block.columns.iter().map(|c| (i, *c)));
+        }
+        if in_block && self.multi && self.active_row == Some(i) {
+            let under = base.unwrap_or(palette.background);
+            if let Some(x) = self.active_x {
+                fill(cell(x), under);
+            }
+            drawn.active = Some((i, self.block.active.1, under));
+            drawn.tinted.retain(|&(r, c)| (r, c) != (i, self.block.active.1));
+        }
+        if in_block && self.block.active.0 != RowRef::Blank {
+            if let Some(x) = self.id_x {
+                fill(cell(x), palette.header_selected);
+            }
+            drawn.pressed_ids.push(i);
+        }
+        shapes
+    }
+
+    /// Bordures de 2 px du bloc (`selection_border`), une par suite de
+    /// lignes voisines du bloc dans la plage dessinée ; une suite qui
+    /// continue hors de la plage déborde d'une ligne (bord coupé par le
+    /// clip, jamais dessiné au milieu du bloc). Rend le nombre de formes.
+    fn paint_borders(
+        &self,
+        painter: &Painter,
+        palette: &Palette,
+        origin: Pos2,
+        row_h: f32,
+        range: &Range<usize>,
+        drawn: &mut SelectionDrawn,
+    ) -> usize {
+        if !self.multi {
+            return 0;
+        }
+        let clip = painter.clip_rect();
+        let (left, right) = if self.block.kind == crate::selection::SelectionKind::Rows {
+            (clip.left(), clip.right())
+        } else {
+            match self.span_x {
+                Some(x) => x,
+                None => return 0,
+            }
+        };
+        let mut shapes = 0_usize;
+        let mut run: Option<(usize, usize)> = None;
+        let mut close = |(first, last): (usize, usize)| {
+            let above = first == range.start && first > 0 && self.contains(first.saturating_sub(1));
+            let below = last.saturating_add(1) == range.end && self.contains(last.saturating_add(1));
+            let mut top = origin.y + index_to_f32(first) * row_h;
+            let mut bottom = origin.y + index_to_f32(last.saturating_add(1)) * row_h;
+            if above {
+                top -= row_h;
+            }
+            if below {
+                bottom += row_h;
+            }
+            let rect = Rect::from_min_max(pos2(left, top), pos2(right, bottom));
+            if rect.is_finite() && rect.is_positive() && rect.intersects(clip) {
+                painter.rect_stroke(
+                    rect,
+                    0.0,
+                    Stroke::new(BLOCK_BORDER, palette.selection_border),
+                    egui::StrokeKind::Inside,
+                );
+                drawn.borders.push(rect);
+                shapes = shapes.saturating_add(1);
+            }
+        };
+        for i in range.clone() {
+            run = match (run, self.contains(i)) {
+                (Some((first, _)), true) => Some((first, i)),
+                (None, true) => Some((i, i)),
+                (Some(r), false) => {
+                    close(r);
+                    None
+                }
+                (None, false) => None,
+            };
+        }
+        if let Some(r) = run {
+            close(r);
+        }
+        shapes
+    }
+}
+
+/// Épaisseur de la bordure du bloc (H-UI-103).
+const BLOCK_BORDER: f32 = 2.0;
 
 /// Fond des lignes non sélectionnées de la table : bandes du style
 /// (H-UI-53, J8 lot L11), alignées sur celles du Gantt ; sans bandes, le

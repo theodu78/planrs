@@ -1765,5 +1765,97 @@ fn timeline_5000() {
 // --- Passe UX (ADR-0018, contrat L0) : sections posées vides, remplies par
 // leur lot (budgets du cahier `docs/plans/ux.md` § 2.5).
 // --- UX L1 --- (`select_drag_5000`, image de Ctrl+A de `select_all_copy_5000`)
+
+/// Appui (bouton principal) en `p`, pointeur amené d'abord.
+fn press_frames(bench: &mut Bench, app: &mut App, p: Pos2, pressed: bool) {
+    bench.frame(app, vec![Event::PointerMoved(p)]);
+    bench.frame(
+        app,
+        vec![Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        }],
+    );
+}
+
+/// UX L1 (ADR-0018, H-UI-88, H-UI-91) : appui sur une cellule du Nom vers
+/// la ligne 10, pointeur tenu sous le bas du corps 120 images (défilement
+/// automatique vertical, bloc étendu à chaque image), puis 60 images au-delà
+/// du bord droit d'une table de 400 points (défilement automatique
+/// horizontal). Image
+/// médiane < 16 ms, p95 < 32 ms.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn select_drag_5000() {
+    let (mut app, mut bench) = nav_bench();
+    // Table étroite : ses colonnes débordent, le défilement horizontal joue.
+    app.dispatch(Action::SetTableWidth(400));
+    bench.settle(&mut app);
+    let x = 150.0;
+    let start = (300_u16..900)
+        .step_by(4)
+        .map(f32::from)
+        .find(|&y| {
+            // Une seconde entre deux clics : jamais de double-clic (saisie).
+            bench.time += 1.0;
+            press_frames(&mut bench, &mut app, pos2(x, y), true);
+            press_frames(&mut bench, &mut app, pos2(x, y), false);
+            app.selection
+                .and_then(|uid| app.rows().unwrap().index_of(uid))
+                .is_some_and(|i| i >= 10)
+        })
+        .expect("aucune ligne 10 sous le pointeur");
+    bench.time += 1.0;
+    press_frames(&mut bench, &mut app, pos2(x, start), true);
+    assert!(app.view().edit.editing.is_none() && app.view().select_drag.is_some());
+    let first = cursor_row(&app);
+    let below = pos2(x, SCREEN.1 + 40.0);
+    for _ in 0..WARMUP {
+        bench.frame(&mut app, vec![Event::PointerMoved(below)]);
+    }
+    let mut samples: Vec<Duration> = (0..120).map(|_| bench.frame(&mut app, Vec::new())).collect();
+    let scrolled = app.view().last_scroll_y;
+    assert!(scrolled > 0.0, "aucun défilement automatique");
+    assert!(
+        app.selected().len() > 60,
+        "bloc de {} lignes depuis la ligne {first}",
+        app.selected().len()
+    );
+    let right = pos2(app.view().last_table_width + 120.0, start);
+    samples.extend((0..60).map(|i| {
+        let events = if i == 0 {
+            vec![Event::PointerMoved(right)]
+        } else {
+            Vec::new()
+        };
+        bench.frame(&mut app, events)
+    }));
+    let table_x = app.view().table_scroll_x;
+    assert!(table_x > 0.0, "aucun défilement horizontal de la table");
+    press_frames(&mut bench, &mut app, right, false);
+    bench.settle(&mut app);
+    assert!(app.view().select_drag.is_none());
+    eprintln!("select_drag_5000 : défilement {scrolled} points, table {table_x} points");
+    assert_budget("select_drag_5000", samples, bench.last);
+}
+
+/// UX L1 (ADR-0018, H-UI-92) : image de Ctrl+A sur 5 000 tâches (toutes les
+/// lignes en lignes entières), 30 fois : médiane < 16 ms, p95 < 32 ms. La
+/// copie du bloc 5 000 × 3 est mesurée par le lot L2.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn select_all_5000() {
+    let (mut app, mut bench) = nav_bench();
+    for _ in 0..WARMUP {
+        bench.frame(&mut app, key_events(Key::A, Modifiers::COMMAND));
+    }
+    let samples: Vec<Duration> = (0..FRAMES)
+        .map(|_| bench.frame(&mut app, key_events(Key::A, Modifiers::COMMAND)))
+        .collect();
+    assert_eq!(app.selected().len(), app.rows().unwrap().len());
+    assert_budget("select_all_5000", samples, bench.last);
+}
 // --- UX L2 --- (`fill_down_1000`, `paste_cells_1000`, copie de `select_all_copy_5000`)
 // --- UX L3 --- (`row_drag_5000`, `best_fit_5000`)

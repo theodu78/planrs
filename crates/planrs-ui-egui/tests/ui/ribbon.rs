@@ -18,9 +18,11 @@ use egui::{Event, Key, Modifiers, PointerButton, Rect, Shape, vec2};
 use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use egui_kittest::{Harness, Node};
 use planrs_core::{LinkType, Project, SchedulingMode, TaskUid};
-use planrs_ui_egui::action::{DialogKind, TaskCmd};
+use planrs_ui_egui::action::{DialogKind, PressMode, PressTarget, SelectOp, TaskCmd};
+use planrs_ui_egui::column::Column;
 use planrs_ui_egui::i18n::{Arg, Language, TextId, Texts};
 use planrs_ui_egui::keymap::{Binding, shortcut_for_os};
+use planrs_ui_egui::nav::RowRef;
 use planrs_ui_egui::ribbon::spec::{QUICK_ACCESS, RIBBON, RibbonCmd, percent_value};
 use planrs_ui_egui::ribbon::{RibbonOp, RibbonTab};
 use planrs_ui_egui::selection::SelectMode;
@@ -1037,4 +1039,112 @@ fn ribbon_dropdown_runs_menu_entry() {
         .click();
     harness.run();
     assert_ne!(visible(&harness), was);
+}
+
+// --- Passe UX (ADR-0018 D10, lot L5) : groupe Édition ---
+
+/// Appui de sélection sur la cellule (`n`, `column`).
+fn press_cell(harness: &mut Harness<'static, App>, n: u32, column: Column, mode: PressMode) {
+    dispatch(
+        harness,
+        Action::SelectOp(SelectOp::Press {
+            row: RowRef::Item(uid(n)),
+            column,
+            target: PressTarget::Cell,
+            mode,
+        }),
+    );
+}
+
+/// Durée de `n`, en jours de 8 h.
+fn days(app: &App, n: u32) -> i64 {
+    project(app).tasks.get(uid(n)).unwrap().duration.minutes().get() / 480
+}
+
+/// Ouvre la liste `list` du groupe Édition puis choisit son entrée `entry`.
+fn pick(harness: &mut Harness<'static, App>, list: TextId, entry: TextId) {
+    node(harness, &fr(list)).click();
+    harness.run();
+    let entries = named(harness, &fr(entry));
+    assert_eq!(entries.len(), 1, "{entry:?} absent de la liste {list:?}");
+    entries[0].click();
+    harness.run();
+}
+
+/// Groupe Édition de l'onglet Tâche (ADR-0018 D10) : Rechercher, Défiler
+/// jusqu'à la tâche, Remplir ▾, Effacer ▾ ; les deux listes portent les
+/// raccourcis de leur commande (Ctrl+D, Ctrl+Suppr) et leurs icônes
+/// Lucide (`arrow-down-to-line`, `eraser`).
+#[test]
+fn h_ui_70_ribbon_editing_group() {
+    let group = RibbonTab::Task
+        .groups()
+        .iter()
+        .find(|g| g.label == TextId::RibbonGroupEditing)
+        .unwrap();
+    let cmds: Vec<RibbonCmd> = group.items.iter().map(|i| i.cmd).collect();
+    assert_eq!(
+        cmds,
+        [
+            RibbonCmd::Find,
+            RibbonCmd::ScrollToTask,
+            RibbonCmd::FillDown,
+            RibbonCmd::ClearContents
+        ]
+    );
+    for item in &group.items[2..] {
+        assert_eq!(item.size, planrs_ui_egui::ribbon::spec::ItemSize::Dropdown);
+        assert_eq!(item.binding, item.cmd.binding(), "{:?}", item.cmd);
+        assert!(item.cmd.dropdown_entry().is_some());
+    }
+    assert_eq!(
+        group.items[2].icon.map(planrs_ui_egui::ribbon::Icon::name),
+        Some("arrow-down-to-line")
+    );
+    assert_eq!(
+        group.items[3].icon.map(planrs_ui_egui::ribbon::Icon::name),
+        Some("eraser")
+    );
+    let harness = p();
+    for label in ["Remplir", "Effacer"] {
+        node(&harness, label);
+    }
+}
+
+/// H-UI-96 par le ruban : bloc Durée 2-3, Remplir ▾ → Vers le bas ⇒ 3
+/// dure 5 j, une entrée d'annulation ; même effet que Ctrl+D.
+#[test]
+fn h_ui_96_ribbon_fill_down() {
+    let mut harness = p();
+    press_cell(&mut harness, 2, Column::Duration, PressMode::Replace);
+    press_cell(&mut harness, 3, Column::Duration, PressMode::Extend);
+    assert_eq!(days(harness.state(), 3), 10);
+    pick(&mut harness, TextId::RibbonFill, TextId::RibbonFillDown);
+    assert_eq!(days(harness.state(), 3), 5);
+    assert_eq!(undoable(harness.state()), 1);
+    assert!(!egui::Popup::is_any_open(&harness.ctx));
+}
+
+/// H-UI-97 par le ruban : (3, Prédécesseurs), Effacer ▾ → Contenu ⇒ lien
+/// 2→3 retiré, la tâche 3 reste ; une entrée d'annulation.
+#[test]
+fn h_ui_97_ribbon_clear_contents() {
+    let mut harness = p();
+    press_cell(&mut harness, 3, Column::Predecessors, PressMode::Replace);
+    let tasks = project(harness.state()).tasks.len();
+    assert!(preds(harness.state(), 3).contains(&(uid(2), LinkType::FinishToStart)));
+    pick(&mut harness, TextId::RibbonClear, TextId::RibbonClearContents);
+    assert_eq!(preds(harness.state(), 3), Vec::new());
+    assert_eq!(project(harness.state()).tasks.len(), tasks);
+    assert_eq!(undoable(harness.state()), 1);
+}
+
+/// Sans document, Remplir ▾ et Effacer ▾ sont grisés (prédicat de leur
+/// commande, comme le menu Édition).
+#[test]
+fn h_ui_73_editing_lists_disabled_on_welcome() {
+    let harness = welcome();
+    for id in [TextId::RibbonFill, TextId::RibbonClear] {
+        assert!(disabled(&node(&harness, &fr(id))), "{id:?}");
+    }
 }

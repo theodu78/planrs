@@ -527,6 +527,14 @@ pub(crate) fn dropdown_contents(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, cmd: R
         RibbonCmd::ThemeMenu => theme_choices(ui, fc),
         RibbonCmd::LanguageMenu => language_choices(ui, fc),
         RibbonCmd::ColumnsMenu => column_choices(ui, fc),
+        // Remplir ▾, Effacer ▾ (passe UX, lot L5) : une entrée, la commande
+        // elle-même (même action, même prédicat, même raccourci).
+        RibbonCmd::FillDown | RibbonCmd::ClearContents => {
+            if let Some(label) = cmd.dropdown_entry() {
+                let shortcut = cmd.shortcut(ui.ctx().os());
+                twin_item(ui, fc, cmd, fc.texts.get(label), shortcut);
+            }
+        }
         _ => {}
     }
 }

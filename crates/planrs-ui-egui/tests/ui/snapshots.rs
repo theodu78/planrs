@@ -15,6 +15,12 @@
 //! captures montrent désormais le ruban à la place des deux rangées
 //! d'outils, et une frise (vide hors « P ») en tête des vues Gantt.
 //!
+//! Passe UX (ADR-0018, lot L5) : bloc de cellules en clair et en sombre,
+//! lignes entières, trait d'insertion d'un déplacement de lignes, liste
+//! « Remplir ▾ » du groupe Édition ; toutes les autres références
+//! régénérées une fois (teinte de sélection plus marquée, ID appuyés,
+//! lignes sélectionnées du Gantt en `header_selected`, groupe Édition).
+//!
 //! Mise à jour des références (Linux, lavapipe) :
 //! `PLANRS_UI_SNAPSHOTS=1 UPDATE_SNAPSHOTS=1 WGPU_BACKEND=vulkan cargo test -p planrs-ui-egui --test ui`.
 
@@ -22,10 +28,14 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable as _;
 use planrs_core::Moment;
 use planrs_tests::generate::ui_network;
+use planrs_ui_egui::action::{PressMode, PressTarget, SelectOp};
+use planrs_ui_egui::column::Column;
 use planrs_ui_egui::i18n::{TextId, Texts};
+use planrs_ui_egui::nav::RowRef;
 use planrs_ui_egui::ribbon::{RibbonOp, RibbonTab};
 use planrs_ui_egui::timescale::TimeAxis;
 use planrs_ui_egui::view::ribbon::drawn;
+use planrs_ui_egui::view::table::selection_drawn;
 use planrs_ui_egui::{
     Action, App, DocOrigin, Env, Language, LanguagePref, ThemePref, TimeScaleZoom, UiState,
 };
@@ -548,4 +558,235 @@ fn snapshot_print_timeline_fr_light() {
     };
     assert!(state.page.timeline, "frise cochée d'office");
     snapshot(&mut harness, "print_timeline_fr_light");
+}
+
+// --- Passe UX (ADR-0018 D11, lot L5) : retours visuels de la sélection ---
+
+/// Appui de sélection sur (`n`, `column`) ; colonne ID : en-tête de ligne.
+fn press(harness: &mut Harness<'static, App>, n: u32, column: Column, mode: PressMode) {
+    let target = if column == Column::Id {
+        PressTarget::RowHeader
+    } else {
+        PressTarget::Cell
+    };
+    harness.state_mut().dispatch(Action::SelectOp(SelectOp::Press {
+        row: RowRef::Item(planrs_core::TaskUid::new(n)),
+        column,
+        target,
+        mode,
+    }));
+    harness.run();
+}
+
+/// Bloc de (`a`) à (`b`) : appui puis Maj+appui.
+fn select_block(harness: &mut Harness<'static, App>, a: (u32, Column), b: (u32, Column)) {
+    press(harness, a.0, a.1, PressMode::Replace);
+    press(harness, b.0, b.1, PressMode::Extend);
+}
+
+/// Ligne affichée de la tâche `n`.
+fn shown(app: &App, n: u32) -> usize {
+    app.visible_rows()
+        .unwrap()
+        .display_of(planrs_core::TaskUid::new(n))
+        .unwrap()
+        .index()
+}
+
+/// « P », thème `theme`, bloc 2-5 × Durée-Début : sept cellules teintées,
+/// (5, Début) active non teintée (fond de la ligne), ID 2 à 5 appuyés, une
+/// bordure (exemple de H-UI-103).
+fn block_2_5(theme: ThemePref) -> Harness<'static, App> {
+    let mut harness = p_capture(LanguagePref::Fr, theme, egui::vec2(1280.0, 720.0), 1.0, &[]);
+    select_block(&mut harness, (2, Column::Duration), (5, Column::Start));
+    let app = harness.state();
+    let d = selection_drawn(&harness.ctx);
+    let rows: Vec<usize> = (2..=5).map(|n| shown(app, n)).collect();
+    assert_eq!(d.tinted.len(), 7, "{d:?}");
+    assert!(
+        d.tinted
+            .iter()
+            .all(|(r, c)| rows.contains(r) && matches!(c, Column::Duration | Column::Start))
+    );
+    let (row, column, fill) = d.active.unwrap();
+    assert_eq!((row, column), (shown(app, 5), Column::Start));
+    let variant = planrs_ui_egui::theme::variant_for(harness.ctx.theme());
+    let style = app
+        .state
+        .effective_style(app.document.as_ref().unwrap().project());
+    let palette = planrs_ui_egui::theme::Palette::from_style(&style, variant);
+    assert_ne!(fill, palette.selection, "cellule active teintée");
+    assert_eq!(d.pressed_ids, rows);
+    assert_eq!(d.borders.len(), 1);
+    assert_eq!(d.full_rows, Vec::<usize>::new());
+    harness
+}
+
+/// H-UI-103 : la cellule active d'un bloc n'est pas teintée (fond de sa
+/// ligne dans son cadre) ; une cellule seule n'est pas teintée du tout,
+/// son ID est appuyé, aucune bordure de bloc.
+#[test]
+fn h_ui_103_active_cell_unfilled() {
+    let mut harness = block_2_5(ThemePref::Light);
+    press(&mut harness, 3, Column::Name, PressMode::Replace);
+    let d = selection_drawn(&harness.ctx);
+    assert!(
+        d.tinted.is_empty() && d.full_rows.is_empty() && d.borders.is_empty(),
+        "{d:?}"
+    );
+    assert_eq!(d.active, None);
+    assert_eq!(d.pressed_ids, vec![shown(harness.state(), 3)]);
+}
+
+/// H-UI-103 : lignes entières 6-7 teintées sur toute la largeur, ID
+/// appuyés, une bordure ; aucune cellule teintée à part.
+#[test]
+fn h_ui_103_rows_tinted_full_width() {
+    let mut harness = p_fr_light();
+    select_block(&mut harness, (6, Column::Id), (7, Column::Id));
+    let app = harness.state();
+    let d = selection_drawn(&harness.ctx);
+    let rows = vec![shown(app, 6), shown(app, 7)];
+    assert_eq!(d.full_rows, rows);
+    assert_eq!(d.pressed_ids, rows);
+    assert_eq!(d.tinted, Vec::<(usize, Column)>::new());
+    assert_eq!(d.borders.len(), 1);
+}
+
+/// H-UI-103 : survol discret de la ligne sous le pointeur ; aucun pendant
+/// un glisser de sélection (bouton tenu), de retour au relâcher.
+#[test]
+fn h_ui_103_hover_not_during_drag() {
+    let mut harness = p_fr_light();
+    let three = shown(harness.state(), 3);
+    let from = crate::select_mouse::cell_point(&harness, three, Column::Name);
+    crate::select_mouse::move_to(&mut harness, from);
+    harness.run();
+    assert_eq!(selection_drawn(&harness.ctx).hover, Some(three));
+    crate::select_mouse::press_at(&mut harness, from, egui::Modifiers::NONE);
+    assert_eq!(selection_drawn(&harness.ctx).hover, None);
+    let five = shown(harness.state(), 5);
+    let to = crate::select_mouse::cell_point(&harness, five, Column::Name);
+    crate::select_mouse::move_to(&mut harness, to);
+    assert_eq!(selection_drawn(&harness.ctx).hover, None);
+    assert_eq!(selection_drawn(&harness.ctx).full_rows.len(), 0);
+    // Relâcher (kittest retire aussi le pointeur), puis survoler de nouveau.
+    crate::select_mouse::release_at(&mut harness, to);
+    crate::select_mouse::move_to(&mut harness, to);
+    harness.run();
+    assert_eq!(selection_drawn(&harness.ctx).hover, Some(five));
+    // Pointeur retiré : plus de survol.
+    harness.remove_cursor();
+    harness.run();
+    assert_eq!(selection_drawn(&harness.ctx).hover, None);
+}
+
+#[test]
+fn snapshot_select_block_fr_light() {
+    let mut harness = block_2_5(ThemePref::Light);
+    snapshot(&mut harness, "select_block_fr_light");
+}
+
+#[test]
+fn snapshot_select_block_fr_dark() {
+    let mut harness = block_2_5(ThemePref::Dark);
+    assert_eq!(harness.ctx.theme(), egui::Theme::Dark);
+    snapshot(&mut harness, "select_block_fr_dark");
+}
+
+#[test]
+fn snapshot_select_rows_fr_light() {
+    let mut harness = p_fr_light();
+    select_block(&mut harness, (6, Column::Id), (7, Column::Id));
+    assert_eq!(selection_drawn(&harness.ctx).full_rows.len(), 2);
+    snapshot(&mut harness, "select_rows_fr_light");
+}
+
+/// H-UI-94 : lignes 6-7 entières, ID 6 glissé au-dessus de la ligne 2,
+/// bouton tenu : trait d'insertion de 2 px, curseur de déplacement (capture
+/// prise pointeur présent : le retirer finirait le geste).
+#[test]
+fn snapshot_row_drag_indicator_fr_light() {
+    let mut harness = p_fr_light();
+    select_block(&mut harness, (6, Column::Id), (7, Column::Id));
+    let app = harness.state();
+    let from = crate::select_mouse::cell_point(&harness, shown(app, 6), Column::Id);
+    let two = crate::select_mouse::cell_point(&harness, shown(app, 2), Column::Id);
+    let row_h = harness.state().row_h();
+    let to = egui::pos2(two.x, two.y - row_h * 0.4);
+    crate::select_mouse::press_at(&mut harness, from, egui::Modifiers::NONE);
+    for k in 1..=4_u8 {
+        let t = f32::from(k) / 4.0;
+        crate::select_mouse::move_to(&mut harness, from + (to - from) * t);
+    }
+    harness.step();
+    assert!(
+        harness.state().view().row_drag.is_some(),
+        "déplacement non commencé"
+    );
+    if crate::common::snapshot_mode() == crate::common::SnapshotMode::Required {
+        harness.snapshot("row_drag_indicator_fr_light");
+    }
+    crate::select_mouse::release_at(&mut harness, to);
+}
+
+/// Groupe Édition (ADR-0018 D10) : liste « Remplir ▾ » ouverte sur un bloc
+/// Durée 2-3 ; 1 920 px (onglet Tâche entier sans réduction, H-UI-75).
+#[test]
+fn snapshot_ribbon_task_editing_fr_light() {
+    use egui_kittest::kittest::NodeT as _;
+    let mut harness = p_capture(
+        LanguagePref::Fr,
+        ThemePref::Light,
+        egui::vec2(1920.0, 720.0),
+        1.0,
+        &[],
+    );
+    select_tab(&mut harness, RibbonTab::Task);
+    select_block(&mut harness, (2, Column::Duration), (3, Column::Duration));
+    let texts = Texts::new(Language::Fr);
+    harness.get_by_label(&texts.get(TextId::RibbonFill)).click();
+    harness.run();
+    let entry = texts.get(TextId::RibbonFillDown);
+    assert!(
+        harness.query_by_label_contains(&entry).is_some(),
+        "liste « Remplir » fermée"
+    );
+    snapshot(&mut harness, "ribbon_task_editing_fr_light");
+    assert!(harness.query_by_label_contains(&entry).is_some());
+    // Entrée « Vers le bas Ctrl+D » : raccourci de la commande affiché.
+    let name = harness
+        .get_by_label_contains(&entry)
+        .accesskit_node()
+        .label()
+        .unwrap_or_default();
+    assert!(name.ends_with("Ctrl+D"), "{name}");
+}
+
+/// Exemple `snapshot`, inclus tel quel : `--block` sélectionne le bloc par
+/// les mêmes appuis que la table (passe UX, lot L5).
+#[allow(
+    dead_code,
+    clippy::duplicate_mod,
+    reason = "`main` et `run` de l'exemple ne servent pas au test ; `desktop` l'inclut aussi, en module privé"
+)]
+#[path = "../../examples/snapshot.rs"]
+mod snapshot_example;
+
+#[test]
+fn snapshot_example_block_option() {
+    let args = |list: &[&str]| snapshot_example::parse_args(list.iter().map(std::ffi::OsString::from));
+    let parsed = args(&["--p", "main", "--block", "2:duration-5:start"]).unwrap();
+    assert_eq!(parsed.block, Some([(2, Column::Duration), (5, Column::Start)]));
+    for bad in ["2:duration", "2-5", "x:duration-5:start", "2:durée-5:start"] {
+        assert!(args(&["--p", "main", "--block", bad]).is_err(), "{bad}");
+    }
+    let harness = snapshot_example::prepared(&parsed, None).unwrap();
+    let d = selection_drawn(&harness.ctx);
+    assert_eq!(d.tinted.len(), 7, "{d:?}");
+    let rows = args(&["--p", "main", "--block", "6:id-7:id"]).unwrap();
+    let harness = snapshot_example::prepared(&rows, None).unwrap();
+    assert_eq!(selection_drawn(&harness.ctx).full_rows.len(), 2);
+    let missing = args(&["--p", "main", "--block", "2:name-99:name"]).unwrap();
+    assert!(snapshot_example::prepared(&missing, None).is_err());
 }

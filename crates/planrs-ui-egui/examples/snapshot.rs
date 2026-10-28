@@ -4,7 +4,8 @@
 //! ```text
 //! cargo run -p planrs-ui-egui --example snapshot -- <fichier.xml | --generate N | --p> <vue>
 //!     [--row N] [--zoom day|week|month|quarter] [--size LxH] [--style <modèle>]
-//!     [--tab task|resource|project|view|format] [--ribbon-collapsed] [sortie.png]
+//!     [--tab task|resource|project|view|format] [--ribbon-collapsed]
+//!     [--block <id1>:<col1>-<id2>:<col2>] [sortie.png]
 //! ```
 //!
 //! Vues : `welcome` (accueil, la source est ignorée), `main` (zoom ajusté),
@@ -16,7 +17,12 @@
 //! « Mode impression » ouverte : frise en tête de la page 1 de l'aperçu).
 //! Français et thème clair sauf mention. `--p` : projet « P » du cahier
 //! (`planrs_tests::daily::plan_p`). `--tab` : onglet du ruban montré ;
-//! `--ribbon-collapsed` : ruban replié (H-UI-72). `--generate N` : réseau généré sans MSPDI
+//! `--ribbon-collapsed` : ruban replié (H-UI-72). `--block` : bloc
+//! sélectionné par deux appuis (H-UI-87 : appui sur la cellule de la tâche
+//! d'ID `id1`, colonne `col1`, puis Maj+appui sur celle de `id2`, `col2`) ;
+//! colonnes nommées comme dans un fichier d'état (`id`, `name`,
+//! `duration`, `start`, `finish`, `predecessors`…), `id` des deux côtés :
+//! lignes entières (passe UX, lot L5). `--generate N` : réseau généré sans MSPDI
 //! (`planrs_tests::generate::ui_network_with_resources`, N arrondi au
 //! multiple de 20 supérieur, deux liens par tâche, une ressource pour 25
 //! tâches), comme le test de fluidité. `--row N` : sélectionne la ligne de
@@ -50,7 +56,9 @@ use egui_kittest::Harness;
 use egui_kittest::wgpu::WgpuTestRenderer;
 use planrs_core::Moment;
 use planrs_render::style::TemplateId;
-use planrs_ui_egui::action::DialogKind;
+use planrs_ui_egui::action::{DialogKind, PressMode, PressTarget, SelectOp};
+use planrs_ui_egui::column::Column;
+use planrs_ui_egui::nav::RowRef;
 use planrs_ui_egui::ribbon::{RibbonOp, RibbonTab};
 use planrs_ui_egui::timescale::TimeAxis;
 use planrs_ui_egui::{
@@ -60,7 +68,7 @@ use planrs_ui_egui::{
 /// Usage affiché en cas d'arguments invalides.
 pub const USAGE: &str = "usage : cargo run -p planrs-ui-egui --example snapshot -- \
 <fichier.xml | --generate N | --p> <vue> [--row N] [--zoom day|week|month|quarter] [--size LxH] [--style <modèle>] \
-[--tab task|resource|project|view|format] [--ribbon-collapsed] [sortie.png]\n\
+[--tab task|resource|project|view|format] [--ribbon-collapsed] [--block ID:COL-ID:COL] [sortie.png]\n\
 vues : welcome | main | main-week | main-day | main-dark | main-en | tracking | resources | usage | timeline | print-timeline\n\
 modèles : classique | sobre | contraste_eleve | presentation | chantier | impression_nb";
 
@@ -182,6 +190,9 @@ pub struct Args {
     pub tab: Option<RibbonTab>,
     /// Ruban replié (H-UI-72).
     pub ribbon_collapsed: bool,
+    /// Bloc sélectionné (`--block`) : (ID, colonne) de l'appui, puis du
+    /// Maj+appui.
+    pub block: Option<[(u32, Column); 2]>,
     /// PNG à écrire.
     pub output: PathBuf,
 }
@@ -232,6 +243,38 @@ fn parse_tab(text: &str) -> Result<RibbonTab, String> {
     }
 }
 
+/// Colonne nommée comme dans l'état de l'interface (`duration`, `start`…).
+fn parse_column(text: &str) -> Result<Column, String> {
+    Column::ALL
+        .into_iter()
+        .find(|c| {
+            serde_json::to_value(c)
+                .ok()
+                .as_ref()
+                .and_then(serde_json::Value::as_str)
+                == Some(text)
+        })
+        .ok_or_else(|| format!("colonne inconnue : {text}"))
+}
+
+/// Bloc `ID:COL-ID:COL` de `--block`.
+fn parse_block(text: &str) -> Result<[(u32, Column); 2], String> {
+    let cell = |part: &str| {
+        let (id, column) = part
+            .split_once(':')
+            .ok_or_else(|| format!("--block attend ID:COL-ID:COL, reçu « {text} »"))?;
+        let id = id
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| format!("--block : ID illisible « {id} »"))?;
+        Ok::<_, String>((id, parse_column(column.trim())?))
+    };
+    let (a, b) = text
+        .split_once('-')
+        .ok_or_else(|| format!("--block attend ID:COL-ID:COL, reçu « {text} »"))?;
+    Ok([cell(a)?, cell(b)?])
+}
+
 /// Taille `LxH` (ou `L×H`), chaque côté dans [`SIDE`].
 fn parse_size(text: &str) -> Result<(f32, f32), String> {
     let invalid = || {
@@ -270,6 +313,7 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Stri
     let mut style = None;
     let mut tab = None;
     let mut ribbon_collapsed = false;
+    let mut block = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--generate") => {
@@ -285,6 +329,7 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Stri
             Some("--style") => style = Some(parse_style(&option_value("--style", args.next())?)?),
             Some("--tab") => tab = Some(parse_tab(&option_value("--tab", args.next())?)?),
             Some("--ribbon-collapsed") => ribbon_collapsed = true,
+            Some("--block") => block = Some(parse_block(&option_value("--block", args.next())?)?),
             Some("--p") => source = Some(Source::P),
             Some(other) if other.starts_with("--") => return Err(format!("option inconnue : {other}")),
             _ => positional.push(arg),
@@ -323,6 +368,7 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Stri
         style,
         tab,
         ribbon_collapsed,
+        block,
         output,
     })
 }
@@ -572,10 +618,40 @@ fn prepare(harness: &mut Harness<'static, App>, args: &Args) -> Result<(), Strin
             settle(harness)?;
         }
     }
+    if let Some(block) = args.block {
+        select_block(harness, block)?;
+    }
     if args.view == View::PrintTimeline {
         harness
             .state_mut()
             .dispatch(Action::ShowDialog(DialogKind::PageSetup { print_mode: true }));
+        settle(harness)?;
+    }
+    Ok(())
+}
+
+/// Sélectionne le bloc de `--block` par les gestes de la table : appui sur
+/// la première cellule, Maj+appui sur la seconde (colonne ID : en-tête de
+/// ligne, lignes entières).
+fn select_block(harness: &mut Harness<'static, App>, block: [(u32, Column); 2]) -> Result<(), String> {
+    for ((id, column), mode) in block.into_iter().zip([PressMode::Replace, PressMode::Extend]) {
+        let uid = harness
+            .state()
+            .rows()
+            .and_then(|rows| (0..rows.len()).find_map(|i| rows.row(i).filter(|r| r.id == id)))
+            .map(|r| r.uid)
+            .ok_or_else(|| format!("--block : tâche d'ID {id} absente"))?;
+        let target = if column == Column::Id {
+            PressTarget::RowHeader
+        } else {
+            PressTarget::Cell
+        };
+        harness.state_mut().dispatch(Action::SelectOp(SelectOp::Press {
+            row: RowRef::Item(uid),
+            column,
+            target,
+            mode,
+        }));
         settle(harness)?;
     }
     Ok(())

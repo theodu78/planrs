@@ -1022,9 +1022,12 @@ fn background_shapes(
                 .row(DisplayRow::at(i))
                 .is_some_and(|r| fc.selected.contains(r.uid))
             {
+                // Lignes entières comme lignes d'un bloc : la teinte
+                // discrète de l'ID appuyé (H-UI-103), qui garde les barres
+                // lisibles (≥ 3:1, `h_ui_103_selection_contrast`).
                 let rect = row_rect(i);
                 if rect.is_finite() {
-                    out.push(Shape::rect_filled(rect, 0.0, palette.selection));
+                    out.push(Shape::rect_filled(rect, 0.0, palette.header_selected));
                 }
             }
         }

@@ -7,7 +7,10 @@
 use std::sync::Arc;
 
 use egui::Color32;
-use planrs_render::style::{BarRole, FontChoice, PlanStyle, Rgb, TemplateId, Variant, template};
+use planrs_render::style::{
+    BarRole, ColorTokens, FontChoice, PlanStyle, Rgb, TemplateId, Variant, blend, contrast_ratio,
+    min_text_contrast, template,
+};
 
 /// Couleurs de dessin de la vue principale.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,7 +29,9 @@ pub struct Palette {
     pub grid_major: Color32,
     /// Fond des en-têtes.
     pub header_bg: Color32,
-    /// Fond de la ligne sélectionnée (table et Gantt).
+    /// Teinte du bloc sélectionné et des lignes entières de la table
+    /// (H-UI-103 : ≥ 1,5:1 sur le fond, ≥ 1,3:1 sur le zébrage et les
+    /// bandes, texte lisible ; dérivée par [`SelectionTokens::derive`]).
     pub selection: Color32,
     /// Barre de tâche.
     pub bar: Color32,
@@ -64,13 +69,13 @@ pub struct Palette {
     /// critique.
     pub progress: Color32,
     /// Bordure de 2 px du bloc sélectionné (ADR-0018 D11, H-UI-103 : ≥ 3:1
-    /// sur le fond et les bandes). Posé en L0, dessiné à partir du lot L5.
+    /// sur le fond, les bandes et la teinte).
     pub selection_border: Color32,
-    /// Fond des ID des lignes de la sélection, en-tête « appuyé »
-    /// (H-UI-103). Posé en L0, dessiné à partir du lot L5.
+    /// Fond des ID des lignes de la sélection, en-tête « appuyé », et des
+    /// lignes sélectionnées du Gantt (H-UI-103).
     pub header_selected: Color32,
     /// Survol discret de la ligne sous le pointeur (H-UI-103, jamais
-    /// pendant un glisser). Posé en L0, dessiné à partir du lot L5.
+    /// pendant un glisser).
     pub hover_row: Color32,
 }
 
@@ -84,7 +89,7 @@ impl Palette {
         grid: Color32::from_rgb(0xE3, 0xE5, 0xE8),
         grid_major: Color32::from_rgb(0xC4, 0xC8, 0xCE),
         header_bg: Color32::from_rgb(0xF3, 0xF4, 0xF6),
-        selection: Color32::from_rgb(0xDC, 0xE8, 0xF7),
+        selection: Color32::from_rgb(0xA3, 0xBF, 0xE6),
         bar: Color32::from_rgb(0x3F, 0x7C, 0xC4),
         bar_outline: Color32::from_rgb(0x2B, 0x5C, 0x99),
         critical: Color32::from_rgb(0xC9, 0x30, 0x2C),
@@ -101,8 +106,8 @@ impl Palette {
         baseline: Color32::from_rgb(0x80, 0x86, 0x8F),
         progress: Color32::from_rgb(0x10, 0x14, 0x1A),
         selection_border: Color32::from_rgb(0x1F, 0x5F, 0xBF),
-        header_selected: Color32::from_rgb(0xDC, 0xE8, 0xF7),
-        hover_row: Color32::from_rgb(0xF3, 0xF4, 0xF6),
+        header_selected: Color32::from_rgb(0xD3, 0xDF, 0xF0),
+        hover_row: Color32::from_rgb(0xE9, 0xEF, 0xF8),
     };
 
     /// Palette sombre.
@@ -114,7 +119,7 @@ impl Palette {
         grid: Color32::from_rgb(0x33, 0x36, 0x3C),
         grid_major: Color32::from_rgb(0x4A, 0x4E, 0x56),
         header_bg: Color32::from_rgb(0x26, 0x28, 0x2C),
-        selection: Color32::from_rgb(0x2D, 0x3F, 0x57),
+        selection: Color32::from_rgb(0x36, 0x4B, 0x67),
         bar: Color32::from_rgb(0x6F, 0xA8, 0xE8),
         bar_outline: Color32::from_rgb(0x4A, 0x86, 0xC8),
         critical: Color32::from_rgb(0xFF, 0x6B, 0x66),
@@ -131,8 +136,8 @@ impl Palette {
         baseline: Color32::from_rgb(0x8E, 0x94, 0x9C),
         progress: Color32::from_rgb(0x0F, 0x23, 0x40),
         selection_border: Color32::from_rgb(0x8A, 0xB4, 0xF8),
-        header_selected: Color32::from_rgb(0x2D, 0x3F, 0x57),
-        hover_row: Color32::from_rgb(0x26, 0x28, 0x2C),
+        header_selected: Color32::from_rgb(0x2C, 0x36, 0x44),
+        hover_row: Color32::from_rgb(0x25, 0x2B, 0x33),
     };
 
     /// Palette tirée d'un style du planning (ADR-0016 D5) pour une variante.
@@ -142,6 +147,7 @@ impl Palette {
     #[must_use]
     pub fn from_style(style: &PlanStyle, variant: Variant) -> Self {
         let c = style.tokens(variant);
+        let sel = SelectionTokens::derive(c, min_text_contrast(style));
         let rgb = |v: Rgb| Color32::from_rgb(v.0, v.1, v.2);
         let fill = |role: BarRole| rgb(c.bars.get(&role).map_or(c.text, |p| p.fill));
         let outline = |role: BarRole| rgb(c.bars.get(&role).map_or(c.text, |p| p.outline.unwrap_or(p.fill)));
@@ -153,7 +159,7 @@ impl Palette {
             grid: rgb(c.grid),
             grid_major: rgb(c.grid_major),
             header_bg: rgb(c.header_bg),
-            selection: rgb(c.selection),
+            selection: rgb(sel.selection),
             bar: fill(BarRole::Task),
             bar_outline: outline(BarRole::Task),
             critical: fill(BarRole::Critical),
@@ -169,11 +175,9 @@ impl Palette {
             cursor: rgb(c.cursor),
             baseline: fill(BarRole::Baseline),
             progress: fill(BarRole::Progress),
-            // Passe UX (L0) : jetons dérivés des jetons du style ; valeurs
-            // propres et seuils de contraste au lot L5 (H-UI-103).
-            selection_border: rgb(c.cursor),
-            header_selected: rgb(c.selection),
-            hover_row: rgb(c.header_bg),
+            selection_border: rgb(sel.border),
+            header_selected: rgb(sel.header_selected),
+            hover_row: rgb(sel.hover_row),
         }
     }
 
@@ -183,6 +187,106 @@ impl Palette {
         match theme {
             egui::Theme::Light => Self::LIGHT,
             egui::Theme::Dark => Self::DARK,
+        }
+    }
+}
+
+/// Teinte du bloc sur le fond (H-UI-103, millièmes) : seuil exigé.
+pub const SELECTION_ON_BG: u32 = 1500;
+
+/// Teinte visée sur le fond (millièmes) : au-dessus du seuil, pour que la
+/// sélection se voie d'un coup d'œil (SEL-08 : 1,2:1 en clair, 1,5:1 en
+/// sombre avant la passe UX).
+const SELECTION_GOAL: u32 = 1800;
+
+/// Teinte du bloc sur le zébrage et les bandes (H-UI-103, millièmes).
+pub const SELECTION_ON_BAND: u32 = 1300;
+
+/// Bordure du bloc sur le fond, les bandes et la teinte (WCAG 1.4.11).
+pub const BORDER_CONTRAST: u32 = 3000;
+
+/// ID appuyé (`header_selected`) sur l'en-tête et sur le fond (millièmes) :
+/// distinct sans être criard ; c'est aussi le fond des lignes
+/// sélectionnées du Gantt, où les barres doivent rester lisibles.
+const PRESSED_ON_HEADER: u32 = 1200;
+
+/// Zébrage de la table sans bandes de style (`lerp_to_gamma(header_bg,
+/// 0.6)` au dessin), en entiers.
+fn zebra_of(c: &ColorTokens) -> Rgb {
+    blend(c.bg, c.header_bg, 60)
+}
+
+/// Jetons de sélection dérivés des jetons d'un style (H-UI-103, lot L5 de
+/// la passe UX) : un style personnalisé garde ses couleurs, renforcées
+/// juste assez pour tenir les seuils, pour toutes les variantes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SelectionTokens {
+    /// Teinte des cellules du bloc et des lignes entières.
+    pub selection: Rgb,
+    /// Bordure de 2 px du bloc.
+    pub border: Rgb,
+    /// ID appuyé des lignes de la sélection ; fond des lignes
+    /// sélectionnées du Gantt.
+    pub header_selected: Rgb,
+    /// Survol discret d'une ligne.
+    pub hover_row: Rgb,
+}
+
+impl SelectionTokens {
+    /// Dérive les jetons de `c`, texte lisible à `min_text` (millièmes).
+    ///
+    /// - Teinte : la `selection` du style, mêlée par pas de 5 % vers le
+    ///   cadre du curseur (bleu du style) jusqu'à
+    ///   [`SELECTION_GOAL`] sur le fond et [`SELECTION_ON_BAND`] sur le
+    ///   zébrage et les deux bandes, texte et texte appuyé ≥ `min_text` ;
+    ///   sinon le premier pas qui tient [`SELECTION_ON_BG`] ; sinon le pas
+    ///   le plus marqué qui garde le texte lisible.
+    /// - Bordure : le cadre du curseur s'il tient [`BORDER_CONTRAST`] sur
+    ///   le fond, le zébrage, les bandes et la teinte ; sinon le texte
+    ///   appuyé.
+    /// - ID appuyé : l'en-tête mêlé vers la teinte jusqu'à
+    ///   `PRESSED_ON_HEADER` sur l'en-tête et le fond, texte lisible.
+    /// - Survol : à mi-chemin du fond et de l'ID appuyé.
+    #[must_use]
+    pub fn derive(c: &ColorTokens, min_text: u32) -> Self {
+        let inks = [c.text, c.text_strong];
+        let readable = |s: Rgb| inks.iter().all(|ink| contrast_ratio(*ink, s) >= min_text);
+        let backs = [zebra_of(c), c.band[0], c.band[1]];
+        let tinted = |s: Rgb, on_bg: u32| {
+            contrast_ratio(s, c.bg) >= on_bg
+                && backs.iter().all(|b| contrast_ratio(s, *b) >= SELECTION_ON_BAND)
+                && readable(s)
+        };
+        let steps = || (0..=20_u8).map(|k| blend(c.selection, c.cursor, k.saturating_mul(5)));
+        let selection = steps()
+            .find(|s| tinted(*s, SELECTION_GOAL))
+            .or_else(|| steps().find(|s| tinted(*s, SELECTION_ON_BG)))
+            .or_else(|| steps().take_while(|s| readable(*s)).last())
+            .unwrap_or(c.selection);
+        let border_ok = |b: Rgb| {
+            [c.bg, selection]
+                .iter()
+                .chain(backs.iter())
+                .all(|on| contrast_ratio(b, *on) >= BORDER_CONTRAST)
+        };
+        let border = if border_ok(c.cursor) {
+            c.cursor
+        } else {
+            c.text_strong
+        };
+        let header_selected = (0..=20_u8)
+            .map(|k| blend(c.header_bg, selection, k.saturating_mul(5)))
+            .find(|h| {
+                contrast_ratio(*h, c.header_bg) >= PRESSED_ON_HEADER
+                    && contrast_ratio(*h, c.bg) >= PRESSED_ON_HEADER
+                    && readable(*h)
+            })
+            .unwrap_or(selection);
+        Self {
+            selection,
+            border,
+            header_selected,
+            hover_row: blend(c.bg, header_selected, 50),
         }
     }
 }
@@ -606,6 +710,105 @@ mod tests {
         assert_eq!(Palette::for_theme(egui::Theme::Dark), Palette::DARK);
     }
 
+    /// H-UI-103 (U09) : pour chaque modèle intégré et chaque thème, teinte
+    /// du bloc ≥ 1,5:1 sur le fond et ≥ 1,3:1 sur le zébrage et les deux
+    /// bandes ; bordure ≥ 3:1 sur le fond, les bandes et la teinte ; texte
+    /// et texte appuyé lisibles (seuil du modèle) sur la teinte, l'ID
+    /// appuyé et le survol ; ID appuyé distinct de l'en-tête et du fond ;
+    /// barres, jalons et liens ≥ 3:1 sur les lignes sélectionnées du Gantt ;
+    /// cadre de la cellule active ≥ 3:1 sur la teinte.
+    #[test]
+    fn h_ui_103_selection_contrast() {
+        for id in TemplateId::ALL {
+            let style = template(id);
+            let min = planrs_render::style::min_text_contrast(&style);
+            for variant in [Variant::Light, Variant::Dark] {
+                let c = style.tokens(variant);
+                let p = Palette::from_style(&style, variant);
+                let rgb = |v: Rgb| Color32::from_rgb(v.0, v.1, v.2);
+                let zebra = p.background.lerp_to_gamma(p.header_bg, 0.6);
+                let name = format!("{id:?} {variant:?}");
+                let on_bg = contrast(p.selection, p.background);
+                assert!(
+                    on_bg >= super::SELECTION_ON_BG,
+                    "{name} : teinte sur fond = {on_bg}‰"
+                );
+                for (label, back) in [
+                    ("zébrage", zebra),
+                    ("bande 0", rgb(c.band[0])),
+                    ("bande 1", rgb(c.band[1])),
+                ] {
+                    let ratio = contrast(p.selection, back);
+                    assert!(
+                        ratio >= super::SELECTION_ON_BAND,
+                        "{name} : teinte sur {label} = {ratio}‰"
+                    );
+                    let border = contrast(p.selection_border, back);
+                    assert!(
+                        border >= super::BORDER_CONTRAST,
+                        "{name} : bordure sur {label} = {border}‰"
+                    );
+                }
+                for (label, back) in [("fond", p.background), ("teinte", p.selection)] {
+                    let border = contrast(p.selection_border, back);
+                    assert!(
+                        border >= super::BORDER_CONTRAST,
+                        "{name} : bordure sur {label} = {border}‰"
+                    );
+                    let frame = contrast(p.cursor, back);
+                    assert!(
+                        frame >= super::BORDER_CONTRAST,
+                        "{name} : cadre actif sur {label} = {frame}‰"
+                    );
+                }
+                for (label, back) in [
+                    ("teinte", p.selection),
+                    ("ID appuyé", p.header_selected),
+                    ("survol", p.hover_row),
+                ] {
+                    for ink in [p.text, p.text_strong] {
+                        let ratio = contrast(ink, back);
+                        assert!(ratio >= min, "{name} : texte sur {label} = {ratio}‰");
+                    }
+                }
+                assert!(
+                    contrast(p.header_selected, p.header_bg) >= 1200,
+                    "{name} : ID appuyé"
+                );
+                assert!(
+                    contrast(p.header_selected, p.background) >= 1200,
+                    "{name} : Gantt"
+                );
+                assert_ne!(p.hover_row, p.background, "{name} : survol");
+                for (label, color) in [
+                    ("barre", p.bar),
+                    ("critique", p.critical),
+                    ("jalon", p.milestone),
+                    ("récapitulative", p.summary),
+                    ("lien", p.link),
+                ] {
+                    let ratio = contrast(color, p.header_selected);
+                    assert!(
+                        ratio >= 3000,
+                        "{name} : {label} sur ligne sélectionnée du Gantt = {ratio}‰"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Les jetons de sélection de Classique sont ceux des palettes J7
+    /// écrites en dur (relues par `classique_equals_j7_palette`), et un
+    /// style à la sélection déjà marquée la garde telle quelle.
+    #[test]
+    fn selection_tokens_keep_strong_style_tint() {
+        let mut c = template(TemplateId::Classique).tokens(Variant::Light).clone();
+        c.selection = Rgb(0x9C, 0xBA, 0xE3);
+        let derived = super::SelectionTokens::derive(&c, 4500);
+        assert_eq!(derived.selection, c.selection);
+        assert_eq!(derived.border, c.cursor);
+    }
+
     #[test]
     fn palette_opaque() {
         for (name, p) in palettes() {
@@ -633,6 +836,9 @@ mod tests {
                 p.cursor,
                 p.baseline,
                 p.progress,
+                p.selection_border,
+                p.header_selected,
+                p.hover_row,
             ] {
                 assert_eq!(color.a(), 255, "{name} : {color:?}");
             }

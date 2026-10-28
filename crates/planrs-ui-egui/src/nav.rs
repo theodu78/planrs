@@ -16,12 +16,17 @@
 //!   premier champ de la première ligne / dernier champ de la dernière
 //!   ligne, ligne vide comprise (H-UI-15) ;
 //! - Page haut/bas : `page − 1` lignes, au moins une (hypothèse : une page
-//!   de 0 ou 1 ligne avance quand même d'une ligne, comme ↑/↓).
+//!   de 0 ou 1 ligne avance quand même d'une ligne, comme ↑/↓) ;
+//! - passe UX (ADR-0018, lot L1) : Entrée, Tab et leurs Maj
+//!   ([`NavMove::Within`]) circulent dans un bloc de plus d'une cellule
+//!   (H-UI-93), les extensions (Maj) s'étendent aussi en colonnes (H-UI-92),
+//!   défilement automatique pendant un glisser ([`autoscroll_speed`],
+//!   [`autoscroll_offset`], H-UI-91).
 
 use crate::column::Column;
 use crate::geom::{f32_to_index, index_to_f32};
 use crate::row_view::{DisplayRow, VisibleRows};
-use crate::selection::{SelectMode, Selection};
+use crate::selection::Selection;
 
 /// Déplacement demandé (H-UI-13 à H-UI-15).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,9 +55,28 @@ pub enum NavMove {
     First,
     /// Dernier champ de la dernière ligne (Ctrl+Fin).
     Last,
+    /// Entrée, Maj+Entrée, Tab, Maj+Tab (et fin de saisie par ces touches) :
+    /// dans un bloc de plus d'une cellule, la cellule active circule dans
+    /// le bloc sans changer la sélection (H-UI-93, `Block::step`) ;
+    /// ailleurs, même déplacement que ↓, ↑, →, ← ([`NavMove::base`]).
+    Within(InBlockMove),
 }
 
 impl NavMove {
+    /// Déplacement dans la grille d'un [`NavMove::Within`] hors d'un bloc
+    /// (Entrée ⇒ ↓, Maj+Entrée ⇒ ↑, Tab ⇒ →, Maj+Tab ⇒ ←) ; les autres
+    /// déplacements sont rendus tels quels.
+    #[must_use]
+    pub const fn base(self) -> Self {
+        match self {
+            Self::Within(InBlockMove::Down) => Self::Down,
+            Self::Within(InBlockMove::Up) => Self::Up,
+            Self::Within(InBlockMove::Right) => Self::Right,
+            Self::Within(InBlockMove::Left) => Self::Left,
+            other => other,
+        }
+    }
+
     /// Tous les déplacements (tests, propriété P45).
     pub const ALL: [Self; 12] = [
         Self::Up,
@@ -104,7 +128,7 @@ pub fn step(pos: GridPos, mv: NavMove, shape: GridShape) -> GridPos {
     let col = pos.col.min(last_col);
     // Une page avance de `page − 1` lignes, au moins une.
     let page = shape.page.saturating_sub(1).max(1);
-    let (row, col) = match mv {
+    let (row, col) = match mv.base() {
         NavMove::Up => (row.saturating_sub(1), col),
         NavMove::Down => (row.saturating_add(1).min(last_row), col),
         NavMove::Left => (row, col.saturating_sub(1)),
@@ -117,6 +141,8 @@ pub fn step(pos: GridPos, mv: NavMove, shape: GridShape) -> GridPos {
         NavMove::LastRow => (last_row, col),
         NavMove::First => (0, 0),
         NavMove::Last => (last_row, last_col),
+        // Ramené par `base` (jamais atteint).
+        NavMove::Within(_) => (row, col),
     };
     GridPos { row, col }
 }
@@ -237,6 +263,33 @@ pub fn autoscroll_speed(pointer: f32, top: f32, bottom: f32, extent: f32) -> f32
     }
 }
 
+/// Pas d'image retenu au plus par le défilement automatique, en secondes :
+/// une image lente ne fait pas sauter la vue (règle 10).
+pub const AUTOSCROLL_MAX_DT: f32 = 0.1;
+
+/// Défilement après une image de défilement automatique (H-UI-91) :
+/// `offset + speed × extent × dt` (`speed` en lignes ou colonnes par
+/// seconde, signée, [`autoscroll_speed`] ; `extent` : hauteur d'une ligne
+/// ou largeur d'une colonne), borné à `[0, max]`. `dt` non fini ou non
+/// positif ⇒ 1/60 s, plafonné à [`AUTOSCROLL_MAX_DT`]. `None` : rien ne
+/// bouge (vitesse nulle, déjà au bord) ou valeur non finie.
+#[must_use]
+pub fn autoscroll_offset(offset: f32, speed: f32, extent: f32, dt: f32, max: f32) -> Option<f32> {
+    if !offset.is_finite() || !speed.is_finite() || !extent.is_finite() || !max.is_finite() {
+        return None;
+    }
+    if speed == 0.0 || extent <= 0.0 {
+        return None;
+    }
+    let dt = if dt.is_finite() && dt > 0.0 {
+        dt.min(AUTOSCROLL_MAX_DT)
+    } else {
+        1.0 / 60.0
+    };
+    let target = (offset + speed * extent * dt).clamp(0.0, max.max(0.0));
+    (target.is_finite() && (target - offset).abs() > f32::EPSILON).then_some(target)
+}
+
 /// Défilement qui rend visible l'élément `index` (étendue `extent` par
 /// élément, `len` éléments, fenêtre de `view` à partir de `offset`), avec
 /// une ligne de marge sauf aux bords (H-UI-17) ; `None` : rien à faire, ou
@@ -297,6 +350,14 @@ impl crate::App {
     /// ligne vide) ; le défilement vertical suit le curseur avec une ligne
     /// de marge ([`ensure_visible`]).
     pub(crate) fn navigate(&mut self, mv: NavMove, extend: bool) {
+        // Entrée et Tab dans un bloc de plus d'une cellule (H-UI-93).
+        if let NavMove::Within(within) = mv
+            && !extend
+            && self.move_in_block(within)
+        {
+            return;
+        }
+        let mv = mv.base();
         let Some(model) = &self.rows else {
             return;
         };
@@ -323,18 +384,29 @@ impl crate::App {
             // L'extension s'arrête à la dernière tâche.
             target.row = target.row.min(len.saturating_sub(1));
         }
+        let from_column = self.view.cursor.column;
         if let Some(column) = visible.get(target.col) {
             self.view.cursor.column = *column;
         }
         let uid = rows.uid(DisplayRow::at(target.row));
         match uid {
             Some(uid) if extend => {
+                // H-UI-92 : plage de lignes depuis l'ancre (type gardé) et
+                // plage de colonnes depuis l'ancre de colonnes, posée sur la
+                // colonne de départ si le bloc n'en a pas.
                 let anchor = self.selected.anchor().or(self.selection).unwrap_or(uid);
-                let mut selected = Selection::single(Some(anchor));
-                selected.click(uid, SelectMode::Range, rows);
-                self.selected = selected;
+                let kind = self.selected.kind();
+                self.selected = Selection::range(anchor, uid, kind, rows);
                 self.selection = Some(uid);
                 self.view.cursor.anchor = Some(anchor);
+                if self
+                    .view
+                    .cursor
+                    .anchor_column
+                    .is_none_or(|c| !visible.contains(&c))
+                {
+                    self.view.cursor.anchor_column = Some(from_column);
+                }
             }
             _ => {
                 self.selection = uid;
@@ -359,6 +431,54 @@ impl crate::App {
             self.view.last_scroll_y = y;
         }
         self.follow_cursor_x();
+    }
+
+    /// Entrée, Tab et leurs Maj dans un bloc de plus d'une cellule
+    /// (H-UI-93) : la cellule active passe à la suivante du bloc
+    /// ([`crate::block::Block::step`]), la sélection (lignes, ancre,
+    /// colonnes) ne change pas ; le défilement suit. Rend faux (rien fait)
+    /// pour un bloc d'une seule cellule ou d'une seule ligne entière.
+    fn move_in_block(&mut self, mv: InBlockMove) -> bool {
+        let visible: Vec<Column> = self.state.visible_columns().map(|state| state.column).collect();
+        let (uid, column, span, index, len) = {
+            let Some(rows) = self.visible_rows() else {
+                return false;
+            };
+            let block = crate::block::resolve(&self.selected, &self.view.cursor, rows, &visible);
+            // Une seule ligne entière (clic sur un ID : « la tâche ») se
+            // parcourt comme sa cellule active (H-UI-13, H-UI-14).
+            let one_row = block.kind == crate::selection::SelectionKind::Rows && block.rows.len() == 1;
+            if block.is_single() || one_row {
+                return false;
+            }
+            let Some(from) = block.active.0.item().and_then(|uid| rows.display_of(uid)) else {
+                return false;
+            };
+            let (d, column) = block.step((from, block.active.1), mv);
+            let Some(uid) = rows.uid(d) else {
+                return false;
+            };
+            let (Some(&first), Some(&last)) = (block.columns.first(), block.columns.last()) else {
+                return false;
+            };
+            (uid, column, (first, last), d.index(), rows.len())
+        };
+        self.selected = self.selected.clone().moved_within(uid, span);
+        self.selection = Some(uid);
+        self.view.cursor.column = column;
+        self.sync_selection();
+        if let Some(y) = ensure_visible(
+            self.view.last_scroll_y,
+            index,
+            self.row_h(),
+            self.view.last_body_height,
+            len.saturating_add(1),
+        ) {
+            self.view.pending_scroll_y = Some(y);
+            self.view.last_scroll_y = y;
+        }
+        self.follow_cursor_x();
+        true
     }
 
     /// « Défiler jusqu'à la tâche » active (ADR-0017, H-UI-84) : la table
@@ -429,8 +549,8 @@ mod tests {
     use proptest::prelude::*;
 
     use super::{
-        AUTOSCROLL_MAX, AUTOSCROLL_MIN, CellCursor, GridPos, GridShape, NavMove, RowRef, autoscroll_speed,
-        ensure_visible, page_rows, scroll_for_x, step,
+        AUTOSCROLL_MAX, AUTOSCROLL_MIN, CellCursor, GridPos, GridShape, InBlockMove, NavMove, RowRef,
+        autoscroll_offset, autoscroll_speed, ensure_visible, page_rows, scroll_for_x, step,
     };
 
     const fn shape(rows: usize, cols: usize, page: usize) -> GridShape {
@@ -608,6 +728,55 @@ mod tests {
         // Corps plus petit que deux lignes : le bord le plus proche.
         assert!(autoscroll_speed(101.0, 100.0, 120.0, h) < 0.0);
         assert!(autoscroll_speed(119.0, 100.0, 120.0, h) > 0.0);
+    }
+
+    /// H-UI-91 : une image à 60 Hz avance de `vitesse × ligne / 60`,
+    /// bornée à `[0, max]` ; `dt` dégénéré ⇒ 1/60 s, plafonné à 0,1 s ;
+    /// rien au bord, à vitesse nulle ou pour une valeur non finie.
+    #[test]
+    fn nav_autoscroll_offset_bounds() {
+        let h = 20.0;
+        assert_eq!(autoscroll_offset(100.0, 6.0, h, 0.05, 1_000.0), Some(106.0));
+        assert_eq!(autoscroll_offset(100.0, -6.0, h, 0.05, 1_000.0), Some(94.0));
+        assert_eq!(autoscroll_offset(100.0, 6.0, h, f32::NAN, 1_000.0), Some(102.0));
+        assert_eq!(autoscroll_offset(100.0, 6.0, h, -1.0, 1_000.0), Some(102.0));
+        assert_eq!(autoscroll_offset(100.0, 6.0, h, 10.0, 1_000.0), Some(112.0));
+        // Bornes.
+        assert_eq!(autoscroll_offset(990.0, 40.0, h, 0.1, 1_000.0), Some(1_000.0));
+        assert_eq!(autoscroll_offset(1_000.0, 40.0, h, 0.1, 1_000.0), None);
+        assert_eq!(autoscroll_offset(0.0, -40.0, h, 0.1, 1_000.0), None);
+        assert_eq!(autoscroll_offset(5.0, 4.0, h, 0.1, -3.0), Some(0.0));
+        // Rien à faire, ou non fini.
+        assert_eq!(autoscroll_offset(100.0, 0.0, h, 0.1, 1_000.0), None);
+        for (o, v, e, m) in [
+            (f32::NAN, 4.0, h, 1_000.0),
+            (100.0, f32::INFINITY, h, 1_000.0),
+            (100.0, 4.0, f32::NAN, 1_000.0),
+            (100.0, 4.0, 0.0, 1_000.0),
+            (100.0, 4.0, h, f32::INFINITY),
+        ] {
+            assert_eq!(autoscroll_offset(o, v, e, 0.1, m), None, "{o} {v} {e} {m}");
+        }
+    }
+
+    /// H-UI-93 : hors d'un bloc, Entrée, Maj+Entrée, Tab et Maj+Tab
+    /// valent ↓, ↑, →, ← (H-UI-13, H-UI-14).
+    #[test]
+    fn nav_within_base_moves() {
+        let s = shape(10, 6, 20);
+        for (within, plain) in [
+            (InBlockMove::Down, NavMove::Down),
+            (InBlockMove::Up, NavMove::Up),
+            (InBlockMove::Right, NavMove::Right),
+            (InBlockMove::Left, NavMove::Left),
+        ] {
+            assert_eq!(NavMove::Within(within).base(), plain);
+            assert_eq!(
+                step(pos(4, 3), NavMove::Within(within), s),
+                step(pos(4, 3), plain, s)
+            );
+        }
+        assert_eq!(NavMove::PageDown.base(), NavMove::PageDown);
     }
 
     fn move_strategy() -> impl Strategy<Value = NavMove> {

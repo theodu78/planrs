@@ -10,11 +10,15 @@
 //! aucune conversion pixel → date : seuls des indices de ligne sont déduits
 //! d'une ordonnée.
 //!
-//! Sélection multiple et menu contextuel (lot L14) : un clic de ligne avec
-//! Ctrl/Cmd ou Maj devient `SelectWith` (la table et le Gantt ne poussent
-//! que `Select`, réécrit ici d'après les modificateurs de l'image) ; un clic
-//! droit sur une ligne la sélectionne (si elle ne l'est pas déjà) et ouvre
-//! le menu des commandes de structure (`Action::Structure`).
+//! Sélection multiple et menu contextuel (lot L14) : un clic de ligne du
+//! Gantt avec Ctrl/Cmd ou Maj devient `SelectWith` (le Gantt ne pousse que
+//! `Select`, réécrit ici d'après les modificateurs de l'image ; la table
+//! pousse ses propres gestes `SelectOp`, ADR-0018) ; un clic droit sur une
+//! ligne la sélectionne (si elle ne l'est pas déjà) et ouvre le menu des
+//! commandes de structure (`Action::Structure`). Un clic dans le Gantt
+//! laisse le clavier à la table (ADR-0018 D8, H-UI-101) ; pendant un
+//! glisser de sélection, de barre ou de lien, la vue défile seule près des
+//! bords ([`autoscroll`], H-UI-91).
 //!
 //! Gestes du Gantt (J7, lot L8, H-UI-20, H-UI-21, R-240 à R-243) : un
 //! glisser qui part d'une barre ([`gantt::hit_test`]) devient un
@@ -130,7 +134,7 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
         zoom_delta: i.zoom_delta(),
     });
 
-    table::paint_header(ui, fc, layout.table_header, table_x);
+    table::paint_header(ui, fc, layout.table_header, table_x, &mut view.select_drag);
     timescale::paint_header(ui, fc, &axis, layout.gantt_header);
     paint_corners(ui, fc, &layout, avail);
 
@@ -142,6 +146,12 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
     } = paint_rows(ui, fc, view, &layout, &axis);
     view.last_scroll_y = scroll_y;
     view.last_body_height = view_h;
+    autoscroll(ui, fc, view, &layout);
+    // Fin du glisser de sélection au relâcher (après le dessin : en-tête et
+    // corps ont vu le même glisser pendant toute l'image).
+    if !ui.input(|i| i.pointer.primary_down()) {
+        view.select_drag = None;
+    }
     if std::mem::take(&mut view.edit.reveal) {
         reveal_edited_row(fc, view);
     }
@@ -343,6 +353,7 @@ fn paint_rows(
     let table_scroll_x = view.table_scroll_x;
     let edit = &mut view.edit;
     let cursor = &mut view.cursor;
+    let select_drag = &mut view.select_drag;
     let drag = &mut view.drag;
     let out = area.show_viewport(&mut body_ui, |ui, viewport| {
         let origin = ui.max_rect().min;
@@ -361,6 +372,7 @@ fn paint_rows(
             fc,
             edit,
             cursor,
+            select_drag,
             origin,
             range.clone(),
             table_clip,
@@ -380,9 +392,9 @@ fn paint_rows(
                 None
             };
             fc.actions.push(Action::Select(uid));
-            // Clic dans le Gantt : le clavier quitte la table (J7, L1).
-            let pane = if in_gantt { Pane::Gantt } else { Pane::Table };
-            fc.actions.push(Action::FocusPane(pane));
+            // Clavier unique (ADR-0018 D8, H-UI-101) : un clic dans le Gantt
+            // laisse le clavier à la table.
+            fc.actions.push(Action::FocusPane(Pane::Table));
         }
         let modifiers = ui.input(|i| i.modifiers);
         apply_click_modifiers(fc.actions, first_action, modifiers);
@@ -419,6 +431,87 @@ fn paint_rows(
     });
     // Les plages dessinées sont relevées par chaque volet lui-même.
     out.inner
+}
+
+/// Largeur d'une colonne du défilement automatique horizontal de la table,
+/// en points (H-UI-91).
+const AUTOSCROLL_COLUMN_W: f32 = 80.0;
+
+/// Défilement automatique pendant un glisser de la vue (ADR-0018 D1,
+/// H-UI-91) : sélection dans la table (cellules, ID ; en-têtes de colonne
+/// pour l'horizontal), barre ou lien du Gantt. Pointeur à moins d'une ligne
+/// du bord haut ou bas du corps, ou au-delà : défilement vertical de
+/// `nav::autoscroll_speed` lignes par seconde (`dt` de l'image), posé dans
+/// `pending_scroll_y` et borné à `[0, contenu − corps]` ; bloc de la table
+/// au bord gauche ou droit : même formule en colonnes de 80 points
+/// (`ScrollTableX`, borné par le réducteur). Seulement dans le sens où le
+/// pointeur s'est éloigné du point d'appui ([`toward`]). La sélection ou la cible suit
+/// la ligne sous le pointeur borné au corps à l'image suivante. Une image
+/// est redemandée tant que la vue défile.
+fn autoscroll(ui: &egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient, layout: &MainLayout) {
+    use crate::action::PressTarget;
+    let selecting = view.select_drag.map(|d| d.target);
+    let bar = view.drag.is_some();
+    if selecting.is_none() && !bar {
+        return;
+    }
+    let (down, pointer, origin, dt) = ui.input(|i| {
+        (
+            i.pointer.primary_down(),
+            i.pointer.interact_pos(),
+            i.pointer.press_origin(),
+            i.stable_dt,
+        )
+    });
+    let Some(p) = pointer.filter(|p| down && p.is_finite()) else {
+        return;
+    };
+    let origin = origin.filter(|o| o.is_finite()).unwrap_or(p);
+    let row_h = fc.metrics.row_h;
+    let mut moving = false;
+    if bar || matches!(selecting, Some(PressTarget::Cell | PressTarget::RowHeader)) {
+        let body = layout.body;
+        let speed = toward(
+            crate::nav::autoscroll_speed(p.y, body.top(), body.bottom(), row_h),
+            p.y - origin.y,
+        );
+        let max = max_scroll_x(view.last_content_h, view.last_body_height);
+        if let Some(y) = crate::nav::autoscroll_offset(view.last_scroll_y, speed, row_h, dt, max) {
+            view.pending_scroll_y = Some(y);
+            view.last_scroll_y = y;
+            moving = true;
+        }
+    }
+    if matches!(selecting, Some(PressTarget::Cell | PressTarget::ColumnHeader)) {
+        let clip = layout.table_clip;
+        let speed = toward(
+            crate::nav::autoscroll_speed(p.x, clip.left(), clip.right(), AUTOSCROLL_COLUMN_W),
+            p.x - origin.x,
+        );
+        let columns_w: f32 = fc.state.visible_columns().map(|c| f32::from(c.width)).sum();
+        let max = max_scroll_x(columns_w, clip.width());
+        if let Some(x) =
+            crate::nav::autoscroll_offset(view.table_scroll_x, speed, AUTOSCROLL_COLUMN_W, dt, max)
+        {
+            fc.actions.push(Action::ScrollTableX(x - view.table_scroll_x));
+            moving = true;
+        }
+    }
+    if moving {
+        ui.ctx().request_repaint();
+    }
+}
+
+/// Vitesse de défilement automatique gardée seulement dans le sens où le
+/// pointeur s'est éloigné du point d'appui (`moved`) : un glisser commencé
+/// près d'un bord (barre de la première ligne visible glissée de côté) ne
+/// fait pas défiler la vue.
+fn toward(speed: f32, moved: f32) -> f32 {
+    if moved.is_finite() && speed * moved > 0.0 {
+        speed
+    } else {
+        0.0
+    }
 }
 
 /// Écart en jours du glisser `d` pour l'abscisse écran `x` : depuis le
@@ -491,8 +584,12 @@ fn bar_gesture(
             d.days = gesture_days(&d, rows, axis, left, p.x);
             d.preview = gesture_preview(doc, &d);
             *drag = Some(d);
-            fc.actions.push(Action::Select(Some(uid)));
-            fc.actions.push(Action::FocusPane(Pane::Gantt));
+            // H-UI-102 : la barre d'une tâche déjà sélectionnée garde la
+            // sélection (multiple comprise) ; sinon la tâche seule.
+            if !fc.selected.contains(uid) {
+                fc.actions.push(Action::Select(Some(uid)));
+            }
+            fc.actions.push(Action::FocusPane(Pane::Table));
         }
     }
     let Some(current) = drag.as_mut() else {

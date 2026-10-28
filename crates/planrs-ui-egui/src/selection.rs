@@ -69,6 +69,12 @@ pub struct Selection {
     order: Vec<TaskUid>,
     /// Bloc de cellules ou lignes entières (H-UI-87).
     kind: SelectionKind,
+    /// Plage de colonnes figée du bloc (première, dernière), posée quand la
+    /// cellule active circule dans le bloc (Entrée, Tab : H-UI-93) ou par
+    /// Ctrl+Espace : le bloc ne se résout plus de l'ancre de colonnes à la
+    /// colonne active, la cellule active pouvant être au milieu. `None` :
+    /// résolution par l'ancre de colonnes (`block::resolve`).
+    span: Option<(Column, Column)>,
 }
 
 impl Selection {
@@ -81,6 +87,7 @@ impl Selection {
             focus: Some(uid),
             order: vec![uid],
             kind: SelectionKind::Cells,
+            span: None,
         })
     }
 
@@ -112,6 +119,7 @@ impl Selection {
             focus: first,
             order,
             kind: SelectionKind::Rows,
+            span: None,
         }
     }
 
@@ -123,6 +131,24 @@ impl Selection {
         let mut selection = Self::single(Some(anchor));
         selection.extend_to(to, rows);
         selection.with_kind(kind)
+    }
+
+    /// Plage de colonnes figée du bloc (H-UI-93), voir le champ `span`.
+    #[must_use]
+    pub const fn column_span(&self) -> Option<(Column, Column)> {
+        self.span
+    }
+
+    /// Même sélection, cellule active déplacée **dans** le bloc (H-UI-93) :
+    /// tâche active `focus` (ignorée si elle n'est pas sélectionnée), ancre
+    /// et ordre gardés, colonnes du bloc figées à `span`.
+    #[must_use]
+    pub fn moved_within(mut self, focus: TaskUid, span: (Column, Column)) -> Self {
+        if self.uids.contains(&focus) {
+            self.focus = Some(focus);
+        }
+        self.span = Some(span);
+        self
     }
 
     /// UID sélectionnés.
@@ -171,6 +197,7 @@ impl Selection {
     /// des lignes affichées d'une plage. Une ancre absente de la vue (tâche
     /// supprimée ou masquée) ramène la plage à la seule tâche cliquée.
     pub fn click(&mut self, uid: TaskUid, mode: SelectMode, rows: VisibleRows<'_>) {
+        self.span = None;
         match mode {
             SelectMode::Toggle => self.toggle(uid),
             SelectMode::Range => self.extend_to(uid, rows),
@@ -244,9 +271,18 @@ impl Selection {
 ///   `Extend` : de l'ancre de colonnes à la colonne cliquée.
 /// - `All` (H-UI-92) : toutes les lignes en lignes entières, cellule active
 ///   (première ligne, Nom).
-///
-/// `DragTo`, `EntireRows`, `EntireColumns` et `Collapse` : lot L1 (rend
-/// faux, rien ne change).
+/// - `DragTo` (H-UI-88, H-UI-89, lot L1) : plage de lignes de l'ancre à la
+///   ligne sous le pointeur (type gardé : cellules ou lignes entières),
+///   colonnes de l'ancre de colonnes à la colonne sous le pointeur ; la
+///   ligne vide est ramenée à la dernière tâche affichée (jamais dans un
+///   bloc de plus d'une ligne) ; sans ancre (ligne vide appuyée) : rien.
+/// - `EntireRows` (Maj+Espace) : mêmes lignes, en lignes entières ; ligne
+///   vide : rien.
+/// - `EntireColumns` (Ctrl+Espace) : toutes les lignes affichées, colonnes
+///   du bloc courant (toutes les colonnes visibles depuis des lignes
+///   entières), cellule active gardée.
+/// - `Collapse` (Maj+Retour arrière) : la cellule active seule.
+#[allow(clippy::too_many_lines, reason = "un bras court par geste de `SelectOp`")]
 pub fn apply_op(
     sel: &mut Selection,
     cursor: &mut TableCursor,
@@ -325,8 +361,66 @@ pub fn apply_op(
             }
             cursor.anchor_column = None;
         }
-        SelectOp::DragTo { .. } | SelectOp::EntireRows | SelectOp::EntireColumns | SelectOp::Collapse => {
-            return false;
+        SelectOp::DragTo { row, column } => {
+            let Some(anchor) = sel.anchor().or(sel.focus()) else {
+                return false;
+            };
+            let to = match row {
+                RowRef::Item(uid) if rows.display_of(uid).is_some() => uid,
+                RowRef::Item(_) => return false,
+                // Ligne vide : bornée à la dernière tâche affichée.
+                RowRef::Blank => match rows
+                    .len()
+                    .checked_sub(1)
+                    .and_then(|i| rows.uid(DisplayRow::at(i)))
+                {
+                    Some(uid) => uid,
+                    None => return false,
+                },
+            };
+            let column = if column_ok(column) { column } else { cursor.column };
+            if cursor.anchor_column.is_none_or(|c| !column_ok(c)) {
+                cursor.anchor_column = Some(cursor.column);
+            }
+            *sel = Selection::range(anchor, to, sel.kind(), rows);
+            cursor.column = column;
+        }
+        SelectOp::EntireRows => {
+            if sel.is_empty() {
+                return false;
+            }
+            let mut rows_sel = sel.clone().with_kind(SelectionKind::Rows);
+            rows_sel.span = None;
+            *sel = rows_sel;
+            cursor.anchor_column = None;
+        }
+        SelectOp::EntireColumns => {
+            let (Some(&first), Some(&last)) = (visible.first(), visible.last()) else {
+                return false;
+            };
+            if rows.is_empty() {
+                return false;
+            }
+            // Colonnes du bloc courant : figées par `span` (la cellule
+            // active peut être au milieu) ; lignes entières ⇒ toutes.
+            let span = if sel.kind() == SelectionKind::Rows {
+                Some((first, last))
+            } else {
+                sel.column_span()
+            };
+            let mut all = Selection::all(rows).with_kind(SelectionKind::Cells);
+            if let Some(focus) = sel.focus().filter(|uid| rows.display_of(*uid).is_some()) {
+                all.focus = Some(focus);
+            }
+            all.span = span.filter(|(a, b)| column_ok(*a) && column_ok(*b));
+            *sel = all;
+            if cursor.anchor_column.is_none_or(|c| !column_ok(c)) {
+                cursor.anchor_column = Some(cursor.column);
+            }
+        }
+        SelectOp::Collapse => {
+            *sel = Selection::single(sel.focus());
+            cursor.anchor_column = None;
         }
     }
     cursor.row = RowRef::from_selection(sel.focus());
@@ -654,6 +748,195 @@ mod tests {
         assert_eq!(blank.kind, SelectionKind::Cells);
         assert_eq!(blank.rows, [DisplayRow::at(rows.len())]);
         assert!(blank.is_single());
+    }
+
+    /// H-UI-88, H-UI-89 (lot L1) : `DragTo` étend le bloc depuis l'ancre
+    /// (lignes et colonnes), garde les lignes entières d'un appui sur l'ID,
+    /// borne la ligne vide à la dernière tâche, ne fait rien sans ancre.
+    #[test]
+    fn h_ui_88_drag_to_extends_block() {
+        let (model, view) = demo_rows();
+        let rows = VisibleRows::new(&model, &view);
+        let visible = default_columns();
+        let mut sel = Selection::default();
+        let mut cursor = TableCursor::default();
+        let two = uid_at(rows, 2);
+        let op = press(
+            RowRef::Item(two),
+            Column::Duration,
+            PressTarget::Cell,
+            PressMode::Replace,
+        );
+        assert!(apply_op(&mut sel, &mut cursor, op, rows, &visible));
+        let drag = SelectOp::DragTo {
+            row: RowRef::Item(uid_at(rows, 5)),
+            column: Column::Start,
+        };
+        assert!(apply_op(&mut sel, &mut cursor, drag, rows, &visible));
+        let block = resolve(&sel, &cursor, rows, &visible);
+        assert_eq!(block.rows, (2..=5).map(DisplayRow).collect::<Vec<_>>());
+        assert_eq!(block.columns, [Column::Duration, Column::Start]);
+        assert_eq!(block.active, (RowRef::Item(uid_at(rows, 5)), Column::Start));
+        // Retour en arrière : le bloc se resserre.
+        let back = SelectOp::DragTo {
+            row: RowRef::Item(two),
+            column: Column::Duration,
+        };
+        apply_op(&mut sel, &mut cursor, back, rows, &visible);
+        assert!(resolve(&sel, &cursor, rows, &visible).is_single());
+        // Ligne vide : la dernière tâche.
+        let blank = SelectOp::DragTo {
+            row: RowRef::Blank,
+            column: Column::Name,
+        };
+        apply_op(&mut sel, &mut cursor, blank, rows, &visible);
+        assert_eq!(
+            sel.focus(),
+            Some(uid_at(rows, u32::try_from(rows.len() - 1).unwrap()))
+        );
+        assert_eq!(sel.len(), rows.len() - 2);
+        // Appui sur l'ID : lignes entières gardées.
+        let op = press(
+            RowRef::Item(two),
+            Column::Id,
+            PressTarget::RowHeader,
+            PressMode::Replace,
+        );
+        apply_op(&mut sel, &mut cursor, op, rows, &visible);
+        let drag = SelectOp::DragTo {
+            row: RowRef::Item(uid_at(rows, 4)),
+            column: Column::Id,
+        };
+        apply_op(&mut sel, &mut cursor, drag, rows, &visible);
+        assert_eq!(sel.kind(), SelectionKind::Rows);
+        assert_eq!(sel.len(), 3);
+        // Sans ancre (ligne vide appuyée) : rien.
+        let mut empty = Selection::default();
+        assert!(!apply_op(&mut empty, &mut cursor, drag, rows, &visible));
+    }
+
+    /// H-UI-92 (lot L1) : Maj+Espace (lignes entières), Ctrl+Espace
+    /// (colonnes entières du bloc, cellule active gardée ; depuis des
+    /// lignes entières : toutes les colonnes), Maj+Retour arrière (cellule
+    /// active seule).
+    #[test]
+    fn h_ui_92_entire_rows_columns_collapse() {
+        let (model, view) = demo_rows();
+        let rows = VisibleRows::new(&model, &view);
+        let visible = default_columns();
+        let mut sel = Selection::default();
+        let mut cursor = TableCursor::default();
+        assert!(!apply_op(
+            &mut sel,
+            &mut cursor,
+            SelectOp::EntireRows,
+            rows,
+            &visible
+        ));
+        let (three, five) = (uid_at(rows, 3), uid_at(rows, 5));
+        let op = press(
+            RowRef::Item(three),
+            Column::Duration,
+            PressTarget::Cell,
+            PressMode::Replace,
+        );
+        apply_op(&mut sel, &mut cursor, op, rows, &visible);
+        let op = press(
+            RowRef::Item(five),
+            Column::Start,
+            PressTarget::Cell,
+            PressMode::Extend,
+        );
+        apply_op(&mut sel, &mut cursor, op, rows, &visible);
+        assert!(apply_op(
+            &mut sel,
+            &mut cursor,
+            SelectOp::EntireColumns,
+            rows,
+            &visible
+        ));
+        let block = resolve(&sel, &cursor, rows, &visible);
+        assert_eq!(block.kind, SelectionKind::Cells);
+        assert_eq!(block.rows.len(), rows.len());
+        assert_eq!(block.columns, [Column::Duration, Column::Start]);
+        assert_eq!(block.active, (RowRef::Item(five), Column::Start));
+        assert!(apply_op(
+            &mut sel,
+            &mut cursor,
+            SelectOp::Collapse,
+            rows,
+            &visible
+        ));
+        let block = resolve(&sel, &cursor, rows, &visible);
+        assert!(block.is_single());
+        assert_eq!(block.active, (RowRef::Item(five), Column::Start));
+        assert!(apply_op(
+            &mut sel,
+            &mut cursor,
+            SelectOp::EntireRows,
+            rows,
+            &visible
+        ));
+        let block = resolve(&sel, &cursor, rows, &visible);
+        assert_eq!(block.kind, SelectionKind::Rows);
+        assert_eq!(block.columns, visible);
+        assert!(apply_op(
+            &mut sel,
+            &mut cursor,
+            SelectOp::EntireColumns,
+            rows,
+            &visible
+        ));
+        let block = resolve(&sel, &cursor, rows, &visible);
+        assert_eq!(block.kind, SelectionKind::Cells);
+        assert_eq!(
+            block.columns, visible,
+            "toutes les colonnes depuis des lignes entières"
+        );
+        assert_eq!(block.active.0, RowRef::Item(five));
+    }
+
+    /// H-UI-93 : une plage de colonnes figée garde le bloc entier quand la
+    /// cellule active est au milieu ; ignorée si la cellule active en sort
+    /// ou si une borne est masquée.
+    #[test]
+    fn h_ui_93_column_span_kept() {
+        let (model, view) = demo_rows();
+        let rows = VisibleRows::new(&model, &view);
+        let visible = default_columns();
+        let (two, three) = (uid_at(rows, 2), uid_at(rows, 3));
+        let sel = Selection::range(two, three, SelectionKind::Cells, rows)
+            .moved_within(two, (Column::Duration, Column::Finish));
+        assert_eq!(sel.focus(), Some(two));
+        assert_eq!(sel.anchor(), Some(two));
+        let cursor = TableCursor {
+            row: RowRef::Item(two),
+            column: Column::Start,
+            anchor: Some(two),
+            anchor_column: Some(Column::Duration),
+        };
+        let block = resolve(&sel, &cursor, rows, &visible);
+        assert_eq!(block.columns, [Column::Duration, Column::Start, Column::Finish]);
+        let outside = TableCursor {
+            column: Column::Name,
+            ..cursor
+        };
+        assert_eq!(
+            resolve(&sel, &outside, rows, &visible).columns,
+            [Column::Name, Column::Duration]
+        );
+        let hidden: Vec<Column> = visible.iter().copied().filter(|c| *c != Column::Finish).collect();
+        assert_eq!(
+            resolve(&sel, &cursor, rows, &hidden).columns,
+            [Column::Duration, Column::Start]
+        );
+        // Un clic efface la plage figée.
+        let mut clicked = sel;
+        clicked.click(three, SelectMode::Toggle, rows);
+        assert_eq!(clicked.column_span(), None);
+        // Tâche active hors de la sélection : ignorée.
+        let other = Selection::single(Some(two)).moved_within(uid_at(rows, 9), (Column::Name, Column::Start));
+        assert_eq!(other.focus(), Some(two));
     }
 
     /// Vue générée sur le modèle de l'exemple : lignes masquées par un

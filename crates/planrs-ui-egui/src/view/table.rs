@@ -20,7 +20,8 @@ use planrs_core::TaskUid;
 use planrs_render::style::RowBanding;
 
 use super::main_view::HBarSpec;
-use super::{FrameCtx, Pane, SelectDrag};
+use super::task_view::TaskViewOp;
+use super::{FrameCtx, Pane, RowDrag, SelectDrag};
 use crate::action::{Action, CellOp, DialogKind, PressMode, PressTarget, SelectOp};
 use crate::column::{CellAlign, Column};
 use crate::edit::{EditState, TableEdit, commit_edit, editable, initial_text, text_language};
@@ -36,7 +37,7 @@ use crate::i18n::{Arg, TextId, Texts};
 use crate::nav::{CellCursor, InBlockMove, NavMove, RowRef};
 use crate::row_view::{DisplayRow, VisibleRows};
 use crate::rows::{Row, RowKind};
-use crate::state::UiState;
+use crate::state::{SortKey, SortSpec, UiState};
 use crate::theme::Palette;
 
 /// Curseur de la table (cellule courante).
@@ -195,8 +196,8 @@ impl Sheet for TaskSheet<'_> {
 }
 
 /// Demi-largeur de la poignée de redimensionnement au bord droit d'un
-/// en-tête de colonne, en points.
-const RESIZE_GRIP: f32 = 3.0;
+/// en-tête de colonne, en points (H-UI-99 : ±4 px).
+pub const RESIZE_GRIP: f32 = 4.0;
 
 /// En-tête de la table : fond, titres des colonnes visibles (centrés,
 /// tronqués), séparateurs verticaux et trait bas, décalés de `scroll_x`
@@ -385,15 +386,36 @@ fn drag_over_headers(
     }
 }
 
-/// Menu des colonnes (clic droit sur un titre) : « Masquer la colonne »
-/// (grisé pour l'ID et le Nom, H-UI-12), puis une case par colonne, cochée
-/// si elle est visible (ID et Nom cochés et grisés). Rend l'action choisie.
+/// Menu des colonnes (clic droit sur un titre, H-UI-99) : « Masquer la
+/// colonne » (grisé pour l'ID et le Nom, H-UI-12), « Ajuster la largeur »
+/// (`FitColumn`, comme le double-clic sur la bordure), « Trier par ordre
+/// croissant » et « décroissant » (`TaskViewOp::SetSort` sur la clé de
+/// [`crate::column::sort_key`] ; grisés, raison en info-bulle, pour une
+/// colonne sans clé de tri), puis une case par colonne, cochée si elle est
+/// visible (ID et Nom cochés et grisés). Rend l'action choisie.
 fn column_menu(ui: &mut egui::Ui, fc: &FrameCtx<'_>, clicked: Column) -> Option<Action> {
     let texts = fc.texts;
     let mut chosen = None;
     let hide = egui::Button::new(texts.get(TextId::ColumnMenuHide));
     if ui.add_enabled(clicked.hideable(), hide).clicked() {
         chosen = Some(Action::ToggleColumn(clicked));
+    }
+    if ui.button(texts.get(TextId::MenuFitColumn)).clicked() {
+        chosen = Some(Action::FitColumn(clicked));
+    }
+    let key = crate::column::sort_key(clicked);
+    for (id, descending) in [
+        (TextId::MenuSortAscending, false),
+        (TextId::MenuSortDescending, true),
+    ] {
+        let response = ui
+            .add_enabled(key.is_some(), egui::Button::new(texts.get(id)))
+            .on_disabled_hover_text(texts.get(TextId::ColumnNotSortable));
+        if response.clicked()
+            && let Some(key) = key
+        {
+            chosen = Some(sort_action(fc, key, descending));
+        }
     }
     ui.separator();
     for column in Column::ALL {
@@ -406,9 +428,23 @@ fn column_menu(ui: &mut egui::Ui, fc: &FrameCtx<'_>, clicked: Column) -> Option<
     chosen
 }
 
-/// Poignée du bord droit d'un titre (`right`) : glisser pousse
-/// `SetColumnWidth` d'après la position du pointeur (largeur entière ≥ 0,
-/// bornée ensuite par l'état).
+/// Tri de la vue des tâches par `key` depuis le menu d'en-tête (H-UI-99) :
+/// « Conserver la structure » repris du tri en cours (coché par défaut,
+/// comme la fenêtre « Trier ») ; l'ID croissant revient à l'ordre des ID.
+fn sort_action(fc: &FrameCtx<'_>, key: SortKey, descending: bool) -> Action {
+    let keep_outline = fc.task_view.state.sort.is_none_or(|spec| spec.keep_outline);
+    let spec = (key != SortKey::Id || descending).then_some(SortSpec {
+        key,
+        descending,
+        keep_outline,
+    });
+    Action::TaskView(TaskViewOp::SetSort(spec))
+}
+
+/// Poignée du bord droit d'un titre (`right`, ±[`RESIZE_GRIP`]) : glisser
+/// pousse `SetColumnWidth` d'après la position du pointeur (largeur entière
+/// ≥ 0, bornée ensuite par l'état) ; double-clic ⇒ `FitColumn` (H-UI-99,
+/// S88) ; curseur de redimensionnement et info-bulle au survol (H-UI-103).
 fn resize_grip(
     ui: &egui::Ui,
     fc: &mut FrameCtx<'_>,
@@ -430,7 +466,7 @@ fn resize_grip(
     let response = ui.interact(
         grip,
         ui.make_persistent_id(("planrs.table.resize", column)),
-        Sense::drag(),
+        Sense::click_and_drag(),
     );
     response.widget_info(|| {
         let label = texts.get_args(
@@ -439,10 +475,16 @@ fn resize_grip(
         );
         egui::WidgetInfo::labeled(egui::Role::Splitter, true, label)
     });
-    let response = response.on_hover_and_drag_cursor(egui::CursorIcon::ResizeColumn);
+    let response = response
+        .on_hover_and_drag_cursor(egui::CursorIcon::ResizeColumn)
+        .on_hover_text(texts.get(TextId::TipColumnResize));
     // H-UI-101 : la poignée laisse le clavier à la table.
     if pressed_now(ui, &response) {
         fc.actions.push(Action::FocusPane(Pane::Table));
+    }
+    if response.double_clicked() {
+        fc.actions.push(Action::FitColumn(column));
+        return;
     }
     if !response.dragged() {
         return;
@@ -533,12 +575,16 @@ pub fn paint_body(
     fc: &mut FrameCtx<'_>,
     edit: &mut TableEdit,
     cursor: &mut TableCursor,
-    select_drag: &mut Option<SelectDrag>,
+    drags: Drags<'_>,
     origin: Pos2,
     range: Range<usize>,
     clip: Rect,
     scroll_x: f32,
 ) {
+    let Drags {
+        select: select_drag,
+        rows: row_drag,
+    } = drags;
     let clip = clip.intersect(ui.clip_rect());
     let scroll_x = if scroll_x.is_finite() { scroll_x } else { 0.0 };
     if !clip.is_finite() || !clip.is_positive() || !origin.x.is_finite() || !origin.y.is_finite() {
@@ -619,7 +665,11 @@ pub fn paint_body(
                 i,
                 left: cols_left,
             };
-            deferred = row_pointer(ui, fc, &sheet, edit, cursor, select_drag, &at).or(deferred);
+            let drags = Drags {
+                select: &mut *select_drag,
+                rows: &mut *row_drag,
+            };
+            deferred = row_pointer(ui, fc, &sheet, edit, cursor, drags, &at).or(deferred);
         }
         // Triangle de repli (J8, lot L9, H-UI-34), interactif au-dessus de
         // la ligne : déclaré après elle.
@@ -645,6 +695,9 @@ pub fn paint_body(
         clip,
     };
     track_select_drag(ui, fc, &sheet, select_drag, &body_at);
+    // Déplacement de lignes par l'ID (H-UI-94) : trait d'insertion,
+    // curseur, refus, lâcher.
+    shapes = shapes.saturating_add(track_row_drag(ui, &painter, fc, sheet.rows, row_drag, &body_at));
 
     // Séparateurs verticaux de colonnes, sur toute la hauteur visible.
     shapes = shapes.saturating_add(grid::paint_column_lines(
@@ -964,8 +1017,8 @@ fn press_target(column: Column) -> PressTarget {
 
 /// Appui sans modificateur sur l'ID d'une ligne déjà sélectionnée en lignes
 /// entières : différé (ADR-0018 D6, H-UI-89). Relâché sans glisser, il la
-/// sélectionne seule ; glissé, il commence le déplacement des lignes (lot
-/// L3 ; d'ici là, une sélection de lignes depuis cette ligne).
+/// sélectionne seule ; glissé, il commence le déplacement des lignes
+/// (H-UI-94, [`track_row_drag`]).
 fn defers_press(fc: &FrameCtx<'_>, uid: Option<TaskUid>, target: PressTarget, mode: PressMode) -> bool {
     target == PressTarget::RowHeader
         && mode == PressMode::Replace
@@ -980,7 +1033,9 @@ fn defers_press(fc: &FrameCtx<'_>, uid: Option<TaskUid>, target: PressTarget, mo
 ///   selon Maj et Ctrl/Cmd), focus de la table, glisser de sélection
 ///   ouvert (`select_drag`) ; un bougé sous le seuil reste la même cellule ;
 /// - **clic sans appui vu** (accessibilité) ou appui différé relâché
-///   ([`defers_press`]) : même appui au relâcher ;
+///   ([`defers_press`]) : même appui au relâcher ; appui différé glissé :
+///   déplacement des lignes (H-UI-94, `drags.rows`) ; survol de l'ID d'une
+///   telle ligne : curseur de déplacement (H-UI-103) ;
 /// - **double-clic** : sur l'ID, « Informations sur la tâche » (H-UI-19) ;
 ///   ailleurs, la saisie de la cellule.
 ///
@@ -993,9 +1048,13 @@ fn row_pointer(
     sheet: &TaskSheet<'_>,
     edit: &mut TableEdit,
     cursor: &mut TableCursor,
-    select_drag: &mut Option<SelectDrag>,
+    drags: Drags<'_>,
     hit: &RowHit<'_>,
 ) -> Option<EditClick> {
+    let Drags {
+        select: select_drag,
+        rows: row_drag,
+    } = drags;
     let response = hit.response;
     let uid = sheet.key(hit.i);
     let row = RowRef::from_selection(uid);
@@ -1043,6 +1102,7 @@ fn row_pointer(
         fc.actions.push(Action::FocusPane(Pane::Table));
     } else if response.drag_started_by(egui::PointerButton::Primary)
         && select_drag.is_none()
+        && row_drag.is_none()
         && defers_press(
             fc,
             uid,
@@ -1050,20 +1110,16 @@ fn row_pointer(
             mode,
         )
     {
-        // Appui différé puis glisser : point d'accroche du déplacement de
-        // lignes (lot L3) ; en L1, sélection de lignes depuis cette ligne.
-        let column = column_of(press_origin).unwrap_or(Column::Id);
-        let target = press_target(column);
-        fc.actions.push(Action::SelectOp(SelectOp::Press {
-            row,
-            column,
-            target,
-            mode: PressMode::Replace,
-        }));
-        *select_drag = Some(SelectDrag {
-            target,
-            last: (row, column),
-        });
+        // Appui différé puis glisser au-delà du seuil : déplacement des
+        // lignes sélectionnées (H-UI-94), le clavier reste à la table.
+        start_row_drag(fc, sheet.rows, row_drag, hit.i);
+        fc.actions.push(Action::FocusPane(Pane::Table));
+    }
+    if select_drag.is_none() && row_drag.is_none() && response.hovered() {
+        let over_id = column_of(response.hover_pos()) == Some(Column::Id);
+        if over_id && defers_press(fc, uid, PressTarget::RowHeader, PressMode::Replace) {
+            row_move_hover(ui, fc, response);
+        }
     }
     // Double-clic (ou triple : deux clics suivant de près un premier) :
     // sur l'ID, « Informations sur la tâche » (H-UI-19, J7 lot L9) ;
@@ -1081,6 +1137,151 @@ fn row_pointer(
         }
     }
     None
+}
+
+/// Glissers de la table tenus d'une image à l'autre (`ViewTransient`) :
+/// sélection (H-UI-88 à H-UI-90) et déplacement de lignes (H-UI-94).
+pub struct Drags<'d> {
+    /// Glisser de sélection.
+    pub select: &'d mut Option<SelectDrag>,
+    /// Déplacement de lignes par leur ID.
+    pub rows: &'d mut Option<RowDrag>,
+}
+
+/// Survol de l'ID d'une ligne sélectionnée en lignes entières (H-UI-103) :
+/// curseur de déplacement et info-bulle du geste ; sous tri ou filtre,
+/// curseur interdit et raison (H-UI-32).
+fn row_move_hover(ui: &egui::Ui, fc: &FrameCtx<'_>, response: &Response) {
+    let (icon, tip) = if fc.task_view.state.reorder_locked() {
+        (
+            egui::CursorIcon::NotAllowed,
+            crate::structure::StructureRefusal::ViewReorderLocked.move_text_id(),
+        )
+    } else {
+        (egui::CursorIcon::Move, crate::structure::ROW_MOVE_TIP)
+    };
+    ui.ctx().set_cursor_icon(icon);
+    drop(response.clone().on_hover_text(fc.texts.get(tip)));
+}
+
+/// Refus d'un lâcher devant la ligne affichée `before` (`None` : en fin),
+/// d'après la sélection de l'image (H-UI-94) : message du refus, `None` si
+/// le lâcher est permis.
+fn drop_refusal(fc: &FrameCtx<'_>, rows: VisibleRows<'_>, before: Option<DisplayRow>) -> Option<TextId> {
+    let doc = fc.doc?;
+    let target = before.and_then(|d| rows.uid(d));
+    crate::structure::move_refusal(
+        doc.project(),
+        fc.selected,
+        target,
+        fc.task_view.state.reorder_locked(),
+    )
+    .map(crate::structure::StructureRefusal::move_text_id)
+}
+
+/// Ouvre le déplacement des lignes sélectionnées (H-UI-94) depuis la ligne
+/// affichée `i` : tâches déplacées ([`crate::structure::move_roots`]),
+/// trait d'insertion devant la ligne appuyée (dans son propre bloc : refusé
+/// tant que le pointeur n'en sort pas).
+fn start_row_drag(fc: &FrameCtx<'_>, rows: VisibleRows<'_>, row_drag: &mut Option<RowDrag>, i: usize) {
+    let Some(doc) = fc.doc else {
+        return;
+    };
+    let insert_before = (i < rows.len()).then(|| DisplayRow::at(i));
+    *row_drag = Some(RowDrag {
+        uids: crate::structure::move_roots(doc.project(), fc.selected),
+        insert_before,
+        refusal: drop_refusal(fc, rows, insert_before),
+    });
+}
+
+/// Intervalle d'insertion le plus proche de l'ordonnée écran `y` : `k`
+/// désigne le trait entre les lignes affichées `k − 1` et `k` (`len` : après
+/// la dernière) ; `y` borné au corps ; `None` pour une valeur non finie.
+fn insertion_gap(y: f32, at: &BodyPlace, row_h: f32, len: usize) -> Option<usize> {
+    let y = bounded(y, at.clip.top(), at.clip.bottom());
+    let rel = (y - at.origin.y) / row_h + 0.5;
+    rel.is_finite()
+        .then(|| crate::geom::f32_to_index(rel.floor()).min(len))
+}
+
+/// Déplacement de lignes en cours (H-UI-94, H-UI-103) : à chaque image, le
+/// trait d'insertion de 2 px (`Palette::cursor`) suit l'intervalle le plus
+/// proche du pointeur (borné au corps ; le défilement automatique est mené
+/// par `main_view::autoscroll`) ; le refus n'est recalculé que quand
+/// l'intervalle change ; curseur de déplacement, ou interdit avec la
+/// raison en info-bulle. Échap annule ; au relâcher, `Action::MoveRows`
+/// (la tâche devant laquelle lâcher, `None` : en fin), que le réducteur
+/// valide de nouveau (refus au bandeau, rien d'écrit). Un bouton relâché
+/// hors de la table (aucun relâcher vu) annule. Rend le nombre de formes.
+fn track_row_drag(
+    ui: &egui::Ui,
+    painter: &Painter,
+    fc: &mut FrameCtx<'_>,
+    rows: VisibleRows<'_>,
+    row_drag: &mut Option<RowDrag>,
+    at: &BodyPlace,
+) -> usize {
+    let Some(d) = row_drag.as_mut() else {
+        return 0;
+    };
+    if ui.input(|i| i.key_pressed(Key::Escape)) {
+        *row_drag = None;
+        fc.actions.push(Action::FocusPane(Pane::Table));
+        return 0;
+    }
+    let (down, released, at_pos) = ui.input(|i| {
+        (
+            i.pointer.primary_down(),
+            i.pointer.primary_released(),
+            i.pointer.interact_pos(),
+        )
+    });
+    let row_h = fc.metrics.row_h;
+    let len = rows.len();
+    let gap = at_pos
+        .filter(|p| p.is_finite())
+        .and_then(|p| insertion_gap(p.y, at, row_h, len));
+    if let Some(gap) = gap {
+        let before = (gap < len).then(|| DisplayRow::at(gap));
+        if before != d.insert_before {
+            d.insert_before = before;
+            d.refusal = drop_refusal(fc, rows, before);
+        }
+    }
+    if !down {
+        if released && let Some(done) = row_drag.take() {
+            let before = done.insert_before.and_then(|d| rows.uid(d));
+            fc.actions.push(Action::MoveRows { before });
+            fc.actions.push(Action::FocusPane(Pane::Table));
+        }
+        *row_drag = None;
+        return 0;
+    }
+    let ctx = ui.ctx();
+    match d.refusal {
+        Some(reason) => {
+            ctx.set_cursor_icon(egui::CursorIcon::NotAllowed);
+            let text = fc.texts.get(reason);
+            drop(
+                egui::Tooltip::always_open(
+                    ctx.clone(),
+                    ui.layer_id(),
+                    Id::unique("planrs.table.row-drag"),
+                    egui::PopupAnchor::Pointer,
+                )
+                .show(|ui| ui.label(text)),
+            );
+        }
+        None => ctx.set_cursor_icon(egui::CursorIcon::Move),
+    }
+    let k = d.insert_before.map_or(len, DisplayRow::index);
+    let y = at.origin.y + index_to_f32(k) * row_h;
+    if !y.is_finite() || y < at.clip.top() - 1.0 || y > at.clip.bottom() + 1.0 {
+        return 0;
+    }
+    painter.hline(at.clip.x_range(), y, Stroke::new(2.0, fc.palette.cursor));
+    1
 }
 
 /// Position du corps à l'écran pour une image.

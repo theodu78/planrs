@@ -473,18 +473,136 @@ fn plan_delete(project: &Project, selection: &Selection) -> Option<StructurePlan
     })
 }
 
+/// Tâches déplacées par un glisser de lignes (H-UI-94) : tâches
+/// sélectionnées sans ancêtre sélectionné, dans l'ordre des lignes (leur
+/// bloc les suit).
+#[must_use]
+pub fn move_roots(project: &Project, selection: &Selection) -> Vec<TaskUid> {
+    top_level(project, selection)
+        .into_iter()
+        .map(|(_, uid)| uid)
+        .collect()
+}
+
+/// Déplacement des lignes sélectionnées avant la tâche `before` (`None` :
+/// en fin de projet), H-UI-94 (ADR-0018 D6, S85) : une commande `task.move`
+/// par tâche sélectionnée sans ancêtre sélectionné, dans l'ordre (chacune
+/// `Placement::Before(before)` ; en fin, `After` de la dernière tâche de
+/// premier niveau puis de la tâche déplacée précédente), dans **un** lot
+/// (une entrée d'annulation). UID, avancement et liens gardés (le registre
+/// déplace les tâches, il n'en crée pas). Rien n'est calculé ici (règle 3) :
+/// seuls l'ordre et les niveaux du modèle sont lus ; le registre reste juge
+/// de la hiérarchie (R-154). Sélection vide ou cible inconnue : lot vide.
+///
+/// # Errors
+///
+/// [`StructureRefusal::NotAdjacent`] : tâches qui ne sont pas des sœurs
+/// voisines (même règle que Monter/Descendre) ;
+/// [`StructureRefusal::InsideOwnBlock`] : cible dans le bloc déplacé (ses
+/// sous-tâches comprises), ou lâcher qui ne changerait rien (juste après le
+/// bloc, au même niveau ; en fin, bloc déjà dernier).
+pub fn plan_move_to(
+    project: &Project,
+    selection: &Selection,
+    before: Option<TaskUid>,
+) -> Result<Batch, StructureRefusal> {
+    let top = top_level(project, selection);
+    let (Some(&(first, _)), Some(&(last, _))) = (top.first(), top.last()) else {
+        return Ok(batch(Vec::new()));
+    };
+    if !siblings_adjacent(project, &top) {
+        return Err(StructureRefusal::NotAdjacent);
+    }
+    let span = first..block_end(project, last);
+    let level = level_at(project, first);
+    let ops = if let Some(target) = before {
+        let Some(at) = project.tasks.position(target) else {
+            return Ok(batch(Vec::new()));
+        };
+        let unchanged = next_non_null(project, span.end) == Some(at) && level_at(project, at) == level;
+        if span.contains(&at) || unchanged {
+            return Err(StructureRefusal::InsideOwnBlock);
+        }
+        top.iter()
+            .map(|(_, uid)| {
+                Command::TaskMove(TaskMove {
+                    uid: TaskRef::Uid(*uid),
+                    to: Placement::Before(TaskRef::Uid(target)),
+                })
+            })
+            .collect()
+    } else {
+        // Dernière tâche de premier niveau : son bloc finit le projet.
+        let Some(anchor) = (0..project.tasks.len()).rev().find(|pos| {
+            project
+                .tasks
+                .at(*pos)
+                .is_some_and(|t| !t.is_null && t.outline_level.get() <= 1)
+        }) else {
+            return Ok(batch(Vec::new()));
+        };
+        if span.contains(&anchor) {
+            return Err(StructureRefusal::InsideOwnBlock);
+        }
+        let Some(mut after) = project.tasks.at(anchor).map(planrs_core::HasUid::uid) else {
+            return Ok(batch(Vec::new()));
+        };
+        top.iter()
+            .map(|(_, uid)| {
+                let op = Command::TaskMove(TaskMove {
+                    uid: TaskRef::Uid(*uid),
+                    to: Placement::After(TaskRef::Uid(after)),
+                });
+                after = *uid;
+                op
+            })
+            .collect()
+    };
+    Ok(batch(ops))
+}
+
+/// Refus d'un lâcher de lignes avant `before` (H-UI-94), calculé pendant
+/// le glisser pour le curseur interdit et son info-bulle : tri ou filtre
+/// (`locked`, H-UI-32), puis ceux de [`plan_move_to`].
+#[must_use]
+pub fn move_refusal(
+    project: &Project,
+    selection: &Selection,
+    before: Option<TaskUid>,
+    locked: bool,
+) -> Option<StructureRefusal> {
+    if locked {
+        return Some(StructureRefusal::ViewReorderLocked);
+    }
+    plan_move_to(project, selection, before).err()
+}
+
 impl App {
     /// Déplace les lignes sélectionnées en lignes entières avant `before`
     /// (`None` : en fin), un lot de `task.move` (`Action::MoveRows`,
-    /// ADR-0018 D6, H-UI-94 ; info-bulle du geste : [`ROW_MOVE_TIP`]).
-    /// Contrat L0 : « pas encore disponible » (lot L3).
+    /// ADR-0018 D6, H-UI-94 ; info-bulle du geste : [`ROW_MOVE_TIP`]) :
+    /// [`plan_move_to`] ; refus (tri ou filtre, bloc, lignes non voisines)
+    /// au bandeau, rien d'écrit ; refus du registre : bandeau
+    /// (`execute`). La sélection garde les tâches déplacées (UID gardés).
     pub(crate) fn move_rows(&mut self, before: Option<TaskUid>) {
-        if self.document.is_none() {
+        self.sync_selection();
+        let Some(document) = &self.document else {
             return;
+        };
+        let plan = if self.view.task_view.reorder_locked() {
+            Err(StructureRefusal::ViewReorderLocked)
+        } else {
+            plan_move_to(document.project(), &self.selected, before)
+        };
+        match plan {
+            Ok(batch) if batch.ops.is_empty() => {}
+            // Un refus du registre est affiché par `execute`.
+            Ok(batch) => drop(self.execute(&batch, EditOrigin::User)),
+            Err(refusal) => {
+                let text = self.texts.get(refusal.move_text_id());
+                self.push_message(planrs_core::Severity::Info, text);
+            }
         }
-        log::debug!("déplacement de lignes avant {before:?} : lot L3");
-        let text = self.texts.get(TextId::UxNotAvailable);
-        self.push_message(planrs_core::Severity::Info, text);
     }
 
     /// Applique une commande de structure à la sélection courante. Une
@@ -836,6 +954,130 @@ mod tests {
         // Dernière tâche du projet : rien à descendre.
         let last = p.tasks.len() - 1;
         assert_eq!(plan(StructureOp::MoveDown, p, &one(last)), None);
+    }
+
+    /// Application ouverte sur « P » (UID = ID).
+    fn p_app() -> App {
+        let now: Moment = "2027-01-15T08:00".parse().unwrap();
+        let mut app = App::new(crate::UiState::default(), Env::fixed(now));
+        app.open_project(
+            planrs_tests::daily::plan_p().project().clone(),
+            crate::DocOrigin {
+                name: "P".to_owned(),
+                path: None,
+                demo: false,
+            },
+        );
+        app
+    }
+
+    /// Lignes entières `first` à `last` de « P ».
+    fn p_rows(app: &App, first: u32, last: u32) -> Selection {
+        Selection::range(
+            TaskUid::new(first),
+            TaskUid::new(last),
+            crate::selection::SelectionKind::Rows,
+            app.visible_rows().unwrap(),
+        )
+    }
+
+    fn moves(batch: &Batch) -> Vec<(TaskRef, Placement)> {
+        batch
+            .ops
+            .iter()
+            .map(|op| match op {
+                Command::TaskMove(m) => (m.uid.clone(), m.to.clone()),
+                other => panic!("{other:?}"),
+            })
+            .collect()
+    }
+
+    /// H-UI-94 : un `task.move` par tâche sans ancêtre sélectionné, dans
+    /// l'ordre ; avant la tâche sous le trait ; en fin, après la dernière
+    /// tâche de premier niveau puis après la tâche déplacée précédente ;
+    /// refus dans le bloc, sans effet, non voisines.
+    #[test]
+    fn h_ui_94_plan_move_to() {
+        use super::{StructureRefusal, move_refusal, move_roots, plan_move_to};
+        let app = p_app();
+        let p = project(&app);
+        let u = |n: u32| TaskUid::new(n);
+        let r = |n: u32| TaskRef::Uid(u(n));
+        let sel = p_rows(&app, 6, 7);
+        assert_eq!(move_roots(p, &sel), [u(6), u(7)]);
+        let batch = plan_move_to(p, &sel, Some(u(2))).unwrap();
+        assert_eq!(
+            moves(&batch),
+            [(r(6), Placement::Before(r(2))), (r(7), Placement::Before(r(2)))]
+        );
+        let batch = plan_move_to(p, &sel, None).unwrap();
+        assert_eq!(
+            moves(&batch),
+            [(r(6), Placement::After(r(5))), (r(7), Placement::After(r(6)))]
+        );
+        // Récapitulative 5 et ses sous-tâches : seule 5 est déplacée.
+        let sel = p_rows(&app, 5, 7);
+        assert_eq!(move_roots(p, &sel), [u(5)]);
+        assert_eq!(
+            moves(&plan_move_to(p, &sel, Some(u(1))).unwrap()),
+            [(r(5), Placement::Before(r(1)))]
+        );
+        // Dans son bloc (sous-tâche comprise), ou en fin alors que le bloc
+        // finit déjà le projet : refus.
+        for before in [Some(u(5)), Some(u(6)), Some(u(7)), None] {
+            assert_eq!(
+                plan_move_to(p, &sel, before),
+                Err(StructureRefusal::InsideOwnBlock),
+                "{before:?}"
+            );
+        }
+        // Juste après le bloc, au même niveau : rien ne changerait.
+        let sel = p_rows(&app, 2, 3);
+        assert_eq!(
+            plan_move_to(p, &sel, Some(u(4))),
+            Err(StructureRefusal::InsideOwnBlock)
+        );
+        // Juste après le bloc, mais à un autre niveau : déplacement réel.
+        let sel = p_rows(&app, 3, 4);
+        assert_eq!(moves(&plan_move_to(p, &sel, Some(u(5))).unwrap()).len(), 2);
+        // Non voisines.
+        let mut gap = Selection::single(Some(u(2)));
+        gap.click(u(6), SelectMode::Toggle, app.visible_rows().unwrap());
+        assert_eq!(
+            plan_move_to(p, &gap, Some(u(1))),
+            Err(StructureRefusal::NotAdjacent)
+        );
+        // Tri ou filtre : refus d'abord.
+        assert_eq!(
+            move_refusal(p, &p_rows(&app, 6, 7), Some(u(2)), true),
+            Some(StructureRefusal::ViewReorderLocked)
+        );
+        assert_eq!(move_refusal(p, &p_rows(&app, 6, 7), Some(u(2)), false), None);
+        // Sélection vide, cible inconnue : lot vide.
+        let none = |sel: &Selection, before| plan_move_to(p, sel, before).unwrap().ops.len();
+        assert_eq!(none(&Selection::default(), Some(u(2))), 0);
+        assert_eq!(none(&p_rows(&app, 6, 7), Some(u(999))), 0);
+    }
+
+    /// H-UI-94 : le lot appliqué par le registre donne l'ordre attendu, UID
+    /// gardés, une entrée d'annulation.
+    #[test]
+    fn h_ui_94_move_rows_applies_one_entry() {
+        let mut app = p_app();
+        app.selected = p_rows(&app, 6, 7);
+        app.selection = app.selected.focus();
+        let entries = app.document.as_ref().unwrap().session.history().entries.len();
+        app.move_rows(Some(TaskUid::new(2)));
+        let order: Vec<(u32, u16)> = project(&app)
+            .tasks
+            .iter()
+            .map(|t| (t.uid().get(), t.outline_level.get()))
+            .collect();
+        assert_eq!(order, [(1, 1), (6, 2), (7, 2), (2, 2), (3, 2), (4, 2), (5, 1)]);
+        assert_eq!(
+            app.document.as_ref().unwrap().session.history().entries.len(),
+            entries + 1
+        );
     }
 
     fn plan_unlink_count(p: &Project, sel: &Selection) -> usize {

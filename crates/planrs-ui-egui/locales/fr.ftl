@@ -1279,6 +1279,7 @@ ribbon-tip-clear = Efface le contenu des cellules sélectionnées sans supprimer
 # --- UX L2 ---
 
 # --- UX L3 ---
+column-not-sortable = Cette colonne ne se trie pas : la fenêtre « Trier » liste les clés possibles.
 
 # --- UX L4 ---
 

@@ -20,7 +20,6 @@ use crate::keymap::{Binding, Shortcut, UiBinding, shortcut_for_os, shortcut_text
 use crate::ribbon::spec::{PERCENT_STEPS, RibbonCmd, percent_value};
 use crate::state::{FilterChoice, MAX_OUTLINE_LEVEL};
 use crate::state::{LanguagePref, ThemePref};
-use crate::structure::StructureOp;
 use crate::theme::Palette;
 use crate::timescale::TimeScaleZoom;
 use crate::view::task_view::TaskViewOp;
@@ -122,8 +121,23 @@ pub(crate) fn twin_item(
     text: String,
     shortcut: Option<Shortcut>,
 ) {
+    command_item(ui, fc, cmd, text, shortcut, cmd.menu_is_check());
+}
+
+/// Entrée d'une commande partagée : case si `check` (état de
+/// [`item_checked`]), bouton avec `shortcut` sinon ; grisée selon
+/// [`RibbonCmd::enabled`], raison en infobulle (H-UI-73) ; un clic pousse
+/// l'action de la commande ([`push_cmd`]).
+fn command_item(
+    ui: &mut egui::Ui,
+    fc: &mut FrameCtx<'_>,
+    cmd: RibbonCmd,
+    text: String,
+    shortcut: Option<Shortcut>,
+    check: bool,
+) {
     let enabled = cmd.enabled(fc);
-    let response = if cmd.menu_is_check() {
+    let response = if check {
         let mut on = item_checked(ui.ctx(), fc, cmd).unwrap_or(false);
         ui.add_enabled(enabled.yes, egui::Checkbox::new(&mut on, text))
     } else {
@@ -142,17 +156,34 @@ pub(crate) fn twin_item(
     }
 }
 
-/// Commande partagée d'une opération de structure du menu contextuel
-/// (« Supprimer » n'a pas de jumeau au ruban).
-const fn structure_cmd(op: StructureOp) -> Option<RibbonCmd> {
-    match op {
-        StructureOp::InsertBefore => Some(RibbonCmd::InsertTask),
-        StructureOp::Indent => Some(RibbonCmd::Indent),
-        StructureOp::Outdent => Some(RibbonCmd::Outdent),
-        StructureOp::Link => Some(RibbonCmd::Link),
-        StructureOp::Unlink => Some(RibbonCmd::Unlink),
-        _ => None,
-    }
+/// Entrée d'un menu contextuel (table, Gantt, en-tête de l'échelle ;
+/// H-UI-100, ADR-0018 D10) : la commande du ruban, libellé
+/// [`RibbonCmd::context_label`] (« Retirer de la chronologie » quand la
+/// tâche active y est), case pour les bascules de tâche (H-UI-74),
+/// raccourci [`RibbonCmd::shortcut`] ; même activation et même action que
+/// le ruban et la barre de menus.
+pub(crate) fn context_item(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, cmd: RibbonCmd) {
+    let text = match cmd {
+        RibbonCmd::AddToTimeline | RibbonCmd::MarkPercent(_) => twin_text(fc, cmd),
+        _ => fc.texts.get(cmd.context_label()),
+    };
+    let shortcut = cmd.shortcut(ui.ctx().os());
+    command_item(
+        ui,
+        fc,
+        cmd,
+        text,
+        shortcut,
+        cmd.context_is_check() || cmd.menu_is_check(),
+    );
+}
+
+/// Entrée jumelle de la barre de menus avec le raccourci de la commande
+/// ([`RibbonCmd::shortcut`], le même qu'au ruban et au menu contextuel).
+fn twin_cmd(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, cmd: RibbonCmd) {
+    let shortcut = cmd.shortcut(ui.ctx().os());
+    let text = twin_text(fc, cmd);
+    twin_item(ui, fc, cmd, text, shortcut);
 }
 
 /// Barre de menus (Fichier, Édition, Affichage, Tâche, Projet, Format,
@@ -384,30 +415,18 @@ fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     twin_item(ui, fc, RibbonCmd::Undo, undo_text, undo);
     twin(ui, fc, RibbonCmd::Redo, Some(Binding::Command("history.redo")));
     ui.separator();
-    let has_doc = fc.doc.is_some();
-    let has_selection = fc.selection.is_some();
-    for (op, label, id, needs_selection) in super::main_view::CONTEXT_ENTRIES {
-        if let Some(cmd) = structure_cmd(op) {
-            twin(ui, fc, cmd, Some(Binding::Command(id)));
-            continue;
-        }
-        let mut button = egui::Button::new(texts.get(label));
-        if let Some(shortcut) = shortcut_for_os(Binding::Command(id), ui.ctx().os()) {
-            button = button.shortcut_text(shortcut_text(ui.ctx(), shortcut));
-        }
-        // H-UI-32 (J8, lot L9) : sous tri ou filtre, déplacer, hausser et
-        // abaisser sont grisés.
-        let locked = super::task_view::reorders(op) && fc.task_view.state.reorder_locked();
-        let enabled = has_doc && (has_selection || !needs_selection) && !locked;
-        let response = ui.add_enabled(enabled, button);
-        let response = if locked {
-            response.on_disabled_hover_text(texts.get(TextId::ViewReorderLocked))
-        } else {
-            response
-        };
-        if response.clicked() {
-            fc.actions.push(Action::Structure(op));
-        }
+    // Six commandes de structure (relecture finale J4, F5), jumelles du
+    // menu contextuel (H-UI-100) : sous tri ou filtre, hausser et abaisser
+    // sont grisés (H-UI-32, `RibbonCmd::enabled`).
+    for cmd in [
+        RibbonCmd::InsertTask,
+        RibbonCmd::DeleteTask,
+        RibbonCmd::Indent,
+        RibbonCmd::Outdent,
+        RibbonCmd::Link,
+        RibbonCmd::Unlink,
+    ] {
+        twin_cmd(ui, fc, cmd);
     }
     ui.separator();
     // « Affecter des ressources » (J7, lot L13) : aucun raccourci (S61).
@@ -419,7 +438,24 @@ fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     twin(ui, fc, RibbonCmd::ScrollToTask, None);
     // --- J8 L10 : couper, copier, coller ---
     ui.separator();
-    clipboard_items(ui, fc);
+    for cmd in [
+        RibbonCmd::Cut,
+        RibbonCmd::Copy,
+        RibbonCmd::Paste,
+        RibbonCmd::PasteSpecial,
+    ] {
+        twin_cmd(ui, fc, cmd);
+    }
+    // --- Passe UX (ADR-0018 D10, H-UI-100) : remplir, effacer, tout
+    // sélectionner (groupe Editing de Project, S80).
+    ui.separator();
+    for cmd in [
+        RibbonCmd::FillDown,
+        RibbonCmd::ClearContents,
+        RibbonCmd::SelectAll,
+    ] {
+        twin_cmd(ui, fc, cmd);
+    }
     // --- J8 L15 : menu Tâche (%, mode, actif) ---
 }
 
@@ -441,13 +477,8 @@ fn task_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
         RibbonCmd::TaskInformation,
         Some(Binding::Ui(UiBinding::TaskInformation)),
     );
-    for (op, _, id, _) in super::main_view::CONTEXT_ENTRIES {
-        if matches!(op, StructureOp::Link | StructureOp::Unlink)
-            && let Some(cmd) = structure_cmd(op)
-        {
-            twin(ui, fc, cmd, Some(Binding::Command(id)));
-        }
-    }
+    twin_cmd(ui, fc, RibbonCmd::Link);
+    twin_cmd(ui, fc, RibbonCmd::Unlink);
     // --- Ruban L2 : récapitulative et jalon (H-UI-83 ; au menu Tâche, comme
     // le groupe Insérer de l'onglet Tâche : au menu Édition, leur libellé
     // commencerait par celui d'« Insérer une tâche »), notes (H-UI-84),
@@ -942,42 +973,6 @@ fn message_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
 }
 
 // --- J8 L10 : couper, copier, coller ---
-
-/// Entrées Couper, Copier, Coller et « Collage spécial… » du menu Édition
-/// (H-UI-39, lot L10). Les raccourcis affichés sont ceux qu'egui livre en
-/// `Event::Cut/Copy/Paste` (pas des entrées de `KEYMAP`) ; Couper et Copier
-/// demandent une sélection, Coller et « Collage spécial… » un document.
-fn clipboard_items(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
-    use crate::clipboard::ClipboardOp;
-    let has_doc = fc.doc.is_some();
-    let has_selection = has_doc && fc.selection.is_some();
-    let entries = [
-        (
-            TextId::MenuCut,
-            Some(egui::Key::X),
-            has_selection,
-            ClipboardOp::Cut,
-        ),
-        (
-            TextId::MenuCopy,
-            Some(egui::Key::C),
-            has_selection,
-            ClipboardOp::Copy,
-        ),
-        (TextId::MenuPaste, Some(egui::Key::V), has_doc, ClipboardOp::Paste),
-        (TextId::MenuPasteSpecial, None, has_doc, ClipboardOp::PasteSpecial),
-    ];
-    for (label, key, enabled, op) in entries {
-        let mut button = egui::Button::new(fc.texts.get(label));
-        if let Some(key) = key {
-            let shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, key);
-            button = button.shortcut_text(shortcut_text(ui.ctx(), &shortcut));
-        }
-        if ui.add_enabled(enabled, button).clicked() {
-            fc.actions.push(Action::Clipboard(op));
-        }
-    }
-}
 
 #[cfg(test)]
 #[allow(

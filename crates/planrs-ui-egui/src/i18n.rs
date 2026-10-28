@@ -1187,6 +1187,7 @@ text_ids! {
     // --- UX L1 ---
     // --- UX L2 ---
     // --- UX L3 ---
+    ColumnNotSortable => "column-not-sortable",
     // --- UX L4 ---
     // --- UX L5 ---
 }

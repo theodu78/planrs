@@ -1280,6 +1280,7 @@ ribbon-tip-clear = Clears the contents of the selected cells without deleting th
 # --- UX L2 ---
 
 # --- UX L3 ---
+column-not-sortable = This column cannot be sorted: the Sort dialog lists the available keys.
 
 # --- UX L4 ---
 

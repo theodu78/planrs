@@ -1996,3 +1996,110 @@ fn select_all_copy_5000() {
     );
 }
 // --- UX L3 --- (`row_drag_5000`, `best_fit_5000`)
+
+/// Abscisse de la colonne ID et ordonnée de la ligne affichée `target` :
+/// cherchées par des clics sur l'ID (une seconde entre deux clics : jamais
+/// de double-clic), comme `select_drag_5000`.
+fn id_point(bench: &mut Bench, app: &mut App, target: usize) -> Pos2 {
+    let x = 24.0;
+    let y = (200_u16..1000)
+        .step_by(2)
+        .map(f32::from)
+        .find(|&y| {
+            bench.time += 1.0;
+            press_frames(bench, app, pos2(x, y), true);
+            press_frames(bench, app, pos2(x, y), false);
+            app.selection
+                .and_then(|uid| app.rows().unwrap().index_of(uid))
+                .is_some_and(|i| i == target)
+        })
+        .expect("ligne introuvable sous le pointeur");
+    pos2(x, y)
+}
+
+/// UX L3 (ADR-0018, H-UI-94) : deux lignes sœurs entières vers la ligne
+/// 10, appui sur leur ID puis 60 images de glisser (4 points par image,
+/// trait d'insertion et refus recalculés quand l'intervalle change), puis
+/// lâcher (un lot). Image médiane < 16 ms, p95 < 32 ms.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn row_drag_5000() {
+    let (mut app, mut bench) = nav_bench();
+    // Deux feuilles sœurs voisines à partir de la ligne 10.
+    let first = {
+        let rows = app.rows().unwrap();
+        (10..rows.len() - 1)
+            .find(|&i| {
+                let (a, b) = (rows.row(i).unwrap(), rows.row(i + 1).unwrap());
+                a.kind == RowKind::Leaf && b.kind == RowKind::Leaf && a.level == b.level
+            })
+            .unwrap()
+    };
+    let p = id_point(&mut bench, &mut app, first);
+    let (a, b) = {
+        let rows = app.rows().unwrap();
+        (rows.row(first).unwrap().uid, rows.row(first + 1).unwrap().uid)
+    };
+    select_rows(&mut app, a, b);
+    bench.settle(&mut app);
+    let generation = app.document.as_ref().unwrap().generation();
+    bench.time += 1.0;
+    press_frames(&mut bench, &mut app, p, true);
+    for k in 1..=WARMUP {
+        bench.frame(&mut app, vec![Event::PointerMoved(p + vec2(0.0, 4.0 * k as f32))]);
+    }
+    assert!(app.view().row_drag.is_some(), "déplacement non ouvert");
+    let samples: Vec<Duration> = (0..60)
+        .map(|k| {
+            let y = p.y + 4.0 * (WARMUP + k) as f32;
+            bench.frame(&mut app, vec![Event::PointerMoved(pos2(p.x, y))])
+        })
+        .collect();
+    let drop = pos2(p.x, p.y + 4.0 * (WARMUP + 60) as f32);
+    press_frames(&mut bench, &mut app, drop, false);
+    bench.settle(&mut app);
+    assert!(app.view().row_drag.is_none());
+    assert_eq!(
+        app.document.as_ref().unwrap().generation(),
+        generation + 1,
+        "lignes non déplacées : {:?}",
+        app.messages().last()
+    );
+    assert_budget("row_drag_5000", samples, bench.last);
+}
+
+/// UX L3 (ADR-0018, H-UI-99) : ajustement de la colonne Nom (galley de
+/// chacun des 5 000 noms affichés) ; dix fois, la largeur remise à 220
+/// entre deux. Mesure : image qui sert `FitColumn` (ajustement compris),
+/// médiane < 50 ms.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn best_fit_5000() {
+    let (mut app, mut bench) = nav_bench();
+    let mut samples = Vec::new();
+    for _ in 0..10 {
+        app.dispatch(Action::SetColumnWidth {
+            column: Column::Name,
+            width: 220,
+        });
+        bench.settle(&mut app);
+        app.dispatch(Action::FitColumn(Column::Name));
+        samples.push(bench.frame(&mut app, Vec::new()));
+        let w = app.state.column(Column::Name).unwrap().width;
+        assert_ne!(w, 220, "largeur non ajustée");
+    }
+    samples.sort();
+    let median = percentile(&samples, 50);
+    eprintln!(
+        "perf UI best_fit_5000 : médiane {:.1} ms, max {:.1} ms ; budget 50 ms",
+        ms(median),
+        ms(*samples.last().unwrap())
+    );
+    report(
+        "best_fit_5000",
+        &samples,
+        bench.last,
+        serde_json::json!({ "budget_median_ms": 50 }),
+    );
+    assert!(median < Duration::from_millis(50), "ajustement : {median:?}");
+}

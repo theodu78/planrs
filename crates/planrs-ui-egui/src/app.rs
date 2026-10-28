@@ -1964,7 +1964,7 @@ impl App {
             Action::SelectOp(op) => self.select_op(op),
             Action::Cells(op) => self.cells_op(op, ctx),
             Action::MoveRows { before } => self.move_rows(before),
-            Action::FitColumn(column) => self.fit_column(column),
+            Action::FitColumn(column) => self.fit_column(column, ctx),
         }
     }
 

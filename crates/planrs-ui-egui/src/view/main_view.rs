@@ -354,6 +354,7 @@ fn paint_rows(
     let edit = &mut view.edit;
     let cursor = &mut view.cursor;
     let select_drag = &mut view.select_drag;
+    let row_drag = &mut view.row_drag;
     let drag = &mut view.drag;
     let out = area.show_viewport(&mut body_ui, |ui, viewport| {
         let origin = ui.max_rect().min;
@@ -372,7 +373,10 @@ fn paint_rows(
             fc,
             edit,
             cursor,
-            select_drag,
+            table::Drags {
+                select: select_drag,
+                rows: row_drag,
+            },
             origin,
             range.clone(),
             table_clip,
@@ -451,7 +455,9 @@ const AUTOSCROLL_COLUMN_W: f32 = 80.0;
 fn autoscroll(ui: &egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient, layout: &MainLayout) {
     use crate::action::PressTarget;
     let selecting = view.select_drag.map(|d| d.target);
-    let bar = view.drag.is_some();
+    // Barre ou lien du Gantt, déplacement de lignes par l'ID (H-UI-94) :
+    // défilement vertical.
+    let bar = view.drag.is_some() || view.row_drag.is_some();
     if selecting.is_none() && !bar {
         return;
     }

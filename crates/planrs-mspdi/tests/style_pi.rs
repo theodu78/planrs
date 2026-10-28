@@ -258,3 +258,20 @@ fn h_r12_no_style_no_pi_bytes_equal_j7() {
         );
     }
 }
+
+/// H-R12 : le contenu d'une instruction n'est pas analysé (XML 1.0 § 2.6) :
+/// `&`, `<`, `&amp;` y sont pris tels quels, sans résolution d'entité.
+#[test]
+fn h_r12_pi_content_taken_verbatim() {
+    let base = text(&project(), &WriteOptions::default());
+    for raw in ["a&b", "x<y", "&amp;", "&#38;", "a & b < c &lt;"] {
+        let xml = base.replacen("<Project", &format!("<?planrs-style {raw}?>\n<Project"), 1);
+        let doc =
+            read(xml.as_bytes(), &ReadOptions::new(now())).unwrap_or_else(|e| panic!("{raw:?} : {e:?}"));
+        assert_eq!(
+            style_pi::entry(&doc.project.extras).map(|e| e.payload.as_str()),
+            Some(raw),
+            "{raw:?}"
+        );
+    }
+}

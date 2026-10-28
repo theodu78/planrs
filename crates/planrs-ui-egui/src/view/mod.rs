@@ -194,6 +194,10 @@ pub struct SelectDrag {
     /// cellule appuyée, H-UI-88) ni défilement automatique (H-UI-91) ; une
     /// fois vrai, il le reste jusqu'au relâcher.
     pub armed: bool,
+    /// Ouvert par un Ctrl/Cmd+appui (`PressMode::Toggle`) : jamais armé, le
+    /// glisser ne remplace pas la multi-sélection par une plage (relecture
+    /// finale, n° 6 ; blocs disjoints reportés après v1.0.0).
+    pub toggle: bool,
 }
 
 /// Déplacement de lignes en cours (ADR-0018, contrat L0, H-UI-94).

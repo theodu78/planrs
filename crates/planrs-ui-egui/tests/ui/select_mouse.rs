@@ -307,6 +307,28 @@ fn h_ui_88_ctrl_press_toggles_row() {
     assert_eq!(app.selection, Some(three));
 }
 
+/// Relecture finale n° 6 : {2, 6} par Ctrl/Cmd+clic, puis Ctrl/Cmd+appui
+/// sur 9 et glisser jusqu'à 11 ⇒ 9 ajoutée seule, 2 et 6 gardées (pas de
+/// plage qui remplace la multi-sélection).
+#[test]
+fn h_ui_88_ctrl_drag_keeps_multi_selection() {
+    let mut harness = demo();
+    click_cell(&mut harness, 2, Column::Name, Modifiers::NONE);
+    click_cell(&mut harness, 6, Column::Name, Modifiers::COMMAND);
+    let from = cell_point(&harness, 9, Column::Name);
+    let to = cell_point(&harness, 11, Column::Name);
+    press_at(&mut harness, from, Modifiers::COMMAND);
+    for k in 1..=4_u8 {
+        move_to(&mut harness, from + (to - from) * (f32::from(k) / 4.0));
+    }
+    release_at(&mut harness, to);
+    let app = harness.state();
+    assert_eq!(
+        app.selected().click_order(),
+        [uid_at(app, 2), uid_at(app, 6), uid_at(app, 9)]
+    );
+}
+
 /// H-UI-86 gardée : saisie ouverte, un appui ailleurs valide d'abord, puis
 /// sélectionne la cellule appuyée (une seule cellule, aucun glisser) ;
 /// refusée, la saisie reste ouverte et la sélection ne bouge pas.

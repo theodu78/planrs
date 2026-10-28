@@ -319,6 +319,7 @@ fn header_cell(
                     target: PressTarget::ColumnHeader,
                     last: (RowRef::Blank, column),
                     armed: false,
+                    toggle: false,
                 });
             }
         }
@@ -1341,6 +1342,7 @@ fn row_pointer(
                 target,
                 last: (row, column),
                 armed: false,
+                toggle: mode == PressMode::Toggle,
             });
         }
         fc.actions.push(Action::FocusPane(Pane::Table));
@@ -1556,8 +1558,12 @@ fn bounded(v: f32, lo: f32, hi: f32) -> f32 {
 /// Seuil du glisser de sélection (H-UI-88) : arme `d` dès que `p` est à
 /// au moins `max_click_dist` d'egui (6 points par défaut) du point d'appui,
 /// et rend vrai tant qu'il est armé. Sans point d'appui connu (clic
-/// d'accessibilité) ou valeur non finie : jamais armé.
+/// d'accessibilité), valeur non finie ou appui Ctrl/Cmd (`toggle`) :
+/// jamais armé.
 pub(crate) fn arm_select_drag(ui: &egui::Ui, d: &mut SelectDrag, p: Pos2) -> bool {
+    if d.toggle {
+        return false;
+    }
     if !d.armed {
         let threshold = ui.ctx().options(|o| o.input_options.max_click_dist);
         d.armed = ui

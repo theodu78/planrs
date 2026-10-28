@@ -302,6 +302,23 @@ fn apply_click_modifiers(actions: &mut [Action], start: usize, modifiers: egui::
     }
 }
 
+/// Clic sur le fond du corps : ligne `uid` du Gantt ⇒ même appui qu'une
+/// cellule de la table sur cette ligne, dans la colonne active `column`
+/// (relecture finale, n° 4 : un clic simple réduit toujours la sélection,
+/// Maj étend, Ctrl/Cmd ajoute ou retire) ; hors d'une ligne : rien de
+/// sélectionné.
+fn gantt_click(uid: Option<TaskUid>, column: Column, modifiers: egui::Modifiers) -> Action {
+    match uid {
+        Some(uid) => Action::SelectOp(SelectOp::Press {
+            row: RowRef::Item(uid),
+            column,
+            target: PressTarget::Cell,
+            mode: table::press_mode(modifiers),
+        }),
+        None => Action::Select(None),
+    }
+}
+
 /// Défilement vertical demandé, borné au défilement maximal : un décalage
 /// au-delà ferait revenir la zone par un rebond animé sur une dizaine
 /// d'images. egui borne d'abord par le maximum de l'image précédente : si le
@@ -405,19 +422,8 @@ fn paint_rows(
             } else {
                 None
             };
-            // Ligne du Gantt : même appui qu'une cellule de la table, dans
-            // la colonne active (relecture finale, n° 4) : un clic simple
-            // réduit toujours la sélection, Maj étend, Ctrl/Cmd ajoute.
-            let action = match uid {
-                Some(uid) => Action::SelectOp(SelectOp::Press {
-                    row: RowRef::Item(uid),
-                    column: cursor.column,
-                    target: PressTarget::Cell,
-                    mode: table::press_mode(ui.input(|i| i.modifiers)),
-                }),
-                None => Action::Select(None),
-            };
-            fc.actions.push(action);
+            let modifiers = ui.input(|i| i.modifiers);
+            fc.actions.push(gantt_click(uid, cursor.column, modifiers));
             // Clavier unique (ADR-0018 D8, H-UI-101) : un clic dans le Gantt
             // laisse le clavier à la table.
             fc.actions.push(Action::FocusPane(Pane::Table));

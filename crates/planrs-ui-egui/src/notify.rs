@@ -6,11 +6,10 @@
 //! leur voie). Le temps est celui d'egui (`ctx.input(|i| i.time)`, en
 //! secondes) : déterministe sous kittest.
 //!
-//! Contrat posé par le lot L0 : la pile de messages d'`App` vit ici, avec
-//! le comportement d'avant la passe (tout au bandeau, sans doublon, les
-//! [`MAX_MESSAGES`] plus récents) tant que [`MessageStore::toasts_live`]
-//! est faux ; le lot L1 l'active, dessine les notifications et l'historique
-//! (`view::chrome`) et déduit la sorte de chaque message.
+//! Le dessin (zone des notifications ancrée en bas à droite, bandeau,
+//! bouton et fenêtre de l'historique) est dans `view::chrome` ; `App`
+//! appelle [`MessageStore::expire`] une fois par image avec la
+//! notification survolée de l'image précédente.
 
 use planrs_core::Severity;
 
@@ -57,8 +56,9 @@ pub const fn lifetime(kind: MessageKind) -> Option<f64> {
 /// enregistrement et export échoués ⇒ `Blocking` (une décision ou un
 /// constat qui ne doit pas s'effacer seul) ; erreur d'une commande ⇒
 /// `Refusal` ; avertissement ⇒ `Warning` ; le reste ⇒ `Info` (compte rendu
-/// d'un collage compris, H-UI-104). Le lot L1 complète la liste des titres
-/// bloquants (confirmation, reprise, état illisible).
+/// d'un collage compris, H-UI-104). La confirmation des modifications et
+/// la reprise ont leurs propres bandeaux ; l'état illisible est publié
+/// `Blocking` par `App::report_state_load`.
 #[must_use]
 pub const fn kind_for(severity: Severity, title: Option<TextId>) -> MessageKind {
     match (title, severity) {
@@ -111,52 +111,43 @@ impl UserMessage {
 }
 
 /// Pile des messages : notifications ([`MAX_TOASTS`]), bandeau
-/// ([`MAX_MESSAGES`]) et historique ([`MAX_HISTORY`]).
+/// ([`MAX_MESSAGES`]) et historique ([`MAX_HISTORY`]), compte des non lus
+/// et ouverture de l'historique (H-UI-104).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MessageStore {
     /// Notifications, la plus ancienne d'abord.
     toasts: Vec<UserMessage>,
-    /// Bandeau, le plus ancien d'abord.
+    /// Bandeau (`Blocking`), le plus ancien d'abord.
     banner: Vec<UserMessage>,
+    /// Messages affichés (bandeau et notifications), le plus ancien
+    /// d'abord : refait après chaque changement des deux voies.
+    live: Vec<UserMessage>,
     /// Historique, le plus ancien d'abord.
     history: Vec<UserMessage>,
+    /// Messages publiés depuis la dernière ouverture de l'historique.
+    unread: usize,
+    /// L'historique est ouvert (fenêtre de la barre d'état).
+    history_open: bool,
     /// Prochain identifiant.
     next_id: u64,
-    /// Les notifications sont servies (lot L1) ; faux : tout va au bandeau,
-    /// comme avant la passe.
-    toasts_live: bool,
 }
 
 impl MessageStore {
-    /// Pile dont les messages non bloquants vont aux notifications (lot L1,
-    /// tests du contrat).
-    #[must_use]
-    pub fn with_toasts() -> Self {
-        Self {
-            toasts_live: true,
-            ..Self::default()
-        }
-    }
-
-    /// Les notifications sont-elles servies ?
-    #[must_use]
-    pub const fn toasts_live(&self) -> bool {
-        self.toasts_live
-    }
-
-    /// Publie `m` : identifiant neuf ; un message de même texte déjà dans sa
-    /// voie est retiré (le nouveau le remplace, minuterie relancée) ; voie
-    /// pleine : le plus ancien part. Copie dans l'historique.
+    /// Publie `m` : identifiant neuf ; `Blocking` au bandeau, le reste aux
+    /// notifications ; un message de même texte déjà dans sa voie est
+    /// retiré (le nouveau le remplace, minuterie relancée, pas de
+    /// doublon) ; voie pleine : le plus ancien part. Copie dans
+    /// l'historique ; compté non lu tant que l'historique est fermé.
     pub fn post(&mut self, mut m: UserMessage) {
         self.next_id = self.next_id.wrapping_add(1);
         m.id = self.next_id;
         if !m.posted_at.is_finite() {
             m.posted_at = 0.0;
         }
-        let (lane, cap) = if self.toasts_live && m.kind != MessageKind::Blocking {
-            (&mut self.toasts, MAX_TOASTS)
-        } else {
+        let (lane, cap) = if m.kind == MessageKind::Blocking {
             (&mut self.banner, MAX_MESSAGES)
+        } else {
+            (&mut self.toasts, MAX_TOASTS)
         };
         lane.retain(|old| old.text != m.text);
         lane.push(m.clone());
@@ -165,6 +156,19 @@ impl MessageStore {
         self.history.push(m);
         let excess = self.history.len().saturating_sub(MAX_HISTORY);
         self.history.drain(..excess);
+        if !self.history_open {
+            self.unread = self.unread.saturating_add(1).min(MAX_HISTORY);
+        }
+        self.rebuild_live();
+    }
+
+    /// Refait [`MessageStore::live`] : les deux voies, par identifiant
+    /// (ordre de publication).
+    fn rebuild_live(&mut self) {
+        self.live.clear();
+        self.live.extend(self.banner.iter().cloned());
+        self.live.extend(self.toasts.iter().cloned());
+        self.live.sort_by_key(|m| m.id);
     }
 
     /// Retire les notifications échues à l'instant `now` (secondes) ; la
@@ -179,19 +183,43 @@ impl MessageStore {
                 toast.posted_at = now;
             }
         }
+        let before = self.toasts.len();
         self.toasts
             .retain(|toast| lifetime(toast.kind).is_none_or(|life| now - toast.posted_at < life));
+        if self.toasts.len() != before || hovered.is_some() {
+            self.rebuild_live();
+        }
+    }
+
+    /// Délai (secondes, fini et positif) avant l'échéance de la prochaine
+    /// notification, vu de `now` ; `None` sans notification (aucun repeint
+    /// à demander).
+    #[must_use]
+    pub fn next_expiry(&self, now: f64) -> Option<f64> {
+        if !now.is_finite() {
+            return None;
+        }
+        self.toasts
+            .iter()
+            .filter_map(|toast| lifetime(toast.kind).map(|life| toast.posted_at + life - now))
+            .filter(|left| left.is_finite())
+            .map(|left| left.max(0.0))
+            .reduce(f64::min)
     }
 
     /// Ferme le message `id` (notification ou bandeau) ; les autres restent.
     pub fn dismiss(&mut self, id: u64) {
         self.toasts.retain(|m| m.id != id);
         self.banner.retain(|m| m.id != id);
+        self.rebuild_live();
     }
 
-    /// Vide le bandeau (« Fermer le message » d'avant la passe).
-    pub fn clear_banner(&mut self) {
+    /// Ferme tous les messages affichés (bandeau et notifications ;
+    /// l'historique est gardé).
+    pub fn clear_live(&mut self) {
+        self.toasts.clear();
         self.banner.clear();
+        self.live.clear();
     }
 
     /// Garde, au bandeau et dans les notifications, les messages pour
@@ -199,6 +227,28 @@ impl MessageStore {
     pub fn retain(&mut self, mut keep: impl FnMut(&UserMessage) -> bool) {
         self.toasts.retain(&mut keep);
         self.banner.retain(&mut keep);
+        self.rebuild_live();
+    }
+
+    /// Ouvre ou ferme l'historique ; l'ouvrir marque tout comme lu.
+    pub fn toggle_history(&mut self) {
+        self.history_open = !self.history_open;
+        if self.history_open {
+            self.unread = 0;
+        }
+    }
+
+    /// L'historique est-il ouvert ?
+    #[must_use]
+    pub const fn history_open(&self) -> bool {
+        self.history_open
+    }
+
+    /// Messages publiés depuis la dernière ouverture de l'historique (au
+    /// plus [`MAX_HISTORY`]).
+    #[must_use]
+    pub const fn unread(&self) -> usize {
+        self.unread
     }
 
     /// Messages du bandeau, le plus ancien d'abord.
@@ -211,6 +261,13 @@ impl MessageStore {
     #[must_use]
     pub fn toasts(&self) -> &[UserMessage] {
         &self.toasts
+    }
+
+    /// Messages affichés (bandeau et notifications), dans l'ordre de
+    /// publication.
+    #[must_use]
+    pub fn live(&self) -> &[UserMessage] {
+        &self.live
     }
 
     /// Historique, le plus ancien d'abord.
@@ -271,7 +328,7 @@ mod tests {
         assert_eq!(lifetime(MessageKind::Warning), Some(8.0));
         assert_eq!(lifetime(MessageKind::Refusal), Some(10.0));
         assert_eq!(lifetime(MessageKind::Blocking), None);
-        let mut store = MessageStore::with_toasts();
+        let mut store = MessageStore::default();
         store.post(message(MessageKind::Info, "info", 1.0));
         store.post(message(MessageKind::Warning, "warning", 1.0));
         store.post(message(MessageKind::Refusal, "refus", 1.0));
@@ -297,11 +354,11 @@ mod tests {
 
     /// H-UI-104 : 3 notifications au plus (la plus ancienne part), 20
     /// messages d'historique, `dismiss` ne retire que son message ; un
-    /// doublon remplace l'ancien ; L0 : sans notifications, tout va au
-    /// bandeau (3 au plus), comme avant la passe.
+    /// doublon remplace l'ancien ; `live` suit les deux voies ; non lus
+    /// remis à zéro à l'ouverture de l'historique.
     #[test]
     fn notify_store_bounds() {
-        let mut store = MessageStore::with_toasts();
+        let mut store = MessageStore::default();
         for i in 0..25 {
             store.post(message(MessageKind::Info, &i.to_string(), 0.0));
         }
@@ -331,20 +388,43 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), store.history().len());
 
-        let mut legacy = MessageStore::default();
-        assert!(!legacy.toasts_live());
-        for i in 0..5 {
-            legacy.post(message(MessageKind::Info, &i.to_string(), 0.0));
-        }
-        legacy.post(message(MessageKind::Info, "3", 0.0));
-        let banner: Vec<&str> = legacy.banner().iter().map(|m| m.text.as_str()).collect();
-        assert_eq!(banner, ["2", "4", "3"]);
-        assert_eq!(legacy.banner().len(), MAX_MESSAGES);
-        assert_eq!(legacy.toasts().len(), 0);
-        legacy.retain(|m| m.text != "4");
-        assert_eq!(legacy.banner().len(), 2);
-        legacy.clear_banner();
-        assert_eq!(legacy.banner().len(), 0);
-        assert_eq!(legacy.history().len(), 6);
+        let live: Vec<u64> = store.live().iter().map(|m| m.id).collect();
+        let mut expected: Vec<u64> = store
+            .banner()
+            .iter()
+            .chain(store.toasts())
+            .map(|m| m.id)
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(live, expected);
+        assert_eq!(store.unread(), MAX_HISTORY);
+        store.toggle_history();
+        assert!(store.history_open());
+        assert_eq!(store.unread(), 0);
+        store.post(message(MessageKind::Info, "lu", 0.0));
+        assert_eq!(store.unread(), 0, "historique ouvert : rien de non lu");
+        store.toggle_history();
+        store.post(message(MessageKind::Info, "non lu", 0.0));
+        assert_eq!(store.unread(), 1);
+        store.retain(|m| m.text != "non lu");
+        assert!(store.live().iter().all(|m| m.text != "non lu"));
+        store.clear_live();
+        assert!(store.live().is_empty() && store.banner().is_empty() && store.toasts().is_empty());
+        assert_eq!(store.history().len(), MAX_HISTORY);
+        assert_eq!(MAX_MESSAGES, 3);
+    }
+
+    /// Prochaine échéance : délai de la notification la plus proche, borné
+    /// à zéro ; aucune notification ou instant non fini : aucune.
+    #[test]
+    fn notify_next_expiry() {
+        let mut store = MessageStore::default();
+        assert_eq!(store.next_expiry(0.0), None);
+        store.post(message(MessageKind::Refusal, "refus", 0.0));
+        store.post(message(MessageKind::Info, "info", 1.0));
+        store.post(message(MessageKind::Blocking, "décision", 1.0));
+        assert_eq!(store.next_expiry(2.0), Some(4.0));
+        assert_eq!(store.next_expiry(100.0), Some(0.0));
+        assert_eq!(store.next_expiry(f64::NAN), None);
     }
 }

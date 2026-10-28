@@ -1345,10 +1345,18 @@ impl App {
         self.actions.push(action);
     }
 
-    /// Messages affichés.
+    /// Messages affichés (bandeau des décisions et notifications), dans
+    /// l'ordre de publication (H-UI-104).
     #[must_use]
     pub fn messages(&self) -> &[UserMessage] {
-        self.messages.banner()
+        self.messages.live()
+    }
+
+    /// Pile des messages : notifications, bandeau, historique, non lus
+    /// (H-UI-104).
+    #[must_use]
+    pub const fn message_store(&self) -> &crate::notify::MessageStore {
+        &self.messages
     }
 
     /// Messages traduits de la langue courante.
@@ -1489,7 +1497,16 @@ impl App {
             TextId::StateLoadWarning,
             &[("detail", Arg::Str(error.to_string().into()))],
         );
-        self.push_message(Severity::Warning, text);
+        // État illisible : constat qui attend d'être lu (bandeau, H-UI-104).
+        self.messages.post(UserMessage {
+            posted_at: self.clock,
+            ..UserMessage::new(
+                crate::notify::MessageKind::Blocking,
+                Severity::Warning,
+                None,
+                text,
+            )
+        });
     }
 
     /// Vue remise à zéro pour un nouveau document (ou aucun), en gardant la
@@ -1789,7 +1806,7 @@ impl App {
                 self.view.pending_scroll_y = Some(geom::index_to_f32(row) * self.row_h());
             }
             Action::ToggleDiagnostics => self.state.diagnostics_open = !self.state.diagnostics_open,
-            Action::DismissMessage => self.messages.clear_banner(),
+            Action::DismissMessage => self.messages.clear_live(),
             // Le refus est affiché par `execute` ; rien d'autre à faire ici.
             Action::Exec(batch) => drop(self.execute(&batch, EditOrigin::User)),
             Action::ExecOn { opening, batch } => {
@@ -1983,7 +2000,7 @@ impl App {
             Action::Column(op) => self.column_op(op),
             Action::Details(op) => self.details_op(op),
             Action::Message(crate::action::MessageOp::Dismiss(id)) => self.messages.dismiss(id),
-            Action::Message(crate::action::MessageOp::ToggleHistory) => self.not_available(),
+            Action::Message(crate::action::MessageOp::ToggleHistory) => self.messages.toggle_history(),
             Action::CloseDocumentGuarded => self.request(Pending::Close, ctx),
         }
     }
@@ -2765,7 +2782,8 @@ impl App {
         let ctx = ui.ctx().clone();
         // Horloge des messages (H-UI-104) : notifications échues retirées.
         self.clock = ctx.input(|input| input.time);
-        self.messages.expire(self.clock, None);
+        self.messages
+            .expire(self.clock, view::chrome::hovered_toast(&ctx));
         // Appels relayés d'un agent d'abord (ADR-0015 D9) : la session vue
         // par l'image est celle qui a répondu.
         #[cfg(not(target_arch = "wasm32"))]
@@ -2847,7 +2865,7 @@ impl App {
             view::chrome::menu_bar(ui, &mut fc, self.side.open);
             view::ribbon::show(ui, &mut fc, &self.state.ribbon, self.view.ribbon_overlay);
             view::search::search_bar(ui, &mut fc);
-            view::chrome::status_bar(ui, &mut fc, self.messages.banner());
+            view::chrome::status_bar(ui, &mut fc, &self.messages);
             view::chrome::confirm_banner(ui, &mut fc, confirm_name.as_deref());
             #[cfg(not(target_arch = "wasm32"))]
             {

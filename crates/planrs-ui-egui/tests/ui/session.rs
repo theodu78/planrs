@@ -405,14 +405,16 @@ fn ui_command_error_banner_translated() {
             Language::Fr => planrs_automation::text::Language::Fr,
             Language::En => planrs_automation::text::Language::En,
         };
-        let expected = texts.get_args(
-            TextId::ErrorTaskNotFound,
-            &[("detail", Arg::Str(error.message(lang).into()))],
-        );
+        // Seconde passe UX (H-UI-105) : l'UID d'une tâche introuvable n'a
+        // pas d'ID ⇒ phrase générique, code et texte du moteur au détail.
+        let expected = texts.get(TextId::RefusalGeneric);
         let messages = harness.state().messages();
         assert_eq!(messages.len(), 1, "{messages:?}");
         assert_eq!(messages[0].title, Some(TextId::CommandErrorTitle));
         assert_eq!(messages[0].text, expected);
+        let detail = messages[0].detail.clone().unwrap();
+        assert!(detail.contains("task.not_found"), "{detail}");
+        assert!(detail.contains(&error.message(lang)), "{detail}");
         assert!(
             harness
                 .query_by_label(&texts.get(TextId::CommandErrorTitle))
@@ -458,7 +460,10 @@ fn ui_command_error_banner_translated() {
         .unwrap_err();
     assert_eq!(error.code, "session.none");
     assert_eq!(error_text_id(error.code), TextId::ErrorSessionNone);
-    assert!(harness.state().messages()[0].text.starts_with("Aucun document"));
+    // Code sans phrase dédiée (H-UI-105) : phrase générique, code au détail.
+    let message = &harness.state().messages()[0];
+    assert_eq!(message.text, fr(TextId::RefusalGeneric));
+    assert!(message.detail.as_deref().unwrap().contains("session.none"));
     assert!(fr(TextId::CommandErrorTitle).starts_with("Modification"));
 }
 

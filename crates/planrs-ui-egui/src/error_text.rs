@@ -1,21 +1,46 @@
 //! Refus du registre en langage d'utilisateur (seconde passe UX, ADR-0019
 //! D1, H-UI-105).
 //!
-//! Contrat posé par le lot L0 : [`user_message`] est appelée par
-//! `App::report_command_error` et rend la phrase affichée et le détail
-//! technique repliable. En L0, la phrase est celle d'avant la passe
-//! (message traduit par code, texte du moteur inséré) et le détail est
-//! vide ; le lot L1 écrit une phrase par code, le sujet en ID de tâche, et
-//! met le code, l'opération et le texte du moteur dans le détail.
+//! [`user_message`] est appelée par `App::report_command_error` et rend la
+//! phrase affichée et le détail technique repliable :
+//!
+//! - la **phrase** vient d'une table par code (lien en double, boucle,
+//!   lien vers soi, récapitulative, tâche introuvable, lot qui créerait
+//!   une erreur, saisie illisible, valeur refusée, limite, champ
+//!   personnalisé) ; le sujet y est nommé par son **ID** de tâche (position
+//!   dans `project.tasks`), jamais par son UID ; une tâche disparue se dit
+//!   « une tâche supprimée » ; un code sans phrase dédiée retombe sur
+//!   « Cette modification n'est pas possible. » ;
+//! - le **détail** porte ce que la phrase tait : code, numéro d'opération,
+//!   champ et texte du moteur.
 
-use planrs_automation::CommandError;
-use planrs_core::Project;
+use std::borrow::Cow;
 
-use crate::i18n::{Arg, TextId, Texts, error_text_id};
+use planrs_automation::error::codes;
+use planrs_automation::text::TextError;
+use planrs_automation::{CommandError, CommandErrorKind};
+use planrs_core::{Diagnostic, Project, Subject, TaskUid};
 
-/// Phrase et détail d'un refus de commande : `(texte, détail)` ; détail
-/// vide s'il n'y en a pas. `project` : document visé (sujets en ID, L1) ;
-/// `engine` : langue des textes du moteur.
+use crate::diag_text::DiagTexts;
+use crate::i18n::{Arg, TextId, Texts};
+
+/// Codes du registre qu'un lot de l'interface peut produire et qui ont
+/// leur phrase dédiée (H-UI-105, test `h_ui_105_every_ui_code_has_sentence`).
+/// Les codes `text.*` et `custom.*` sont couverts par préfixe.
+pub const UI_CODES: [&str; 8] = [
+    codes::LINK_DUPLICATE,
+    codes::LINK_SELF,
+    codes::LINK_SUMMARY_DESCENDANT,
+    codes::TASK_NOT_FOUND,
+    codes::BATCH_WOULD_CREATE_ERRORS,
+    codes::PARAM_INVALID,
+    codes::LIMIT_EXCEEDED,
+    "text.bad_number",
+];
+
+/// Phrase et détail d'un refus de commande : `(texte, détail)`. `project` :
+/// document visé (sujets en ID) ; `engine` : langue des textes du moteur
+/// (repris dans le détail).
 #[must_use]
 pub fn user_message(
     error: &CommandError,
@@ -23,18 +48,145 @@ pub fn user_message(
     texts: &Texts,
     engine: planrs_automation::text::Language,
 ) -> (String, String) {
-    // L0 : le projet n'est pas encore lu (sujets en UID dans le texte du
-    // moteur, comme avant la passe).
-    let _ = project;
-    let detail = error.message(engine);
-    let text = texts.get_args(error_text_id(error.code), &[("detail", Arg::Str(detail.into()))]);
-    (text, String::new())
+    let text = sentence(error, project, texts).unwrap_or_else(|| texts.get(TextId::RefusalGeneric));
+    (text, detail(error, texts, engine))
 }
 
-/// Textes posés par le lot L0 pour les refus en langage d'utilisateur,
-/// servis par le lot L1 (H-UI-105) : phrase générique, détail (code,
-/// opération), tâche supprimée, et une phrase par code du registre que
-/// l'interface produit.
+/// ID affiché de la tâche `uid` (« 12 »), ou « une tâche supprimée ».
+fn task_label(uid: TaskUid, project: Option<&Project>, texts: &Texts) -> String {
+    project.and_then(|p| p.task_id(uid)).map_or_else(
+        || texts.get(TextId::RefusalDeletedTask),
+        |id| id.get().to_string(),
+    )
+}
+
+/// Phrase dédiée au code de `error`, s'il en a une.
+fn sentence(error: &CommandError, project: Option<&Project>, texts: &Texts) -> Option<String> {
+    let code = error.code;
+    if code.starts_with("custom.") {
+        return Some(texts.get(TextId::RefusalCustomField));
+    }
+    if code.starts_with("text.") {
+        return Some(text_sentence(&error.kind, texts));
+    }
+    match code {
+        codes::LINK_DUPLICATE => {
+            let Some(Subject::Link {
+                predecessor,
+                successor,
+            }) = error.subject
+            else {
+                return None;
+            };
+            Some(texts.get_args(
+                TextId::RefusalLinkDuplicate,
+                &[
+                    (
+                        "successor",
+                        Arg::Str(task_label(successor, project, texts).into()),
+                    ),
+                    (
+                        "predecessor",
+                        Arg::Str(task_label(predecessor, project, texts).into()),
+                    ),
+                ],
+            ))
+        }
+        codes::LINK_SELF => Some(texts.get(TextId::RefusalLinkSelf)),
+        codes::LINK_SUMMARY_DESCENDANT => Some(texts.get(TextId::RefusalLinkSummary)),
+        codes::TASK_NOT_FOUND => {
+            // L'UID d'une tâche introuvable n'a pas d'ID : phrase générique,
+            // l'UID reste dans le détail.
+            let CommandErrorKind::UnknownTask(uid) = error.kind else {
+                return None;
+            };
+            let id = project.and_then(|p| p.task_id(uid))?;
+            Some(texts.get_args(
+                TextId::RefusalTaskNotFound,
+                &[("id", Arg::Str(id.get().to_string().into()))],
+            ))
+        }
+        codes::BATCH_WOULD_CREATE_ERRORS => {
+            let CommandErrorKind::WouldCreateErrors(diags) = &error.kind else {
+                return None;
+            };
+            let first = diags.first()?;
+            Some(diagnostic_sentence(first, project, texts))
+        }
+        codes::PARAM_INVALID => Some(texts.get(TextId::RefusalParamInvalid)),
+        codes::LIMIT_EXCEEDED => Some(texts.get(TextId::RefusalLimitExceeded)),
+        _ => None,
+    }
+}
+
+/// Saisie illisible : le morceau fautif s'il est connu (unité, type de
+/// lien), sinon « Une valeur saisie n'est pas valable. ».
+fn text_sentence(kind: &CommandErrorKind, texts: &Texts) -> String {
+    let piece = match kind {
+        CommandErrorKind::Text(TextError::UnknownUnit { unit }) => Some(unit.as_str()),
+        CommandErrorKind::Text(TextError::BadLinkType { code }) => Some(code.as_str()),
+        _ => None,
+    };
+    match piece {
+        Some(piece) => texts.get_args(
+            TextId::RefusalTextParse,
+            &[("text", Arg::Str(Cow::Borrowed(piece)))],
+        ),
+        None => texts.get(TextId::RefusalParamInvalid),
+    }
+}
+
+/// Premier diagnostic d'un lot refusé : boucle de liens nommée par les ID
+/// de ses tâches (triés) ; autre diagnostic : son message traduit.
+fn diagnostic_sentence(d: &Diagnostic, project: Option<&Project>, texts: &Texts) -> String {
+    if let Diagnostic::LinkCycle { tasks } = d {
+        let mut ids: Vec<u32> = tasks
+            .iter()
+            .filter_map(|uid| project.and_then(|p| p.task_id(*uid)))
+            .map(planrs_core::TaskId::get)
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        if !ids.is_empty() {
+            let list: Vec<String> = ids.iter().map(ToString::to_string).collect();
+            return texts.get_args(
+                TextId::RefusalLinkCycle,
+                &[("tasks", Arg::Str(list.join(", ").into()))],
+            );
+        }
+    }
+    let detail = DiagTexts::new(texts).core(d);
+    texts.get_args(TextId::RefusalBatchErrors, &[("detail", Arg::Str(detail.into()))])
+}
+
+/// Détail repliable : code (et code du premier diagnostic d'un lot
+/// refusé), opération, champ, puis texte du moteur.
+fn detail(error: &CommandError, texts: &Texts, engine: planrs_automation::text::Language) -> String {
+    let mut code = error.code.to_owned();
+    if let CommandErrorKind::WouldCreateErrors(diags) = &error.kind
+        && let Some(first) = diags.first()
+    {
+        code.push_str(", ");
+        code.push_str(first.code());
+    }
+    let mut head = texts.get_args(TextId::RefusalDetailCode, &[("code", Arg::Str(code.into()))]);
+    if let Some(n) = error.op_index {
+        head.push_str(", ");
+        let n = i64::try_from(n).unwrap_or(i64::MAX);
+        head.push_str(&texts.get_args(TextId::RefusalDetailOperation, &[("n", Arg::Count(n))]));
+    }
+    if let Some(field) = &error.field {
+        head.push_str(", ");
+        head.push_str(field);
+    }
+    head.push('\n');
+    head.push_str(&error.message(engine));
+    head
+}
+
+/// Textes des refus en langage d'utilisateur (H-UI-105) : phrase
+/// générique, détail (code, opération), tâche supprimée, et une phrase par
+/// code du registre que l'interface produit.
 pub const L1_TEXTS: [TextId; 14] = [
     TextId::RefusalGeneric,
     TextId::RefusalDetailCode,
@@ -51,3 +203,67 @@ pub const L1_TEXTS: [TextId; 14] = [
     TextId::RefusalTextParse,
     TextId::RefusalCustomField,
 ];
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "tests : un échec doit s'arrêter net et lisiblement"
+)]
+mod tests {
+    use planrs_automation::error::codes;
+    use planrs_automation::text::{Language as Engine, TextError};
+    use planrs_automation::{CommandError, CommandErrorKind};
+    use planrs_core::{Diagnostic, Subject, TaskUid};
+
+    use super::{UI_CODES, user_message};
+    use crate::i18n::{Language, Texts};
+
+    fn uid(n: u32) -> TaskUid {
+        TaskUid::new(n)
+    }
+
+    /// Erreur représentative d'un code de [`UI_CODES`] (sujets inconnus du
+    /// projet absent : tâches dites « supprimées »).
+    fn sample(code: &'static str) -> CommandError {
+        let kind = match code {
+            codes::LINK_DUPLICATE => CommandErrorKind::DuplicateLink,
+            codes::LINK_SELF => CommandErrorKind::SelfLink,
+            codes::LINK_SUMMARY_DESCENDANT => CommandErrorKind::SummaryDescendantLink,
+            codes::TASK_NOT_FOUND => CommandErrorKind::UnknownTask(uid(3)),
+            codes::BATCH_WOULD_CREATE_ERRORS => {
+                CommandErrorKind::WouldCreateErrors(vec![Diagnostic::LinkCycle {
+                    tasks: vec![uid(2), uid(3)],
+                }])
+            }
+            codes::LIMIT_EXCEEDED => CommandErrorKind::Limit { what: "ops", max: 5 },
+            "text.bad_number" => CommandErrorKind::Text(TextError::BadNumber { at: 2 }),
+            _ => CommandErrorKind::InvalidParam("x".to_owned()),
+        };
+        CommandError::new(code, kind)
+            .with_subject(Subject::Link {
+                predecessor: uid(2),
+                successor: uid(3),
+            })
+            .with_op_index(4)
+    }
+
+    /// Aucune phrase ne cite le code, le numéro d'opération ni les mots du
+    /// registre ; le détail les porte.
+    #[test]
+    fn sentences_hide_codes_detail_keeps_them() {
+        for lang in [Language::Fr, Language::En] {
+            let texts = Texts::new(lang);
+            for code in UI_CODES {
+                let error = sample(code);
+                let (text, detail) = user_message(&error, None, &texts, Engine::Fr);
+                assert!(!text.contains(code), "{code}: {text}");
+                assert!(
+                    !text.contains("opération") && !text.contains("operation"),
+                    "{text}"
+                );
+                assert!(detail.contains(code), "{code}: {detail}");
+            }
+        }
+    }
+}

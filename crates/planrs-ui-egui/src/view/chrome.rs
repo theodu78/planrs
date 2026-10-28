@@ -1,5 +1,5 @@
-//! Habillage : barre de menus, écran d'accueil, barre d'état et bandeau de
-//! messages (le ruban à onglets est dans `view::ribbon`, ADR-0017 ; il
+//! Habillage : barre de menus, écran d'accueil, barre d'état, bandeau des
+//! décisions, notifications et historique des messages (le ruban à onglets est dans `view::ribbon`, ADR-0017 ; il
 //! remplace depuis le lot L5 l'ancienne barre d'outils de J7 et J8).
 //!
 //! `menu_bar` et `status_bar` reçoivent l'`Ui` racine et posent leur propre
@@ -8,8 +8,8 @@
 
 use planrs_core::Severity;
 
-use crate::action::Action;
 use crate::action::ConfirmChoice;
+use crate::action::{Action, MessageOp};
 use crate::app::{MAX_MESSAGES, UserMessage};
 use crate::column::Column;
 use crate::dialog::filter::FilterDialogMode;
@@ -17,6 +17,7 @@ use crate::format::format_date;
 use crate::i18n::{Arg, TextId};
 use crate::io::SaveKind;
 use crate::keymap::{Binding, Shortcut, UiBinding, shortcut_for_os, shortcut_text};
+use crate::notify::{MessageKind, MessageStore};
 use crate::ribbon::spec::{PERCENT_STEPS, RibbonCmd, percent_value};
 use crate::state::{FilterChoice, MAX_OUTLINE_LEVEL};
 use crate::state::{LanguagePref, ThemePref};
@@ -809,66 +810,285 @@ fn centered_row(ui: &mut egui::Ui, labels: &[String], add_contents: impl FnOnce(
 }
 
 /// Barre d'état (nom précédé de « * » si le document est modifié, nombre de
-/// tâches, plage, diagnostics) et bandeau des
-/// messages (sous la barre d'outils).
-pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMessage]) {
-    let texts = fc.texts;
-    egui::Panel::bottom("planrs_status_bar").show(ui, |ui| {
+/// tâches, plage, diagnostics, bouton de l'historique des messages), puis
+/// bandeau des décisions (`Blocking`, sous le ruban), notifications (en
+/// surimpression, en bas à droite au-dessus de la barre) et fenêtre de
+/// l'historique (H-UI-104). Les notifications ne déplacent aucune vue.
+pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &MessageStore) {
+    let bar = egui::Panel::bottom("planrs_status_bar").show(ui, |ui| {
         ui.horizontal(|ui| {
-            let Some(doc) = fc.doc else {
-                ui.label(texts.get(TextId::StatusNoDocument));
-                return;
-            };
-            // « * » si modifié, comme le titre de la fenêtre : sur le web,
-            // seul indicateur visible dans la page (relecture finale J4, F4).
-            ui.strong(crate::app::document_label(doc));
-            ui.separator();
-            let count = fc
-                .rows
-                .map(crate::rows::RowModel::len)
-                .filter(|&len| len > 0)
-                .unwrap_or_else(|| doc.project().tasks.len());
-            let count = i64::try_from(count).unwrap_or(i64::MAX);
-            ui.label(texts.get_args(TextId::StatusTasks, &[("count", Arg::Count(count))]));
-            ui.separator();
-            let labels = texts.format_labels();
-            ui.label(texts.get_args(
-                TextId::StatusRange,
-                &[
-                    (
-                        "start",
-                        Arg::Str(format_date(doc.schedule().project_start, labels).into()),
-                    ),
-                    (
-                        "finish",
-                        Arg::Str(format_date(doc.schedule().project_finish, labels).into()),
-                    ),
-                ],
-            ));
-            ui.separator();
-            // Cliquer sur un compteur ouvre ou referme le panneau des
-            // diagnostics. Compteurs calculés une fois par document (cache
-            // d'`App`, `DiagnosticsView`).
-            let errors = i64::try_from(fc.diagnostics.errors).unwrap_or(i64::MAX);
-            let warnings = i64::try_from(fc.diagnostics.warnings).unwrap_or(i64::MAX);
-            let counters = [
-                (TextId::StatusErrors, errors, ui.visuals().error_fg_color),
-                (TextId::StatusWarnings, warnings, ui.visuals().warn_fg_color),
-            ];
-            for (id, count, color) in counters {
-                let mut text = egui::RichText::new(texts.get_args(id, &[("count", Arg::Count(count))]));
-                if count > 0 {
-                    text = text.color(color);
-                }
-                if ui.selectable_label(fc.state.diagnostics_open, text).clicked() {
-                    fc.actions.push(Action::ToggleDiagnostics);
-                }
+            // Bouton de l'historique à droite, seulement s'il y a un
+            // message (barre inchangée sinon).
+            if messages.history().is_empty() {
+                status_contents(ui, fc);
+            } else {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    history_button(ui, fc, messages);
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        status_contents(ui, fc);
+                    });
+                });
             }
-            // --- J8 L9 : « Filtre : Critiques » (rien sans filtre).
-            super::task_view::status_indicator(ui, fc);
         });
     });
-    message_banner(ui, fc, messages);
+    let bar_h = bar.response.rect.height();
+    let bar_h = if bar_h.is_finite() {
+        bar_h.clamp(0.0, 200.0)
+    } else {
+        0.0
+    };
+    message_banner(ui, fc, messages.banner());
+    let ctx = ui.ctx().clone();
+    let hovered = if messages.history_open() {
+        history_window(&ctx, fc, messages, bar_h);
+        None
+    } else {
+        toasts(&ctx, fc, messages.toasts(), bar_h)
+    };
+    ctx.data_mut(|data| data.insert_temp(hovered_toast_id(), hovered));
+    // Repeint à l'échéance de la prochaine notification (aucun repeint
+    // immédiat : l'application reste au repos entre deux échéances).
+    let now = ctx.input(|input| input.time);
+    if let Some(left) = messages.next_expiry(now)
+        && let Ok(delay) = std::time::Duration::try_from_secs_f64(left + TOAST_REPAINT_SLACK)
+    {
+        ctx.request_repaint_after(delay);
+    }
+}
+
+/// Contenu de la barre d'état (document, tâches, plage, diagnostics,
+/// filtre).
+fn status_contents(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    let texts = fc.texts;
+    let Some(doc) = fc.doc else {
+        ui.label(texts.get(TextId::StatusNoDocument));
+        return;
+    };
+    // « * » si modifié, comme le titre de la fenêtre : sur le web,
+    // seul indicateur visible dans la page (relecture finale J4, F4).
+    ui.strong(crate::app::document_label(doc));
+    ui.separator();
+    let count = fc
+        .rows
+        .map(crate::rows::RowModel::len)
+        .filter(|&len| len > 0)
+        .unwrap_or_else(|| doc.project().tasks.len());
+    let count = i64::try_from(count).unwrap_or(i64::MAX);
+    ui.label(texts.get_args(TextId::StatusTasks, &[("count", Arg::Count(count))]));
+    ui.separator();
+    let labels = texts.format_labels();
+    ui.label(texts.get_args(
+        TextId::StatusRange,
+        &[
+            (
+                "start",
+                Arg::Str(format_date(doc.schedule().project_start, labels).into()),
+            ),
+            (
+                "finish",
+                Arg::Str(format_date(doc.schedule().project_finish, labels).into()),
+            ),
+        ],
+    ));
+    ui.separator();
+    // Cliquer sur un compteur ouvre ou referme le panneau des
+    // diagnostics. Compteurs calculés une fois par document (cache
+    // d'`App`, `DiagnosticsView`).
+    let errors = i64::try_from(fc.diagnostics.errors).unwrap_or(i64::MAX);
+    let warnings = i64::try_from(fc.diagnostics.warnings).unwrap_or(i64::MAX);
+    let counters = [
+        (TextId::StatusErrors, errors, ui.visuals().error_fg_color),
+        (TextId::StatusWarnings, warnings, ui.visuals().warn_fg_color),
+    ];
+    for (id, count, color) in counters {
+        let mut text = egui::RichText::new(texts.get_args(id, &[("count", Arg::Count(count))]));
+        if count > 0 {
+            text = text.color(color);
+        }
+        if ui.selectable_label(fc.state.diagnostics_open, text).clicked() {
+            fc.actions.push(Action::ToggleDiagnostics);
+        }
+    }
+    // --- J8 L9 : « Filtre : Critiques » (rien sans filtre).
+    super::task_view::status_indicator(ui, fc);
+}
+
+/// Largeur maximale d'une notification (H-UI-104).
+pub const TOAST_W: f32 = 420.0;
+
+/// Bouton qui ferme une notification (signe de multiplication U+00D7,
+/// symbole et non texte : rien à traduire).
+pub const TOAST_CLOSE_GLYPH: &str = "\u{d7}";
+
+/// Marge entre les notifications et le bord de la fenêtre ou la barre
+/// d'état.
+const TOAST_MARGIN: f32 = 12.0;
+
+/// Marge ajoutée au délai de repeint, pour que l'image tombe après
+/// l'échéance.
+const TOAST_REPAINT_SLACK: f64 = 0.05;
+
+/// Clé de la mémoire d'egui où la zone des notifications dépose la
+/// notification survolée de l'image (survol = pause, relu par `App` à
+/// l'image suivante).
+fn hovered_toast_id() -> egui::Id {
+    egui::Id::unique("planrs.toast-hovered")
+}
+
+/// Notification survolée à l'image précédente, s'il y en a une.
+#[must_use]
+pub fn hovered_toast(ctx: &egui::Context) -> Option<u64> {
+    ctx.data(|data| data.get_temp::<Option<u64>>(hovered_toast_id()))
+        .flatten()
+}
+
+/// Fond, liseré et texte d'un message selon sa sorte.
+fn message_colors(
+    kind: MessageKind,
+    palette: &Palette,
+    visuals: &egui::Visuals,
+) -> (egui::Color32, egui::Color32, egui::Color32) {
+    match kind {
+        MessageKind::Refusal | MessageKind::Blocking => {
+            (palette.message_error_bg, palette.critical, palette.text_strong)
+        }
+        MessageKind::Warning => (
+            palette.message_warning_bg,
+            visuals.warn_fg_color,
+            palette.text_strong,
+        ),
+        MessageKind::Info => (
+            visuals.window_fill,
+            visuals.widgets.noninteractive.bg_stroke.color,
+            visuals.text_color(),
+        ),
+    }
+}
+
+/// Bouton de l'historique dans la barre d'état : « Messages », puis le
+/// compte des non lus s'il y en a.
+fn history_button(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &MessageStore) {
+    let texts = fc.texts;
+    let mut label = texts.get(TextId::NotifyHistory);
+    let unread = messages.unread();
+    if unread > 0 {
+        let count = i64::try_from(unread).unwrap_or(i64::MAX);
+        label.push_str(" · ");
+        label.push_str(&texts.get_args(TextId::NotifyUnread, &[("count", Arg::Count(count))]));
+    }
+    if ui.selectable_label(messages.history_open(), label).clicked() {
+        fc.actions.push(Action::Message(MessageOp::ToggleHistory));
+    }
+}
+
+/// Corps d'un message : titre, texte, « Détails » repliable (fermé par
+/// défaut) ; `salt` distingue les repliables d'une même voie.
+fn message_body(ui: &mut egui::Ui, fc: &FrameCtx<'_>, message: &UserMessage, fg: egui::Color32, salt: &str) {
+    let texts = fc.texts;
+    if let Some(title) = message.title {
+        ui.label(egui::RichText::new(texts.get(title)).strong().color(fg));
+    }
+    ui.label(egui::RichText::new(message.text.as_str()).color(fg));
+    if let Some(detail) = message.detail.as_deref().filter(|d| !d.is_empty()) {
+        egui::CollapsingHeader::new(texts.get(TextId::NotifyDetails))
+            .id_salt((salt, message.id))
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new(detail).small().monospace().color(fg));
+            });
+    }
+}
+
+/// Zone des notifications, en bas à droite au-dessus de la barre d'état
+/// (`bar_h`), la plus récente en bas ; « × » sur chacune. Rend la
+/// notification survolée.
+fn toasts(ctx: &egui::Context, fc: &mut FrameCtx<'_>, toasts: &[UserMessage], bar_h: f32) -> Option<u64> {
+    if toasts.is_empty() {
+        return None;
+    }
+    let palette = fc.palette;
+    let close = fc.texts.get(TextId::NotifyClose);
+    let mut hovered = None;
+    let mut dismissed = Vec::new();
+    egui::Area::new(egui::Id::unique("planrs.toasts"))
+        .order(egui::Order::Foreground)
+        .anchor(
+            egui::Align2::RIGHT_BOTTOM,
+            egui::vec2(-TOAST_MARGIN, -(bar_h + TOAST_MARGIN)),
+        )
+        .show(ctx, |ui| {
+            ui.set_max_width(TOAST_W);
+            for toast in toasts {
+                let (fill, accent, fg) = message_colors(toast.kind, palette, ui.visuals());
+                let frame = egui::Frame::popup(ui.style())
+                    .fill(fill)
+                    .stroke(egui::Stroke::new(1.0, accent))
+                    .inner_margin(egui::Margin::same(8));
+                let response = frame
+                    .show(ui, |ui| {
+                        ui.set_max_width(TOAST_W);
+                        ui.horizontal_top(|ui| {
+                            ui.vertical(|ui| {
+                                ui.set_max_width(TOAST_W - 80.0);
+                                message_body(ui, fc, toast, fg, "planrs_toast_detail");
+                            });
+                            // « × » (H-UI-104) : nom distinct des « Fermer » des
+                            // fenêtres ; le texte traduit en infobulle.
+                            if ui
+                                .small_button(TOAST_CLOSE_GLYPH)
+                                .on_hover_text(close.as_str())
+                                .clicked()
+                            {
+                                dismissed.push(toast.id);
+                            }
+                        });
+                    })
+                    .response;
+                if ui.rect_contains_pointer(response.rect) {
+                    hovered = Some(toast.id);
+                }
+                ui.add_space(6.0);
+            }
+        });
+    for id in dismissed {
+        fc.actions.push(Action::Message(MessageOp::Dismiss(id)));
+    }
+    hovered
+}
+
+/// Fenêtre de l'historique (les [`crate::notify::MAX_HISTORY`] derniers
+/// messages, le plus récent en haut, détails repliables), ancrée comme les
+/// notifications.
+fn history_window(ctx: &egui::Context, fc: &mut FrameCtx<'_>, messages: &MessageStore, bar_h: f32) {
+    let texts = fc.texts;
+    let mut open = true;
+    egui::Window::new(texts.get(TextId::NotifyHistoryTitle))
+        .id(egui::Id::unique("planrs.message-history"))
+        .anchor(
+            egui::Align2::RIGHT_BOTTOM,
+            egui::vec2(-TOAST_MARGIN, -(bar_h + TOAST_MARGIN)),
+        )
+        .collapsible(false)
+        .resizable(false)
+        .default_width(TOAST_W)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            ui.set_max_width(TOAST_W);
+            if messages.history().is_empty() {
+                ui.label(texts.get(TextId::NotifyHistoryEmpty));
+                return;
+            }
+            egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                let fg = ui.visuals().text_color();
+                for message in messages.history().iter().rev() {
+                    message_body(ui, fc, message, fg, "planrs_history_detail");
+                    ui.separator();
+                }
+            });
+        });
+    if !open {
+        fc.actions.push(Action::Message(MessageOp::ToggleHistory));
+    }
 }
 
 /// Bandeau « Enregistrer les modifications de « nom » ? » (Enregistrer /
@@ -922,10 +1142,12 @@ fn banner_colors(
     }
 }
 
-/// Bandeau des messages, refermable ; jamais de modale. Texte fort
+/// Bandeau des décisions (`Blocking` : ouverture, enregistrement ou
+/// export échoués, état illisible), jamais de modale. Texte fort
 /// (`text_strong`) sur fond teinté (contraste ≥ 4,5:1, testé dans `theme`),
 /// liseré gauche coloré selon la gravité ; au plus [`MAX_MESSAGES`]
-/// messages, les plus récents.
+/// messages, les plus récents ; « Fermer le message » ne ferme que le
+/// sien (H-UI-104).
 fn message_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMessage]) {
     let messages = recent_messages(messages);
     if messages.is_empty() {
@@ -934,20 +1156,6 @@ fn message_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
     let texts = fc.texts;
     let palette = fc.palette;
     let has_error = messages.iter().any(|message| message.severity == Severity::Error);
-    // Titre de chaque message (« Impossible d'ouvrir le fichier »,
-    // « Modification refusée »), une fois par suite de messages de même
-    // titre.
-    let titled: Vec<(Option<String>, &UserMessage)> = messages
-        .iter()
-        .scan(None, |previous: &mut Option<TextId>, message| {
-            let title = message
-                .title
-                .filter(|title| *previous != Some(*title))
-                .map(|title| texts.get(title));
-            *previous = message.title;
-            Some((title, message))
-        })
-        .collect();
     let (fill, accent) = banner_colors(has_error, palette, ui.visuals());
     let fg = palette.text_strong;
     let frame = egui::Frame::side_top_panel(ui.style()).fill(fill);
@@ -961,22 +1169,19 @@ fn message_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
                 ui.painter()
                     .rect_filled(bar.expand2(egui::vec2(0.0, 2.0)), 0.0, accent);
             }
-            ui.horizontal(|ui| {
-                ui.add_space(6.0);
-                ui.vertical(|ui| {
-                    for (title, message) in titled {
-                        if let Some(title) = title {
-                            ui.label(egui::RichText::new(title).strong().size(15.0).color(fg));
+            for message in messages {
+                ui.horizontal(|ui| {
+                    ui.add_space(6.0);
+                    ui.vertical(|ui| {
+                        message_body(ui, fc, message, fg, "planrs_banner_detail");
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(texts.get(TextId::MessageDismiss)).clicked() {
+                            fc.actions.push(Action::Message(MessageOp::Dismiss(message.id)));
                         }
-                        ui.label(egui::RichText::new(message.text.as_str()).color(fg));
-                    }
+                    });
                 });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(texts.get(TextId::MessageDismiss)).clicked() {
-                        fc.actions.push(Action::DismissMessage);
-                    }
-                });
-            });
+            }
         });
 }
 

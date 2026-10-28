@@ -158,8 +158,11 @@ impl RowModel {
     /// Texte pré-formaté d'une cellule ; chaîne vide hors bornes.
     #[must_use]
     pub fn text(&self, i: usize, c: Column) -> &str {
+        // Champ de la seconde passe UX (sans texte pré-formaté avant le lot
+        // L7) : chaîne vide.
+        let ordinal = c.ordinal();
         i.checked_mul(Column::COUNT)
-            .and_then(|base| base.checked_add(c.ordinal()))
+            .and_then(|base| ordinal.and_then(|o| base.checked_add(o)))
             .and_then(|k| self.texts.get(k))
             .map_or("", String::as_str)
     }
@@ -397,6 +400,9 @@ fn push_texts(
                     SchedulingMode::Auto => l.mode_auto.clone(),
                     SchedulingMode::Manual { .. } => l.mode_manual.clone(),
                 },
+                // Champs de la seconde passe UX : hors de `Column::ALL`
+                // (valeurs servies par le lot L7).
+                _ => String::new(),
             }
         };
         texts.push(text);

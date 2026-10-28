@@ -108,13 +108,9 @@ pub const fn tsv_column(column: Column) -> Option<CsvColumn> {
         Column::Finish => Some(CsvColumn::Finish),
         Column::Predecessors => Some(CsvColumn::Predecessors),
         Column::PercentComplete => Some(CsvColumn::PercentComplete),
-        Column::TotalSlack
-        | Column::Critical
-        | Column::ResourceNames
-        | Column::BaselineStart
-        | Column::BaselineFinish
-        | Column::FinishVariance
-        | Column::Mode => None,
+        // Marge, critique, ressources, ligne de base, variation, mode et
+        // champs de la seconde passe UX (copiés à partir du lot L7).
+        _ => None,
     }
 }
 

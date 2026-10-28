@@ -14,6 +14,7 @@
 
 mod assignment;
 mod baseline;
+pub mod custom;
 mod extras;
 mod leveling;
 mod link;
@@ -28,6 +29,7 @@ use serde::{Deserialize, Serialize};
 
 pub use assignment::{Assignment, WorkContour};
 pub use baseline::{AssignmentBaseline, ResourceBaseline, TaskBaseline};
+pub use custom::{CustomFieldDef, CustomFieldId, CustomKind, CustomValue};
 pub use extras::{ExtraEntry, Extras};
 pub use leveling::LevelingDelay;
 pub use link::{Link, LinkType};

@@ -262,15 +262,9 @@ pub fn clear_cell(task: &Task, project: &Project, column: Column, ctx: &TextCont
                 })]
             }
         }
-        Column::Id
-        | Column::Duration
-        | Column::TotalSlack
-        | Column::Critical
-        | Column::ResourceNames
-        | Column::BaselineStart
-        | Column::BaselineFinish
-        | Column::FinishVariance
-        | Column::Mode => return CellClear::NotClearable,
+        // Colonnes calculées ou en lecture seule, et champs de la seconde
+        // passe UX (à partir du lot L7).
+        _ => return CellClear::NotClearable,
     };
     if ops.is_empty() {
         CellClear::Nothing
@@ -502,14 +496,9 @@ pub fn commit_edit(state: &EditState, session: &Session, lang: text::Language) -
                     batch.ops = vec![percent_update(uid, buffer, &ctx)?];
                     return Ok(batch);
                 }
-                Column::Id
-                | Column::TotalSlack
-                | Column::Critical
-                | Column::ResourceNames
-                | Column::BaselineStart
-                | Column::BaselineFinish
-                | Column::FinishVariance
-                | Column::Mode => return Err(EditError::NotEditable),
+                // Colonnes calculées ou en lecture seule, et champs de la seconde
+                // passe UX (à partir du lot L7).
+                _ => return Err(EditError::NotEditable),
             }
             vec![Command::TaskUpdate(op)]
         }
@@ -559,15 +548,9 @@ fn blank_row_ops(
             }));
             return Ok(ops);
         }
-        Column::Id
-        | Column::TotalSlack
-        | Column::Critical
-        | Column::PercentComplete
-        | Column::ResourceNames
-        | Column::BaselineStart
-        | Column::BaselineFinish
-        | Column::FinishVariance
-        | Column::Mode => return Err(EditError::NotEditable),
+        // Colonnes calculées ou en lecture seule, et champs de la seconde
+        // passe UX (à partir du lot L7).
+        _ => return Err(EditError::NotEditable),
     }
     Ok(vec![Command::TaskAdd(add)])
 }

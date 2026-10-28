@@ -1030,7 +1030,7 @@ fn ribbon_dropdown_runs_menu_entry() {
     node(&harness, &fr(TextId::RibbonColumns)).click();
     harness.run();
     let column = planrs_ui_egui::column::Column::Duration;
-    let visible = |h: &Harness<'static, App>| h.state().state.column(column).is_some_and(|c| c.visible);
+    let visible = |h: &Harness<'static, App>| h.state().state.shown(column);
     let was = visible(&harness);
     harness
         .query_all_by_label(&fr(column.title()))

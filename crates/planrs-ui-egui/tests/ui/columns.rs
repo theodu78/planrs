@@ -49,7 +49,7 @@ fn grip_label(column: Column) -> String {
 }
 
 fn visible(app: &App, column: Column) -> bool {
-    app.state.column(column).unwrap().visible
+    app.state.shown(column)
 }
 
 /// Affiche `column` par le réducteur (une image).

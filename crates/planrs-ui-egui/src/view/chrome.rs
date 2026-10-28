@@ -543,7 +543,7 @@ pub(crate) fn dropdown_contents(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, cmd: R
 /// menu du titre de colonne (J7, lot L6).
 fn column_choices(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     for column in Column::ALL {
-        let mut visible = fc.state.column(column).is_some_and(|state| state.visible);
+        let mut visible = fc.state.shown(column);
         let check = egui::Checkbox::new(&mut visible, fc.texts.get(column.title()));
         if ui.add_enabled(column.hideable(), check).clicked() {
             fc.actions.push(Action::ToggleColumn(column));
@@ -995,11 +995,12 @@ mod tests {
     use crate::app::{MAX_MESSAGES, UserMessage};
 
     fn message(n: usize) -> UserMessage {
-        UserMessage {
-            severity: Severity::Warning,
-            title: None,
-            text: n.to_string(),
-        }
+        UserMessage::new(
+            crate::notify::MessageKind::Warning,
+            Severity::Warning,
+            None,
+            n.to_string(),
+        )
     }
 
     #[test]

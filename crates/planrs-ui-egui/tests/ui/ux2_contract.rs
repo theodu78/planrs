@@ -229,19 +229,20 @@ fn ux2_pane_op_writes_state() {
     assert_eq!(read.timeline_height, state.timeline_height);
 }
 
-/// Contrat L0 (messages) : `MessageOp::Dismiss` ne ferme que son message ;
-/// `DismissMessage` vide le bandeau (comportement d'avant la passe).
+/// Contrat L0 (messages), servi par L1 : `MessageOp::Dismiss` ne ferme que
+/// son message ; `DismissMessage` ferme tous les messages affichés ;
+/// `ToggleHistory` ouvre l'historique sans rien publier.
 #[test]
 fn ux2_message_dismiss_one() {
     let mut harness = demo_on_row(1);
     for _ in 0..2 {
         // Même texte deux fois : un seul message (doublon remplacé).
-        harness
-            .state_mut()
-            .dispatch(Action::Message(MessageOp::ToggleHistory));
+        harness.state_mut().dispatch(Action::About);
         harness.run();
     }
-    harness.state_mut().dispatch(Action::About);
+    harness
+        .state_mut()
+        .report_state_load(&planrs_ui_egui::state::StateLoadError::NotObject);
     harness.run();
     assert_eq!(harness.state().messages().len(), 2);
     let first = harness.state().messages()[0].id;
@@ -251,6 +252,12 @@ fn ux2_message_dismiss_one() {
     harness.run();
     assert_eq!(harness.state().messages().len(), 1);
     assert_ne!(harness.state().messages()[0].id, first);
+    harness
+        .state_mut()
+        .dispatch(Action::Message(MessageOp::ToggleHistory));
+    harness.run();
+    assert_eq!(harness.state().messages().len(), 1);
+    assert!(harness.state().message_store().history_open());
     harness.state_mut().dispatch(Action::DismissMessage);
     harness.run();
     assert_eq!(harness.state().messages().len(), 0);

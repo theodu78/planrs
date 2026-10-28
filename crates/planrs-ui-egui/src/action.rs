@@ -61,7 +61,9 @@ pub enum Action {
     ScrollToRow(usize),
     /// Ouvre ou referme le panneau des diagnostics.
     ToggleDiagnostics,
-    /// Referme le bandeau de messages.
+    /// Ferme tous les messages affichés (bandeau et notifications ;
+    /// l'historique est gardé). Le « Fermer » de chaque message pousse
+    /// `Message(MessageOp::Dismiss)`.
     DismissMessage,
     /// Applique un lot de commandes à la session du document (toute
     /// édition passe par le registre). Sans effet jusqu'au lot L11.
@@ -324,7 +326,7 @@ pub enum DetailsOp {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageOp {
     /// Ferme le message d'identifiant donné (notification ou bandeau) ;
-    /// `Action::DismissMessage` reste « Fermer » du bandeau entier.
+    /// `Action::DismissMessage` ferme tous les messages affichés.
     Dismiss(u64),
     /// Ouvre ou ferme l'historique des messages.
     ToggleHistory,

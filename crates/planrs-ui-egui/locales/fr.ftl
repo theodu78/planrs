@@ -905,6 +905,7 @@ diag-baseline-task_skipped = { $count ->
     }
 diag-baseline-nothing_to_clear = ligne de base { $number } : rien à effacer
 diag-schedule-internal = incohérence interne du calcul (anomalie à signaler) : { $detail }
+diag-task-custom_invalid = la tâche { $task } a une valeur de { $field } du mauvais type ou hors des bornes
 diag-mspdi-invalid_value = valeur illisible ou hors bornes : valeur par défaut appliquée
 diag-mspdi-unknown_code = code inconnu ({ $code }) : valeur par défaut appliquée
 diag-mspdi-missing_required = élément obligatoire absent

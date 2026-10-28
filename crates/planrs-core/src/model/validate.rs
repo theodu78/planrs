@@ -10,7 +10,9 @@
 //! 8. calendrier du projet qui n'est pas un calendrier de base ;
 //! 9. pour chaque calendrier : héritage, semaines datées qui se chevauchent,
 //!    exceptions qui se chevauchent (jugées sur les jours dépliés des
-//!    récurrences), récurrences non prises en charge.
+//!    récurrences), récurrences non prises en charge ;
+//! 10. champs personnalisés (R-263) : valeur du type du champ et dans ses
+//!     bornes.
 //!
 //! `CalendarSet::compile` ajoute ensuite `CalendarNoWorkingTime`.
 
@@ -40,7 +42,24 @@ impl Project {
         for calendar in &self.calendars {
             self.check_calendar(calendar, &mut out);
         }
+        self.check_custom(&mut out);
         out
+    }
+
+    /// Contrôle 10 (R-263) : chaque valeur personnalisée (récapitulative du
+    /// projet comprise) a le type de son champ et tient dans ses bornes ;
+    /// sinon `task.custom_invalid` (erreur), une fois par valeur.
+    fn check_custom(&self, out: &mut Diagnostics) {
+        for task in self.summary_task.iter().chain(self.tasks.iter()) {
+            for (field, value) in &task.custom {
+                if value.kind() != field.kind() || value.check().is_err() {
+                    out.push(Diagnostic::TaskCustomInvalid {
+                        task: task.uid(),
+                        field: *field,
+                    });
+                }
+            }
+        }
     }
 
     /// Contrôle 1 : uID 0 dans `tasks` (impossible après lecture JSON, possible par l'API).

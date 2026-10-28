@@ -298,6 +298,10 @@ impl Diagnostic {
             }
             Self::BaselineTaskSkipped { count } => vec![("count", DiagArg::Int(i64::from(*count)))],
             Self::ScheduleInternal { detail } => vec![("detail", DiagArg::Text(detail.clone()))],
+            Self::TaskCustomInvalid { task: t, field } => vec![
+                ("task", task(*t)),
+                ("field", DiagArg::Text(field.canonical_name())),
+            ],
         }
     }
 
@@ -506,6 +510,10 @@ impl Diagnostic {
             Self::ScheduleInternal {
                 detail: "x".to_owned(),
             },
+            Self::TaskCustomInvalid {
+                task: t1,
+                field: crate::model::CustomFieldId::TEXT1,
+            },
         ]
     }
 }
@@ -583,6 +591,7 @@ mod tests {
             D::BaselineTaskSkipped { .. } => 57,
             D::BaselineNothingToClear { .. } => 58,
             D::ScheduleInternal { .. } => 59,
+            D::TaskCustomInvalid { .. } => 60,
         }
     }
 
@@ -591,7 +600,7 @@ mod tests {
     fn n5_examples_cover_every_variant() {
         let examples = Diagnostic::examples();
         let ranks: Vec<usize> = examples.iter().map(rank).collect();
-        assert_eq!(ranks, (0..60).collect::<Vec<_>>());
+        assert_eq!(ranks, (0..61).collect::<Vec<_>>());
         let codes: BTreeSet<&str> = examples.iter().map(Diagnostic::code).collect();
         assert_eq!(codes.len(), examples.len());
     }

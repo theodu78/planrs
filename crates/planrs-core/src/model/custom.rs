@@ -1,10 +1,11 @@
 //! Champs personnalisés simples (ADR-0019 D8, R-263) : types seuls.
 //!
 //! Texte1 à Texte30, Nombre1 à Nombre20, Date1 à Date10, Indicateur1 à
-//! Indicateur20, sans formule ni table de choix. Contrat posé par le lot L0
-//! de la seconde passe UX ; les champs `Project.custom_fields` et
-//! `Task.custom`, les bornes des valeurs, les commandes et le MSPDI sont
-//! ajoutés par le lot L8 (R-263 à R-266).
+//! Indicateur20, sans formule ni table de choix. Types posés par le lot L0
+//! de la seconde passe UX ; bornes des valeurs et champs
+//! `Project.custom_fields` et `Task.custom` ajoutés par le lot L8 (R-263) ;
+//! commandes dans `planrs-automation` (R-264), MSPDI dans `planrs-mspdi`
+//! (R-265, R-266). Aucun calcul n'en dépend.
 //!
 //! Identifiant sérialisé en minuscules, sans séparateur (`"text1"`,
 //! `"number20"`, `"date10"`, `"flag1"`) : clé des commandes (`task.update {
@@ -28,6 +29,21 @@ pub const MAX_CUSTOM_TEXT_CHARS: usize = 255;
 /// Longueur maximale d'un alias, en caractères (R-263 ; schéma MSPDI :
 /// `Alias` de 50 caractères au plus, S91).
 pub const MAX_CUSTOM_ALIAS_CHARS: usize = 50;
+
+/// Plus grande valeur absolue d'un nombre personnalisé, en dix-millièmes :
+/// |x| ≤ 10^14 (R-263), soit 10^18 dix-millièmes (tient dans un `i64`).
+pub const MAX_CUSTOM_NUMBER_ABS: i64 = 1_000_000_000_000_000_000;
+
+/// Valeur personnalisée hors de ses bornes (R-263).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum CustomValueError {
+    /// Texte de plus de [`MAX_CUSTOM_TEXT_CHARS`] caractères.
+    #[error("texte de plus de 255 caractères")]
+    TooLong,
+    /// Nombre au-delà de ±10^14.
+    #[error("nombre hors des bornes (±10^14)")]
+    OutOfRange,
+}
 
 /// Type d'un champ personnalisé.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -71,6 +87,12 @@ pub struct CustomFieldId {
 }
 
 impl CustomFieldId {
+    /// Texte1, premier champ.
+    pub const TEXT1: Self = Self {
+        kind: CustomKind::Text,
+        index: 1,
+    };
+
     /// Champ `kind` de numéro `index` ; `None` hors de `1..=max(kind)`.
     #[must_use]
     pub const fn new(kind: CustomKind, index: u8) -> Option<Self> {
@@ -109,6 +131,20 @@ impl CustomFieldId {
     #[must_use]
     pub const fn index(self) -> u8 {
         self.index
+    }
+
+    /// Nom canonique anglais du champ (S90 : « Represents the Text1 (Task)
+    /// field. ») : `Text1`, `Number20`, `Date10`, `Flag1` ; c'est le
+    /// `FieldName` écrit dans le MSPDI (R-266).
+    #[must_use]
+    pub fn canonical_name(self) -> String {
+        let word = match self.kind {
+            CustomKind::Text => "Text",
+            CustomKind::Number => "Number",
+            CustomKind::Date => "Date",
+            CustomKind::Flag => "Flag",
+        };
+        format!("{word}{}", self.index)
     }
 }
 
@@ -160,7 +196,7 @@ impl From<CustomFieldId> for String {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CustomValue {
-    /// Texte (≤ [`MAX_CUSTOM_TEXT_CHARS`] caractères, borne vérifiée en L8).
+    /// Texte (≤ [`MAX_CUSTOM_TEXT_CHARS`] caractères, [`CustomValue::check`]).
     Text(String),
     /// Nombre en dix-millièmes ([`CUSTOM_NUMBER_SCALE`]).
     Number(i64),
@@ -171,6 +207,30 @@ pub enum CustomValue {
 }
 
 impl CustomValue {
+    /// R-263 : valeur dans ses bornes — texte d'au plus
+    /// [`MAX_CUSTOM_TEXT_CHARS`] caractères, nombre d'au plus
+    /// [`MAX_CUSTOM_NUMBER_ABS`] dix-millièmes en valeur absolue.
+    ///
+    /// # Errors
+    ///
+    /// [`CustomValueError`] hors des bornes.
+    pub fn check(&self) -> Result<(), CustomValueError> {
+        match self {
+            Self::Text(t) if t.chars().nth(MAX_CUSTOM_TEXT_CHARS).is_some() => Err(CustomValueError::TooLong),
+            Self::Number(n) if n.unsigned_abs() > MAX_CUSTOM_NUMBER_ABS.unsigned_abs() => {
+                Err(CustomValueError::OutOfRange)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Valeur « vide » : texte vide ou indicateur à `false`, jamais stockée
+    /// (R-263 : absent = vide).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        matches!(self, Self::Text(t) if t.is_empty()) || *self == Self::Flag(false)
+    }
+
     /// Type de la valeur.
     #[must_use]
     pub const fn kind(&self) -> CustomKind {

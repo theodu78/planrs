@@ -906,6 +906,7 @@ diag-baseline-task_skipped = { $count ->
     }
 diag-baseline-nothing_to_clear = baseline { $number }: nothing to clear
 diag-schedule-internal = internal scheduling inconsistency (please report): { $detail }
+diag-task-custom_invalid = task { $task } has a { $field } value of the wrong type or out of range
 diag-mspdi-invalid_value = unreadable or out-of-range value: default applied
 diag-mspdi-unknown_code = unknown code ({ $code }): default applied
 diag-mspdi-missing_required = required element missing

@@ -854,6 +854,7 @@ text_ids! {
     DiagBaselineTaskSkipped => "diag-baseline-task_skipped",
     DiagBaselineNothingToClear => "diag-baseline-nothing_to_clear",
     DiagScheduleInternal => "diag-schedule-internal",
+    DiagTaskCustomInvalid => "diag-task-custom_invalid",
     DiagMspdiInvalidValue => "diag-mspdi-invalid_value",
     DiagMspdiUnknownCode => "diag-mspdi-unknown_code",
     DiagMspdiMissingRequired => "diag-mspdi-missing_required",

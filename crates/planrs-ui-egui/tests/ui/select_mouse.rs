@@ -215,6 +215,60 @@ fn h_ui_88_jitter_click_selects() {
     assert_eq!(b.active, (RowRef::Item(uid_at(app, 6)), Column::Name));
 }
 
+/// Bords gauche et droit écran de la colonne `column` (ligne `i` visible).
+fn cell_x_span(harness: &Harness<'static, App>, i: usize, column: Column) -> (f32, f32) {
+    let app = harness.state();
+    let center = cell_point(harness, i, column).x;
+    let w = app
+        .state
+        .visible_columns()
+        .find(|c| c.column == column)
+        .map(|c| f32::from(c.width))
+        .unwrap();
+    (center - w / 2.0, center + w / 2.0)
+}
+
+/// H-UI-88 (relecture finale, n° 1) : un tremblement de 3 points sous le
+/// seuil de glisser qui franchit une bordure reste la cellule appuyée :
+/// cellule (bordure droite du Nom), ID (bordure basse) et titre de colonne
+/// (bordure gauche de la Durée, hors de la poignée de largeur).
+#[test]
+fn h_ui_88_jitter_across_border_stays() {
+    let mut harness = demo();
+    let (_, right) = cell_x_span(&harness, 6, Column::Name);
+    let p = pos2(right - 2.0, cell_point(&harness, 6, Column::Name).y);
+    press_at(&mut harness, p, Modifiers::NONE);
+    move_to(&mut harness, p + egui::vec2(3.0, 0.0));
+    release_at(&mut harness, p + egui::vec2(3.0, 0.0));
+    let app = harness.state();
+    let b = block(app);
+    assert!(b.is_single(), "{b:?}");
+    assert_eq!(b.active, (RowRef::Item(uid_at(app, 6)), Column::Name));
+    // ID : bordure basse de la ligne 6.
+    let row_h = harness.state().row_h();
+    let id = cell_point(&harness, 6, Column::Id);
+    let p = pos2(id.x, id.y + row_h / 2.0 - 2.0);
+    press_at(&mut harness, p, Modifiers::NONE);
+    move_to(&mut harness, p + egui::vec2(0.0, 3.0));
+    release_at(&mut harness, p + egui::vec2(0.0, 3.0));
+    let app = harness.state();
+    assert_eq!(app.selected().kind(), SelectionKind::Rows);
+    assert_eq!(app.selected().click_order(), [uid_at(app, 6)]);
+    // Titre : 5 points dans la Durée, puis 0,5 point dans le Nom.
+    let (left, _) = cell_x_span(&harness, 6, DUR);
+    let y = header_point(&harness, DUR).y;
+    press_at(&mut harness, pos2(left + 5.0, y), Modifiers::NONE);
+    move_to(&mut harness, pos2(left - 0.5, y));
+    release_at(&mut harness, pos2(left - 0.5, y));
+    assert_eq!(block(harness.state()).columns, [DUR]);
+    // Au-delà du seuil, le premier changement de cellule compte.
+    let p = pos2(right - 2.0, cell_point(&harness, 6, Column::Name).y);
+    press_at(&mut harness, p, Modifiers::NONE);
+    move_to(&mut harness, p + egui::vec2(7.0, 0.0));
+    release_at(&mut harness, p + egui::vec2(7.0, 0.0));
+    assert_eq!(block(harness.state()).columns, [Column::Name, DUR]);
+}
+
 /// H-UI-88 : Maj+appui étend depuis l'ancre (bloc 2-5 × Durée-Début).
 #[test]
 fn h_ui_88_shift_press_extends() {
@@ -433,6 +487,54 @@ fn h_ui_91_autoscroll_down() {
     let still = harness.state().view().last_scroll_y;
     harness.run();
     assert_eq!(harness.state().view().last_scroll_y, still);
+}
+
+/// Bord droit écran de la table (corps), d'après la colonne ID et la
+/// largeur relevée.
+fn table_right(harness: &Harness<'static, App>) -> f32 {
+    let app = harness.state();
+    let (left, _) = cell_x_span(harness, 0, Column::Id);
+    left + app.view().table_scroll_x + app.view().last_table_width
+}
+
+/// H-UI-91 (relecture finale, n° 2) : glisser vertical à 40 points du bord
+/// droit de la table, avec 1 point de dérive vers la droite, 30 images ⇒
+/// la table ne défile pas de côté ; au-delà du bord droit, elle défile.
+#[test]
+fn h_ui_91_no_horizontal_autoscroll_on_drift() {
+    let mut harness = demo();
+    // Table plus étroite que ses colonnes.
+    harness
+        .state_mut()
+        .dispatch(planrs_ui_egui::Action::SetTableWidth(400));
+    harness.run();
+    let app = harness.state();
+    let columns_w: f32 = app.state.visible_columns().map(|c| f32::from(c.width)).sum();
+    assert!(
+        columns_w > app.view().last_table_width + 100.0,
+        "colonnes {columns_w}, table {}",
+        app.view().last_table_width
+    );
+    let right = table_right(&harness);
+    let y = cell_point(&harness, 2, Column::Name).y;
+    let row_h = harness.state().row_h();
+    let from = pos2(right - 40.0, y);
+    press_at(&mut harness, from, Modifiers::NONE);
+    for k in 1..=30_u8 {
+        let dy = (f32::from(k) * row_h / 6.0).min(row_h * 3.0);
+        move_to(&mut harness, from + egui::vec2(1.0, dy));
+    }
+    assert_eq!(harness.state().view().table_scroll_x, 0.0);
+    release_at(&mut harness, from + egui::vec2(1.0, row_h * 3.0));
+    assert_eq!(harness.state().view().table_scroll_x, 0.0);
+    // Au-delà du bord droit : défilement.
+    press_at(&mut harness, from, Modifiers::NONE);
+    for _ in 0..10 {
+        move_to(&mut harness, pos2(right + 10.0, y));
+    }
+    let x = harness.state().view().table_scroll_x;
+    assert!(x > 0.0 && x.is_finite(), "défilement {x}");
+    release_at(&mut harness, pos2(right + 10.0, y));
 }
 
 /// H-UI-91 : glisser une barre (ou tracer un lien) près du bord bas fait

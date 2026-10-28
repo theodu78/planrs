@@ -188,6 +188,12 @@ pub struct SelectDrag {
     /// Dernière cellule envoyée (`SelectOp::DragTo` n'est poussé que quand
     /// elle change).
     pub last: (crate::nav::RowRef<TaskUid>, Column),
+    /// Le pointeur s'est éloigné du point d'appui d'au moins le seuil de
+    /// glisser d'egui (`max_click_dist`) : tant que faux, aucun
+    /// `SelectOp::DragTo` (un tremblement qui franchit une bordure reste la
+    /// cellule appuyée, H-UI-88) ni défilement automatique (H-UI-91) ; une
+    /// fois vrai, il le reste jusqu'au relâcher.
+    pub armed: bool,
 }
 
 /// Déplacement de lignes en cours (ADR-0018, contrat L0, H-UI-94).

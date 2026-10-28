@@ -318,6 +318,7 @@ fn header_cell(
                 *drag = Some(SelectDrag {
                     target: PressTarget::ColumnHeader,
                     last: (RowRef::Blank, column),
+                    armed: false,
                 });
             }
         }
@@ -340,7 +341,8 @@ fn header_cell(
 /// Glisser commencé sur un titre de colonne (H-UI-90) : la colonne sous le
 /// pointeur (bornée aux titres dessinés) étend la sélection de colonnes
 /// depuis l'ancre (`Press { ColumnHeader, Extend }`), poussé seulement
-/// quand elle change.
+/// quand elle change, une fois le seuil de glisser franchi
+/// ([`arm_select_drag`]).
 fn drag_over_headers(
     ui: &egui::Ui,
     fc: &mut FrameCtx<'_>,
@@ -350,18 +352,21 @@ fn drag_over_headers(
     let Some(d) = drag.as_mut().filter(|d| d.target == PressTarget::ColumnHeader) else {
         return;
     };
-    let Some(x) = ui
+    let Some(p) = ui
         .input(|i| {
             i.pointer
                 .primary_down()
                 .then(|| i.pointer.interact_pos())
                 .flatten()
         })
-        .map(|p| p.x)
-        .filter(|x| x.is_finite())
+        .filter(|p| p.is_finite())
     else {
         return;
     };
+    if !arm_select_drag(ui, d, p) {
+        return;
+    }
+    let x = p.x;
     let (Some(first), Some(last)) = (edges.first(), edges.last()) else {
         return;
     };
@@ -1335,6 +1340,7 @@ fn row_pointer(
             *select_drag = Some(SelectDrag {
                 target,
                 last: (row, column),
+                armed: false,
             });
         }
         fc.actions.push(Action::FocusPane(Pane::Table));
@@ -1547,13 +1553,30 @@ fn bounded(v: f32, lo: f32, hi: f32) -> f32 {
     v.min(hi).max(lo)
 }
 
+/// Seuil du glisser de sélection (H-UI-88) : arme `d` dès que `p` est à
+/// au moins `max_click_dist` d'egui (6 points par défaut) du point d'appui,
+/// et rend vrai tant qu'il est armé. Sans point d'appui connu (clic
+/// d'accessibilité) ou valeur non finie : jamais armé.
+pub(crate) fn arm_select_drag(ui: &egui::Ui, d: &mut SelectDrag, p: Pos2) -> bool {
+    if !d.armed {
+        let threshold = ui.ctx().options(|o| o.input_options.max_click_dist);
+        d.armed = ui
+            .input(|i| i.pointer.press_origin())
+            .filter(|o| o.is_finite())
+            .is_some_and(|o| o.distance(p) >= threshold);
+    }
+    d.armed
+}
+
 /// Glisser de sélection ouvert par un appui sur une cellule ou un ID
 /// (H-UI-88, H-UI-89) : tant que le bouton est tenu, la cellule sous le
 /// pointeur, **bornée au corps** (au-dessus : première ligne visible ; au-
 /// dessous ou sur la ligne vide : dernière ligne ; à gauche, à droite : la
 /// colonne du bord), devient l'extrémité du bloc (`SelectOp::DragTo`,
 /// poussé seulement quand elle change). Un glisser commencé sur l'ID reste
-/// en lignes entières (colonne ID). Toute valeur non finie : rien.
+/// en lignes entières (colonne ID). Rien tant que le pointeur n'a pas
+/// franchi le seuil de glisser ([`arm_select_drag`]). Toute valeur non
+/// finie : rien.
 fn track_select_drag(
     ui: &egui::Ui,
     fc: &mut FrameCtx<'_>,
@@ -1578,6 +1601,9 @@ fn track_select_drag(
     else {
         return;
     };
+    if !arm_select_drag(ui, d, p) {
+        return;
+    }
     let row_h = fc.metrics.row_h;
     let len = sheet.len().saturating_add(1);
     let y = bounded(p.y, at.clip.top(), at.clip.bottom() - 0.5);

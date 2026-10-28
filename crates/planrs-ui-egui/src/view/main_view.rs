@@ -447,20 +447,30 @@ fn paint_rows(
 /// en points (H-UI-91).
 const AUTOSCROLL_COLUMN_W: f32 = 80.0;
 
+/// Largeur de la zone du défilement automatique horizontal de la table, à
+/// l'intérieur du bord gauche ou droit, en points (H-UI-91) : étroite, pour
+/// qu'un glisser vertical dans la dernière colonne visible ne fasse pas
+/// défiler la table.
+const AUTOSCROLL_EDGE_X: f32 = 20.0;
+
 /// Défilement automatique pendant un glisser de la vue (ADR-0018 D1,
 /// H-UI-91) : sélection dans la table (cellules, ID ; en-têtes de colonne
 /// pour l'horizontal), barre ou lien du Gantt. Pointeur à moins d'une ligne
 /// du bord haut ou bas du corps, ou au-delà : défilement vertical de
 /// `nav::autoscroll_speed` lignes par seconde (`dt` de l'image), posé dans
 /// `pending_scroll_y` et borné à `[0, contenu − corps]` ; bloc de la table
-/// au bord gauche ou droit : même formule en colonnes de 80 points
-/// (`ScrollTableX`, borné par le réducteur). Seulement dans le sens où le
-/// pointeur s'est éloigné du point d'appui ([`toward`]). La sélection ou la cible suit
+/// à moins de 20 points du bord gauche ou droit, ou au-delà : même formule
+/// (`d` rapporté à ces 20 points) en colonnes de 80 points (`ScrollTableX`,
+/// borné par le réducteur). Seulement dans le sens où le pointeur s'est
+/// éloigné du point d'appui d'au moins le seuil de glisser ([`toward`]), et
+/// pour un glisser de sélection, seulement une fois armé
+/// ([`table::arm_select_drag`]). La sélection ou la cible suit
 /// la ligne sous le pointeur borné au corps à l'image suivante. Une image
 /// est redemandée tant que la vue défile.
 fn autoscroll(ui: &egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient, layout: &MainLayout) {
     use crate::action::PressTarget;
-    let selecting = view.select_drag.map(|d| d.target);
+    // Glisser de sélection pas encore armé (sous le seuil) : rien.
+    let selecting = view.select_drag.filter(|d| d.armed).map(|d| d.target);
     // Barre ou lien du Gantt, déplacement de lignes par l'ID (H-UI-94) :
     // défilement vertical.
     let bar = view.drag.is_some() || view.row_drag.is_some();
@@ -479,6 +489,7 @@ fn autoscroll(ui: &egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient, la
         return;
     };
     let origin = origin.filter(|o| o.is_finite()).unwrap_or(p);
+    let threshold = ui.ctx().options(|o| o.input_options.max_click_dist);
     let row_h = fc.metrics.row_h;
     let mut moving = false;
     if bar || matches!(selecting, Some(PressTarget::Cell | PressTarget::RowHeader)) {
@@ -486,6 +497,7 @@ fn autoscroll(ui: &egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient, la
         let speed = toward(
             crate::nav::autoscroll_speed(p.y, body.top(), body.bottom(), row_h),
             p.y - origin.y,
+            threshold,
         );
         let max = max_scroll_x(view.last_content_h, view.last_body_height);
         if let Some(y) = crate::nav::autoscroll_offset(view.last_scroll_y, speed, row_h, dt, max) {
@@ -497,8 +509,9 @@ fn autoscroll(ui: &egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient, la
     if matches!(selecting, Some(PressTarget::Cell | PressTarget::ColumnHeader)) {
         let clip = layout.table_clip;
         let speed = toward(
-            crate::nav::autoscroll_speed(p.x, clip.left(), clip.right(), AUTOSCROLL_COLUMN_W),
+            crate::nav::autoscroll_speed(p.x, clip.left(), clip.right(), AUTOSCROLL_EDGE_X),
             p.x - origin.x,
+            threshold,
         );
         let columns_w: f32 = fc.state.visible_columns().map(|c| f32::from(c.width)).sum();
         let max = max_scroll_x(columns_w, clip.width());
@@ -515,11 +528,13 @@ fn autoscroll(ui: &egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient, la
 }
 
 /// Vitesse de défilement automatique gardée seulement dans le sens où le
-/// pointeur s'est éloigné du point d'appui (`moved`) : un glisser commencé
-/// près d'un bord (barre de la première ligne visible glissée de côté) ne
-/// fait pas défiler la vue.
-fn toward(speed: f32, moved: f32) -> f32 {
-    if moved.is_finite() && speed * moved > 0.0 {
+/// pointeur s'est éloigné du point d'appui (`moved`) d'au moins `threshold`
+/// (seuil de glisser d'egui) : un glisser commencé près d'un bord (barre de
+/// la première ligne visible glissée de côté) ou un glisser vertical qui
+/// dérive d'un point vers la droite ne fait pas défiler la vue dans cet
+/// axe.
+fn toward(speed: f32, moved: f32, threshold: f32) -> f32 {
+    if moved.is_finite() && speed * moved > 0.0 && moved.abs() >= threshold {
         speed
     } else {
         0.0

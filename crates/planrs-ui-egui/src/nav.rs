@@ -229,8 +229,8 @@ pub const AUTOSCROLL_MAX: f32 = 40.0;
 /// gauche), positive vers le bas (ou la droite), 0 hors des zones.
 ///
 /// `pointer` : coordonnée du pointeur ; `top`, `bottom` : bords du corps ;
-/// `extent` : hauteur d'une ligne (largeur de 80 px d'une colonne pour
-/// l'horizontal). Zone : à moins d'une ligne d'un bord, ou au-delà ;
+/// `extent` : hauteur d'une ligne (zone de 20 px au bord pour
+/// l'horizontal de la table). Zone : à moins de `extent` d'un bord, ou au-delà ;
 /// `d` = distance au seuil (bord ± `extent`), vitesse
 /// `clamp(4 + 8·d / extent, 4, 40)`. Une valeur non finie, une ligne non
 /// positive ou un corps inversé ⇒ 0 (règle 10). Corps plus petit que deux

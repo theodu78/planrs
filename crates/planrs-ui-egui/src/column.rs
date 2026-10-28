@@ -231,6 +231,14 @@ pub const HEADER_MENU_TEXTS: [TextId; 4] = [
 /// large après un arrondi.
 const FIT_SLACK: f32 = 1.0;
 
+/// Nombre de textes mis en page exactement par l'ajustement : les plus
+/// larges d'après la somme des avances de leurs glyphes. Hypothèse : le
+/// crénage, seul écart entre cette somme et la mise en page, ne fait pas
+/// passer un texte hors des 64 premiers devant le plus large ; au pire la
+/// largeur manque de quelques dixièmes de point, absorbés par
+/// [`FIT_SLACK`].
+const FIT_EXACT: usize = 64;
+
 /// Largeur ajustée d'une colonne (H-UI-99, S88 : double-clic sur la bordure
 /// d'en-tête) : la plus grande des largeurs de texte `texts` (retrait de
 /// niveau de chaque ligne déjà compris), augmentée de `indent` (retrait
@@ -291,13 +299,12 @@ impl crate::App {
             return;
         };
         let width = ctx.fonts_mut(|fonts| {
-            let mut measure = |text: &str, font: &egui::FontId| {
-                fonts
-                    .layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER)
-                    .size()
-                    .x
-            };
-            let texts: Vec<f32> = (0..rows.len())
+            // Estimation rapide d'abord (somme des avances des glyphes, un
+            // cache par caractère), puis mise en page exacte des seuls
+            // textes les plus larges (`FIT_EXACT`) : 5 000 galleys coûtent
+            // plus que le budget de 50 ms (`best_fit_5000`).
+            let mut advance: std::collections::BTreeMap<char, f32> = std::collections::BTreeMap::new();
+            let mut candidates: Vec<(f32, f32, &str)> = (0..rows.len())
                 .filter_map(|i| {
                     let d = crate::row_view::DisplayRow::at(i);
                     let row = rows.row(d)?;
@@ -316,8 +323,25 @@ impl crate::App {
                     } else {
                         0.0
                     };
-                    Some(measure(text, &font) + indent + bold)
+                    let extra = indent + bold;
+                    let estimate: f32 = text
+                        .chars()
+                        .map(|c| *advance.entry(c).or_insert_with(|| fonts.glyph_width(&font, c)))
+                        .sum();
+                    Some((estimate + extra, extra, text))
                 })
+                .collect();
+            candidates.sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
+            let mut measure = |text: &str, font: &egui::FontId| {
+                fonts
+                    .layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER)
+                    .size()
+                    .x
+            };
+            let texts: Vec<f32> = candidates
+                .iter()
+                .take(FIT_EXACT)
+                .map(|(_, extra, text)| measure(text, &font) + extra)
                 .collect();
             let title_w = measure(&title, &title_font);
             fit_width(texts.into_iter(), title_w, metrics.pad_x, 0.0)

@@ -659,6 +659,19 @@ impl RibbonCmd {
         }
     }
 
+    /// Libellé de l'entrée de la liste « Remplir ▾ » ou « Effacer ▾ » du
+    /// groupe Édition (passe UX, lot L5) : « Vers le bas », « Contenu » ;
+    /// `None` pour une commande qui n'est pas une telle liste. L'entrée
+    /// pousse [`Self::action`] et affiche [`Self::shortcut`].
+    #[must_use]
+    pub const fn dropdown_entry(self) -> Option<TextId> {
+        match self {
+            Self::FillDown => Some(TextId::RibbonFillDown),
+            Self::ClearContents => Some(TextId::RibbonClearContents),
+            _ => None,
+        }
+    }
+
     /// Case cochable dans un menu contextuel (H-UI-74 : état de la tâche
     /// active).
     #[must_use]
@@ -1081,6 +1094,26 @@ const TASK_GROUPS: &[GroupSpec] = &[
                 TextId::RibbonScrollToTask,
                 TextId::RibbonTipScrollToTask,
                 RibbonCmd::ScrollToTask,
+            ),
+            // Passe UX (ADR-0018 D10, lot L5) : Remplir ▾ (Vers le bas) et
+            // Effacer ▾ (Contenu), listes à une entrée comme le groupe
+            // Editing de Project (S80) ; l'entrée est le jumeau du menu
+            // Édition ([`RibbonCmd::dropdown_entry`]).
+            item(
+                Dropdown,
+                Some(Icon::ArrowDownToLine),
+                TextId::RibbonFill,
+                TextId::RibbonTipFill,
+                Some(ui(UiBinding::FillDown)),
+                RibbonCmd::FillDown,
+            ),
+            item(
+                Dropdown,
+                Some(Icon::Eraser),
+                TextId::RibbonClear,
+                TextId::RibbonTipClear,
+                Some(ui(UiBinding::ClearCells)),
+                RibbonCmd::ClearContents,
             ),
         ],
         shrink_rank: 1,

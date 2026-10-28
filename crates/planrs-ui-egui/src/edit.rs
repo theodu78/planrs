@@ -14,19 +14,20 @@
 use std::collections::BTreeMap;
 
 use planrs_automation::command::{
-    DurationJson, LagJson, LinkKey, LinkSpec, LinkTypeJson, PercentJson, ProgressUpdate, TaskAdd, TaskUpdate,
+    ConstraintKindJson, DurationJson, LagJson, LinkKey, LinkSpec, LinkTypeJson, PercentJson, ProgressUpdate,
+    SetConstraint, TaskAdd, TaskUpdate,
 };
 use planrs_automation::text::{
     self, DateRole, PredecessorRef, TextContext, TextError, format_date, format_duration,
     format_predecessors, parse_date, parse_duration, parse_percent, parse_predecessors,
 };
 use planrs_automation::{Batch, Command, CommandError, Patch, Placement, Session, TaskRef};
-use planrs_core::{Duration, Lag, LinkType, Moment, Project, Task, TaskUid};
+use planrs_core::{Constraint, Duration, Lag, LinkType, Moment, Project, SchedulingMode, Task, TaskUid};
 
 use crate::app::OpenDocument;
 use crate::column::Column;
 use crate::i18n::{Arg, Language, TextId, Texts, error_text_id};
-use crate::rows::{RowKind, RowModel};
+use crate::rows::{Row, RowKind, RowModel};
 
 /// Étiquette de la tâche créée par la ligne vide, reprise par les liens du
 /// même lot (R-150).
@@ -41,6 +42,9 @@ pub enum EditError {
     UnknownId(u32),
     /// Colonne calculée, non éditable (ID, marge, critique).
     NotEditable,
+    /// Saisie vide sur une cellule qui ne peut pas être vide (R-259 : durée,
+    /// date d'une tâche manuelle ou d'une récapitulative…).
+    NotClearable,
 }
 
 impl From<TextError> for EditError {
@@ -63,6 +67,7 @@ impl EditError {
                 texts.get_args(TextId::EditErrorUnknownId, &[("id", Arg::Count(i64::from(*id)))])
             }
             Self::NotEditable => texts.get(TextId::EditErrorNotEditable),
+            Self::NotClearable => texts.get_args(TextId::CellsNotClearable, &[("count", Arg::Count(1))]),
         }
     }
 }
@@ -156,6 +161,122 @@ pub const fn editable(column: Column) -> bool {
             | Column::Predecessors
             | Column::PercentComplete
     )
+}
+
+/// Cellule modifiable pour ce type de ligne (ADR-0018, R-257, R-258) :
+/// colonne éditable ([`editable`]) et champ que le registre accepte
+/// d'écrire sur cette ligne. Une récapitulative n'a que son Nom et ses
+/// Prédécesseurs (durée, dates et % calculés, R-054, R-055) ; une tâche
+/// exclue n'a pas de % achevé ; une ligne vide MSPDI (`IsNull`) rien.
+#[must_use]
+pub fn writable(row: &Row, column: Column) -> bool {
+    if !editable(column) {
+        return false;
+    }
+    match row.kind {
+        RowKind::Null => false,
+        RowKind::Summary => matches!(column, Column::Name | Column::Predecessors),
+        RowKind::Excluded => column != Column::PercentComplete,
+        RowKind::Leaf | RowKind::Milestone => true,
+    }
+}
+
+/// Effacement d'une cellule (R-259).
+#[derive(Clone, Debug, PartialEq)]
+pub enum CellClear {
+    /// Opérations qui vident la cellule.
+    Ops(Vec<Command>),
+    /// Cellule déjà vide (nom vide, aucun lien, 0 %, contrainte par
+    /// défaut) : rien à écrire.
+    Nothing,
+    /// La cellule ne peut pas être vide (durée, date d'une tâche manuelle
+    /// ou d'une récapitulative, % d'une récapitulative ou d'une tâche
+    /// inactive, colonnes calculées).
+    NotClearable,
+}
+
+/// Vrai si la tâche `uid` est récapitulative (R-052 : la tâche non vide
+/// suivante est plus profonde).
+fn is_summary(project: &Project, uid: TaskUid) -> bool {
+    let Some(pos) = project.tasks.position(uid) else {
+        return false;
+    };
+    let Some(task) = project.tasks.at(pos) else {
+        return false;
+    };
+    project
+        .tasks
+        .iter()
+        .skip(pos.saturating_add(1))
+        .find(|t| !t.is_null)
+        .is_some_and(|next| next.outline_level.get() > task.outline_level.get())
+}
+
+/// R-259 : opérations qui vident la cellule (`task`, `column`) ; chemin
+/// unique de Ctrl+Suppr, de Suppr sur une cellule et de la validation d'une
+/// saisie vide.
+///
+/// - Nom ⇒ nom vide ; Prédécesseurs ⇒ liens retirés (même chemin que la
+///   saisie) ; % achevé ⇒ 0 % (récapitulative ou tâche inactive : non
+///   effaçable) ;
+/// - Début ou Fin d'une tâche automatique ⇒ contrainte par défaut du sens
+///   de planification (`task.set_constraint`) ; d'une tâche manuelle ou
+///   d'une récapitulative ⇒ non effaçable ;
+/// - Durée et colonnes calculées ⇒ non effaçables.
+#[must_use]
+pub fn clear_cell(task: &Task, project: &Project, column: Column, ctx: &TextContext) -> CellClear {
+    let uid = task.uid();
+    if task.is_null {
+        return CellClear::Nothing;
+    }
+    let ops = match column {
+        Column::Name if task.name.is_empty() => Vec::new(),
+        Column::Name => {
+            let mut op = update(uid);
+            op.name = Patch::Set(String::new());
+            vec![Command::TaskUpdate(op)]
+        }
+        Column::Predecessors => replace_links(task, &[], project, ctx),
+        Column::PercentComplete if is_summary(project, uid) || !task.active => {
+            return CellClear::NotClearable;
+        }
+        Column::PercentComplete if task.progress.percent_complete.get() == 0 => Vec::new(),
+        Column::PercentComplete => match percent_update(uid, "0", ctx) {
+            Ok(op) => vec![op],
+            Err(_) => return CellClear::NotClearable,
+        },
+        Column::Start | Column::Finish
+            if is_summary(project, uid) || matches!(task.mode, SchedulingMode::Manual { .. }) =>
+        {
+            return CellClear::NotClearable;
+        }
+        Column::Start | Column::Finish => {
+            let default = Constraint::default_for(&project.anchor);
+            if task.constraint == default {
+                Vec::new()
+            } else {
+                vec![Command::TaskSetConstraint(SetConstraint {
+                    uid: TaskRef::Uid(uid),
+                    kind: ConstraintKindJson::from(default.kind()),
+                    date: None,
+                })]
+            }
+        }
+        Column::Id
+        | Column::Duration
+        | Column::TotalSlack
+        | Column::Critical
+        | Column::ResourceNames
+        | Column::BaselineStart
+        | Column::BaselineFinish
+        | Column::FinishVariance
+        | Column::Mode => return CellClear::NotClearable,
+    };
+    if ops.is_empty() {
+        CellClear::Nothing
+    } else {
+        CellClear::Ops(ops)
+    }
 }
 
 /// `progress.update { percent_complete: { text } }` d'un % saisi (J7, lot
@@ -352,6 +473,16 @@ pub fn commit_edit(state: &EditState, session: &Session, lang: text::Language) -
             let Some(task) = project.tasks.get(uid) else {
                 return Ok(batch);
             };
+            // Saisie vide (Retour arrière puis Entrée, collage d'une cellule
+            // vide) : effacement de R-259 au lieu d'une lecture refusée.
+            if buffer.trim().is_empty() && editable(state.column) {
+                batch.ops = match clear_cell(task, project, state.column, &ctx) {
+                    CellClear::Ops(ops) => ops,
+                    CellClear::Nothing => Vec::new(),
+                    CellClear::NotClearable => return Err(EditError::NotClearable),
+                };
+                return Ok(batch);
+            }
             let mut op = update(uid);
             match state.column {
                 Column::Name => op.name = Patch::Set(buffer.to_owned()),
@@ -494,30 +625,42 @@ pub fn initial_text(
     column: Column,
     lang: Language,
 ) -> String {
+    let project = doc.project();
+    let ctx = TextContext::for_project(project, text_language(lang));
+    initial_text_in(project, rows, row, column, &ctx)
+}
+
+/// [`initial_text`] sur un projet et un contexte de texte donnés (copier
+/// et remplir un bloc de cellules, ADR-0018 : un contexte pour toutes les
+/// cellules).
+#[must_use]
+pub fn initial_text_in(
+    project: &Project,
+    rows: &RowModel,
+    row: usize,
+    column: Column,
+    ctx: &TextContext,
+) -> String {
     let Some(info) = rows.row(row) else {
         return String::new();
     };
     let display = rows.text(row, column);
-    let project = doc.project();
     let Some(task) = project.tasks.get(info.uid) else {
         return display.to_owned();
     };
-    let ctx = TextContext::for_project(project, text_language(lang));
     match column {
         // Récapitulative : durée calculée, affichée telle quelle (le registre
         // refuse de la modifier).
-        Column::Duration if info.kind != RowKind::Summary => {
-            duration_edit_text(&task.duration, display, &ctx)
-        }
+        Column::Duration if info.kind != RowKind::Summary => duration_edit_text(&task.duration, display, ctx),
         Column::Start => info.bar.map_or_else(
             || display.to_owned(),
-            |(start, _)| date_edit_text(start, display, DateRole::Start, &ctx),
+            |(start, _)| date_edit_text(start, display, DateRole::Start, ctx),
         ),
         Column::Finish => info.bar.map_or_else(
             || display.to_owned(),
-            |(_, finish)| date_edit_text(finish, display, DateRole::Finish, &ctx),
+            |(_, finish)| date_edit_text(finish, display, DateRole::Finish, ctx),
         ),
-        Column::Predecessors => predecessors_edit_text(task, project, display, &ctx),
+        Column::Predecessors => predecessors_edit_text(task, project, display, ctx),
         _ => display.to_owned(),
     }
 }

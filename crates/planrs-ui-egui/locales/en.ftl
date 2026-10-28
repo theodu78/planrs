@@ -724,8 +724,8 @@ paste-report-tasks = { $count ->
        *[other] { $count } tasks pasted
     }
 paste-report-links = { $count ->
-        [one] { $count } link not copied (one end outside the copy)
-       *[other] { $count } links not copied (one end outside the copy)
+        [one] { $count } link to a task that was not copied not kept
+       *[other] { $count } links to tasks that were not copied not kept
     }
 paste-report-assignments = { $count ->
         [one] { $count } assignment skipped (missing resource)
@@ -1285,3 +1285,227 @@ column-not-sortable = This column cannot be sorted: the Sort dialog lists the av
 # --- UX L4 ---
 
 # --- UX L5 ---
+
+# --- UX2 L0 (ADR-0019) ---
+col-unique-id = Unique ID
+col-wbs = WBS
+col-outline-level = Outline Level
+col-summary = Summary
+col-milestone = Milestone
+col-notes = Notes
+col-created = Created
+col-priority = Priority
+col-active = Active
+col-successors = Successors
+col-constraint-type = Constraint Type
+col-constraint-date = Constraint Date
+col-deadline = Deadline
+col-task-type = Type
+col-effort-driven = Effort Driven
+col-work = Work
+col-early-start = Early Start
+col-early-finish = Early Finish
+col-late-start = Late Start
+col-late-finish = Late Finish
+col-free-slack = Free Slack
+col-percent-work-complete = % Work Complete
+col-actual-start = Actual Start
+col-actual-finish = Actual Finish
+col-actual-duration = Actual Duration
+col-remaining-duration = Remaining Duration
+col-actual-work = Actual Work
+col-remaining-work = Remaining Work
+col-baseline-duration = Baseline Duration
+col-baseline-work = Baseline Work
+col-baseline1-start = Baseline1 Start
+col-baseline1-finish = Baseline1 Finish
+col-baseline1-duration = Baseline1 Duration
+col-baseline1-work = Baseline1 Work
+col-baseline2-start = Baseline2 Start
+col-baseline2-finish = Baseline2 Finish
+col-baseline2-duration = Baseline2 Duration
+col-baseline2-work = Baseline2 Work
+col-baseline3-start = Baseline3 Start
+col-baseline3-finish = Baseline3 Finish
+col-baseline3-duration = Baseline3 Duration
+col-baseline3-work = Baseline3 Work
+col-baseline4-start = Baseline4 Start
+col-baseline4-finish = Baseline4 Finish
+col-baseline4-duration = Baseline4 Duration
+col-baseline4-work = Baseline4 Work
+col-baseline5-start = Baseline5 Start
+col-baseline5-finish = Baseline5 Finish
+col-baseline5-duration = Baseline5 Duration
+col-baseline5-work = Baseline5 Work
+col-baseline6-start = Baseline6 Start
+col-baseline6-finish = Baseline6 Finish
+col-baseline6-duration = Baseline6 Duration
+col-baseline6-work = Baseline6 Work
+col-baseline7-start = Baseline7 Start
+col-baseline7-finish = Baseline7 Finish
+col-baseline7-duration = Baseline7 Duration
+col-baseline7-work = Baseline7 Work
+col-baseline8-start = Baseline8 Start
+col-baseline8-finish = Baseline8 Finish
+col-baseline8-duration = Baseline8 Duration
+col-baseline8-work = Baseline8 Work
+col-baseline9-start = Baseline9 Start
+col-baseline9-finish = Baseline9 Finish
+col-baseline9-duration = Baseline9 Duration
+col-baseline9-work = Baseline9 Work
+col-baseline10-start = Baseline10 Start
+col-baseline10-finish = Baseline10 Finish
+col-baseline10-duration = Baseline10 Duration
+col-baseline10-work = Baseline10 Work
+col-start-variance = Start Variance
+col-duration-variance = Duration Variance
+col-work-variance = Work Variance
+col-cost = Cost
+col-fixed-cost = Fixed Cost
+col-actual-cost = Actual Cost
+col-remaining-cost = Remaining Cost
+col-baseline-cost = Baseline Cost
+col-cost-variance = Cost Variance
+col-custom-text = Text{ $n }
+col-custom-number = Number{ $n }
+col-custom-date = Date{ $n }
+col-custom-flag = Flag{ $n }
+
+# --- UX2 L1 ---
+notify-history = Messages
+notify-unread = { $count ->
+    [one] 1 unread message
+   *[other] { $count } unread messages
+}
+notify-details = Details
+notify-close = Close
+notify-history-empty = No messages.
+notify-history-title = Recent messages
+refusal-generic = This change is not possible.
+refusal-detail-code = Code: { $code }
+refusal-detail-operation = operation { $n }
+refusal-deleted-task = a deleted task
+refusal-link-duplicate = Task { $successor } already has task { $predecessor } as a predecessor.
+refusal-link-cycle = This link would create a loop between tasks { $tasks }.
+refusal-link-self = A task cannot be its own predecessor.
+refusal-link-summary = A summary task cannot be linked to one of its subtasks.
+refusal-task-not-found = There is no task { $id }.
+refusal-batch-errors = This change would create an error: { $detail }
+refusal-param-invalid = An entered value is not valid.
+refusal-limit-exceeded = This change exceeds a project limit.
+refusal-text-parse = “{ $text }” cannot be read here.
+refusal-custom-field = This custom field does not accept this value.
+
+# --- UX2 L2 ---
+paste-links-dropped = { $count ->
+    [one] 1 link to a task that was not copied was not kept.
+   *[other] { $count } links to tasks that were not copied were not kept.
+}
+paste-rows-on-cells = You copied entire rows: select an entire row (click its ID) to paste them.
+paste-values-outside = { $count ->
+    [one] 1 value outside the table was not pasted.
+   *[other] { $count } values outside the table were not pasted.
+}
+link-already-linked = These tasks are already linked.
+menu-fill-right = Fill Right
+
+# --- UX2 L3 ---
+mac-menu-about = About { $product }
+mac-menu-hide = Hide { $product }
+mac-menu-hide-others = Hide Others
+mac-menu-show-all = Show All
+mac-menu-quit = Quit { $product }
+mac-menu-window = Window
+mac-menu-minimize = Minimize
+mac-menu-zoom = Zoom
+menu-close-document = Close Document
+
+# --- UX2 L4 ---
+timeline-hide = Hide Timeline
+timeline-close-tip = Hide the timeline (View → Timeline shows it again)
+splitter-tip = Drag to resize; double-click: default height
+details-close-tip = Close the details pane
+
+# --- UX2 L5 ---
+details-title = Task Form
+details-form-resources-predecessors = Resources & Predecessors
+details-form-resources-successors = Resources & Successors
+details-form-predecessors-successors = Predecessors & Successors
+details-name = Name
+details-duration = Duration
+details-effort-driven = Effort driven
+details-manual = Manually Scheduled
+details-start = Start
+details-finish = Finish
+details-task-type = Task type
+details-percent = % Complete
+details-constraint = Constraint
+details-constraint-date = Constraint date
+details-predecessors = Predecessors
+details-successors = Successors
+details-resources = Resources
+details-col-id = ID
+details-col-name = Name
+details-col-type = Type
+details-col-lag = Lag
+details-col-units = Units
+details-col-work = Work
+details-ok = OK
+details-cancel = Cancel
+details-batch-label = Task Form
+details-summary-reason = Calculated from the subtasks.
+menu-details-pane = Details
+details-unknown-task = There is no task { $id }.
+details-draft-kept = The document changed elsewhere: your form changes are kept.
+details-select-task = Select a task
+
+# --- UX2 L6 ---
+field-cat-general = General
+field-cat-scheduling = Scheduling
+field-cat-progress = Progress
+field-cat-baseline = Baseline
+field-cat-variance = Variance
+field-cat-slack = Slack
+field-cat-resources = Resources
+field-cat-costs = Costs
+field-cat-custom = Custom fields
+field-costs-not-computed = Costs: not calculated in this version.
+menu-insert-column = Insert Column
+menu-hide-column = Hide Column
+menu-field-settings = Field Settings…
+add-new-column = Add New Column
+field-picker-search = Search for a field
+field-picker-empty = No field matches.
+field-picker-shown = already shown
+field-settings-title = Field Settings
+field-settings-field = Field name
+field-settings-column-title = Title
+field-settings-align-title = Align title
+field-settings-align-data = Align data
+field-settings-width = Width
+align-left = Left
+align-center = Center
+align-right = Right
+columns-max-reached = The table already shows 64 columns: hide one to insert another.
+column-id-stays-first = The ID column stays first.
+menu-table-display = Table display
+
+# --- UX2 L7 ---
+
+# --- UX2 L8 ---
+
+# --- UX2 L9 ---
+menu-custom-fields = Custom Fields…
+custom-fields-title = Custom Fields
+custom-fields-rename = Rename…
+custom-fields-alias-title = { $alias } ({ $column })
+custom-fields-batch-label = Custom Fields
+custom-fields-alias-too-long = A field name has 50 characters at most.
+custom-type-text = Text
+custom-type-number = Number
+custom-type-date = Date
+custom-type-flag = Flag
+
+# --- UX2 L10 ---
+
+# --- UX2 L11 ---

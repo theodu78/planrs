@@ -23,19 +23,27 @@
 //! ADR-0017 (contrat L0) : préférences du ruban ([`RibbonPrefs`] : onglet,
 //! repli) et visibilité de la chronologie ; même règle, la version reste 1
 //! (un état J8 se lit sans avertissement).
+//!
+//! Seconde passe UX (ADR-0019, contrat L0) : **version 2**. `columns`
+//! devient la liste des colonnes **affichées**, dans l'ordre d'affichage
+//! (masquer = retirer ; titre et alignements de « Paramètres de champ ») ;
+//! un état version 1 est relu avec ses colonnes visibles, dans l'ordre de
+//! [`Column::ALL`], largeurs gardées (P63). Champs ajoutés : hauteur de la
+//! chronologie ([`UiState::timeline_height`]) et volet de détails
+//! ([`DetailsPrefs`]).
 
 use planrs_automation::filter::{FilterPreset, TaskFilter};
 use planrs_render::style::{DocStyle, TemplateId};
 use serde::{Deserialize, Serialize};
 
-use crate::column::{Column, ColumnState};
+use crate::column::{Column, ColumnState, MAX_COLUMN_TITLE, MAX_COLUMNS};
 use crate::ribbon::RibbonPrefs;
 use crate::timescale::TimeScaleZoom;
 
 /// Version du format JSON. Elle s'incrémente quand le sens d'un champ change
 /// ou qu'un champ est retiré ou renommé ; ajouter un champ avec valeur par
 /// défaut ne l'incrémente pas.
-pub const UI_STATE_VERSION: u32 = 1;
+pub const UI_STATE_VERSION: u32 = 2;
 
 /// Clé de stockage eframe (desktop : fichier de `storage_dir`, web :
 /// `localStorage`). Contient le nom provisoire : listée dans `docs/rename.md`.
@@ -63,6 +71,22 @@ pub const MAX_USER_TEMPLATE_NAME: usize = 64;
 /// (H-UI-34).
 pub const MAX_OUTLINE_LEVEL: u8 = 9;
 
+/// Hauteur par défaut de la chronologie, en points (H-UI-78, H-UI-111).
+pub const TIMELINE_HEIGHT_DEFAULT: u16 = 72;
+
+/// Hauteur minimale de la chronologie, en points (H-UI-111).
+pub const TIMELINE_HEIGHT_MIN: u16 = 48;
+
+/// Hauteur par défaut du volet de détails, en points (H-UI-111).
+pub const DETAILS_HEIGHT_DEFAULT: u16 = 220;
+
+/// Hauteur minimale du volet de détails, en points (H-UI-111).
+pub const DETAILS_HEIGHT_MIN: u16 = 120;
+
+/// Hauteur maximale enregistrée d'un volet, en points ; la borne relative à
+/// la fenêtre (40 % et 60 %) s'applique à la disposition (`panes::layout`).
+pub const PANE_HEIGHT_MAX: u16 = 4_000;
+
 /// Préférences d'interface persistées.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -79,7 +103,8 @@ pub struct UiState {
     pub theme: ThemePref,
     /// Dernier zoom choisi (écrasé par l'ajustement à chaque ouverture).
     pub zoom: TimeScaleZoom,
-    /// Une entrée par colonne, dans l'ordre de [`Column::ALL`].
+    /// Colonnes **affichées**, dans l'ordre d'affichage (version 2) : sans
+    /// doublon, ID en premier, Nom présent, [`MAX_COLUMNS`] au plus.
     pub columns: Vec<ColumnState>,
     /// Largeur de la table, en points logiques.
     pub table_width: u16,
@@ -110,6 +135,48 @@ pub struct UiState {
     /// Chronologie affichée au-dessus du Gantt (ADR-0017, H-UI-78 : vrai par
     /// défaut).
     pub timeline_visible: bool,
+    /// Hauteur de la chronologie, en points (seconde passe UX, H-UI-111 ;
+    /// [`TIMELINE_HEIGHT_DEFAULT`] par défaut).
+    pub timeline_height: u16,
+    /// Volet de détails « Formulaire tâche » (seconde passe UX, H-UI-111,
+    /// H-UI-112).
+    pub details: DetailsPrefs,
+}
+
+/// Préférences du volet de détails (seconde passe UX, ADR-0019 D5, D6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DetailsPrefs {
+    /// Volet affiché (faux par défaut ; Affichage → Détails).
+    pub visible: bool,
+    /// Hauteur, en points ([`DETAILS_HEIGHT_DEFAULT`] par défaut).
+    pub height: u16,
+    /// Forme des deux grilles du bas (clic droit dans le volet).
+    pub form: DetailsForm,
+}
+
+impl Default for DetailsPrefs {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            height: DETAILS_HEIGHT_DEFAULT,
+            form: DetailsForm::default(),
+        }
+    }
+}
+
+/// Forme du volet de détails, comme le Formulaire tâche de MS Project
+/// (H-UI-112).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DetailsForm {
+    /// Ressources et prédécesseurs (défaut).
+    #[default]
+    ResourcesPredecessors,
+    /// Ressources et successeurs.
+    ResourcesSuccessors,
+    /// Prédécesseurs et successeurs.
+    PredecessorsSuccessors,
 }
 
 /// Préférences persistées de la vue des tâches (J8, ADR-0016 D2) : seul
@@ -373,7 +440,11 @@ impl Default for UiState {
             language: LanguagePref::default(),
             theme: ThemePref::default(),
             zoom: TimeScaleZoom::default(),
-            columns: Column::ALL.iter().map(|&c| ColumnState::default_for(c)).collect(),
+            columns: Column::ALL
+                .into_iter()
+                .filter(|c| c.default_visible())
+                .map(ColumnState::default_for)
+                .collect(),
             table_width: TABLE_WIDTH_DEFAULT,
             diagnostics_open: false,
             view: ViewKind::default(),
@@ -388,6 +459,8 @@ impl Default for UiState {
             chart_only: false,
             ribbon: RibbonPrefs::default(),
             timeline_visible: true,
+            timeline_height: TIMELINE_HEIGHT_DEFAULT,
+            details: DetailsPrefs::default(),
         }
     }
 }
@@ -432,12 +505,22 @@ impl UiState {
             bad: Vec::new(),
         };
         let defaults = Self::default();
+        // Version 1 (ou absente) : colonnes au format v1 (une entrée par
+        // colonne, `visible`), migrées vers la liste des colonnes affichées.
+        let v1 = object
+            .get("version")
+            .and_then(serde_json::Value::as_u64)
+            .is_none_or(|v| v < 2);
         let state = Self {
             version: reader.field("version", defaults.version),
             language: reader.field("language", defaults.language),
             theme: reader.field("theme", defaults.theme),
             zoom: reader.field("zoom", defaults.zoom),
-            columns: reader.columns(defaults.columns),
+            columns: if v1 {
+                reader.columns_v1(defaults.columns)
+            } else {
+                reader.list("columns", defaults.columns)
+            },
             table_width: reader.field("table_width", defaults.table_width),
             diagnostics_open: reader.field("diagnostics_open", defaults.diagnostics_open),
             view: reader.field("view", defaults.view),
@@ -450,6 +533,8 @@ impl UiState {
             chart_only: reader.field("chart_only", defaults.chart_only),
             ribbon: reader.field("ribbon", defaults.ribbon),
             timeline_visible: reader.field("timeline_visible", defaults.timeline_visible),
+            timeline_height: reader.field("timeline_height", defaults.timeline_height),
+            details: reader.field("details", defaults.details),
         };
         let warning = (!reader.bad.is_empty()).then_some(StateLoadError::Fields(reader.bad));
         (state.normalized(), warning)
@@ -494,11 +579,9 @@ impl UiState {
         self.recent.retain(|recent| recent.path != path);
     }
 
-    /// Bornes appliquées, colonnes complétées et dédoublonnées dans l'ordre
-    /// de [`Column::ALL`] (la première occurrence d'une colonne l'emporte),
-    /// largeurs bornées à `[Column::MIN_WIDTH, Column::MAX_WIDTH]`, largeur
-    /// de table bornée à `[TABLE_WIDTH_MIN, TABLE_WIDTH_MAX]`, ID et Nom
-    /// forcés visibles, version ramenée à [`UI_STATE_VERSION`], fichiers
+    /// Bornes appliquées : colonnes par [`normalize_columns`], largeur de
+    /// table bornée à `[TABLE_WIDTH_MIN, TABLE_WIDTH_MAX]`, hauteurs des
+    /// volets bornées, version ramenée à [`UI_STATE_VERSION`], fichiers
     /// récents coupés à [`MAX_RECENT_FILES`].
     #[must_use]
     pub fn normalized(mut self) -> Self {
@@ -515,39 +598,31 @@ impl UiState {
             .outline_level
             .map(|n| n.clamp(1, MAX_OUTLINE_LEVEL));
         self.table_width = self.table_width.clamp(TABLE_WIDTH_MIN, TABLE_WIDTH_MAX);
-        let columns = Column::ALL
-            .iter()
-            .map(|&column| {
-                self.columns
-                    .iter()
-                    .find(|state| state.column == column)
-                    .map_or_else(
-                        || ColumnState::default_for(column),
-                        |state| ColumnState {
-                            column,
-                            visible: state.visible || !column.hideable(),
-                            width: state.width.clamp(Column::MIN_WIDTH, Column::MAX_WIDTH),
-                        },
-                    )
-            })
-            .collect();
-        self.columns = columns;
+        self.columns = normalize_columns(std::mem::take(&mut self.columns));
+        self.timeline_height = self.timeline_height.clamp(TIMELINE_HEIGHT_MIN, PANE_HEIGHT_MAX);
+        self.details.height = self.details.height.clamp(DETAILS_HEIGHT_MIN, PANE_HEIGHT_MAX);
         self
     }
 
-    /// État d'une colonne, s'il est présent.
+    /// État d'une colonne affichée (`None` : masquée).
     #[must_use]
     pub fn column(&self, column: Column) -> Option<&ColumnState> {
         self.columns.iter().find(|state| state.column == column)
     }
 
-    /// Colonnes visibles, dans l'ordre d'affichage.
-    pub fn visible_columns(&self) -> impl Iterator<Item = ColumnState> + '_ {
+    /// La colonne est-elle affichée (hors « graphique seul ») ?
+    #[must_use]
+    pub fn shown(&self, column: Column) -> bool {
+        self.column(column).is_some()
+    }
+
+    /// Colonnes visibles à l'écran, dans l'ordre d'affichage (« graphique
+    /// seul » : ID et Nom).
+    pub fn visible_columns(&self) -> impl Iterator<Item = &ColumnState> + '_ {
         let chart_only = self.chart_only;
         self.columns
             .iter()
-            .copied()
-            .filter(move |state| state.visible && (!chart_only || !state.column.hideable()))
+            .filter(move |state| !chart_only || !state.column.hideable())
     }
 
     /// Largeur de la table à l'écran : celle choisie, ou la somme des
@@ -565,18 +640,95 @@ impl UiState {
         }
     }
 
-    /// Affiche ou masque `column` (J7, lot L6) ; l'ID et le Nom restent
-    /// visibles (H-UI-12). Rend vrai si la visibilité a changé.
+    /// Affiche ou masque `column` (J7, lot L6 ; cases du menu Colonnes) ;
+    /// l'ID et le Nom restent visibles (H-UI-12). Affichée, elle prend la
+    /// place que lui donne l'ordre de [`Column::ALL`] (avant la première
+    /// colonne affichée qui la suit dans cet ordre, sinon en fin), largeur
+    /// par défaut. Rend vrai si l'affichage a changé.
     pub fn toggle_column(&mut self, column: Column) -> bool {
         if !column.hideable() {
             return false;
         }
-        match self.columns.iter_mut().find(|state| state.column == column) {
-            Some(state) => {
-                state.visible = !state.visible;
+        if let Some(at) = self.columns.iter().position(|state| state.column == column) {
+            return self.hide_column(at);
+        }
+        let rank = |c: Column| c.ordinal().unwrap_or(usize::MAX);
+        let at = self
+            .columns
+            .iter()
+            .position(|state| rank(state.column) > rank(column))
+            .unwrap_or(self.columns.len());
+        self.insert_column(at, column)
+    }
+
+    /// Insère `column` au rang `at` (borné : jamais avant l'ID ; au-delà de
+    /// la fin : en fin), largeur par défaut ; déjà affichée : déplacée à ce
+    /// rang avec ses réglages (H-UI-114). Refusée (faux) si
+    /// [`MAX_COLUMNS`] colonnes sont déjà affichées ou si c'est l'ID.
+    pub fn insert_column(&mut self, at: usize, column: Column) -> bool {
+        if column == Column::Id {
+            return false;
+        }
+        if let Some(from) = self.columns.iter().position(|state| state.column == column) {
+            // `at` compté avant le retrait : le rang d'arrivée tient compte
+            // de la place libérée.
+            let to = if at > from { at.saturating_sub(1) } else { at };
+            return self.move_column(from, to);
+        }
+        if self.columns.len() >= MAX_COLUMNS {
+            return false;
+        }
+        let at = at.max(1).min(self.columns.len());
+        self.columns.insert(at, ColumnState::default_for(column));
+        true
+    }
+
+    /// Masque la colonne de rang `at` (la retire) ; ID et Nom refusés.
+    /// Rend vrai si elle a été retirée.
+    pub fn hide_column(&mut self, at: usize) -> bool {
+        if self.columns.get(at).is_none_or(|state| !state.column.hideable()) {
+            return false;
+        }
+        self.columns.remove(at);
+        true
+    }
+
+    /// Déplace la colonne de rang `from` au rang `to` (borné à la fin) ;
+    /// l'ID reste en premier (déplacer l'ID ou devant lui : refusé, H-UI-116).
+    /// Rend vrai si l'ordre a changé.
+    pub fn move_column(&mut self, from: usize, to: usize) -> bool {
+        let last = self.columns.len().saturating_sub(1);
+        let to = to.min(last);
+        if from == 0 || to == 0 || from == to || from > last {
+            return false;
+        }
+        let state = self.columns.remove(from);
+        self.columns.insert(to, state);
+        true
+    }
+
+    /// Réglages de « Paramètres de champ » (H-UI-115) pour la colonne de
+    /// rang `at` : champ (un champ déjà affiché ailleurs est refusé), titre
+    /// (vide ⇒ défaut, [`MAX_COLUMN_TITLE`] caractères), alignements,
+    /// largeur bornée. L'ID reste l'ID. Rend vrai si quelque chose a changé.
+    pub fn set_column_settings(&mut self, at: usize, settings: ColumnState) -> bool {
+        let Some(current) = self.columns.get(at) else {
+            return false;
+        };
+        let column_ok = settings.column == current.column
+            || (current.column.hideable()
+                && settings.column != Column::Id
+                && !self.columns.iter().any(|state| state.column == settings.column));
+        if !column_ok {
+            return false;
+        }
+        let settings = clean_column(settings);
+        match self.columns.get_mut(at) {
+            Some(state) if *state != settings => {
+                *state = settings;
                 true
             }
-            None => false,
+            _ => false,
         }
     }
 
@@ -593,6 +745,65 @@ impl UiState {
             _ => false,
         }
     }
+}
+
+/// Réglages d'une colonne bornés : largeur dans `[Column::MIN_WIDTH,
+/// Column::MAX_WIDTH]`, titre sans blancs aux bords, vide ⇒ `None`, coupé à
+/// [`MAX_COLUMN_TITLE`] caractères.
+fn clean_column(mut state: ColumnState) -> ColumnState {
+    state.width = state.width.clamp(Column::MIN_WIDTH, Column::MAX_WIDTH);
+    state.title = state
+        .title
+        .map(|t| {
+            let cut: String = t.trim().chars().take(MAX_COLUMN_TITLE).collect();
+            cut.trim_end().to_owned()
+        })
+        .filter(|t| !t.is_empty());
+    state
+}
+
+/// Colonnes affichées normalisées (version 2, P63) : première occurrence
+/// d'une colonne gardée, réglages bornés ([`clean_column`]), ID en premier
+/// (ajouté s'il manque), Nom présent (ajouté après l'ID s'il manque),
+/// [`MAX_COLUMNS`] au plus (les dernières, hors ID et Nom, partent).
+#[must_use]
+pub fn normalize_columns(columns: Vec<ColumnState>) -> Vec<ColumnState> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out: Vec<ColumnState> = columns
+        .into_iter()
+        .filter(|state| seen.insert(state.column))
+        .map(clean_column)
+        .collect();
+    match out.iter().position(|state| state.column == Column::Id) {
+        Some(0) => {}
+        Some(at) => {
+            let id = out.remove(at);
+            out.insert(0, id);
+        }
+        None => out.insert(0, ColumnState::default_for(Column::Id)),
+    }
+    if !out.iter().any(|state| state.column == Column::Name) {
+        out.insert(1, ColumnState::default_for(Column::Name));
+    }
+    while out.len() > MAX_COLUMNS {
+        match out.iter().rposition(|state| state.column.hideable()) {
+            Some(at) => drop(out.remove(at)),
+            None => break,
+        }
+    }
+    out
+}
+
+/// Colonne au format v1 (une entrée par colonne, affichée ou non), relue
+/// pour la migration vers la version 2.
+#[derive(Clone, Copy, Debug, Deserialize)]
+struct ColumnStateV1 {
+    /// Colonne.
+    column: Column,
+    /// Affichée.
+    visible: bool,
+    /// Largeur.
+    width: u16,
 }
 
 /// Lecteur champ par champ d'un objet JSON d'état : chaque champ illisible
@@ -646,11 +857,14 @@ impl FieldReader<'_> {
         out
     }
 
-    /// Champ `columns` : un tableau dont chaque entrée est lue seule ; une
-    /// entrée illisible (colonne inconnue d'une version future, largeur hors
-    /// type…) est écartée et le champ relevé une fois. Pas un tableau →
-    /// `default`, relevé.
-    fn columns(&mut self, default: Vec<ColumnState>) -> Vec<ColumnState> {
+    /// Champ `columns` au format v1 : un tableau dont chaque entrée est lue
+    /// seule ; une entrée illisible (colonne inconnue d'une version future,
+    /// largeur hors type…) est écartée et le champ relevé une fois. Migré
+    /// comme la normalisation v1 l'affichait : pour chaque colonne de
+    /// [`Column::ALL`], sa première entrée (affichée ou non ; ID et Nom
+    /// toujours), à défaut son affichage par défaut ; largeurs gardées. Pas
+    /// un tableau → `default`, relevé.
+    fn columns_v1(&mut self, default: Vec<ColumnState>) -> Vec<ColumnState> {
         const NAME: &str = "columns";
         let Some(raw) = self.object.get(NAME) else {
             return default;
@@ -660,11 +874,11 @@ impl FieldReader<'_> {
             self.bad.push(NAME);
             return default;
         };
-        let mut columns = Vec::with_capacity(entries.len().min(Column::COUNT));
+        let mut read = Vec::with_capacity(entries.len().min(Column::COUNT));
         let mut skipped = false;
         for entry in entries {
-            match ColumnState::deserialize(entry) {
-                Ok(state) => columns.push(state),
+            match ColumnStateV1::deserialize(entry) {
+                Ok(state) => read.push(state),
                 Err(error) => {
                     log::warn!("état d'interface : colonne ignorée : {error}");
                     skipped = true;
@@ -674,7 +888,17 @@ impl FieldReader<'_> {
         if skipped {
             self.bad.push(NAME);
         }
-        columns
+        Column::ALL
+            .into_iter()
+            .filter_map(|column| match read.iter().find(|state| state.column == column) {
+                Some(state) if state.visible || !column.hideable() => Some(ColumnState {
+                    width: state.width,
+                    ..ColumnState::default_for(column)
+                }),
+                Some(_) => None,
+                None => column.default_visible().then(|| ColumnState::default_for(column)),
+            })
+            .collect()
     }
 }
 
@@ -757,7 +981,10 @@ mod tests {
     use crate::column::{Column, ColumnState};
     use crate::timescale::TimeScaleZoom;
 
-    /// JSON de référence de `UiState::default()` (format v1).
+    /// JSON de référence de `UiState::default()` (format v2).
+    const REFERENCE_V2: &str = include_str!("../tests/fixtures/ui_state_v2.json");
+
+    /// État v1 par défaut écrit par `main` avant la seconde passe UX.
     const REFERENCE_V1: &str = include_str!("../tests/fixtures/ui_state_v1.json");
 
     #[test]
@@ -765,10 +992,10 @@ mod tests {
         let json = UiState::default().to_json().unwrap();
         assert_eq!(
             json,
-            REFERENCE_V1.trim_end(),
+            REFERENCE_V2.trim_end(),
             "le format JSON de UiState a changé : décider s'il faut incrémenter UI_STATE_VERSION"
         );
-        let (state, warning) = UiState::from_json_lenient(REFERENCE_V1);
+        let (state, warning) = UiState::from_json_lenient(REFERENCE_V2);
         assert!(warning.is_none(), "{warning:?}");
         assert_eq!(state, UiState::default());
     }
@@ -786,10 +1013,10 @@ mod tests {
         assert_eq!(state.view, ViewKind::Gantt);
         assert_eq!(state.gantt_style, GanttStyle::Standard);
         assert_eq!(state.recent.len(), 0);
-        // Colonnes J7 et colonne « Mode » (J8, lot L11) ajoutées masquées.
-        let added: Vec<ColumnState> = state.columns.iter().copied().skip(8).collect();
-        assert_eq!(added.len(), 6);
-        assert!(added.iter().all(|c| !c.visible));
+        // Colonnes J7 et colonne « Mode » (J8, lot L11) masquées : absentes
+        // de la liste v2.
+        assert_eq!(state.columns.len(), 6);
+        assert!(!state.shown(Column::Mode) && !state.shown(Column::TotalSlack));
     }
 
     /// Champs J7 relus ; fichiers récents coupés à 10 (H-UI-28).
@@ -1014,29 +1241,41 @@ mod tests {
         );
         // Colonne d'une version future : écartée, les autres colonnes et le
         // thème sont gardés.
+        // Seconde passe UX : état v1 (sans version) migré ; Durée masquée
+        // retirée, Marge totale illisible ⇒ son affichage par défaut.
         let json = r#"{"theme":"light","columns":[
             {"column":"future_col","visible":true,"width":50},
             {"column":"duration","visible":false,"width":70},
             {"column":"total_slack","visible":true,"width":"x"}]}"#;
         let (state, warning) = UiState::from_json_lenient(json);
         assert_eq!(state.theme, ThemePref::Light);
+        assert_eq!(state.column(Column::Duration), None);
+        assert_eq!(state.column(Column::TotalSlack), None);
+        let order: Vec<Column> = state.columns.iter().map(|c| c.column).collect();
         assert_eq!(
-            state.column(Column::Duration),
-            Some(&ColumnState {
-                column: Column::Duration,
-                visible: false,
-                width: 70
-            })
+            order,
+            [
+                Column::Id,
+                Column::Name,
+                Column::Start,
+                Column::Finish,
+                Column::Predecessors
+            ]
         );
-        assert_eq!(
-            state.column(Column::TotalSlack),
-            Some(&ColumnState::default_for(Column::TotalSlack))
-        );
-        assert_eq!(state.columns.len(), Column::COUNT);
         assert!(
             matches!(&warning, Some(StateLoadError::Fields(f)) if f == &["columns"]),
             "{warning:?}"
         );
+        // Même chose en v2 : entrée illisible écartée, les autres gardées.
+        let json = r#"{"version":2,"columns":[
+            {"column":"future_col","width":50},
+            {"column":"duration","width":70},
+            {"column":"free_slack","width":"x"}]}"#;
+        let (state, warning) = UiState::from_json_lenient(json);
+        let order: Vec<Column> = state.columns.iter().map(|c| c.column).collect();
+        assert_eq!(order, [Column::Id, Column::Name, Column::Duration]);
+        assert_eq!(state.column(Column::Duration).unwrap().width, 70);
+        assert!(matches!(&warning, Some(StateLoadError::Fields(f)) if f == &["columns"]));
         // `columns` qui n'est pas un tableau : colonnes par défaut.
         let (state, warning) = UiState::from_json_lenient(r#"{"columns":{"id":1},"zoom":"day"}"#);
         assert_eq!(state.columns, UiState::default().columns);
@@ -1050,8 +1289,8 @@ mod tests {
     fn ui_state_warning_text_is_language_neutral() {
         let (_, json) = UiState::from_json_lenient("{");
         assert!(json.unwrap().to_string().starts_with("JSON "));
-        let (_, too_new) = UiState::from_json_lenient(r#"{"version":2}"#);
-        assert_eq!(too_new.unwrap().to_string(), "v2 > v1");
+        let (_, too_new) = UiState::from_json_lenient(r#"{"version":3}"#);
+        assert_eq!(too_new.unwrap().to_string(), "v3 > v2");
         assert_eq!(StateLoadError::NotObject.to_string(), "JSON");
     }
 
@@ -1073,12 +1312,12 @@ mod tests {
 
     #[test]
     fn ui_state_too_new_warns() {
-        let json = r#"{"version":2,"theme":"dark","zoom":{"px_per_day":3}}"#;
+        let json = r#"{"version":3,"theme":"dark","zoom":{"px_per_day":3}}"#;
         let (state, warning) = UiState::from_json_lenient(json);
         assert_eq!(state, UiState::default());
         match warning {
             Some(StateLoadError::TooNew { found, supported }) => {
-                assert_eq!(found, 2);
+                assert_eq!(found, 3);
                 assert_eq!(supported, UI_STATE_VERSION);
             }
             other => panic!("attendu TooNew, obtenu {other:?}"),
@@ -1090,36 +1329,36 @@ mod tests {
         ));
     }
 
+    /// Version 2 : première occurrence gardée, largeurs bornées, ID en
+    /// premier, Nom ajouté s'il manque, titres bornés, hauteurs bornées.
     #[test]
     fn ui_state_normalized_bounds() {
         let state = UiState {
             version: 0,
             table_width: 1,
+            timeline_height: 0,
+            details: super::DetailsPrefs {
+                visible: true,
+                height: u16::MAX,
+                form: super::DetailsForm::PredecessorsSuccessors,
+            },
             columns: vec![
                 ColumnState {
-                    column: Column::Critical,
-                    visible: true,
                     width: 0,
+                    title: Some("   ".to_owned()),
+                    ..ColumnState::default_for(Column::Critical)
                 },
                 ColumnState {
-                    column: Column::Id,
-                    visible: false,
                     width: 9_999,
+                    ..ColumnState::default_for(Column::Id)
                 },
                 ColumnState {
-                    column: Column::Critical,
-                    visible: false,
                     width: 300,
+                    ..ColumnState::default_for(Column::Critical)
                 },
                 ColumnState {
-                    column: Column::Name,
-                    visible: false,
-                    width: 100,
-                },
-                ColumnState {
-                    column: Column::Duration,
-                    visible: false,
-                    width: 50,
+                    title: Some("x".repeat(100)),
+                    ..ColumnState::default_for(Column::Duration)
                 },
             ],
             ..UiState::default()
@@ -1127,46 +1366,31 @@ mod tests {
         .normalized();
         assert_eq!(state.version, UI_STATE_VERSION);
         assert_eq!(state.table_width, TABLE_WIDTH_MIN);
+        assert_eq!(state.timeline_height, super::TIMELINE_HEIGHT_MIN);
+        assert_eq!(state.details.height, super::PANE_HEIGHT_MAX);
         let order: Vec<Column> = state.columns.iter().map(|c| c.column).collect();
-        assert_eq!(order, Column::ALL);
-        // Première occurrence retenue, largeur bornée.
+        assert_eq!(
+            order,
+            [Column::Id, Column::Name, Column::Critical, Column::Duration]
+        );
+        assert_eq!(state.column(Column::Id).unwrap().width, Column::MAX_WIDTH);
         assert_eq!(
             state.column(Column::Critical),
             Some(&ColumnState {
-                column: Column::Critical,
-                visible: true,
-                width: Column::MIN_WIDTH
+                width: Column::MIN_WIDTH,
+                ..ColumnState::default_for(Column::Critical)
             })
         );
-        // ID et Nom toujours visibles.
         assert_eq!(
-            state.column(Column::Id),
-            Some(&ColumnState {
-                column: Column::Id,
-                visible: true,
-                width: Column::MAX_WIDTH
-            })
+            state
+                .column(Column::Duration)
+                .unwrap()
+                .title
+                .as_ref()
+                .map(|t| t.chars().count()),
+            Some(crate::column::MAX_COLUMN_TITLE)
         );
-        assert!(state.column(Column::Name).unwrap().visible);
-        // Masquage respecté pour une colonne masquable.
-        assert!(!state.column(Column::Duration).unwrap().visible);
-        // Colonnes manquantes : défauts.
-        assert_eq!(
-            state.column(Column::Start),
-            Some(&ColumnState::default_for(Column::Start))
-        );
-        let visible: Vec<Column> = state.visible_columns().map(|c| c.column).collect();
-        assert_eq!(
-            visible,
-            [
-                Column::Id,
-                Column::Name,
-                Column::Start,
-                Column::Finish,
-                Column::Predecessors,
-                Column::Critical
-            ]
-        );
+        assert_eq!(state.clone().normalized(), state);
 
         let wide = UiState {
             table_width: u16::MAX,
@@ -1175,11 +1399,61 @@ mod tests {
         .normalized();
         assert_eq!(wide.table_width, TABLE_WIDTH_MAX);
 
-        // La lecture tolérante normalise aussi.
-        let (read, warning) = UiState::from_json_lenient(r#"{"table_width":0,"columns":[]}"#);
+        // La lecture tolérante normalise aussi ; liste vide : ID et Nom.
+        let (read, warning) = UiState::from_json_lenient(r#"{"version":2,"table_width":0,"columns":[]}"#);
         assert!(warning.is_none());
         assert_eq!(read.table_width, TABLE_WIDTH_MIN);
-        assert_eq!(read.columns, UiState::default().columns);
+        let order: Vec<Column> = read.columns.iter().map(|c| c.column).collect();
+        assert_eq!(order, [Column::Id, Column::Name]);
+    }
+
+    /// P63 (état v1 relu) : l'état v1 par défaut de `main` et un état v1
+    /// réglé (Marge totale et % achevé affichés, Durée masquée, largeurs
+    /// changées) sont relus avec les mêmes colonnes visibles, dans le même
+    /// ordre, largeurs gardées, sans avertissement.
+    #[test]
+    fn ui_state_v1_columns_migrate() {
+        let (state, warning) = UiState::from_json_lenient(REFERENCE_V1);
+        assert!(warning.is_none(), "{warning:?}");
+        assert_eq!(state, UiState::default());
+        let tuned = REFERENCE_V1
+            .replace(
+                r#"{"column":"duration","visible":true,"width":80}"#,
+                r#"{"column":"duration","visible":false,"width":80}"#,
+            )
+            .replace(
+                r#"{"column":"total_slack","visible":false,"width":80}"#,
+                r#"{"column":"total_slack","visible":true,"width":91}"#,
+            )
+            .replace(
+                r#"{"column":"percent_complete","visible":false,"width":60}"#,
+                r#"{"column":"percent_complete","visible":true,"width":66}"#,
+            )
+            .replace(
+                r#"{"column":"name","visible":true,"width":220}"#,
+                r#"{"column":"name","visible":false,"width":300}"#,
+            );
+        assert_ne!(tuned, REFERENCE_V1);
+        let (state, warning) = UiState::from_json_lenient(&tuned);
+        assert!(warning.is_none(), "{warning:?}");
+        let shown: Vec<(Column, u16)> = state.columns.iter().map(|c| (c.column, c.width)).collect();
+        assert_eq!(
+            shown,
+            [
+                (Column::Id, 40),
+                (Column::Name, 300),
+                (Column::Start, 96),
+                (Column::Finish, 96),
+                (Column::Predecessors, 110),
+                (Column::TotalSlack, 91),
+                (Column::PercentComplete, 66),
+            ]
+        );
+        assert_eq!(state.version, UI_STATE_VERSION);
+        // Réécrit en v2, relu à l'identique.
+        let (again, warning) = UiState::from_json_lenient(&state.to_json().unwrap());
+        assert!(warning.is_none(), "{warning:?}");
+        assert_eq!(again, state);
     }
 
     #[test]
@@ -1192,10 +1466,25 @@ mod tests {
             diagnostics_open: true,
             ..UiState::default()
         };
-        if let Some(slack) = state.columns.iter_mut().find(|c| c.column == Column::TotalSlack) {
-            slack.visible = true;
-            slack.width = 123;
-        }
+        assert!(state.insert_column(2, Column::TotalSlack));
+        assert!(state.set_column_width(Column::TotalSlack, 123));
+        assert!(state.insert_column(
+            3,
+            Column::Custom(
+                planrs_core::model::CustomFieldId::new(planrs_core::model::CustomKind::Text, 7).unwrap()
+            )
+        ));
+        assert!(state.set_column_settings(
+            1,
+            ColumnState {
+                title: Some("Tâche".to_owned()),
+                align: Some(crate::column::CellAlign::Center),
+                ..ColumnState::default_for(Column::Name)
+            }
+        ));
+        state.timeline_height = 150;
+        state.details.visible = true;
+        state.details.form = super::DetailsForm::ResourcesSuccessors;
         let json = state.to_json().unwrap();
         let (read, warning) = UiState::from_json_lenient(&json);
         assert!(warning.is_none(), "{warning:?}");
@@ -1282,5 +1571,92 @@ mod tests {
             .save_user_template("M1", doc(TemplateId::Presentation))
             .unwrap();
         assert_eq!(state.user_templates.len(), MAX_USER_TEMPLATES);
+    }
+
+    /// Opération d'état des colonnes (P63).
+    #[derive(Clone, Debug)]
+    enum ColOp {
+        Insert(usize, Column),
+        Hide(usize),
+        Move(usize, usize),
+        Settings(usize, Column, u16, Option<String>),
+        Width(Column, u16),
+        Toggle(Column),
+    }
+
+    fn any_column() -> impl proptest::strategy::Strategy<Value = Column> {
+        use planrs_core::model::{CustomFieldId, CustomKind};
+        use proptest::prelude::*;
+        prop_oneof![
+            proptest::sample::select(Column::ALL.to_vec()),
+            proptest::sample::select(Column::FIELDS.to_vec()),
+            (0u8..4, 1u8..=30).prop_map(|(k, i)| {
+                let kind = CustomKind::ALL[usize::from(k)];
+                let i = i.min(CustomFieldId::max(kind));
+                Column::Custom(CustomFieldId::new(kind, i).unwrap())
+            }),
+        ]
+    }
+
+    fn any_op() -> impl proptest::strategy::Strategy<Value = ColOp> {
+        use proptest::prelude::*;
+        prop_oneof![
+            4 => (0usize..80, any_column()).prop_map(|(at, c)| ColOp::Insert(at, c)),
+            2 => (0usize..80).prop_map(ColOp::Hide),
+            2 => (0usize..80, 0usize..80).prop_map(|(a, b)| ColOp::Move(a, b)),
+            1 => (0usize..80, any_column(), any::<u16>(), proptest::option::of("[ a-zé]{0,80}"))
+                .prop_map(|(at, c, w, t)| ColOp::Settings(at, c, w, t)),
+            1 => (any_column(), any::<u16>()).prop_map(|(c, w)| ColOp::Width(c, w)),
+            1 => any_column().prop_map(ColOp::Toggle),
+        ]
+    }
+
+    fn check_columns(state: &UiState) {
+        let columns: Vec<Column> = state.columns.iter().map(|c| c.column).collect();
+        let unique: std::collections::BTreeSet<Column> = columns.iter().copied().collect();
+        assert_eq!(unique.len(), columns.len(), "doublon : {columns:?}");
+        assert_eq!(columns.first(), Some(&Column::Id));
+        assert!(columns.contains(&Column::Name));
+        assert!(columns.len() <= crate::column::MAX_COLUMNS);
+        for c in &state.columns {
+            assert!((Column::MIN_WIDTH..=Column::MAX_WIDTH).contains(&c.width));
+            assert!(
+                c.title.as_ref().is_none_or(|t| {
+                    !t.is_empty() && t.chars().count() <= crate::column::MAX_COLUMN_TITLE
+                })
+            );
+        }
+        assert_eq!(state.clone().normalized(), *state, "hors forme normale");
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(256))]
+
+        /// P63 (contrat L0, opérations d'état seulement) : pour toute suite
+        /// (≤ 64) d'insertions, retraits, déplacements, paramètres et
+        /// largeurs de colonnes : sans doublon, ID en premier, Nom présent,
+        /// ≤ 64 colonnes, largeurs et titres bornés, forme normale ;
+        /// sérialisé puis relu ⇒ égal.
+        #[test]
+        fn p63_column_state_invariants(ops in proptest::collection::vec(any_op(), 0..64)) {
+            let mut state = UiState::default();
+            for op in ops {
+                match op {
+                    ColOp::Insert(at, c) => drop(state.insert_column(at, c)),
+                    ColOp::Hide(at) => drop(state.hide_column(at)),
+                    ColOp::Move(a, b) => drop(state.move_column(a, b)),
+                    ColOp::Settings(at, c, w, t) => drop(state.set_column_settings(
+                        at,
+                        ColumnState { width: w, title: t, ..ColumnState::default_for(c) },
+                    )),
+                    ColOp::Width(c, w) => drop(state.set_column_width(c, w)),
+                    ColOp::Toggle(c) => drop(state.toggle_column(c)),
+                }
+                check_columns(&state);
+            }
+            let (read, warning) = UiState::from_json_lenient(&state.to_json().unwrap());
+            proptest::prop_assert!(warning.is_none(), "{warning:?}");
+            proptest::prop_assert_eq!(read, state);
+        }
     }
 }

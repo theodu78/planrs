@@ -138,7 +138,8 @@ impl CellOp {
         match self {
             Self::FillDown => Some(TextId::MenuFillDown),
             Self::Clear => Some(TextId::MenuClearContents),
-            Self::DeleteKey | Self::FillTyped(_) => None,
+            // Remplir à droite : jumeau de menu posé par le lot L2.
+            Self::DeleteKey | Self::FillTyped(_) | Self::FillRight => None,
         }
     }
 }
@@ -718,6 +719,8 @@ impl crate::App {
             CellOp::Clear => self.clear_cells(),
             CellOp::FillDown => self.fill_down(),
             CellOp::FillTyped(text) => self.fill_typed(&text, ctx),
+            // Ctrl/Cmd+R (seconde passe UX, contrat L0) : servi par le lot L2.
+            CellOp::FillRight => self.not_available(),
         }
     }
 

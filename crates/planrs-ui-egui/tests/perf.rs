@@ -872,7 +872,7 @@ fn frame_counts_equal_at_1000_and_5000_tasks() {
         // J7 L6 : toutes les colonnes affichées (textes des colonnes de
         // suivi), table défilée horizontalement par Fin.
         for column in Column::ALL {
-            if !app.state.column(column).is_some_and(|c| c.visible) {
+            if !app.state.shown(column) {
                 app.dispatch(Action::ToggleColumn(column));
             }
         }
@@ -2103,3 +2103,11 @@ fn best_fit_5000() {
     );
     assert!(median < Duration::from_millis(50), "ajustement : {median:?}");
 }
+
+// --- Seconde passe UX (ADR-0019, contrat L0) : sections posées vides,
+// remplies par leur lot (budgets du cahier `docs/plans/ux2.md` § 2.5).
+// --- UX2 L2 --- (`paste_cells_1000` et `paste_1000` tenus)
+// --- UX2 L4 --- (`splitter_drag_5000`)
+// --- UX2 L5 --- (`details_follow_5000`)
+// --- UX2 L6 --- (`field_picker_5000`)
+// --- UX2 L7 --- (`wide_table_5000`)

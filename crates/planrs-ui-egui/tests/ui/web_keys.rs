@@ -44,7 +44,10 @@ const COMMAND_SHIFT: Modifiers = Modifiers {
 
 /// H-UI-55 : liste attendue des entrées retenues au navigateur ; exclues :
 /// Ctrl/Cmd+N (nouvelle fenêtre), Tab et Maj+Tab, Ctrl/Cmd+Q (Quitter) ;
-/// aucune entrée à W ou T (le navigateur ne les rend jamais).
+/// seconde passe UX (H-UI-109) : Ctrl/Cmd+W et Ctrl+F4 (fermer le
+/// document), Ctrl/Cmd+P (impression) et Ctrl/Cmd+R (remplir à droite)
+/// restent au navigateur ; aucune entrée à T, et W seulement pour fermer le
+/// document (le navigateur ne les rend jamais).
 #[test]
 fn h_ui_55_interceptable_flags() {
     let excluded: Vec<&Shortcut> = KEYMAP
@@ -57,13 +60,18 @@ fn h_ui_55_interceptable_flags() {
         Shortcut::new(Modifiers::COMMAND, Key::N),
         Shortcut::new(Modifiers::SHIFT, Key::Tab),
         Shortcut::new(Modifiers::NONE, Key::Tab),
+        Shortcut::new(Modifiers::COMMAND, Key::W),
+        Shortcut::new(Modifiers::CTRL, Key::F4),
+        Shortcut::new(Modifiers::COMMAND, Key::P),
+        Shortcut::new(Modifiers::COMMAND, Key::R),
     ];
     assert_eq!(excluded, expected.iter().collect::<Vec<_>>());
     assert!(
         !KEYMAP
             .iter()
-            .any(|(_, shortcut, _)| matches!(shortcut.logical_key, Key::W | Key::T)),
-        "Ctrl/Cmd+W ou T dans KEYMAP : le navigateur ne les rend pas"
+            .any(|(_, shortcut, binding)| shortcut.logical_key == Key::T
+                || (shortcut.logical_key == Key::W && *binding != Binding::Ui(UiBinding::CloseDocument))),
+        "Ctrl/Cmd+T, ou W hors « fermer le document », dans KEYMAP : le navigateur ne les rend pas"
     );
     assert_eq!(WEB_NEVER, &[Key::N, Key::W, Key::T, Key::Tab]);
     // Entrées que le navigateur prendrait pour lui : recherche dans la

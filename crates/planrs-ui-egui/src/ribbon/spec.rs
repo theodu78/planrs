@@ -18,7 +18,9 @@ use planrs_render::style::BarRole;
 
 use super::icon_data::Icon;
 use super::{Enabled, RibbonOp, RibbonTab};
-use crate::action::{Action, CellOp, DialogKind, FormatOp, SelectOp, TaskCmd, TimelineOp};
+use crate::action::{
+    ACTIVE_COLUMN, Action, CellOp, ColumnOp, DialogKind, FormatOp, PaneOp, SelectOp, TaskCmd, TimelineOp,
+};
 use crate::clipboard::ClipboardOp;
 use crate::i18n::TextId;
 use crate::io::SaveKind;
@@ -202,6 +204,17 @@ pub enum RibbonCmd {
     /// Supprimer la tâche (Suppr ; menus seulement : pas d'élément du
     /// ruban).
     DeleteTask,
+    // --- Seconde passe UX (ADR-0019, contrat L0) : variantes seulement ;
+    // leurs éléments du ruban et jumeaux de menus sont posés par L10.
+    /// Case Détails (Affichage → Fractionner, H-UI-112).
+    DetailsPane,
+    /// Insérer une colonne… (Format → Colonnes, H-UI-114).
+    InsertColumn,
+    /// Paramètres de champ… (Format → Colonnes, H-UI-115).
+    FieldSettings,
+    /// Champs personnalisés… (Projet → Propriétés, H-UI-118 ; fenêtre du
+    /// lot L9).
+    CustomFields,
 }
 
 /// Pas de « marquer n % », dans l'ordre de la rangée (H-UI-35).
@@ -242,7 +255,9 @@ impl RibbonCmd {
             | Self::TimescaleMenu
             | Self::ThemeMenu
             | Self::LanguageMenu
-            | Self::ColumnsMenu => return None,
+            | Self::ColumnsMenu
+            // Fenêtre « Champs personnalisés » : posée par le lot L9.
+            | Self::CustomFields => return None,
             // Comme le menu Affichage : le style du Gantt ramène à la vue
             // Gantt ; le moteur pousse aussi `SetGanttStyle` (voir
             // [`Self::gantt_style`]).
@@ -292,6 +307,9 @@ impl RibbonCmd {
             Self::ClearContents => Action::Cells(CellOp::Clear),
             Self::SelectAll => Action::SelectOp(SelectOp::All),
             Self::DeleteTask => Action::Structure(StructureOp::Delete),
+            Self::DetailsPane => Action::Pane(PaneOp::ShowDetails(!fc.state.details.visible)),
+            Self::InsertColumn => Action::Column(ColumnOp::OpenPicker { at: ACTIVE_COLUMN }),
+            Self::FieldSettings => Action::Column(ColumnOp::OpenSettings(ACTIVE_COLUMN)),
         })
     }
 
@@ -321,6 +339,7 @@ impl RibbonCmd {
             | Self::AiPanel
             | Self::Diagnostics
             | Self::TimelineVisible
+            | Self::DetailsPane
             | Self::CriticalTasks
             | Self::ChartOnly => return Enabled::YES,
             Self::Undo if history.as_ref().is_none_or(|h| h.entries.is_empty()) => {
@@ -384,6 +403,8 @@ impl RibbonCmd {
                 | Self::ClearContents
                 | Self::SelectAll
                 | Self::DeleteTask
+                | Self::InsertColumn
+                | Self::FieldSettings
         )
     }
 
@@ -421,6 +442,7 @@ impl RibbonCmd {
     pub fn checked(self, fc: &FrameCtx<'_>) -> Option<bool> {
         match self {
             Self::TimelineVisible => Some(fc.state.timeline_visible),
+            Self::DetailsPane => Some(fc.state.details.visible),
             Self::AiPanel => Some(false),
             Self::Inactivate => Some(active_task(fc).is_some_and(|task| !task.active)),
             Self::ManualSchedule => Some(
@@ -501,6 +523,10 @@ impl RibbonCmd {
             Self::ClearContents => TextId::MenuClearContents,
             Self::SelectAll => TextId::MenuSelectAll,
             Self::DeleteTask => TextId::StructureDelete,
+            Self::DetailsPane => TextId::MenuDetailsPane,
+            Self::InsertColumn => TextId::MenuInsertColumn,
+            Self::FieldSettings => TextId::MenuFieldSettings,
+            Self::CustomFields => TextId::MenuCustomFields,
         }
     }
 
@@ -546,7 +572,8 @@ impl RibbonCmd {
             | Self::LanguageMenu
             | Self::CollapseRibbon
             | Self::CriticalTasks
-            | Self::ChartOnly => &[TextId::MenuView],
+            | Self::ChartOnly
+            | Self::DetailsPane => &[TextId::MenuView],
             Self::MarkPercent(_)
             | Self::InsertSummary
             | Self::InsertMilestone
@@ -557,12 +584,17 @@ impl RibbonCmd {
             | Self::TaskInformation
             | Self::TaskNotes
             | Self::AddToTimeline => &[TextId::MenuTask],
-            Self::ProjectInformation | Self::WorkingTime | Self::SetBaseline | Self::UpdateProject => {
-                &[TextId::MenuProject]
-            }
-            Self::FormatBars | Self::Gallery | Self::RelativeMonths | Self::ColumnsMenu => {
-                &[TextId::MenuFormat]
-            }
+            Self::ProjectInformation
+            | Self::WorkingTime
+            | Self::SetBaseline
+            | Self::UpdateProject
+            | Self::CustomFields => &[TextId::MenuProject],
+            Self::FormatBars
+            | Self::Gallery
+            | Self::RelativeMonths
+            | Self::ColumnsMenu
+            | Self::InsertColumn
+            | Self::FieldSettings => &[TextId::MenuFormat],
         }
     }
 
@@ -574,6 +606,7 @@ impl RibbonCmd {
         matches!(
             self,
             Self::TimelineVisible
+                | Self::DetailsPane
                 | Self::AiPanel
                 | Self::Diagnostics
                 | Self::CollapseRibbon
@@ -623,6 +656,7 @@ impl RibbonCmd {
             Self::FillDown => ui(UiBinding::FillDown),
             Self::ClearContents => ui(UiBinding::ClearCells),
             Self::SelectAll => ui(UiBinding::SelectAll),
+            Self::FieldSettings => ui(UiBinding::FieldSettings),
             _ => return None,
         })
     }

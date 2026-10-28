@@ -425,7 +425,7 @@ fn column_menu(ui: &mut egui::Ui, fc: &FrameCtx<'_>, clicked: Column) -> Option<
     }
     ui.separator();
     for column in Column::ALL {
-        let mut visible = fc.state.column(column).is_some_and(|state| state.visible);
+        let mut visible = fc.state.shown(column);
         let check = egui::Checkbox::new(&mut visible, texts.get(column.title()));
         if ui.add_enabled(column.hideable(), check).clicked() {
             chosen = Some(Action::ToggleColumn(column));

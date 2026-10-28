@@ -8,6 +8,8 @@ Une version publiée a une section `## [X.Y.Z] - AAAA-MM-JJ` en tête (sous une 
 
 Ruban à onglets et chronologie (ADR-0017, cahier `docs/plans/ribbon.md`), demandés avant `v1.0.0` pour que l'utilisateur occasionnel de MS Project retrouve ses repères dès l'ouverture. Aucune convention n'est « vérifiée contre MS Project » (`docs/scorecard.md`).
 
+Passe UX (ADR-0018, cahier `docs/plans/ux.md`), après essai sur Mac : la table et le Gantt reprennent les gestes de MS Project et d'Excel (sélection à la souris, copier-coller de cellules, remplir, déplacer des lignes). Conventions au statut `hypothèse` sauf ce que disent les pages d'aide Microsoft relues.
+
 ### Ajouté
 - **Ruban à onglets** Tâche, Ressource, Projet, Affichage, Format, sous la barre de menus : groupes nommés (Presse-papiers, Planification, Insérer, Propriétés, Édition, Zoom, Fractionner l'affichage…), grands et petits boutons à icône et libellé, listes déroulantes, cases ; barre d'accès rapide (Enregistrer, Annuler, Rétablir) ; info-bulles avec le raccourci clavier et, pour un élément grisé, la raison ; réduction progressive des groupes jusqu'à 800 px de large sans débordement. Chaque élément pousse la même action que son entrée de la barre de menus, qui reste (accès clavier, macOS).
 - Repli du ruban par double-clic sur un onglet, Ctrl+F1 (Cmd+F1 sur macOS) ou Affichage → Réduire le ruban ; replié, un clic sur un onglet ouvre le corps en surimpression. Onglet choisi et repli mémorisés.
@@ -16,15 +18,25 @@ Ruban à onglets et chronologie (ADR-0017, cahier `docs/plans/ribbon.md`), deman
 - **Chronologie** au-dessus du Gantt (Affichage → Chronologie, cochée par défaut) : début, fin et date d'état du projet, graduations, tâches et jalons ajoutés par Tâche → Ajouter à la chronologie ou par le menu contextuel (une annulation, 200 tâches au plus, enregistrées dans le style du document), rectangle de la partie visible du Gantt, clic sur un élément = sélection et défilement.
 - Impression de la chronologie en tête de la première page (case « Chronologie » de Mise en page, cochée d'office par Mode impression quand elle est affichée) : aperçu, PDF, SVG, `project.export_pdf` de la CLI et du serveur MCP.
 - Les archives de release (DMG, zip, archive Linux, paquet web) portent un dossier `licenses/` : licences du code, `NOTICE`, licences d'Inter et de Lucide.
+- **Sélection à la souris** : appuyer-glisser sélectionne un bloc de cellules (la cellule active reste dans le bloc), sur les ID des lignes entières, sur les titres des colonnes entières ; le titre de l'ID sélectionne tout ; défilement automatique près des bords pendant tout glisser ; un clic qui tremble n'est plus perdu.
+- Raccourcis de sélection : Maj+←/→, Maj+Origine/Fin, Ctrl+Maj+Origine/Fin, Ctrl/Cmd+A, Maj+Espace (lignes), Ctrl+Espace (colonnes), Maj+Retour arrière (cellule active) ; Entrée et Tab circulent dans un bloc.
+- **Édition sur la sélection** : copier un bloc en texte tabulé, coller dans des cellules (une valeur seule remplit tout le bloc, une annulation), Remplir vers le bas (Ctrl/Cmd+D), Ctrl/Cmd+Entrée (la saisie remplit le bloc), Effacer le contenu (Ctrl/Cmd+Suppr) ; groupe Édition du ruban : Remplir ▾ et Effacer ▾.
+- **Déplacer des lignes** en glissant leur ID (trait d'insertion, une annulation, refusé sous tri ou filtre, Échap annule) ; **ajuster une colonne** par double-clic sur sa bordure ; menu d'en-tête : Ajuster la largeur, Trier par ordre croissant ou décroissant.
+- Menus contextuels de la table, du Gantt et de l'en-tête de l'échelle construits sur les commandes du ruban (Couper, Copier, Coller, Remplir, Effacer, Insérer, Supprimer, Lier…) ; menu Édition : Remplir vers le bas, Effacer le contenu, Tout sélectionner.
 
 ### Modifié
 - Le ruban remplace les deux rangées de boutons de J7 et J8 ; la vue Gantt commence sous la chronologie (repliable, masquable).
+- Suppr efface le contenu des cellules sélectionnées ; il supprime les tâches sur des lignes entières ou depuis l'ID et le Nom (message « n tâche(s) supprimée(s) ») ; valider une cellule vide l'efface au lieu d'un refus.
+- Un clic dans le Gantt laisse le clavier à la table (flèches, frappe, presse-papiers) ; glisser la barre d'une tâche d'une sélection multiple garde la sélection.
+- Sélection plus visible en clair et en sombre (teinte, bordure de 2 px, ID appuyés) ; un clic simple ne teinte plus toute la ligne ; survol discret de la ligne.
 
 ### Corrigé
 - Appliquer un modèle de la galerie vidait la liste de la chronologie du document ; elle est gardée, comme les couleurs de phase, et n'est jamais enregistrée dans un modèle personnel.
+- On ne pouvait pas sélectionner plusieurs cellules d'un coup à la souris (Maj obligatoire) ; coller « 7j » sur une Durée créait une tâche ; copier une cellule copiait la ligne entière.
 
 ### Limites connues
 - Libellés français des onglets et groupes non relus sur l'interface française de Project ; Cmd+F1 peut être pris par macOS (le double-clic et le menu Affichage restent) ; ruban déplié et chronologie prennent environ 216 px au-dessus de la table (replier sur un petit écran).
+- Passe UX : Ctrl+Espace peut être pris par macOS (changement de source de saisie ; clic sur le titre de colonne à la place) ; un seul bloc à la fois (pas de blocs disjoints) ; pas de poignée de recopie ni de Ctrl+R ; glisser dans le vide du Gantt fait défiler (aucune sélection) ; colonnes non réordonnables au glisser.
 
 ## [1.0.0-rc.1] - 2026-10-26
 

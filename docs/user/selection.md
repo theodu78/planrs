@@ -7,10 +7,10 @@ La table des tâches de planrs se manie comme une feuille Excel et comme la tabl
 | Geste | Résultat |
 |---|---|
 | Appui sur une cellule | La cellule seule ; elle devient la **cellule active** (cadre de 2 px). La sélection se fait à l'appui, sans attendre le relâcher. |
-| Cliquer-glisser | Un **bloc** de cellules, de la cellule appuyée à celle sous le pointeur. Au bord haut ou bas de la table, la vue défile toute seule. |
+| Cliquer-glisser | Un **bloc** de cellules, de la cellule appuyée à celle sous le pointeur. Un léger tremblement (moins de 6 points) garde la cellule appuyée. Au bord haut ou bas de la table, la vue défile toute seule ; tout contre le bord gauche ou droit, ou au-delà, elle défile de côté. |
 | Maj+clic | Étend le bloc jusqu'à la cellule cliquée. |
-| Ctrl+clic | Ajoute ou retire une ligne (jamais la dernière). |
-| Clic, glisser sur les **n°** (colonne ID) | Une ou plusieurs **lignes entières**. |
+| Ctrl+clic | Ajoute ou retire une ligne (jamais la dernière) ; glisser après un Ctrl+appui n'étend rien. |
+| Clic, glisser sur les **n°** (colonne ID) | Une ou plusieurs **lignes entières**. Attention : un glisser qui part du n° d'une ligne **déjà** sélectionnée en lignes entières la **déplace** (section 4, comme MS Project ; Ctrl+Z l'annule) ; pour étendre la sélection depuis elle, **Maj+clic** sur le dernier n°. |
 | Clic sur un **titre de colonne** | La colonne entière ; glisser sur les titres ou Maj+clic : plusieurs colonnes. Le titre « N° » sélectionne tout. |
 | Ctrl+A (ou Ctrl+Maj+Espace) | Tout, en lignes entières. |
 | Maj+← / → / Origine / Fin | Étend le bloc d'une colonne, ou jusqu'au bout de la ligne. |
@@ -42,7 +42,7 @@ Ces couleurs suivent le modèle de mise en forme et le thème (clair ou sombre) 
 | Recopier la première cellule de chaque colonne du bloc vers le bas | **Ctrl+D**, ou Tâche → Édition → **Remplir ▾ → Vers le bas**, ou Édition → Remplir vers le bas, ou clic droit |
 | Écrire la même valeur dans tout le bloc | Taper la valeur puis **Ctrl+Entrée** |
 | Vider des cellules sans supprimer les tâches | **Ctrl+Suppr**, ou Tâche → Édition → **Effacer ▾ → Contenu** ; Suppr fait de même sur une cellule hors N° et Nom, et sur tout bloc de plusieurs cellules (colonne entière comprise) |
-| Supprimer des tâches | **Suppr** avec des lignes entières (clic sur le N°), ou une seule cellule du Nom sélectionnée (un message rappelle Ctrl+Z) |
+| Supprimer des tâches | **Suppr** avec des lignes entières (clic sur le N°), ou une seule cellule du Nom sélectionnée (un message rappelle Ctrl+Z) ; **Ctrl+Retour arrière** supprime toujours les tâches des lignes sélectionnées, quel que soit le bloc (le menu « Supprimer la tâche » affiche Suppr, qui efface un bloc de plusieurs cellules) |
 
 Chaque geste (coller, remplir, effacer, déplacer) est **une seule** entrée d'annulation : Ctrl+Z le défait d'un coup.
 

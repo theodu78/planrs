@@ -242,7 +242,9 @@ mod tests {
             CustomFieldId::new(CustomKind::Number, 20).unwrap().to_string(),
             "number20"
         );
-        for bad in ["", "text", "text0", "text01", "text31", "Text1", "cost1", "flag-1", "date 1", "text1x"] {
+        for bad in [
+            "", "text", "text0", "text01", "text31", "Text1", "cost1", "flag-1", "date 1", "text1x",
+        ] {
             assert!(bad.parse::<CustomFieldId>().is_err(), "{bad}");
         }
         assert!(serde_json::from_str::<CustomFieldId>("\"date11\"").is_err());

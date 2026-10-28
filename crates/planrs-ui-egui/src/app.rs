@@ -49,10 +49,10 @@ use crate::io::{
     suggested_file_name,
 };
 use crate::keymap::KeyState;
-use crate::nav::{self, GridPos, GridShape, NavMove, RowRef};
+use crate::nav::RowRef;
 use crate::row_view::{DisplayRow, ModelRow, RowView, VisibleRows};
 use crate::rows::RowModel;
-use crate::selection::{SelectMode, Selection};
+use crate::selection::Selection;
 use crate::state::{
     FilterChoice, SortSpec, StateLoadError, TABLE_WIDTH_MAX, TABLE_WIDTH_MIN, TaskViewState, ThemePref,
     UiState, ViewKind,
@@ -327,7 +327,7 @@ pub struct App {
     pub(crate) rows: Option<RowModel>,
     /// Vue des lignes (J8, lot L5) : lignes affichées par filtre, tri et
     /// repli, construite sur `rows` ; identité sans état de vue.
-    row_view: RowView,
+    pub(crate) row_view: RowView,
     /// Clé de la vue construite (`None` : à reconstruire).
     row_view_key: Option<RowViewKey>,
     /// État transitoire de la vue.
@@ -779,6 +779,9 @@ impl App {
         }
         if self.selected.focus() != self.selection {
             self.selected = Selection::single(self.selection);
+            // Sélection posée ailleurs (Gantt, chronologie, agent) : bloc
+            // d'une cellule (ADR-0018).
+            self.view.cursor.anchor_column = None;
         }
         self.view.cursor.row = RowRef::from_selection(self.selection);
         if self.selected.len() <= 1 {
@@ -1724,7 +1727,7 @@ impl App {
 
     /// Réducteur : applique une action.
     #[allow(clippy::too_many_lines, reason = "réducteur : un bras court par action")]
-    fn apply(&mut self, action: Action, ctx: &egui::Context) {
+    pub(crate) fn apply(&mut self, action: Action, ctx: &egui::Context) {
         match action {
             Action::OpenDemo => self.request(Pending::OpenDemo, ctx),
             Action::OpenDialog => self.request(Pending::OpenDialog, ctx),
@@ -1945,6 +1948,23 @@ impl App {
                     self.open_task_info_on(uid, crate::dialog::task_info::TaskInfoTab::Notes);
                 }
             }
+            // --- Passe UX (ADR-0018, contrat L0) : bras posés une fois ; les
+            // fonctions appelées vivent dans le fichier du lot qui les sert
+            // (`selection.rs` L1, `cells.rs` L2, `structure.rs` et
+            // `column.rs` L3). Vues des ressources : sans effet (gestes de
+            // bloc reportés), sauf Suppr, qui garde son chemin.
+            Action::SelectOp(_)
+            | Action::MoveRows { .. }
+            | Action::FitColumn(_)
+            | Action::Cells(
+                crate::action::CellOp::FillDown
+                | crate::action::CellOp::Clear
+                | crate::action::CellOp::FillTyped(_),
+            ) if self.state.view != ViewKind::Gantt => {}
+            Action::SelectOp(op) => self.select_op(op),
+            Action::Cells(op) => self.cells_op(op, ctx),
+            Action::MoveRows { before } => self.move_rows(before),
+            Action::FitColumn(column) => self.fit_column(column, ctx),
         }
     }
 
@@ -2166,74 +2186,6 @@ impl App {
         });
     }
 
-    /// Navigation au clavier (H-UI-13 à H-UI-17) : [`nav::step`] sur
-    /// (ligne, colonne visible), ligne vide comprise ; la sélection suit la
-    /// ligne du curseur (`extend` : plage depuis l'ancre, sans aller sur la
-    /// ligne vide) ; le défilement vertical suit le curseur avec une ligne
-    /// de marge ([`nav::ensure_visible`]).
-    fn navigate(&mut self, mv: NavMove, extend: bool) {
-        let Some(model) = &self.rows else {
-            return;
-        };
-        // Lignes affichées (J8, lot L5) : la navigation suit la vue.
-        let rows = VisibleRows::new(model, &self.row_view);
-        let len = rows.len();
-        let visible: Vec<Column> = self.state.visible_columns().map(|state| state.column).collect();
-        let row = match self.selection {
-            Some(uid) => rows.display_of(uid).map_or(0, DisplayRow::index),
-            None => len,
-        };
-        let col = visible
-            .iter()
-            .position(|column| *column == self.view.cursor.column)
-            .unwrap_or(0);
-        let shape = GridShape {
-            rows: len.saturating_add(1),
-            cols: visible.len(),
-            page: nav::page_rows(self.view.last_body_height, self.row_h()),
-        };
-        let mut target = nav::step(GridPos { row, col }, mv, shape);
-        let extend = extend && len > 0;
-        if extend {
-            // L'extension s'arrête à la dernière tâche.
-            target.row = target.row.min(len.saturating_sub(1));
-        }
-        if let Some(column) = visible.get(target.col) {
-            self.view.cursor.column = *column;
-        }
-        let uid = rows.uid(DisplayRow::at(target.row));
-        match uid {
-            Some(uid) if extend => {
-                let anchor = self.selected.anchor().or(self.selection).unwrap_or(uid);
-                let mut selected = Selection::single(Some(anchor));
-                selected.click(uid, SelectMode::Range, rows);
-                self.selected = selected;
-                self.selection = Some(uid);
-                self.view.cursor.anchor = Some(anchor);
-            }
-            _ => {
-                self.selection = uid;
-                self.selected = Selection::single(uid);
-            }
-        }
-        self.sync_selection();
-        if extend {
-            self.view.cursor.anchor = self.selected.anchor();
-        }
-        let view_h = self.view.last_body_height;
-        if let Some(y) = nav::ensure_visible(
-            self.view.last_scroll_y,
-            target.row,
-            self.row_h(),
-            view_h,
-            shape.rows,
-        ) {
-            self.view.pending_scroll_y = Some(y);
-            self.view.last_scroll_y = y;
-        }
-        self.follow_cursor_x();
-    }
-
     /// Affiche ou masque une colonne (J7, lot L6) ; masquer la colonne du
     /// curseur le ramène sur le Nom (toujours visible).
     fn toggle_column(&mut self, column: Column) {
@@ -2259,7 +2211,7 @@ impl App {
 
     /// Le défilement horizontal suit la colonne du curseur, une colonne de
     /// marge de chaque côté quand elle tient (H-UI-17, J7 lot L6).
-    fn follow_cursor_x(&mut self) {
+    pub(crate) fn follow_cursor_x(&mut self) {
         if self.view.last_table_width.is_nan() || self.view.last_table_width <= 0.0 {
             // Aucune image encore : largeur visible inconnue.
             return;

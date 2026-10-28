@@ -758,7 +758,7 @@ fn measure_edit_latency(name: &str, baseline: bool) {
         assert!(matches!(row.kind, RowKind::Leaf | RowKind::Milestone), "{index}");
         let uid = row.uid;
         app.dispatch(Action::ScrollToRow(index));
-        app.dispatch(Action::Select(Some(uid)));
+        select_rows(&mut app, uid, uid);
         bench.settle(&mut app);
         // Décomposition, hors image, sur une copie du document.
         let doc = app.document.as_ref().unwrap();
@@ -1413,11 +1413,9 @@ fn paste_1000() {
     let (mut app, mut bench) = nav_bench();
     let first = app.rows().unwrap().row(0).unwrap().uid;
     let last = app.rows().unwrap().row(999).unwrap().uid;
-    app.dispatch(Action::Select(Some(first)));
-    app.dispatch(Action::SelectWith {
-        uid: last,
-        mode: planrs_ui_egui::selection::SelectMode::Range,
-    });
+    // Lignes entières (H-UI-95 : le tampon de lignes suit les lignes
+    // entières depuis la passe UX).
+    select_rows(&mut app, first, last);
     bench.settle(&mut app);
     bench.frame(&mut app, vec![Event::Copy]);
     let slot = app.clipboard().expect("rien copié").clone();
@@ -1442,7 +1440,7 @@ fn paste_1000() {
         let index = 2_500 + k * 100;
         let uid = app.rows().unwrap().row(index).unwrap().uid;
         app.dispatch(Action::ScrollToRow(index));
-        app.dispatch(Action::Select(Some(uid)));
+        select_rows(&mut app, uid, uid);
         bench.settle(&mut app);
         // Décomposition, hors image, sur une copie du document.
         let (batch, apply, build) = paste_parts(app.document.as_ref().unwrap(), &slot, uid, &labels);
@@ -1760,4 +1758,348 @@ fn timeline_5000() {
         "timeline_5000 : layout médiane {layout_median:?} ≥ 2 ms"
     );
     assert_budget("timeline_5000", samples, bench.last);
+}
+
+// --- Passe UX (ADR-0018, contrat L0) : sections posées vides, remplies par
+// leur lot (budgets du cahier `docs/plans/ux.md` § 2.5).
+// --- UX L1 --- (`select_drag_5000`, image de Ctrl+A de `select_all_copy_5000`)
+
+/// Appui (bouton principal) en `p`, pointeur amené d'abord.
+fn press_frames(bench: &mut Bench, app: &mut App, p: Pos2, pressed: bool) {
+    bench.frame(app, vec![Event::PointerMoved(p)]);
+    bench.frame(
+        app,
+        vec![Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        }],
+    );
+}
+
+/// UX L1 (ADR-0018, H-UI-88, H-UI-91) : appui sur une cellule du Nom vers
+/// la ligne 10, pointeur tenu sous le bas du corps 120 images (défilement
+/// automatique vertical, bloc étendu à chaque image), puis 60 images au-delà
+/// du bord droit d'une table de 400 points (défilement automatique
+/// horizontal). Image
+/// médiane < 16 ms, p95 < 32 ms.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn select_drag_5000() {
+    let (mut app, mut bench) = nav_bench();
+    // Table étroite : ses colonnes débordent, le défilement horizontal joue.
+    app.dispatch(Action::SetTableWidth(400));
+    bench.settle(&mut app);
+    let x = 150.0;
+    let start = (300_u16..900)
+        .step_by(4)
+        .map(f32::from)
+        .find(|&y| {
+            // Une seconde entre deux clics : jamais de double-clic (saisie).
+            bench.time += 1.0;
+            press_frames(&mut bench, &mut app, pos2(x, y), true);
+            press_frames(&mut bench, &mut app, pos2(x, y), false);
+            app.selection
+                .and_then(|uid| app.rows().unwrap().index_of(uid))
+                .is_some_and(|i| i >= 10)
+        })
+        .expect("aucune ligne 10 sous le pointeur");
+    bench.time += 1.0;
+    press_frames(&mut bench, &mut app, pos2(x, start), true);
+    assert!(app.view().edit.editing.is_none() && app.view().select_drag.is_some());
+    let first = cursor_row(&app);
+    let below = pos2(x, SCREEN.1 + 40.0);
+    for _ in 0..WARMUP {
+        bench.frame(&mut app, vec![Event::PointerMoved(below)]);
+    }
+    let mut samples: Vec<Duration> = (0..120).map(|_| bench.frame(&mut app, Vec::new())).collect();
+    let scrolled = app.view().last_scroll_y;
+    assert!(scrolled > 0.0, "aucun défilement automatique");
+    assert!(
+        app.selected().len() > 60,
+        "bloc de {} lignes depuis la ligne {first}",
+        app.selected().len()
+    );
+    let right = pos2(app.view().last_table_width + 120.0, start);
+    samples.extend((0..60).map(|i| {
+        let events = if i == 0 {
+            vec![Event::PointerMoved(right)]
+        } else {
+            Vec::new()
+        };
+        bench.frame(&mut app, events)
+    }));
+    let table_x = app.view().table_scroll_x;
+    assert!(table_x > 0.0, "aucun défilement horizontal de la table");
+    press_frames(&mut bench, &mut app, right, false);
+    bench.settle(&mut app);
+    assert!(app.view().select_drag.is_none());
+    eprintln!("select_drag_5000 : défilement {scrolled} points, table {table_x} points");
+    assert_budget("select_drag_5000", samples, bench.last);
+}
+
+/// UX L1 (ADR-0018, H-UI-92) : image de Ctrl+A sur 5 000 tâches (toutes les
+/// lignes en lignes entières), 30 fois : médiane < 16 ms, p95 < 32 ms. La
+/// copie du bloc 5 000 × 3 est mesurée par le lot L2.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn select_all_5000() {
+    let (mut app, mut bench) = nav_bench();
+    for _ in 0..WARMUP {
+        bench.frame(&mut app, key_events(Key::A, Modifiers::COMMAND));
+    }
+    let samples: Vec<Duration> = (0..FRAMES)
+        .map(|_| bench.frame(&mut app, key_events(Key::A, Modifiers::COMMAND)))
+        .collect();
+    assert_eq!(app.selected().len(), app.rows().unwrap().len());
+    assert_budget("select_all_5000", samples, bench.last);
+}
+// --- UX L2 --- (`fill_down_1000`, `paste_cells_1000`, copie de `select_all_copy_5000`)
+
+/// Lignes entières `first` à `last` (appui sur l'ID puis Maj+appui).
+fn select_rows(app: &mut App, first: planrs_core::TaskUid, last: planrs_core::TaskUid) {
+    use planrs_ui_egui::action::{PressMode, PressTarget, SelectOp};
+    for (uid, mode) in [(first, PressMode::Replace), (last, PressMode::Extend)] {
+        app.dispatch(Action::SelectOp(SelectOp::Press {
+            row: RowRef::Item(uid),
+            column: Column::Name,
+            target: PressTarget::RowHeader,
+            mode,
+        }));
+    }
+}
+
+/// Bloc de la colonne `column`, lignes affichées `first` à `last`.
+fn select_cells(app: &mut App, first: usize, last: usize, column: Column) {
+    use planrs_ui_egui::action::{PressMode, PressTarget, SelectOp};
+    for (i, mode) in [(first, PressMode::Replace), (last, PressMode::Extend)] {
+        let uid = app.rows().unwrap().row(i).unwrap().uid;
+        app.dispatch(Action::SelectOp(SelectOp::Press {
+            row: RowRef::Item(uid),
+            column,
+            target: PressTarget::Cell,
+            mode,
+        }));
+    }
+}
+
+/// Mesure d'un geste d'édition sur sélection (5 répétitions annulées) :
+/// image du geste et image suivante (lot appliqué) ; budget de
+/// `paste_1000` (objectif 500 ms, garde bloquante 1 s).
+fn measure_cell_gesture(label: &str, app: &mut App, bench: &mut Bench, events: &dyn Fn() -> Vec<Event>) {
+    let mut samples = Vec::new();
+    for k in 0..5 {
+        let generation = app.document.as_ref().unwrap().generation();
+        let gesture = bench.frame(app, events());
+        let next = bench.frame(app, Vec::new());
+        assert_eq!(
+            app.document.as_ref().unwrap().generation(),
+            generation + 1,
+            "{label} non appliqué ({k})"
+        );
+        samples.push(gesture + next);
+        app.dispatch(Action::Undo);
+        bench.settle(app);
+    }
+    samples.sort();
+    let median = percentile(&samples, 50);
+    eprintln!(
+        "perf UI {label} : médiane {:.1} ms, max {:.1} ms ; objectif {} ms, garde {} ms",
+        ms(median),
+        ms(*samples.last().unwrap()),
+        PASTE_BUDGET.as_millis(),
+        PASTE_GUARD.as_millis()
+    );
+    report(
+        label,
+        &samples,
+        bench.last,
+        serde_json::json!({ "budget_median_ms": PASTE_BUDGET.as_millis(), "guard_median_ms": PASTE_GUARD.as_millis() }),
+    );
+    if median >= PASTE_BUDGET {
+        eprintln!("perf UI {label} : HORS OBJECTIF (médiane {median:?}), non bloquant");
+    }
+    assert!(
+        median < PASTE_GUARD,
+        "{label} : médiane {median:?} ≥ {PASTE_GUARD:?}"
+    );
+}
+
+/// UX L2 : Ctrl+D sur la Durée de 1 000 lignes (R-258), dans 5 000 tâches.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn fill_down_1000() {
+    let (mut app, mut bench) = nav_bench();
+    select_cells(&mut app, 1_000, 1_999, Column::Duration);
+    bench.settle(&mut app);
+    measure_cell_gesture("fill_down_1000", &mut app, &mut bench, &|| {
+        key_events(Key::D, Modifiers::COMMAND)
+    });
+}
+
+/// UX L2 : collage d'un texte 1 000 × 2 (Nom, Durée) à partir d'une
+/// cellule (R-257), dans 5 000 tâches.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn paste_cells_1000() {
+    let (mut app, mut bench) = nav_bench();
+    select_cells(&mut app, 2_000, 2_000, Column::Name);
+    bench.settle(&mut app);
+    let mut text = String::new();
+    for i in 0..1_000 {
+        std::fmt::Write::write_fmt(&mut text, format_args!("Tâche collée {i}\t{}j\n", 1 + i % 5)).unwrap();
+    }
+    measure_cell_gesture("paste_cells_1000", &mut app, &mut bench, &|| {
+        vec![Event::Paste(text.clone())]
+    });
+}
+
+/// UX L2 : copie d'un bloc 5 000 × 3 (Nom, Durée, Début) après Ctrl+A
+/// (durée de la copie < 200 ms ; l'image de Ctrl+A est mesurée par L1).
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn select_all_copy_5000() {
+    let (app, _bench) = nav_bench();
+    let doc = app.document.as_ref().unwrap();
+    let rows = app.visible_rows().unwrap();
+    let block = planrs_ui_egui::block::Block {
+        kind: planrs_ui_egui::selection::SelectionKind::Cells,
+        rows: (0..rows.len())
+            .map(planrs_ui_egui::row_view::DisplayRow::at)
+            .collect(),
+        columns: vec![Column::Name, Column::Duration, Column::Start],
+        active: (RowRef::Blank, Column::Name),
+    };
+    let mut samples = Vec::new();
+    for _ in 0..5 {
+        let t0 = Instant::now();
+        let text = planrs_ui_egui::cells::copy_text(&block, doc, rows, planrs_automation::text::Language::Fr);
+        samples.push(t0.elapsed());
+        assert_eq!(black_box(text).lines().count(), rows.len());
+    }
+    samples.sort();
+    let median = percentile(&samples, 50);
+    eprintln!(
+        "perf UI select_all_copy_5000 (copie) : médiane {:.1} ms ; budget 200 ms",
+        ms(median)
+    );
+    report(
+        "select_all_copy_5000_copy",
+        &samples,
+        Counts::default(),
+        serde_json::json!({ "budget_median_ms": 200 }),
+    );
+    assert!(
+        median < Duration::from_millis(200),
+        "copie 5 000 × 3 : {median:?}"
+    );
+}
+// --- UX L3 --- (`row_drag_5000`, `best_fit_5000`)
+
+/// Abscisse de la colonne ID et ordonnée de la ligne affichée `target` :
+/// cherchées par des clics sur l'ID (une seconde entre deux clics : jamais
+/// de double-clic), comme `select_drag_5000`.
+fn id_point(bench: &mut Bench, app: &mut App, target: usize) -> Pos2 {
+    let x = 24.0;
+    let y = (200_u16..1000)
+        .step_by(2)
+        .map(f32::from)
+        .find(|&y| {
+            bench.time += 1.0;
+            press_frames(bench, app, pos2(x, y), true);
+            press_frames(bench, app, pos2(x, y), false);
+            app.selection
+                .and_then(|uid| app.rows().unwrap().index_of(uid))
+                .is_some_and(|i| i == target)
+        })
+        .expect("ligne introuvable sous le pointeur");
+    pos2(x, y)
+}
+
+/// UX L3 (ADR-0018, H-UI-94) : deux lignes sœurs entières vers la ligne
+/// 10, appui sur leur ID puis 60 images de glisser (4 points par image,
+/// trait d'insertion et refus recalculés quand l'intervalle change), puis
+/// lâcher (un lot). Image médiane < 16 ms, p95 < 32 ms.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn row_drag_5000() {
+    let (mut app, mut bench) = nav_bench();
+    // Deux feuilles sœurs voisines à partir de la ligne 10.
+    let first = {
+        let rows = app.rows().unwrap();
+        (10..rows.len() - 1)
+            .find(|&i| {
+                let (a, b) = (rows.row(i).unwrap(), rows.row(i + 1).unwrap());
+                a.kind == RowKind::Leaf && b.kind == RowKind::Leaf && a.level == b.level
+            })
+            .unwrap()
+    };
+    let p = id_point(&mut bench, &mut app, first);
+    let (a, b) = {
+        let rows = app.rows().unwrap();
+        (rows.row(first).unwrap().uid, rows.row(first + 1).unwrap().uid)
+    };
+    select_rows(&mut app, a, b);
+    bench.settle(&mut app);
+    let generation = app.document.as_ref().unwrap().generation();
+    bench.time += 1.0;
+    press_frames(&mut bench, &mut app, p, true);
+    for k in 1..=WARMUP {
+        bench.frame(&mut app, vec![Event::PointerMoved(p + vec2(0.0, 4.0 * k as f32))]);
+    }
+    assert!(app.view().row_drag.is_some(), "déplacement non ouvert");
+    let samples: Vec<Duration> = (0..60)
+        .map(|k| {
+            let y = p.y + 4.0 * (WARMUP + k) as f32;
+            bench.frame(&mut app, vec![Event::PointerMoved(pos2(p.x, y))])
+        })
+        .collect();
+    let drop = pos2(p.x, p.y + 4.0 * (WARMUP + 60) as f32);
+    press_frames(&mut bench, &mut app, drop, false);
+    bench.settle(&mut app);
+    assert!(app.view().row_drag.is_none());
+    assert_eq!(
+        app.document.as_ref().unwrap().generation(),
+        generation + 1,
+        "lignes non déplacées : {:?}",
+        app.messages().last()
+    );
+    assert_budget("row_drag_5000", samples, bench.last);
+}
+
+/// UX L3 (ADR-0018, H-UI-99) : ajustement de la colonne Nom (galley de
+/// chacun des 5 000 noms affichés) ; dix fois, la largeur remise à 220
+/// entre deux. Mesure : image qui sert `FitColumn` (ajustement compris),
+/// médiane < 50 ms.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn best_fit_5000() {
+    let (mut app, mut bench) = nav_bench();
+    let mut samples = Vec::new();
+    for _ in 0..10 {
+        app.dispatch(Action::SetColumnWidth {
+            column: Column::Name,
+            width: 220,
+        });
+        bench.settle(&mut app);
+        app.dispatch(Action::FitColumn(Column::Name));
+        samples.push(bench.frame(&mut app, Vec::new()));
+        let w = app.state.column(Column::Name).unwrap().width;
+        assert_ne!(w, 220, "largeur non ajustée");
+    }
+    samples.sort();
+    let median = percentile(&samples, 50);
+    eprintln!(
+        "perf UI best_fit_5000 : médiane {:.1} ms, max {:.1} ms ; budget 50 ms",
+        ms(median),
+        ms(*samples.last().unwrap())
+    );
+    report(
+        "best_fit_5000",
+        &samples,
+        bench.last,
+        serde_json::json!({ "budget_median_ms": 50 }),
+    );
+    assert!(median < Duration::from_millis(50), "ajustement : {median:?}");
 }

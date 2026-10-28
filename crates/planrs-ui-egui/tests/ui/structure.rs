@@ -103,12 +103,24 @@ fn right_click_row(harness: &mut Harness<'static, App>, uid: TaskUid) {
 
 /// Appuie sur le raccourci lié à la commande `id` dans [`KEYMAP`].
 fn press(harness: &mut Harness<'static, App>, id: &str) {
+    delete_from_name(harness, id);
     let (_, shortcut, _) = KEYMAP
         .iter()
         .find(|(_, _, binding)| matches!(binding, Binding::Command(command) if *command == id))
         .unwrap_or_else(|| panic!("« {id} » sans raccourci"));
     harness.key_press_modifiers(shortcut.modifiers, shortcut.logical_key);
     harness.run();
+}
+
+/// Suppr supprime la tâche depuis l'ID ou le Nom (H-UI-97, lot L2 de la
+/// passe UX ; ailleurs il efface la cellule) : la cellule active passe au
+/// Nom de la ligne cliquée avant `task.delete`.
+fn delete_from_name(harness: &mut Harness<'static, App>, id: &str) {
+    if id == "task.delete" {
+        let cursor = &mut harness.state_mut().view_mut().cursor;
+        cursor.column = Column::Name;
+        cursor.anchor_column = None;
+    }
 }
 
 fn assert_no_message(app: &App) {
@@ -402,7 +414,8 @@ fn ui_context_menu_runs_structure() {
 /// Vérification d'une entrée de [`KEYMAP`] liée à une commande de structure
 /// (appelée par `session.rs`, un test par entrée).
 pub fn check_keymap_entry(id: &str, shortcut: egui::KeyboardShortcut) {
-    let press = |harness: &mut Harness<'static, App>, _: &str| {
+    let press = |harness: &mut Harness<'static, App>, id: &str| {
+        delete_from_name(harness, id);
         harness.key_press_modifiers(shortcut.modifiers, shortcut.logical_key);
         harness.run();
     };
@@ -418,6 +431,13 @@ pub fn check_keymap_entry(id: &str, shortcut: egui::KeyboardShortcut) {
             click_row(&mut harness, uid(3), Modifiers::NONE);
             press(&mut harness, id);
             assert!(!project(harness.state()).tasks.contains(uid(3)));
+            // Suppr : message « 1 tâche supprimée — Ctrl/Cmd+Z annule »
+            // (H-UI-97, lot L2 de la passe UX) ; Cmd+Retour arrière : aucun.
+            if shortcut.logical_key == egui::Key::Delete {
+                assert_eq!(harness.state().messages().len(), 1);
+                harness.state_mut().dispatch(Action::DismissMessage);
+                harness.run();
+            }
         }
         "task.indent" => {
             click_row(&mut harness, uid(32), Modifiers::NONE);

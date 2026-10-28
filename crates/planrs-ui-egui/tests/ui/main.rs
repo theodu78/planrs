@@ -13,7 +13,10 @@
 //! J8 (lot L0, ADR-0016), remplis par leur lot. Modules du ruban et de la
 //! chronologie (`ribbon`, `ribbon_commands`, `timeline`) posés par le
 //! contrat ADR-0017 (lot L0), remplis par L2, L3 et L4 ; scénario de bout
-//! en bout du ruban (`ribbon_e2e`) ajouté par le lot L6.
+//! en bout du ruban (`ribbon_e2e`) ajouté par le lot L6. Modules de la
+//! passe UX (`select_mouse`, `select_keys`, `cells`, `rows_columns`,
+//! `context_menus`, `ux_e2e`) posés par le contrat ADR-0018 (lot L0),
+//! remplis par L1 à L6.
 //!
 //! Cible unique `ui` (un seul binaire lié à wgpu, ADR-0011, décision 12).
 //! Les libellés cherchés sont construits par `Texts` (jamais en dur : le
@@ -34,9 +37,11 @@
 
 mod ai_panel;
 mod assign;
+mod cells;
 mod clipboard;
 mod columns;
 mod common;
+mod context_menus;
 mod csv_import;
 mod desktop;
 mod dialogs;
@@ -56,7 +61,10 @@ mod ribbon;
 mod ribbon_commands;
 mod ribbon_e2e;
 mod row_view;
+mod rows_columns;
 mod search;
+mod select_keys;
+mod select_mouse;
 mod session;
 mod snapshots;
 mod structure;
@@ -65,6 +73,7 @@ mod task_info;
 mod timeline;
 mod tracking;
 mod usage;
+mod ux_e2e;
 mod visible;
 mod web_keys;
 

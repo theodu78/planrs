@@ -135,6 +135,26 @@ fn select(harness: &mut Harness<'static, App>, first: TaskUid, last: TaskUid) {
     }
 }
 
+/// Sélectionne les lignes entières `first` à `last` (appui sur l'ID puis
+/// Maj+appui) : couper, copier et coller de lignes suivent les lignes
+/// entières depuis la passe UX (H-UI-95, ADR-0018 D3).
+fn select_rows(harness: &mut Harness<'static, App>, first: TaskUid, last: TaskUid) {
+    for (n, mode) in [
+        (first, planrs_ui_egui::action::PressMode::Replace),
+        (last, planrs_ui_egui::action::PressMode::Extend),
+    ] {
+        harness
+            .state_mut()
+            .dispatch(Action::SelectOp(planrs_ui_egui::action::SelectOp::Press {
+                row: planrs_ui_egui::nav::RowRef::Item(n),
+                column: Column::Name,
+                target: planrs_ui_egui::action::PressTarget::RowHeader,
+                mode,
+            }));
+        harness.run();
+    }
+}
+
 /// Envoie `event` (copier ou couper) et rend le texte écrit dans le
 /// presse-papiers par cette image.
 fn clip_event(harness: &mut Harness<'static, App>, event: Event) -> String {
@@ -361,10 +381,10 @@ fn e2e_daily_j8() {
 
     // 5. Copier 3 et 4, coller avant 6 (R-244) : « Murs » et « Livraison »
     // recréés sous 5, lien interne recréé, rapport « 2 liens » externes.
-    select(harness, uid(3), uid(4));
+    select_rows(harness, uid(3), uid(4));
     let text = clip_event(harness, Event::Copy);
     assert_eq!(text.lines().count(), 2, "{text:?}");
-    select(harness, uid(6), uid(6));
+    select_rows(harness, uid(6), uid(6));
     paste(harness, &text);
     let app = harness.state();
     assert_eq!(
@@ -394,7 +414,7 @@ fn e2e_daily_j8() {
 
     // 6. Couper 7 « Peinture » (un lot), coller en fin (ligne vide
     // sélectionnée : niveau 1, un second lot).
-    select(harness, uid(7), uid(7));
+    select_rows(harness, uid(7), uid(7));
     let text = clip_event(harness, Event::Cut);
     assert!(text.contains("Peinture"), "{text:?}");
     assert_eq!(history(harness.state()), (2, 0));

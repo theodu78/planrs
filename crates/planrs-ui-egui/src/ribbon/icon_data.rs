@@ -26,6 +26,8 @@ pub struct IconData {
 /// Icône du ruban : un variant par fichier de `assets/icons/lucide/`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Icon {
+    /// `arrow-down-to-line.svg`.
+    ArrowDownToLine,
     /// `arrow-up-down.svg`.
     ArrowUpDown,
     /// `calendar-check.svg`.
@@ -56,6 +58,8 @@ pub enum Icon {
     Copy,
     /// `diamond.svg`.
     Diamond,
+    /// `eraser.svg`.
+    Eraser,
     /// `file-cog.svg`.
     FileCog,
     /// `file-down.svg`.
@@ -124,7 +128,8 @@ pub enum Icon {
 
 impl Icon {
     /// Toutes les icônes, dans l'ordre des fichiers.
-    pub const ALL: [Self; 47] = [
+    pub const ALL: [Self; 49] = [
+        Self::ArrowDownToLine,
         Self::ArrowUpDown,
         Self::CalendarCheck,
         Self::CalendarCog,
@@ -140,6 +145,7 @@ impl Icon {
         Self::Columns3,
         Self::Copy,
         Self::Diamond,
+        Self::Eraser,
         Self::FileCog,
         Self::FileDown,
         Self::FileText,
@@ -178,6 +184,7 @@ impl Icon {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
+            Self::ArrowDownToLine => "arrow-down-to-line",
             Self::ArrowUpDown => "arrow-up-down",
             Self::CalendarCheck => "calendar-check",
             Self::CalendarCog => "calendar-cog",
@@ -193,6 +200,7 @@ impl Icon {
             Self::Columns3 => "columns-3",
             Self::Copy => "copy",
             Self::Diamond => "diamond",
+            Self::Eraser => "eraser",
             Self::FileCog => "file-cog",
             Self::FileDown => "file-down",
             Self::FileText => "file-text",
@@ -232,6 +240,7 @@ impl Icon {
     #[must_use]
     pub const fn data(self) -> &'static IconData {
         match self {
+            Self::ArrowDownToLine => &ARROW_DOWN_TO_LINE,
             Self::ArrowUpDown => &ARROW_UP_DOWN,
             Self::CalendarCheck => &CALENDAR_CHECK,
             Self::CalendarCog => &CALENDAR_COG,
@@ -247,6 +256,7 @@ impl Icon {
             Self::Columns3 => &COLUMNS_3,
             Self::Copy => &COPY,
             Self::Diamond => &DIAMOND,
+            Self::Eraser => &ERASER,
             Self::FileCog => &FILE_COG,
             Self::FileDown => &FILE_DOWN,
             Self::FileText => &FILE_TEXT,
@@ -282,6 +292,22 @@ impl Icon {
         }
     }
 }
+
+/// `arrow-down-to-line.svg`.
+static ARROW_DOWN_TO_LINE: IconData = IconData {
+    lines: &[
+        IconLine { closed: false, points: &[
+            (768, 1088), (768, 192),
+        ] },
+        IconLine { closed: false, points: &[
+            (384, 704), (768, 1088), (1152, 704),
+        ] },
+        IconLine { closed: false, points: &[
+            (1216, 1344), (320, 1344),
+        ] },
+    ],
+    dots: &[],
+};
 
 /// `arrow-up-down.svg`.
 static ARROW_UP_DOWN: IconData = IconData {
@@ -600,6 +626,21 @@ static DIAMOND: IconData = IconData {
             (682, 1383), (709, 1397), (737, 1405), (768, 1408), (798, 1405), (827, 1397), (853, 1383), (877, 1363), (1363, 877), (1382, 854),
             (1396, 827), (1405, 799), (1408, 768), (1405, 738), (1396, 709), (1382, 683), (1363, 659), (877, 173), (853, 154), (827, 140),
             (798, 131), (768, 128), (737, 131), (709, 140), (682, 154), (659, 173),
+        ] },
+    ],
+    dots: &[],
+};
+
+/// `eraser.svg`.
+static ERASER: IconData = IconData {
+    lines: &[
+        IconLine { closed: false, points: &[
+            (1344, 1344), (512, 1344), (479, 1340), (448, 1327), (421, 1306), (166, 1050), (145, 1023), (132, 993), (128, 960), (132, 927),
+            (145, 897), (166, 870), (806, 230), (832, 209), (863, 196), (896, 192), (929, 196), (960, 209), (987, 230), (1370, 614),
+            (1391, 641), (1404, 671), (1408, 704), (1404, 737), (1391, 767), (1370, 794), (821, 1344),
+        ] },
+        IconLine { closed: false, points: &[
+            (325, 710), (890, 1275),
         ] },
     ],
     dots: &[],

@@ -10,11 +10,17 @@
 //! aucune conversion pixel → date : seuls des indices de ligne sont déduits
 //! d'une ordonnée.
 //!
-//! Sélection multiple et menu contextuel (lot L14) : un clic de ligne avec
-//! Ctrl/Cmd ou Maj devient `SelectWith` (la table et le Gantt ne poussent
-//! que `Select`, réécrit ici d'après les modificateurs de l'image) ; un clic
-//! droit sur une ligne la sélectionne (si elle ne l'est pas déjà) et ouvre
-//! le menu des commandes de structure (`Action::Structure`).
+//! Sélection multiple et menu contextuel (lot L14) : un clic de ligne du
+//! Gantt avec Ctrl/Cmd ou Maj devient `SelectWith` (le Gantt ne pousse que
+//! `Select`, réécrit ici d'après les modificateurs de l'image ; la table
+//! pousse ses propres gestes `SelectOp`, ADR-0018) ; un clic droit hors de
+//! la sélection sélectionne la cellule (table) ou la ligne (Gantt) cliquée,
+//! puis ouvre le menu contextuel jumeau du ruban (`CONTEXT_MENU`, H-UI-100) ;
+//! un clic droit sur l'en-tête de l'échelle ouvre le menu du zoom
+//! (`TIMESCALE_MENU`). Un clic dans le Gantt
+//! laisse le clavier à la table (ADR-0018 D8, H-UI-101) ; pendant un
+//! glisser de sélection, de barre ou de lien, la vue défile seule près des
+//! bords ([`autoscroll`], H-UI-91).
 //!
 //! Gestes du Gantt (J7, lot L8, H-UI-20, H-UI-21, R-240 à R-243) : un
 //! glisser qui part d'une barre ([`gantt::hit_test`]) devient un
@@ -36,16 +42,17 @@ use egui::{
 use planrs_automation::gesture::{self, GestureKind};
 use planrs_core::TaskUid;
 
-use super::{BarDrag, FrameCtx, OVERSCAN, Pane, ViewTransient, gantt, table, timeline, timescale};
-use crate::action::{Action, DialogKind};
+use super::{BarDrag, FrameCtx, OVERSCAN, Pane, ViewTransient, chrome, gantt, table, timeline, timescale};
+use crate::action::{Action, DialogKind, PressMode, PressTarget, SelectOp};
 use crate::app::OpenDocument;
+use crate::column::Column;
 use crate::geom::{self, GanttHit, MainLayout};
 use crate::i18n::TextId;
-use crate::keymap::{self, Binding, UiBinding};
+use crate::nav::RowRef;
+use crate::ribbon::spec::{CONTEXT_MENU, RibbonCmd, TIMESCALE_MENU};
 use crate::row_view::{DisplayRow, VisibleRows};
 use crate::rows::RowKind;
 use crate::selection::SelectMode;
-use crate::structure::StructureOp;
 use crate::timescale::TimeAxis;
 
 /// Largeur minimale du curseur de la barre horizontale, en points.
@@ -130,7 +137,7 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
         zoom_delta: i.zoom_delta(),
     });
 
-    table::paint_header(ui, fc, layout.table_header, table_x);
+    table::paint_header(ui, fc, layout.table_header, table_x, &mut view.select_drag);
     timescale::paint_header(ui, fc, &axis, layout.gantt_header);
     paint_corners(ui, fc, &layout, avail);
 
@@ -142,10 +149,17 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
     } = paint_rows(ui, fc, view, &layout, &axis);
     view.last_scroll_y = scroll_y;
     view.last_body_height = view_h;
+    autoscroll(ui, fc, view, &layout);
+    // Fin du glisser de sélection au relâcher (après le dessin : en-tête et
+    // corps ont vu le même glisser pendant toute l'image).
+    if !ui.input(|i| i.pointer.primary_down()) {
+        view.select_drag = None;
+    }
     if std::mem::take(&mut view.edit.reveal) {
         reveal_edited_row(fc, view);
     }
-    context_menu(ui, fc, context_click);
+    context_menu(ui, fc, &*view, context_click);
+    timescale_menu(ui, fc, secondary_click(ui, layout.gantt_header).is_some());
 
     // Molette horizontale (ou Maj + molette) au-dessus du Gantt : la
     // `ScrollArea` verticale ne consomme pas l'axe x (vérifié par le test
@@ -232,8 +246,14 @@ struct RowsOut {
 /// Clic droit sur le corps de la vue.
 #[derive(Clone, Copy, Debug)]
 struct ContextClick {
+    /// Ligne affichée cliquée (`rows.len()` : la ligne vide ; `None` sous
+    /// la ligne vide).
+    row: Option<usize>,
     /// Tâche de la ligne cliquée (`None` sous la dernière ligne).
     uid: Option<TaskUid>,
+    /// Colonne cliquée dans la table (`None` : Gantt, ou au-delà de la
+    /// dernière colonne).
+    column: Option<Column>,
     /// Barre cliquée : son type et sa tâche (H-UI-59, J8 lot L15).
     bar: Option<(planrs_render::style::BarRole, TaskUid)>,
 }
@@ -279,6 +299,23 @@ fn apply_click_modifiers(actions: &mut [Action], start: usize, modifiers: egui::
         if let Action::Select(Some(uid)) = *action {
             *action = Action::SelectWith { uid, mode };
         }
+    }
+}
+
+/// Clic sur le fond du corps : ligne `uid` du Gantt ⇒ même appui qu'une
+/// cellule de la table sur cette ligne, dans la colonne active `column`
+/// (relecture finale, n° 4 : un clic simple réduit toujours la sélection,
+/// Maj étend, Ctrl/Cmd ajoute ou retire) ; hors d'une ligne : rien de
+/// sélectionné.
+fn gantt_click(uid: Option<TaskUid>, column: Column, modifiers: egui::Modifiers) -> Action {
+    match uid {
+        Some(uid) => Action::SelectOp(SelectOp::Press {
+            row: RowRef::Item(uid),
+            column,
+            target: PressTarget::Cell,
+            mode: table::press_mode(modifiers),
+        }),
+        None => Action::Select(None),
     }
 }
 
@@ -343,6 +380,8 @@ fn paint_rows(
     let table_scroll_x = view.table_scroll_x;
     let edit = &mut view.edit;
     let cursor = &mut view.cursor;
+    let select_drag = &mut view.select_drag;
+    let row_drag = &mut view.row_drag;
     let drag = &mut view.drag;
     let out = area.show_viewport(&mut body_ui, |ui, viewport| {
         let origin = ui.max_rect().min;
@@ -361,6 +400,10 @@ fn paint_rows(
             fc,
             edit,
             cursor,
+            table::Drags {
+                select: select_drag,
+                rows: row_drag,
+            },
             origin,
             range.clone(),
             table_clip,
@@ -379,20 +422,17 @@ fn paint_rows(
             } else {
                 None
             };
-            fc.actions.push(Action::Select(uid));
-            // Clic dans le Gantt : le clavier quitte la table (J7, L1).
-            let pane = if in_gantt { Pane::Gantt } else { Pane::Table };
-            fc.actions.push(Action::FocusPane(pane));
+            let modifiers = ui.input(|i| i.modifiers);
+            fc.actions.push(gantt_click(uid, cursor.column, modifiers));
+            // Clavier unique (ADR-0018 D8, H-UI-101) : un clic dans le Gantt
+            // laisse le clavier à la table.
+            fc.actions.push(Action::FocusPane(Pane::Table));
         }
         let modifiers = ui.input(|i| i.modifiers);
         apply_click_modifiers(fc.actions, first_action, modifiers);
-        let context_click = secondary_click(ui, table_clip.union(gantt_clip)).map(|p| ContextClick {
-            uid: geom::row_at(p.y - origin.y, row_h, len)
-                .and_then(|i| fc.visible().and_then(|rows| rows.uid(DisplayRow::at(i)))),
-            bar: gantt_clip
-                .contains(p)
-                .then(|| bar_under(fc, axis, origin, p))
-                .flatten(),
+        let context_click = secondary_click(ui, table_clip.union(gantt_clip)).map(|p| {
+            let left = table_clip.left() - table_scroll_x;
+            context_click_at(fc, axis, (origin, left), (table_clip, gantt_clip), p)
         });
         let from_gantt = ui
             .input(|i| i.pointer.press_origin())
@@ -419,6 +459,104 @@ fn paint_rows(
     });
     // Les plages dessinées sont relevées par chaque volet lui-même.
     out.inner
+}
+
+/// Largeur d'une colonne du défilement automatique horizontal de la table,
+/// en points (H-UI-91).
+const AUTOSCROLL_COLUMN_W: f32 = 80.0;
+
+/// Largeur de la zone du défilement automatique horizontal de la table, à
+/// l'intérieur du bord gauche ou droit, en points (H-UI-91) : étroite, pour
+/// qu'un glisser vertical dans la dernière colonne visible ne fasse pas
+/// défiler la table.
+const AUTOSCROLL_EDGE_X: f32 = 20.0;
+
+/// Défilement automatique pendant un glisser de la vue (ADR-0018 D1,
+/// H-UI-91) : sélection dans la table (cellules, ID ; en-têtes de colonne
+/// pour l'horizontal), barre ou lien du Gantt. Pointeur à moins d'une ligne
+/// du bord haut ou bas du corps, ou au-delà : défilement vertical de
+/// `nav::autoscroll_speed` lignes par seconde (`dt` de l'image), posé dans
+/// `pending_scroll_y` et borné à `[0, contenu − corps]` ; bloc de la table
+/// à moins de 20 points du bord gauche ou droit, ou au-delà : même formule
+/// (`d` rapporté à ces 20 points) en colonnes de 80 points (`ScrollTableX`,
+/// borné par le réducteur). Seulement dans le sens où le pointeur s'est
+/// éloigné du point d'appui d'au moins le seuil de glisser ([`toward`]), et
+/// pour un glisser de sélection, seulement une fois armé
+/// ([`table::arm_select_drag`]). La sélection ou la cible suit
+/// la ligne sous le pointeur borné au corps à l'image suivante. Une image
+/// est redemandée tant que la vue défile.
+fn autoscroll(ui: &egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient, layout: &MainLayout) {
+    use crate::action::PressTarget;
+    // Glisser de sélection pas encore armé (sous le seuil) : rien.
+    let selecting = view.select_drag.filter(|d| d.armed).map(|d| d.target);
+    // Barre ou lien du Gantt, déplacement de lignes par l'ID (H-UI-94) :
+    // défilement vertical.
+    let bar = view.drag.is_some() || view.row_drag.is_some();
+    if selecting.is_none() && !bar {
+        return;
+    }
+    let (down, pointer, origin, dt) = ui.input(|i| {
+        (
+            i.pointer.primary_down(),
+            i.pointer.interact_pos(),
+            i.pointer.press_origin(),
+            i.stable_dt,
+        )
+    });
+    let Some(p) = pointer.filter(|p| down && p.is_finite()) else {
+        return;
+    };
+    let origin = origin.filter(|o| o.is_finite()).unwrap_or(p);
+    let threshold = ui.ctx().options(|o| o.input_options.max_click_dist);
+    let row_h = fc.metrics.row_h;
+    let mut moving = false;
+    if bar || matches!(selecting, Some(PressTarget::Cell | PressTarget::RowHeader)) {
+        let body = layout.body;
+        let speed = toward(
+            crate::nav::autoscroll_speed(p.y, body.top(), body.bottom(), row_h),
+            p.y - origin.y,
+            threshold,
+        );
+        let max = max_scroll_x(view.last_content_h, view.last_body_height);
+        if let Some(y) = crate::nav::autoscroll_offset(view.last_scroll_y, speed, row_h, dt, max) {
+            view.pending_scroll_y = Some(y);
+            view.last_scroll_y = y;
+            moving = true;
+        }
+    }
+    if matches!(selecting, Some(PressTarget::Cell | PressTarget::ColumnHeader)) {
+        let clip = layout.table_clip;
+        let speed = toward(
+            crate::nav::autoscroll_speed(p.x, clip.left(), clip.right(), AUTOSCROLL_EDGE_X),
+            p.x - origin.x,
+            threshold,
+        );
+        let columns_w: f32 = fc.state.visible_columns().map(|c| f32::from(c.width)).sum();
+        let max = max_scroll_x(columns_w, clip.width());
+        if let Some(x) =
+            crate::nav::autoscroll_offset(view.table_scroll_x, speed, AUTOSCROLL_COLUMN_W, dt, max)
+        {
+            fc.actions.push(Action::ScrollTableX(x - view.table_scroll_x));
+            moving = true;
+        }
+    }
+    if moving {
+        ui.ctx().request_repaint();
+    }
+}
+
+/// Vitesse de défilement automatique gardée seulement dans le sens où le
+/// pointeur s'est éloigné du point d'appui (`moved`) d'au moins `threshold`
+/// (seuil de glisser d'egui) : un glisser commencé près d'un bord (barre de
+/// la première ligne visible glissée de côté) ou un glisser vertical qui
+/// dérive d'un point vers la droite ne fait pas défiler la vue dans cet
+/// axe.
+fn toward(speed: f32, moved: f32, threshold: f32) -> f32 {
+    if moved.is_finite() && speed * moved > 0.0 && moved.abs() >= threshold {
+        speed
+    } else {
+        0.0
+    }
 }
 
 /// Écart en jours du glisser `d` pour l'abscisse écran `x` : depuis le
@@ -491,8 +629,12 @@ fn bar_gesture(
             d.days = gesture_days(&d, rows, axis, left, p.x);
             d.preview = gesture_preview(doc, &d);
             *drag = Some(d);
-            fc.actions.push(Action::Select(Some(uid)));
-            fc.actions.push(Action::FocusPane(Pane::Gantt));
+            // H-UI-102 : la barre d'une tâche déjà sélectionnée garde la
+            // sélection (multiple comprise) ; sinon la tâche seule.
+            if !fc.selected.contains(uid) {
+                fc.actions.push(Action::Select(Some(uid)));
+            }
+            fc.actions.push(Action::FocusPane(Pane::Table));
         }
     }
     let Some(current) = drag.as_mut() else {
@@ -650,72 +792,106 @@ fn secondary_click(ui: &egui::Ui, zone: Rect) -> Option<Pos2> {
     (zone.contains(pos) && ui.clip_rect().contains(pos) && on_layer).then_some(pos)
 }
 
-/// Entrées du menu contextuel (et du menu Édition) : commande, libellé,
-/// liaison de [`keymap::KEYMAP`] dont le raccourci est affiché, et besoin
-/// d'une sélection.
-pub(crate) const CONTEXT_ENTRIES: [(StructureOp, TextId, &str, bool); 6] = [
-    (
-        StructureOp::InsertBefore,
-        TextId::StructureInsert,
-        "task.add",
-        false,
-    ),
-    (StructureOp::Delete, TextId::StructureDelete, "task.delete", true),
-    (StructureOp::Indent, TextId::StructureIndent, "task.indent", true),
-    (
-        StructureOp::Outdent,
-        TextId::StructureOutdent,
-        "task.outdent",
-        true,
-    ),
-    (StructureOp::Link, TextId::StructureLink, "link.add", true),
-    (StructureOp::Unlink, TextId::StructureUnlink, "link.remove", true),
-];
+/// Clic droit en `p` sur le corps : ligne et tâche sous le pointeur (corps
+/// d'origine `origin`), colonne de la table (première colonne à
+/// `cols_left`) ou barre du Gantt.
+fn context_click_at(
+    fc: &FrameCtx<'_>,
+    axis: &TimeAxis,
+    (origin, cols_left): (Pos2, f32),
+    (table_clip, gantt_clip): (Rect, Rect),
+    p: Pos2,
+) -> ContextClick {
+    let len = fc.visible().map_or(0, |rows| rows.len().saturating_add(1));
+    let row = geom::row_at(p.y - origin.y, fc.metrics.row_h, len);
+    ContextClick {
+        row,
+        uid: row.and_then(|i| fc.visible().and_then(|rows| rows.uid(DisplayRow::at(i)))),
+        column: table_clip
+            .contains(p)
+            .then(|| table_column_at(fc, cols_left, p.x))
+            .flatten(),
+        bar: gantt_clip
+            .contains(p)
+            .then(|| bar_under(fc, axis, origin, p))
+            .flatten(),
+    }
+}
 
-/// Menu contextuel des commandes de structure, ouvert au pointeur par un
-/// clic droit sur le corps ; la ligne cliquée est d'abord sélectionnée si
-/// elle ne l'est pas (la sélection multiple est gardée sinon).
-fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick>) {
-    let open = click.map(|ContextClick { uid, bar }| {
-        if let Some(uid) = uid
-            && !fc.selected.contains(uid)
-        {
-            fc.actions.push(Action::Select(Some(uid)));
+/// Colonne visible de la table sous l'abscisse écran `x`, la première
+/// colonne commençant à `left` (défilement horizontal déduit) ; `None` si
+/// `x` n'est pas fini ou tombe au-delà de la dernière colonne.
+fn table_column_at(fc: &FrameCtx<'_>, left: f32, x: f32) -> Option<Column> {
+    if !(left.is_finite() && x.is_finite()) {
+        return None;
+    }
+    let columns: Vec<(Column, u16)> = fc
+        .state
+        .visible_columns()
+        .map(|state| (state.column, state.width))
+        .collect();
+    crate::grid::column_at(&columns, left, x)
+}
+
+/// Sélection d'un clic droit (H-UI-100, ADR-0018 D10) : dans la sélection,
+/// elle est gardée ; hors d'elle, la cellule cliquée (table : l'ID donne la
+/// ligne entière, comme un appui, H-UI-89) ou la ligne (Gantt) devient la
+/// sélection, par le même `SelectOp::Press` qu'un appui sans modificateur.
+fn context_select(fc: &FrameCtx<'_>, view: &ViewTransient, click: ContextClick) -> Option<SelectOp> {
+    let rows = fc.visible()?;
+    let i = click.row?;
+    let row = click.uid.map_or(RowRef::Blank, RowRef::Item);
+    if let Some(column) = click.column {
+        let visible: Vec<Column> = fc.state.visible_columns().map(|state| state.column).collect();
+        let block = crate::block::resolve(fc.selected, &view.cursor, rows, &visible);
+        if block.contains(DisplayRow::at(i), column) {
+            return None;
         }
-        ui.ctx().data_mut(|d| d.insert_temp(context_bar_id(), bar));
+        let target = if column == Column::Id {
+            PressTarget::RowHeader
+        } else {
+            PressTarget::Cell
+        };
+        return Some(SelectOp::Press {
+            row,
+            column,
+            target,
+            mode: PressMode::Replace,
+        });
+    }
+    // Gantt : la ligne, la colonne active gardée.
+    let uid = click.uid?;
+    (!fc.selected.contains(uid)).then_some(SelectOp::Press {
+        row,
+        column: view.cursor.column,
+        target: PressTarget::Cell,
+        mode: PressMode::Replace,
+    })
+}
+
+/// Menu contextuel de la table et du Gantt (H-UI-100, ADR-0018 D10),
+/// ouvert au pointeur par un clic droit sur le corps : « Mettre en forme
+/// les barres » sur une barre (H-UI-59), puis les groupes de
+/// [`CONTEXT_MENU`], chaque entrée étant la commande de son élément du
+/// ruban (`chrome::context_item` : même action, même prédicat, même
+/// raccourci). Le clic droit pose d'abord la sélection ([`context_select`])
+/// et laisse le clavier à la table (H-UI-101).
+fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, view: &ViewTransient, click: Option<ContextClick>) {
+    let open = click.map(|click| {
+        if let Some(op) = context_select(fc, view, click) {
+            fc.actions.push(Action::SelectOp(op));
+        }
+        fc.actions.push(Action::FocusPane(Pane::Table));
+        ui.ctx().data_mut(|d| d.insert_temp(context_bar_id(), click.bar));
         SetOpenCommand::Bool(true)
     });
     let bar: Option<(planrs_render::style::BarRole, TaskUid)> =
         ui.ctx().data(|d| d.get_temp(context_bar_id())).flatten();
-    let mut format_bar = None;
-    // La sélection change à la fin de l'image : une ligne cliquée compte
-    // déjà comme sélectionnée pour griser les entrées.
-    let has_selection = fc.selection.is_some() || click.is_some_and(|c| c.uid.is_some());
     let texts = fc.texts;
-    let reorder_locked = fc.task_view.state.reorder_locked();
-    let ctx = ui.ctx().clone();
-    let mut chosen = None;
-    let mut information = false;
-    let mut timeline_toggle = false;
-    // Chronologie (ADR-0017, H-UI-79) : libellé selon la tâche active
-    // (H-UI-74).
-    let timeline_label = {
-        let active = click.and_then(|c| c.uid).or(fc.selection);
-        let on = active.is_some_and(|uid| {
-            fc.task_view
-                .style
-                .style
-                .timeline
-                .tasks
-                .binary_search(&uid.get())
-                .is_ok()
-        });
-        let (add, remove) = super::timeline::CONTEXT_LABELS;
-        if on { remove } else { add }
-    };
+    let mut format_bar = None;
     Popup::new(
         Id::unique("planrs.structure-menu"),
-        ctx.clone(),
+        ui.ctx().clone(),
         PopupAnchor::PointerFixed,
         ui.layer_id(),
     )
@@ -732,55 +908,54 @@ fn context_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, click: Option<ContextClick
             }
             ui.separator();
         }
-        for (op, text, command, needs_selection) in CONTEXT_ENTRIES {
-            let mut button = egui::Button::new(texts.get(text));
-            if let Some(shortcut) = keymap::shortcut_for_os(Binding::Command(command), ctx.os()) {
-                button = button.shortcut_text(keymap::shortcut_text(&ctx, shortcut));
+        for (i, group) in CONTEXT_MENU.iter().enumerate() {
+            if i > 0 {
+                ui.separator();
             }
-            // H-UI-32 (J8, lot L9) : grisé sous tri ou filtre.
-            let locked = super::task_view::reorders(op) && reorder_locked;
-            let response = ui.add_enabled((has_selection || !needs_selection) && !locked, button);
-            let response = if locked {
-                response.on_disabled_hover_text(texts.get(TextId::ViewReorderLocked))
-            } else {
-                response
-            };
-            if response.clicked() {
-                chosen = Some(op);
+            for cmd in *group {
+                chrome::context_item(ui, fc, *cmd);
             }
-        }
-        // « Informations sur la tâche » (H-UI-19, J7 lot L9).
-        ui.separator();
-        let mut button = egui::Button::new(texts.get(TextId::TaskInfoMenu));
-        if let Some(shortcut) = keymap::shortcut_for_os(Binding::Ui(UiBinding::TaskInformation), ctx.os()) {
-            button = button.shortcut_text(keymap::shortcut_text(&ctx, shortcut));
-        }
-        if ui.add_enabled(has_selection, button).clicked() {
-            information = true;
-        }
-        if ui
-            .add_enabled(has_selection, egui::Button::new(texts.get(timeline_label)))
-            .clicked()
-        {
-            timeline_toggle = true;
         }
     });
-    if timeline_toggle {
-        fc.actions
-            .push(Action::Timeline(crate::action::TimelineOp::ToggleSelection));
-    }
-    if let Some(op) = chosen {
-        fc.actions.push(Action::Structure(op));
-    }
-    if information {
-        fc.actions.push(Action::ShowTaskInformation);
-    }
     if let Some((role, uid)) = format_bar {
         fc.actions.push(Action::Format(crate::action::FormatOp::OpenBars {
             role,
             task: Some(uid),
         }));
     }
+}
+
+/// Menu contextuel de l'en-tête de l'échelle de temps (H-UI-100), ouvert au
+/// pointeur par un clic droit sur l'en-tête du Gantt : « Échelle de temps »
+/// (sous-menu des unités, celui de la liste du ruban), Zoom avant, Zoom
+/// arrière, Projet entier ([`TIMESCALE_MENU`], commandes du groupe Zoom).
+fn timescale_menu(ui: &egui::Ui, fc: &mut FrameCtx<'_>, clicked: bool) {
+    let open = clicked.then_some(SetOpenCommand::Bool(true));
+    let texts = fc.texts;
+    Popup::new(
+        Id::unique("planrs.timescale-menu"),
+        ui.ctx().clone(),
+        PopupAnchor::PointerFixed,
+        ui.layer_id(),
+    )
+    .kind(PopupKind::Menu)
+    .layout(Layout::top_down_justified(Align::Min))
+    .style(menu_style)
+    .open_memory(open)
+    .show(|ui| {
+        for cmd in TIMESCALE_MENU {
+            if *cmd == RibbonCmd::TimescaleMenu {
+                let enabled = cmd.enabled(fc);
+                ui.add_enabled_ui(enabled.yes, |ui| {
+                    ui.menu_button(texts.get(cmd.context_label()), |ui| {
+                        chrome::dropdown_contents(ui, fc, *cmd);
+                    });
+                });
+            } else {
+                chrome::context_item(ui, fc, *cmd);
+            }
+        }
+    });
 }
 
 /// Coins à droite de l'en-tête et de la barre horizontale du Gantt, au-dessus

@@ -172,6 +172,46 @@ pub struct ViewTransient {
     pub ribbon_overlay: Option<crate::ribbon::RibbonTab>,
     /// Chronologie : disposition en cache (ADR-0017, H-UI-78, lot L4).
     pub timeline: timeline::TimelineView,
+    /// Glisser de sélection en cours dans la table, de l'appui au relâcher
+    /// (ADR-0018, H-UI-88 à H-UI-90 ; tenu par le lot L1).
+    pub select_drag: Option<SelectDrag>,
+    /// Déplacement de lignes en cours par leur ID (ADR-0018, H-UI-94 ;
+    /// tenu par le lot L3).
+    pub row_drag: Option<RowDrag>,
+}
+
+/// Glisser de sélection en cours (ADR-0018, contrat L0).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SelectDrag {
+    /// Cible de l'appui qui l'a commencé.
+    pub target: crate::action::PressTarget,
+    /// Dernière cellule envoyée (`SelectOp::DragTo` n'est poussé que quand
+    /// elle change).
+    pub last: (crate::nav::RowRef<TaskUid>, Column),
+    /// Le pointeur s'est éloigné du point d'appui d'au moins le seuil de
+    /// glisser d'egui (`max_click_dist`) : tant que faux, aucun
+    /// `SelectOp::DragTo` (un tremblement qui franchit une bordure reste la
+    /// cellule appuyée, H-UI-88) ni défilement automatique (H-UI-91) ; une
+    /// fois vrai, il le reste jusqu'au relâcher.
+    pub armed: bool,
+    /// Ouvert par un Ctrl/Cmd+appui (`PressMode::Toggle`) : jamais armé, le
+    /// glisser ne remplace pas la multi-sélection par une plage (relecture
+    /// finale, n° 6 ; blocs disjoints reportés après v1.0.0).
+    pub toggle: bool,
+}
+
+/// Déplacement de lignes en cours (ADR-0018, contrat L0, H-UI-94).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RowDrag {
+    /// Tâches déplacées (sélectionnées sans ancêtre sélectionné), dans
+    /// l'ordre des lignes.
+    pub uids: Vec<TaskUid>,
+    /// Ligne affichée devant laquelle le trait d'insertion est dessiné
+    /// (`None` : après la dernière ligne).
+    pub insert_before: Option<DisplayRow>,
+    /// Raison du refus du lâcher à cet endroit (curseur interdit,
+    /// info-bulle), `None` si le lâcher est permis.
+    pub refusal: Option<crate::i18n::TextId>,
 }
 
 /// Volet de la vue principale (J7).

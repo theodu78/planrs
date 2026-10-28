@@ -1158,6 +1158,38 @@ text_ids! {
     NewSummaryName => "new-summary-name",
     InsertSummaryNotAdjacent => "insert-summary-not-adjacent",
     ScrollTaskHidden => "scroll-task-hidden",
+    // --- UX L0 (ADR-0018) ---
+    UxNotAvailable => "ux-not-available",
+    CellsTooLarge => "cells-too-large",
+    CellsParse => "cells-parse",
+    CellsPastEnd => "cells-past-end",
+    CellsNothingAbove => "cells-nothing-above",
+    CellsSkipped => "cells-skipped",
+    CellsNotClearable => "cells-not-clearable",
+    TasksDeleted => "tasks-deleted",
+    RowsMoveInsideBlock => "rows-move-inside-block",
+    RowsMoveNotAdjacent => "rows-move-not-adjacent",
+    RowsMoveLocked => "rows-move-locked",
+    TipRowMove => "tip-row-move",
+    TipColumnResize => "tip-column-resize",
+    MenuFillDown => "menu-fill-down",
+    MenuClearContents => "menu-clear-contents",
+    MenuSelectAll => "menu-select-all",
+    MenuFitColumn => "menu-fit-column",
+    MenuSortAscending => "menu-sort-ascending",
+    MenuSortDescending => "menu-sort-descending",
+    RibbonFill => "ribbon-fill",
+    RibbonFillDown => "ribbon-fill-down",
+    RibbonClear => "ribbon-clear",
+    RibbonClearContents => "ribbon-clear-contents",
+    RibbonTipFill => "ribbon-tip-fill",
+    RibbonTipClear => "ribbon-tip-clear",
+    // --- UX L1 ---
+    // --- UX L2 ---
+    // --- UX L3 ---
+    ColumnNotSortable => "column-not-sortable",
+    // --- UX L4 ---
+    // --- UX L5 ---
 }
 
 /// Clé fluent du refus de code `code` : `error-<code>`, points changés en
@@ -1652,6 +1684,7 @@ mod tests {
             ("dropped", Arg::Count(3)),
             ("size", Arg::Count(300)),
             ("max", Arg::Count(200)),
+            ("undo", Arg::Str("Ctrl+Z".into())),
             ("message", Arg::Str("message".into())),
             ("open", Arg::Str("Project/Tasks".into())),
             ("depth", Arg::Count(2)),

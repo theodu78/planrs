@@ -12,9 +12,11 @@ use egui_kittest::kittest::Queryable as _;
 use planrs_automation::clip::fingerprint;
 use planrs_core::{Severity, TaskUid};
 use planrs_tests::daily::plan_p;
+use planrs_ui_egui::action::{PressMode, PressTarget, SelectOp};
 use planrs_ui_egui::clipboard::ClipboardOp;
+use planrs_ui_egui::column::Column;
 use planrs_ui_egui::i18n::{Arg, Language, TextId, Texts};
-use planrs_ui_egui::selection::SelectMode;
+use planrs_ui_egui::nav::RowRef;
 use planrs_ui_egui::{Action, App, DocOrigin};
 
 use crate::{fr, harness_for, new_app};
@@ -41,17 +43,26 @@ fn p_harness() -> Harness<'static, App> {
     harness
 }
 
-/// Sélectionne les tâches `first` à `last` (plage, ordre des lignes).
+/// Sélectionne les tâches `first` à `last` en lignes entières (appui sur
+/// l'ID puis Maj+appui, H-UI-89) : le presse-papiers de lignes (H-UI-39)
+/// suit les lignes entières depuis la passe UX (H-UI-95, ADR-0018 D3).
 fn select(harness: &mut Harness<'static, App>, first: u32, last: u32) {
-    harness.state_mut().dispatch(Action::Select(Some(uid(first))));
-    harness.run();
+    press_id(harness, first, PressMode::Replace);
     if last != first {
-        harness.state_mut().dispatch(Action::SelectWith {
-            uid: uid(last),
-            mode: SelectMode::Range,
-        });
-        harness.run();
+        press_id(harness, last, PressMode::Extend);
     }
+}
+
+/// Appui sur l'ID de la tâche `n` (en-tête de ligne), cellule active au
+/// Nom (F2 y ouvre la saisie).
+fn press_id(harness: &mut Harness<'static, App>, n: u32, mode: PressMode) {
+    harness.state_mut().dispatch(Action::SelectOp(SelectOp::Press {
+        row: RowRef::Item(uid(n)),
+        column: Column::Name,
+        target: PressTarget::RowHeader,
+        mode,
+    }));
+    harness.run();
 }
 
 /// Envoie `event` et rend le texte écrit dans le presse-papiers par cette

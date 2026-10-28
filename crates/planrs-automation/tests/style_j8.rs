@@ -449,23 +449,54 @@ proptest! {
     /// (valide) ou le modèle par défaut avec diagnostic, jamais de panique.
     #[test]
     fn p56_any_pi_payload_opens(text in "[ -~]{0,200}", valid in any::<bool>()) {
-        let s = session();
-        let base = xml(&s);
         let body = if valid {
             r#"{"base":"sobre","over":{"density":"airy"},"v":1}"#.to_owned()
         } else {
-            text.replace("?>", "")
+            strip_pi_end(&text)
         };
-        let doc = base.replacen("<Project", &format!("<?planrs-style {body}?>\n<Project"), 1);
-        let (opened, diags) = reopen(doc.as_bytes());
-        let ignored = diags.iter().any(|d| d.code.code() == "style.ignored");
-        match style::doc_style(opened.project()) {
-            Some(_) => prop_assert!(!ignored),
-            None => prop_assert!(ignored || body.trim().is_empty() && payload(&opened).is_none()),
-        }
+        let ignored = open_with_pi(&body)?;
         if valid {
             prop_assert!(!ignored);
         }
+    }
+}
+
+/// Retire `?>` jusqu'au point fixe : une seule passe en laisse (`??>>` ⇒
+/// `?>`), qui fermerait l'instruction avant la fin de la charge.
+fn strip_pi_end(text: &str) -> String {
+    let mut out = text.to_owned();
+    while out.contains("?>") {
+        out = out.replace("?>", "");
+    }
+    out
+}
+
+/// Ouvre la session de base précédée de `<?planrs-style {body}?>` ; vrai si
+/// le style est ignoré (diagnostic), faux s'il est appliqué.
+fn open_with_pi(body: &str) -> Result<bool, TestCaseError> {
+    let base = xml(&session());
+    let doc = base.replacen("<Project", &format!("<?planrs-style {body}?>\n<Project"), 1);
+    let (opened, diags) = reopen(doc.as_bytes());
+    let ignored = diags.iter().any(|d| d.code.code() == "style.ignored");
+    match style::doc_style(opened.project()) {
+        Some(_) => prop_assert!(!ignored),
+        None => prop_assert!(ignored || body.trim().is_empty() && payload(&opened).is_none()),
+    }
+    Ok(ignored)
+}
+
+/// P56, cas réduits par la CI (run 40644375476) : `??>><` laissait un `?>`
+/// après une passe de retrait ; une charge avec `&`, `<` ou `&amp;` est
+/// prise telle quelle (XML 1.0 § 2.6) : le fichier s'ouvre, style ignoré
+/// (JSON invalide), diagnostic `style.ignored`.
+#[test]
+fn p56_pi_payload_regressions() {
+    assert_eq!(strip_pi_end("??>><"), "<");
+    assert_eq!(strip_pi_end("a??>>?>b"), "ab");
+    for raw in ["??>><", "a&b", "x<y", "&amp;", "&#38; &lt; <Project>"] {
+        let body = strip_pi_end(raw);
+        let ignored = open_with_pi(&body).map_err(|e| e.to_string());
+        assert_eq!(ignored, Ok(true), "{raw:?}");
     }
 }
 
@@ -624,4 +655,31 @@ fn timeline_input_skeleton_uses_engine_bounds() {
     let input = planrs_automation::timeline::input(&s, &spec, Language::Fr);
     assert_eq!(input.start, s.schedule().project_start);
     assert_eq!(input.finish, s.schedule().project_finish);
+}
+
+/// H-R12 : un nom de style contenant `?>`, `&` et `<` ne ferme pas
+/// l'instruction (`>` écrit `>` par le JSON canonique) ; le fichier
+/// se relit avec le même style et les mêmes octets.
+#[test]
+fn h_r12_hostile_style_name_roundtrips() {
+    let mut s = session();
+    call(
+        &mut s,
+        "style.apply",
+        json!({ "template": "sobre", "patch": { "name": "a?>b &amp; <c>" } }),
+    );
+    let first = xml(&s);
+    let line = first.lines().nth(1).unwrap_or_default();
+    assert!(
+        line.starts_with("<?planrs-style ") && line.ends_with("?>"),
+        "{line}"
+    );
+    assert_eq!(line.matches("?>").count(), 1, "{line}");
+    let (opened, diags) = reopen(first.as_bytes());
+    assert!(
+        diags.iter().all(|d| d.code.code() != "style.ignored"),
+        "{diags:?}"
+    );
+    assert_eq!(style::doc_style(opened.project()), style::doc_style(s.project()));
+    assert_eq!(xml(&opened), first);
 }

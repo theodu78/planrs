@@ -563,7 +563,9 @@ fn edit_cell(
         state.buffer = name;
     }
     match finish {
-        None => {}
+        // Ctrl/Cmd+Entrée (H-UI-98) : aucun bloc dans la feuille des
+        // ressources (ADR-0018, reporté) ; la saisie reste ouverte.
+        None | Some(Finish::FillTyped) => {}
         Some(Finish::Cancel) => {
             if let Some(state) = edit.editing.as_ref() {
                 cursor.row = state.row;

@@ -19,7 +19,7 @@ La **barre de menus** (Fichier, Édition, Affichage, Tâche, Projet, Format, Aid
 
 | Onglet | Groupes et boutons |
 |---|---|
-| **Tâche** | Affichage (Diagramme de Gantt ▾) · Presse-papiers (Coller, Couper, Copier, Collage spécial…) · Mise en forme (Mettre en forme les barres, Modèles…) · Planification (0 % à 100 %, Lier, Délier, Indenter, Désindenter, Désactiver) · Tâches (Planifier manuellement) · Insérer (Tâche, Récapitulative, Jalon) · Propriétés (Informations, Notes, Ajouter à la chronologie) · Édition (Rechercher, Défiler jusqu'à la tâche) |
+| **Tâche** | Affichage (Diagramme de Gantt ▾) · Presse-papiers (Coller, Couper, Copier, Collage spécial…) · Mise en forme (Mettre en forme les barres, Modèles…) · Planification (0 % à 100 %, Lier, Délier, Indenter, Désindenter, Désactiver) · Tâches (Planifier manuellement) · Insérer (Tâche, Récapitulative, Jalon) · Propriétés (Informations, Notes, Ajouter à la chronologie) · Édition (Rechercher, Défiler jusqu'à la tâche, Remplir ▾, Effacer ▾) |
 | **Ressource** | Affichage (Feuille des ressources, Utilisation des ressources) · Affectations (Affecter les ressources) |
 | **Projet** | Propriétés (Informations sur le projet, Modifier le temps de travail) · Planification (Définir la référence) · État (Mettre à jour le projet) · Impression (Mode impression, Mise en page…, Exporter en PDF…) |
 | **Affichage** | Affichages des tâches (Diagramme de Gantt, Gantt de suivi) · Affichages des ressources · Données (Trier ▾, Mode plan ▾, Filtre ▾) · Zoom (Échelle de temps ▾, Zoom avant, Zoom arrière, Projet entier) · Fractionner l'affichage (Chronologie, Volet Opérations IA, Diagnostics) · Interface (Thème ▾, Langue ▾, Réduire le ruban) |
@@ -42,6 +42,8 @@ Fenêtre étroite : les groupes de droite perdent d'abord les libellés de leurs
 | Informations sur la tâche, notes | Tâche → Propriétés → **Informations** (Maj+F2), **Notes** |
 | Retrouver la barre d'une tâche | Tâche → Édition → **Défiler jusqu'à la tâche** |
 | Rechercher | Tâche → Édition → **Rechercher** (Ctrl+F ; suivant Ctrl+G) |
+| Recopier vers le bas | Tâche → Édition → **Remplir ▾** → Vers le bas (Ctrl+D) |
+| Vider des cellules sans supprimer les tâches | Tâche → Édition → **Effacer ▾** → Contenu (Ctrl+Suppr) |
 | Gantt de suivi, feuille des ressources | Affichage → Affichages des tâches / des ressources, ou Tâche → **Diagramme de Gantt ▾** |
 | Trier, filtrer, niveau de plan | Affichage → Données (effacer le filtre : F3 ; trier par N° : Maj+F3) |
 | Changer l'échelle de temps | Affichage → Zoom → **Échelle de temps ▾**, **Zoom avant/arrière** (Ctrl+/ et Ctrl+-), **Projet entier** |

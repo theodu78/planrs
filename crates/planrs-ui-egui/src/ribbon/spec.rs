@@ -18,11 +18,11 @@ use planrs_render::style::BarRole;
 
 use super::icon_data::Icon;
 use super::{Enabled, RibbonOp, RibbonTab};
-use crate::action::{Action, DialogKind, FormatOp, TaskCmd, TimelineOp};
+use crate::action::{Action, CellOp, DialogKind, FormatOp, SelectOp, TaskCmd, TimelineOp};
 use crate::clipboard::ClipboardOp;
 use crate::i18n::TextId;
 use crate::io::SaveKind;
-use crate::keymap::{Binding, UiBinding};
+use crate::keymap::{Binding, Shortcut, UiBinding, shortcut_for_os};
 use crate::state::{GanttStyle, ViewKind};
 use crate::structure::StructureOp;
 use crate::view::FrameCtx;
@@ -190,6 +190,18 @@ pub enum RibbonCmd {
     RelativeMonths,
     /// Case Graphique seul.
     ChartOnly,
+    // --- Passe UX (ADR-0018 D10, lot L4) : commandes des menus contextuels
+    // et du menu Édition ; leurs éléments du ruban (groupe Édition) sont
+    // posés par L5 dans [`RIBBON`].
+    /// Remplir vers le bas (Ctrl/Cmd+D, R-258).
+    FillDown,
+    /// Effacer le contenu du bloc (Ctrl/Cmd+Suppr, R-259).
+    ClearContents,
+    /// Tout sélectionner (Ctrl/Cmd+A, H-UI-92).
+    SelectAll,
+    /// Supprimer la tâche (Suppr ; menus seulement : pas d'élément du
+    /// ruban).
+    DeleteTask,
 }
 
 /// Pas de « marquer n % », dans l'ordre de la rangée (H-UI-35).
@@ -276,6 +288,10 @@ impl RibbonCmd {
             Self::CriticalTasks => Action::SetHighlightCritical(!fc.task_view.state.highlight_critical),
             Self::RelativeMonths => Action::Format(FormatOp::SetRelativeMonths(!relative_months(fc))),
             Self::ChartOnly => Action::SetChartOnly(!fc.state.chart_only),
+            Self::FillDown => Action::Cells(CellOp::FillDown),
+            Self::ClearContents => Action::Cells(CellOp::Clear),
+            Self::SelectAll => Action::SelectOp(SelectOp::All),
+            Self::DeleteTask => Action::Structure(StructureOp::Delete),
         })
     }
 
@@ -364,6 +380,10 @@ impl RibbonCmd {
                 | Self::Copy
                 | Self::Paste
                 | Self::PasteSpecial
+                | Self::FillDown
+                | Self::ClearContents
+                | Self::SelectAll
+                | Self::DeleteTask
         )
     }
 
@@ -385,6 +405,9 @@ impl RibbonCmd {
                 | Self::ScrollToTask
                 | Self::Cut
                 | Self::Copy
+                | Self::FillDown
+                | Self::ClearContents
+                | Self::DeleteTask
         )
     }
 
@@ -474,6 +497,10 @@ impl RibbonCmd {
             Self::CriticalTasks => TextId::MenuHighlightCritical,
             Self::RelativeMonths => TextId::MenuRelativeMonths,
             Self::ChartOnly => TextId::MenuChartOnly,
+            Self::FillDown => TextId::MenuFillDown,
+            Self::ClearContents => TextId::MenuClearContents,
+            Self::SelectAll => TextId::MenuSelectAll,
+            Self::DeleteTask => TextId::StructureDelete,
         }
     }
 
@@ -495,7 +522,11 @@ impl RibbonCmd {
             | Self::InsertTask
             | Self::Find
             | Self::ScrollToTask
-            | Self::AssignResources => &[TextId::MenuEdit],
+            | Self::AssignResources
+            | Self::FillDown
+            | Self::ClearContents
+            | Self::SelectAll
+            | Self::DeleteTask => &[TextId::MenuEdit],
             Self::ZoomIn | Self::ZoomOut | Self::EntireProject => &[TextId::MenuView, TextId::MenuZoom],
             // Listes : leur jumeau est le sous-menu (Zoom, Thème, Langue,
             // Colonnes) ou la première entrée à plat du menu.
@@ -567,7 +598,121 @@ impl RibbonCmd {
                 _ => false,
             }
     }
+
+    /// Liaison de [`crate::keymap::KEYMAP`] dont le raccourci est affiché
+    /// par le ruban, la barre de menus et les menus contextuels (H-UI-73,
+    /// H-UI-100 : même raccourci partout ; un test vérifie que chaque
+    /// élément de [`RIBBON`] qui en affiche un affiche celui-ci).
+    #[must_use]
+    pub const fn binding(self) -> Option<Binding> {
+        Some(match self {
+            Self::Save => command("project.save"),
+            Self::Undo => command("history.undo"),
+            Self::Redo => command("history.redo"),
+            Self::Link => command("link.add"),
+            Self::Unlink => command("link.remove"),
+            Self::Indent => command("task.indent"),
+            Self::Outdent => command("task.outdent"),
+            Self::InsertTask => command("task.add"),
+            Self::DeleteTask => command("task.delete"),
+            Self::TaskInformation => ui(UiBinding::TaskInformation),
+            Self::Find => ui(UiBinding::Find),
+            Self::ZoomIn => ui(UiBinding::ZoomFiner),
+            Self::ZoomOut => ui(UiBinding::ZoomCoarser),
+            Self::CollapseRibbon => ui(UiBinding::ToggleRibbon),
+            Self::FillDown => ui(UiBinding::FillDown),
+            Self::ClearContents => ui(UiBinding::ClearCells),
+            Self::SelectAll => ui(UiBinding::SelectAll),
+            _ => return None,
+        })
+    }
+
+    /// Raccourci affiché pour le système `os` : celui de [`Self::binding`],
+    /// sinon Ctrl/Cmd+X, C, V pour Couper, Copier, Coller (événements du
+    /// presse-papiers livrés par egui, hors de `KEYMAP`, H-UI-39).
+    #[must_use]
+    pub fn shortcut(self, os: egui::os::OperatingSystem) -> Option<Shortcut> {
+        if let Some(shortcut) = self.binding().and_then(|binding| shortcut_for_os(binding, os)) {
+            return Some(*shortcut);
+        }
+        let key = match self {
+            Self::Cut => egui::Key::X,
+            Self::Copy => egui::Key::C,
+            Self::Paste => egui::Key::V,
+            _ => return None,
+        };
+        Some(Shortcut::new(egui::Modifiers::COMMAND, key))
+    }
+
+    /// Libellé dans un menu contextuel (H-UI-100) : celui de l'élément du
+    /// ruban pour les cases (« Désactiver », « Planifier manuellement ») et
+    /// pour le menu de l'en-tête de l'échelle (« Échelle de temps »,
+    /// « Projet entier ») ; celui du jumeau de la barre de menus sinon.
+    #[must_use]
+    pub const fn context_label(self) -> TextId {
+        match self {
+            Self::Inactivate => TextId::RibbonInactivate,
+            Self::ManualSchedule => TextId::RibbonManualSchedule,
+            Self::TimescaleMenu => TextId::RibbonTimescale,
+            Self::EntireProject => TextId::RibbonEntireProject,
+            _ => self.menu_label(),
+        }
+    }
+
+    /// Libellé de l'entrée de la liste « Remplir ▾ » ou « Effacer ▾ » du
+    /// groupe Édition (passe UX, lot L5) : « Vers le bas », « Contenu » ;
+    /// `None` pour une commande qui n'est pas une telle liste. L'entrée
+    /// pousse [`Self::action`] et affiche [`Self::shortcut`].
+    #[must_use]
+    pub const fn dropdown_entry(self) -> Option<TextId> {
+        match self {
+            Self::FillDown => Some(TextId::RibbonFillDown),
+            Self::ClearContents => Some(TextId::RibbonClearContents),
+            _ => None,
+        }
+    }
+
+    /// Case cochable dans un menu contextuel (H-UI-74 : état de la tâche
+    /// active).
+    #[must_use]
+    pub const fn context_is_check(self) -> bool {
+        matches!(self, Self::Inactivate | Self::ManualSchedule)
+    }
 }
+
+/// Menu contextuel de la table et du Gantt (H-UI-100, ADR-0018 D10) :
+/// groupes séparés par un trait, dans l'ordre ; chaque entrée est la
+/// [`RibbonCmd`] de son élément du ruban (même action, même prédicat, même
+/// raccourci). « Mettre en forme les barres » le précède sur une barre.
+pub const CONTEXT_MENU: &[&[RibbonCmd]] = &[
+    &[
+        RibbonCmd::Cut,
+        RibbonCmd::Copy,
+        RibbonCmd::Paste,
+        RibbonCmd::PasteSpecial,
+    ],
+    &[RibbonCmd::FillDown, RibbonCmd::ClearContents],
+    &[RibbonCmd::InsertTask, RibbonCmd::DeleteTask],
+    &[RibbonCmd::Indent, RibbonCmd::Outdent],
+    &[RibbonCmd::Link, RibbonCmd::Unlink],
+    &[RibbonCmd::Inactivate, RibbonCmd::ManualSchedule],
+    &[
+        RibbonCmd::TaskInformation,
+        RibbonCmd::TaskNotes,
+        RibbonCmd::AssignResources,
+        RibbonCmd::ScrollToTask,
+        RibbonCmd::AddToTimeline,
+    ],
+];
+
+/// Menu contextuel de l'en-tête de l'échelle de temps (H-UI-100) : les
+/// commandes du groupe Zoom de l'onglet Affichage.
+pub const TIMESCALE_MENU: &[RibbonCmd] = &[
+    RibbonCmd::TimescaleMenu,
+    RibbonCmd::ZoomIn,
+    RibbonCmd::ZoomOut,
+    RibbonCmd::EntireProject,
+];
 
 /// Tâche active du document (H-UI-74), si elle existe encore.
 fn active_task<'a>(fc: &FrameCtx<'a>) -> Option<&'a planrs_core::Task> {
@@ -949,6 +1094,26 @@ const TASK_GROUPS: &[GroupSpec] = &[
                 TextId::RibbonScrollToTask,
                 TextId::RibbonTipScrollToTask,
                 RibbonCmd::ScrollToTask,
+            ),
+            // Passe UX (ADR-0018 D10, lot L5) : Remplir ▾ (Vers le bas) et
+            // Effacer ▾ (Contenu), listes à une entrée comme le groupe
+            // Editing de Project (S80) ; l'entrée est le jumeau du menu
+            // Édition ([`RibbonCmd::dropdown_entry`]).
+            item(
+                Dropdown,
+                Some(Icon::ArrowDownToLine),
+                TextId::RibbonFill,
+                TextId::RibbonTipFill,
+                Some(ui(UiBinding::FillDown)),
+                RibbonCmd::FillDown,
+            ),
+            item(
+                Dropdown,
+                Some(Icon::Eraser),
+                TextId::RibbonClear,
+                TextId::RibbonTipClear,
+                Some(ui(UiBinding::ClearCells)),
+                RibbonCmd::ClearContents,
             ),
         ],
         shrink_rank: 1,
@@ -1362,6 +1527,29 @@ mod tests {
             if let Some(binding) = item.binding {
                 assert!(KEYMAP.iter().any(|(_, _, b)| *b == binding), "{binding:?}");
                 assert!(binding_action(binding).is_some(), "{binding:?}");
+            }
+        }
+    }
+
+    /// H-UI-100 : chaque élément qui affiche un raccourci affiche celui de
+    /// sa commande ([`super::RibbonCmd::binding`], lu aussi par les menus
+    /// contextuels) ; les commandes des menus contextuels ont une liaison
+    /// présente dans `KEYMAP`.
+    #[test]
+    fn h_ui_100_bindings_shared_with_menus() {
+        for item in RIBBON
+            .iter()
+            .flat_map(|(_, groups)| groups.iter())
+            .flat_map(|g| g.items.iter())
+            .chain(QUICK_ACCESS)
+        {
+            if item.binding.is_some() {
+                assert_eq!(item.binding, item.cmd.binding(), "{:?}", item.cmd);
+            }
+        }
+        for cmd in super::CONTEXT_MENU.iter().flat_map(|g| g.iter()) {
+            if let Some(binding) = cmd.binding() {
+                assert!(KEYMAP.iter().any(|(_, _, b)| *b == binding), "{binding:?}");
             }
         }
     }

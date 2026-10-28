@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::duration::Minutes;
 use crate::error::CalendarError;
 use crate::ids::{AssignmentUid, BaselineNumber, CalendarUid, ResourceUid, TaskUid};
-use crate::model::{ConstraintKind, LinkType, ProgressOption, WorkContour};
+use crate::model::{ConstraintKind, CustomFieldId, LinkType, ProgressOption, WorkContour};
 use crate::quantity::Units;
 use crate::time::Moment;
 
@@ -648,6 +648,16 @@ pub enum Diagnostic {
         /// Description.
         detail: String,
     },
+    /// Valeur d'un champ personnalisé du mauvais type ou hors de ses
+    /// bornes (texte de plus de 255 caractères, nombre au-delà de ±10^14)
+    /// (erreur, R-263).
+    #[serde(rename = "task.custom_invalid")]
+    TaskCustomInvalid {
+        /// Tâche.
+        task: TaskUid,
+        /// Champ.
+        field: CustomFieldId,
+    },
 }
 
 impl Diagnostic {
@@ -709,7 +719,8 @@ impl Diagnostic {
             | Self::TaskUnschedulable { .. }
             | Self::LinkUnschedulable { .. }
             | Self::AssignmentDurationOutOfDomain { .. }
-            | Self::ScheduleInternal { .. } => Severity::Error,
+            | Self::ScheduleInternal { .. }
+            | Self::TaskCustomInvalid { .. } => Severity::Error,
             Self::CalendarExceptionsOverlap { .. }
             | Self::CalendarWorkWeeksOverlap { .. }
             | Self::CalendarRecurrenceUnsupported { .. }
@@ -797,6 +808,7 @@ impl Diagnostic {
             | Self::ProgressFromFinishInProgress { task }
             | Self::ProgressActualStartMissing { task }
             | Self::ProgressMilestoneRounded { task }
+            | Self::TaskCustomInvalid { task, .. }
             | Self::ConstraintIgnoredInProgress { task, .. } => Subject::Task(*task),
             Self::LinkCycle { tasks } => tasks.iter().min().map_or(Subject::Project, |t| Subject::Task(*t)),
             Self::LinkSelf { task } => Subject::Link {
@@ -926,6 +938,7 @@ impl Diagnostic {
             Self::ProgressFromFinishInProgress { .. } => "progress.from_finish_in_progress",
             Self::ProgressActualStartMissing { .. } => "progress.actual_start_missing",
             Self::ProgressMilestoneRounded { .. } => "progress.milestone_rounded",
+            Self::TaskCustomInvalid { .. } => "task.custom_invalid",
             Self::ConstraintIgnoredInProgress { .. } => "constraint.ignored_in_progress",
             Self::BaselineCostNotComputed { .. } => "baseline.cost_not_computed",
             Self::BaselineTaskSkipped { .. } => "baseline.task_skipped",
@@ -1270,6 +1283,11 @@ impl fmt::Display for Diagnostic {
                     "incohérence interne du calcul (anomalie à signaler) : {detail}"
                 )
             }
+            Self::TaskCustomInvalid { task, field } => write!(
+                f,
+                "la tâche {task} a une valeur de {} du mauvais type ou hors des bornes",
+                field.canonical_name()
+            ),
         }
     }
 }

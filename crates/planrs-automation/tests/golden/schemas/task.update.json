@@ -10,6 +10,11 @@
         "null"
       ]
     },
+    "custom": {
+      "additionalProperties": true,
+      "description": "Champs personnalisés (R-264, seconde passe UX) : clé `text1` …\n`text30`, `number1` … `number20`, `date1` … `date10`, `flag1` …\n`flag20` ; valeur : texte (≤ 255 caractères) ; nombre en texte dans\nla langue du lot (« 12,5 » ou « 12.5 ») ou nombre JSON ; date ISO\nlocale comme `start` (« 2026-11-02T08:00 ») ; booléen ; `null`\nefface. Aucune date calculée.",
+      "type": "object"
+    },
     "duration": {
       "additionalProperties": false,
       "description": "Durée.",

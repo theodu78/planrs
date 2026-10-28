@@ -632,6 +632,10 @@ error-pdf-glyph_missing = Caractère absent des polices du PDF : { $detail }
 error-pdf-logo_invalid = Logo illisible : { $detail }
 error-task-manual_finish_before_start = Fin avant le début de la tâche manuelle : { $detail }
 error-control-bad_endpoint = Adresse du canal de contrôle invalide : { $detail }
+error-custom-unknown_field = Champ personnalisé inconnu : { $detail }
+error-custom-value_type = Valeur de champ personnalisé refusée : { $detail }
+error-custom-too_long = Texte trop long : { $detail }
+error-custom-read_only = Champ défini par le fichier : { $detail }
 
 # --- J8 L1 ---
 
@@ -905,6 +909,7 @@ diag-baseline-task_skipped = { $count ->
     }
 diag-baseline-nothing_to_clear = ligne de base { $number } : rien à effacer
 diag-schedule-internal = incohérence interne du calcul (anomalie à signaler) : { $detail }
+diag-task-custom_invalid = la tâche { $task } a une valeur de { $field } du mauvais type ou hors des bornes
 diag-mspdi-invalid_value = valeur illisible ou hors bornes : valeur par défaut appliquée
 diag-mspdi-unknown_code = code inconnu ({ $code }) : valeur par défaut appliquée
 diag-mspdi-missing_required = élément obligatoire absent
@@ -924,6 +929,7 @@ diag-mspdi-progress_inconsistent = { $count ->
         [one] { $count } reste relu remplacé par le calcul
        *[other] { $count } restes relus remplacés par le calcul
     }
+diag-mspdi-custom_unreadable = valeur de champ personnalisé illisible : gardée telle quelle dans le fichier
 diag-style-ignored = style du document ignoré ({ $reason }) : modèle par défaut appliqué
 diag-mspdi-error-empty = document vide
 diag-mspdi-error-too_large = document trop grand : { $size } octets (limite { $max })

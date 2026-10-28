@@ -11,7 +11,10 @@
 //! quotidienne (mêmes jours), `Extras` (invalides et origines étrangères
 //! retirés, ancres recalculées, ordre canonique, `CurrencyCode` ajouté ;
 //! style du document gardé seulement s'il est écrit, H-R12),
-//! taux relus à travers l'écriture par heure ; profil strict : `GUID`,
+//! taux relus à travers l'écriture par heure ; champs personnalisés (R-266 :
+//! valeurs et définitions des champs étrangers retirées, textes tronqués à
+//! 255 et alias à 50 caractères, vides retirés, définitions et valeurs
+//! simples des `Extras` remontées dans le modèle) ; profil strict : `GUID`,
 //! éléments hors schéma et plages des semaines datées perdus.
 
 use std::collections::BTreeSet;
@@ -136,6 +139,8 @@ pub fn normalize(project: &Project, options: &WriteOptions) -> Project {
         .filter(|payload| options.style && crate::style_pi::writable(payload));
     crate::style_pi::set(&mut ex, style);
     p.extras = ex;
+    // P62 (R-266) : champs personnalisés, après les `Extras`.
+    crate::custom::normalize(&mut p, |s, max| sanitize_text(s).chars().take(max).collect());
     p
 }
 

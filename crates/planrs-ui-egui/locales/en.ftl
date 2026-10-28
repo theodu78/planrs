@@ -633,6 +633,10 @@ error-pdf-glyph_missing = Character missing from the PDF fonts: { $detail }
 error-pdf-logo_invalid = Unreadable logo: { $detail }
 error-task-manual_finish_before_start = Manual task finish before its start: { $detail }
 error-control-bad_endpoint = Invalid control channel address: { $detail }
+error-custom-unknown_field = Unknown custom field: { $detail }
+error-custom-value_type = Custom field value refused: { $detail }
+error-custom-too_long = Text too long: { $detail }
+error-custom-read_only = Field defined by the file: { $detail }
 
 # --- J8 L1 ---
 
@@ -906,6 +910,7 @@ diag-baseline-task_skipped = { $count ->
     }
 diag-baseline-nothing_to_clear = baseline { $number }: nothing to clear
 diag-schedule-internal = internal scheduling inconsistency (please report): { $detail }
+diag-task-custom_invalid = task { $task } has a { $field } value of the wrong type or out of range
 diag-mspdi-invalid_value = unreadable or out-of-range value: default applied
 diag-mspdi-unknown_code = unknown code ({ $code }): default applied
 diag-mspdi-missing_required = required element missing
@@ -925,6 +930,7 @@ diag-mspdi-progress_inconsistent = { $count ->
         [one] { $count } remaining value read from the file replaced by the calculation
        *[other] { $count } remaining values read from the file replaced by the calculation
     }
+diag-mspdi-custom_unreadable = unreadable custom field value: kept as is in the file
 diag-style-ignored = document style ignored ({ $reason }): default template applied
 diag-mspdi-error-empty = empty document
 diag-mspdi-error-too_large = document too large: { $size } bytes (limit { $max })

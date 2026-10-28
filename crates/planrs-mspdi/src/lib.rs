@@ -31,6 +31,7 @@
 //!   (R-120 à R-132).
 
 pub mod codes;
+pub mod custom;
 pub mod diag;
 pub mod error;
 pub mod extras;

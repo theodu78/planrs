@@ -10,7 +10,8 @@ use planrs_core::calendar::{Calendar, CalendarSet};
 use planrs_core::{Arena, CalendarUid, Diagnostic, Project, ResourceUid, Schedule, Subject, TaskUid};
 
 use super::{
-    Command, assignment, baseline, calendar, constraint, link, progress, project, resource, style, task,
+    Command, assignment, baseline, calendar, constraint, custom, link, progress, project, resource, style,
+    task,
 };
 use crate::error::{CommandError, CommandErrorKind, codes};
 use crate::outcome::SideEffect;
@@ -239,6 +240,7 @@ impl Exec for Command {
             Self::StyleApply(op) => style::apply(op, ctx),
             Self::StyleSetBarRole(op) => style::set_bar_role(op, ctx),
             Self::StyleResetToTemplate(op) => style::reset_to_template(op, ctx),
+            Self::CustomFieldRename(op) => custom::rename(op, ctx),
         }
     }
 }

@@ -1385,6 +1385,8 @@ text_ids! {
     ColumnIdStaysFirst => "column-id-stays-first",
     MenuTableDisplay => "menu-table-display",
     // --- UX2 L7 ---
+    EditErrorBadChoice => "edit-error-bad-choice",
+    EditErrorComputed => "edit-error-computed",
     // --- UX2 L8 ---
     // --- UX2 L9 ---
     MenuCustomFields => "menu-custom-fields",

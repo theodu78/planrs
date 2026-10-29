@@ -669,6 +669,8 @@ impl App {
     /// liste ; aucune si rien n'est affiché). Une saisie ouverte sur une
     /// ligne masquée est abandonnée. Sans document : vue vide.
     pub(crate) fn ensure_row_view(&mut self) {
+        // Textes des champs affichés (seconde passe UX, lot L7, `rows.rs`).
+        self.ensure_row_columns();
         let (Some(document), Some(model)) = (&self.document, &self.rows) else {
             self.row_view = RowView::default();
             self.row_view_key = None;

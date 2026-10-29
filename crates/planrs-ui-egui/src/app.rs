@@ -1469,13 +1469,6 @@ impl App {
         });
     }
 
-    /// « Ce geste n'est pas encore disponible. » (touches et commandes
-    /// posées par le contrat d'un lot, servies par un lot suivant).
-    pub(crate) fn not_available(&mut self) {
-        let text = self.texts.get(TextId::UxNotAvailable);
-        self.push_message(Severity::Info, text);
-    }
-
     /// Retire les messages de titre `title` (refus devenus caducs).
     pub(crate) fn clear_titled(&mut self, title: TextId) {
         self.messages.retain(|message| message.title != Some(title));

@@ -23,10 +23,18 @@
 //! modale** (`egui::Window`) : la table et le Gantt restent cliquables, la
 //! fenêtre est relue sur la sélection et le document à chaque image où ils
 //! ont changé, et chacun de ses boutons applique aussitôt son lot.
+//!
+//! Seconde passe UX (ADR-0019, lot L6) : le sélecteur de champ
+//! (`field_picker.rs`) et « Paramètres de champ » (`field_settings.rs`)
+//! règlent des préférences d'affichage (`UiState.columns`), sans brouillon
+//! du document : hébergés par `ViewTransient::picker`, hors de
+//! [`DialogState`].
 
 pub mod assign;
 pub mod baseline;
 pub mod csv_import;
+pub mod field_picker;
+pub mod field_settings;
 pub mod filter;
 pub mod gallery;
 pub mod link;

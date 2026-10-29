@@ -2161,4 +2161,31 @@ fn splitter_drag_5000() {
 }
 // --- UX2 L5 --- (`details_follow_5000`)
 // --- UX2 L6 --- (`field_picker_5000`)
+
+/// Seconde passe UX, lot L6 (§ 2.5) : sélecteur de champ ouvert sur le
+/// réseau de 5 000 tâches, 6 caractères tapés, un par image (recherche
+/// relancée à chaque frappe), cinq fois ; image médiane < 16 ms, p95
+/// < 32 ms. Rien d'écrit dans le document.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn field_picker_5000() {
+    use planrs_ui_egui::action::ColumnOp;
+    let (mut app, mut bench) = nav_bench();
+    let generation = app.document.as_ref().unwrap().generation();
+    let mut samples = Vec::new();
+    for _ in 0..5 {
+        app.dispatch(Action::Column(ColumnOp::OpenPicker { at: 2 }));
+        bench.settle(&mut app);
+        for c in "travai".chars() {
+            samples.push(bench.frame(&mut app, vec![Event::Text(c.to_string())]));
+        }
+        assert_eq!(app.view().picker.as_ref().unwrap().query, "travai");
+        bench.frame(&mut app, key_events(Key::Escape, Modifiers::NONE));
+        bench.settle(&mut app);
+        assert!(app.view().picker.is_none());
+    }
+    assert_eq!(app.document.as_ref().unwrap().generation(), generation);
+    assert_budget("field_picker_5000", samples, bench.last);
+}
+
 // --- UX2 L7 --- (`wide_table_5000`)

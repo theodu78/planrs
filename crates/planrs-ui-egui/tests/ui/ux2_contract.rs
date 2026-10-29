@@ -15,7 +15,7 @@ use planrs_ui_egui::view::Pane;
 use planrs_ui_egui::view::table::table_id;
 use planrs_ui_egui::{Action, App};
 
-use crate::{fr, harness, open_demo};
+use crate::{harness, open_demo};
 
 /// Vrai si l'entrée de [`KEYMAP`] est vérifiée par [`check_keymap_entry`].
 pub fn is_ux2_entry(binding: Binding) -> bool {
@@ -64,7 +64,6 @@ fn texts(app: &App) -> Vec<String> {
 /// Vérifie l'entrée `i` de [`KEYMAP`] de la seconde passe (contrat L0).
 pub fn check_keymap_entry(i: usize) {
     let (context, shortcut, binding) = KEYMAP[i];
-    let not_available = fr(TextId::UxNotAvailable);
     match binding {
         Binding::Ui(UiBinding::CloseDocument) => {
             assert_eq!(context, KeyContext::Global);
@@ -130,11 +129,14 @@ pub fn check_keymap_entry(i: usize) {
             );
         }
         Binding::Ui(UiBinding::FieldSettings) => {
+            // Servi par le lot L6 (H-UI-115) : « Paramètres de champ » de
+            // la colonne de la cellule active, rien d'écrit, aucun message.
             let mut harness = demo_on_row(3);
             let filtered = harness.state().task_view().clone();
             press(&mut harness, i);
             let app = harness.state();
-            assert_eq!(texts(app), [not_available], "{shortcut:?}");
+            assert_eq!(texts(app), Vec::<String>::new(), "{shortcut:?}");
+            assert!(app.view().picker.as_ref().is_some_and(|p| p.settings.is_some()));
             assert_eq!(app.document.as_ref().unwrap().generation(), 0);
             // Alt+F3 n'est pas pris par F3 (retirer le filtre).
             assert_eq!(*app.task_view(), filtered);
@@ -172,8 +174,8 @@ fn ux2_ctrl_f4_not_on_mac() {
 }
 
 /// Contrat L0 (`ColumnOp`) : insérer et masquer servis sur
-/// `UiState.columns` (préférence, aucune entrée d'annulation) ; déplacer,
-/// paramètres et fenêtres répondent « non disponible ».
+/// `UiState.columns` (préférence, aucune entrée d'annulation) ; déplacer
+/// servi depuis le lot L6.
 #[test]
 fn ux2_column_op_insert_hide() {
     let mut harness = demo_on_row(1);
@@ -215,12 +217,13 @@ fn ux2_column_op_insert_hide() {
     assert!(!harness.state().state.shown(Column::Work));
     assert_eq!(texts(harness.state()), Vec::<String>::new());
     assert_eq!(harness.state().document.as_ref().unwrap().generation(), 0);
+    // Déplacer : servi par le lot L6 (H-UI-116), sans message.
     harness
         .state_mut()
         .dispatch(Action::Column(ColumnOp::Move { from: 2, to: 3 }));
     harness.run();
-    assert_eq!(texts(harness.state()), [fr(TextId::UxNotAvailable)]);
-    assert_eq!(order(harness.state()).get(2), Some(&Column::Duration));
+    assert_eq!(texts(harness.state()), Vec::<String>::new());
+    assert_eq!(order(harness.state()).get(3), Some(&Column::Duration));
 }
 
 /// Contrat L0 (`PaneOp`) : hauteurs bornées, visibilité et forme du volet
@@ -305,7 +308,7 @@ fn ux2_shell_quit_guarded() {
 
 /// Contrat L0 (ruban) : la case Détails bascule le volet dans `UiState`
 /// (sans dessin avant L4) ; Insérer une colonne et Paramètres de champ
-/// répondent « non disponible ».
+/// ouvrent leur fenêtre (lot L6).
 #[test]
 fn ux2_ribbon_cmds_contract() {
     use planrs_ui_egui::ribbon::spec::RibbonCmd;
@@ -324,8 +327,11 @@ fn ux2_ribbon_cmds_contract() {
         };
         harness.state_mut().dispatch(action);
         harness.run();
+        // Servis par le lot L6 : sélecteur, puis « Paramètres de champ ».
+        let picker = harness.state().view().picker.as_ref().unwrap();
+        assert_eq!(picker.settings.is_some(), cmd == RibbonCmd::FieldSettings);
     }
-    assert_eq!(texts(harness.state()), [fr(TextId::UxNotAvailable)]);
+    assert_eq!(texts(harness.state()), Vec::<String>::new());
     assert_eq!(RibbonCmd::DetailsPane.menu_label(), TextId::MenuDetailsPane);
     assert_eq!(RibbonCmd::CustomFields.menu_label(), TextId::MenuCustomFields);
 }

@@ -20,6 +20,8 @@
 //! d'indentation et de désindentation : elle suit son bloc (comme dans MS
 //! Project, chaque ligne sélectionnée ne bouge que d'un niveau).
 
+use std::collections::BTreeSet;
+
 use planrs_automation::command::{LinkKey, LinkSpec, TaskAdd, TaskDelete, TaskMove, TaskOne};
 use planrs_automation::json::DurationJson;
 use planrs_automation::{Batch, Command, Placement, TaskRef};
@@ -263,8 +265,23 @@ pub fn plan_named(
                 .copied()
                 .filter(|uid| project.tasks.contains(*uid))
                 .collect();
+            // R-260 b : seules les paires sans lien, dans un sens ou dans
+            // l'autre (ni déjà liées dans le projet, ni deux fois dans la
+            // chaîne) ; tout lié ⇒ aucun lot.
+            let mut seen: BTreeSet<(TaskUid, TaskUid)> = BTreeSet::new();
             chain
                 .windows(2)
+                .filter(|pair| match pair {
+                    [pred, succ] => {
+                        let key = if pred <= succ {
+                            (*pred, *succ)
+                        } else {
+                            (*succ, *pred)
+                        };
+                        pred != succ && !linked_either_way(project, *pred, *succ) && seen.insert(key)
+                    }
+                    _ => false,
+                })
                 .filter_map(|pair| match pair {
                     [pred, succ] => Some(Command::LinkAdd(LinkSpec {
                         pred: TaskRef::Uid(*pred),
@@ -296,6 +313,17 @@ pub fn plan_named(
         batch: batch(ops),
         confirm_cascade: None,
     }))
+}
+
+/// Vrai si `a` et `b` sont liées dans un sens ou dans l'autre (R-260 b).
+fn linked_either_way(project: &Project, a: TaskUid, b: TaskUid) -> bool {
+    let has = |succ: TaskUid, pred: TaskUid| {
+        project
+            .tasks
+            .get(succ)
+            .is_some_and(|t| t.predecessors.iter().any(|l| l.predecessor == pred))
+    };
+    has(b, a) || has(a, b)
 }
 
 /// Placement d'une tâche insérée : avant la première tâche sélectionnée

@@ -205,13 +205,15 @@ fn h_ui_39_paste_internal_full() {
 
 #[test]
 fn h_ui_39_paste_external_names() {
-    // R-256 (b) : une colonne sans tabulation ⇒ une tâche par ligne non
-    // vide, avant la tâche active.
+    // R-256 (b), destination de R-261 : une colonne sans tabulation sur la
+    // ligne vide (colonne Nom) ⇒ une tâche par ligne non vide, en fin.
     let mut harness = p_harness();
     select(&mut harness, 2, 2);
+    harness.state_mut().dispatch(Action::Select(None));
+    harness.run();
     paste(&mut harness, "A\nB\n\nC");
     let got = plain_names(harness.state());
-    assert_eq!(&got[1..5], ["A", "B", "C", "Fondations"]);
+    assert_eq!(&got[6..], ["Peinture", "A", "B", "C"]);
     assert_eq!(history_len(harness.state()), 1);
     // R-256 (a) : en-tête reconnu ⇒ lignes de l'import CSV (durées lues).
     select(&mut harness, 5, 5);
@@ -232,20 +234,21 @@ fn h_ui_39_paste_external_names() {
         ]
     );
     assert_eq!(history_len(app), 2);
-    // R-256 (c) : plusieurs colonnes sans en-tête ⇒ `paste.unrecognized`,
-    // rien écrit, refus au bandeau.
-    let before = plain_names(harness.state());
-    paste(&mut harness, "A\t3j\nB\t2j");
+    // R-261 (amende R-256 c) : plusieurs colonnes sans en-tête sur des
+    // lignes entières (les deux lignes importées, restées sélectionnées) ⇒
+    // collage de cellules à partir de la cellule active (Nom), un lot.
+    paste(&mut harness, "A2\t4j\nB2\t1j");
     let app = harness.state();
-    assert_eq!(plain_names(app), before);
-    assert_eq!(history_len(app), 2);
-    let (severity, text) = titled(app, TextId::CommandErrorTitle).unwrap();
-    assert_eq!(severity, Severity::Error);
-    let expected = Texts::new(Language::Fr).get_args(
-        TextId::ErrorPasteUnrecognized,
-        &[("detail", Arg::Str(fr(TextId::PasteHintUnrecognized).into()))],
-    );
-    assert_eq!(text, expected);
+    let project = app.document.as_ref().unwrap().project();
+    let renamed: Vec<(String, i64)> = project
+        .tasks
+        .iter()
+        .filter(|t| t.name == "A2" || t.name == "B2")
+        .map(|t| (t.name.clone(), t.duration.minutes().get()))
+        .collect();
+    assert_eq!(renamed, [("A2".to_owned(), 4 * 480), ("B2".to_owned(), 480)]);
+    assert_eq!(history_len(app), 3);
+    let before = plain_names(harness.state());
     // Plafond : plus de 10 000 lignes ⇒ `paste.too_large`, rien écrit.
     let huge = "x\n".repeat(10_001);
     paste(&mut harness, &huge);
@@ -356,6 +359,9 @@ fn h_ui_39_clip_survives_open() {
     harness.run();
     assert_eq!(plain_names(harness.state()).len(), 49);
     assert!(harness.state().clipboard().is_some());
+    // Destination de R-261 : la première ligne, entière.
+    let first = harness.state().rows().unwrap().row(0).unwrap().uid;
+    press_id(&mut harness, first.get(), PressMode::Replace);
     paste(&mut harness, &text);
     let app = harness.state();
     let got = plain_names(app);
@@ -376,18 +382,21 @@ fn paste_report_banner() {
     let text = copy_event(&mut harness, Event::Copy).unwrap();
     select(&mut harness, 6, 6);
     paste(&mut harness, &text);
+    // H-UI-104 : compte rendu toujours en information, liens non repris
+    // dans leur propre phrase (sans « un bout »).
     let texts = Texts::new(Language::Fr);
     let expected = [
         texts.get_args(TextId::PasteReportTasks, &[("count", Arg::Count(2))]),
-        texts.get_args(TextId::PasteReportLinks, &[("count", Arg::Count(2))]),
+        texts.get_args(TextId::PasteLinksDropped, &[("count", Arg::Count(2))]),
     ]
-    .join(", ");
+    .join(". ");
     let (severity, got) = titled(harness.state(), TextId::PasteReportTitle).unwrap();
-    assert_eq!(severity, Severity::Warning);
+    assert_eq!(severity, Severity::Info);
     assert_eq!(got, expected);
     assert!(harness.query_by_label(&fr(TextId::PasteReportTitle)).is_some());
-    // Un second collage remplace le compte rendu (un seul « Collage »).
-    paste(&mut harness, "Z");
+    // Un second collage remplace le compte rendu (un seul « Collage ») :
+    // texte à en-tête sur les lignes collées, restées sélectionnées.
+    paste(&mut harness, "Nom\nZ");
     let reports: Vec<_> = harness
         .state()
         .messages()
@@ -413,9 +422,9 @@ fn paste_report_banner() {
     let (_, got) = titled(app, TextId::PasteReportTitle).unwrap();
     let expected = [
         texts.get_args(TextId::PasteReportTasks, &[("count", Arg::Count(2))]),
-        texts.get_args(TextId::PasteReportLinks, &[("count", Arg::Count(3))]),
+        texts.get_args(TextId::PasteLinksDropped, &[("count", Arg::Count(3))]),
     ]
-    .join(", ");
+    .join(". ");
     assert_eq!(got, expected);
     assert_eq!(history_len(app), 3);
 }
@@ -469,7 +478,8 @@ fn paste_report_warns_tracking_dropped() {
     let texts = Texts::new(Language::Fr);
     let tracking = texts.get_args(TextId::PasteReportTracking, &[("count", Arg::Count(1))]);
     let (severity, got) = titled(harness.state(), TextId::PasteReportTitle).unwrap();
-    assert_eq!(severity, Severity::Warning);
+    // H-UI-104 : compte rendu d'un collage réussi toujours en information.
+    assert_eq!(severity, Severity::Info);
     assert!(got.contains(&tracking), "{got}");
     // La tâche collée est bien repartie de 0 % (R-244).
     let project = harness.state().document.as_ref().unwrap().project();

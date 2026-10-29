@@ -367,17 +367,23 @@ fn lag_json(lag: &Lag, ctx: &TextContext) -> LagJson {
 type Resolved = (TaskUid, LinkType, Lag);
 
 /// R-150 côté interface : ID (position + 1) → UID. Un ID absent refuse la
-/// saisie.
+/// saisie. R-260 a : un ID répété ne donne qu'un lien, à la place de sa
+/// première occurrence, avec le type et le décalage de la dernière
+/// (« 6;6SS » ⇒ un lien 6 SS).
 fn resolve(refs: &[PredecessorRef], project: &Project) -> Result<Vec<Resolved>, EditError> {
-    refs.iter()
-        .map(|r| {
-            let position = usize::try_from(r.id).ok().and_then(|id| id.checked_sub(1));
-            position
-                .and_then(|p| project.tasks.at(p))
-                .map(|task| (task.uid(), r.kind, r.lag))
-                .ok_or(EditError::UnknownId(r.id))
-        })
-        .collect()
+    let mut out: Vec<Resolved> = Vec::with_capacity(refs.len());
+    for r in refs {
+        let position = usize::try_from(r.id).ok().and_then(|id| id.checked_sub(1));
+        let uid = position
+            .and_then(|p| project.tasks.at(p))
+            .map(Task::uid)
+            .ok_or(EditError::UnknownId(r.id))?;
+        match out.iter_mut().find(|(u, _, _)| *u == uid) {
+            Some(slot) => *slot = (uid, r.kind, r.lag),
+            None => out.push((uid, r.kind, r.lag)),
+        }
+    }
+    Ok(out)
 }
 
 /// Lit une liste de prédécesseurs : la première erreur de texte refuse la
@@ -453,6 +459,32 @@ fn replace_links(task: &Task, wanted: &[Resolved], project: &Project, ctx: &Text
 /// [`EditError`] : texte illisible, ID inconnu, colonne non éditable, tâche
 /// absente (`text.empty` n'est jamais rendu pour la ligne vide).
 pub fn commit_edit(state: &EditState, session: &Session, lang: text::Language) -> Result<Batch, EditError> {
+    commit(state, session, lang, true)
+}
+
+/// Comme [`commit_edit`], sans le non-changement des dates (R-260 d) :
+/// pour une cellule Début ou Fin dont la tâche a déjà reçu une date saisie
+/// dans le même lot (la contrainte en place n'est plus celle qui sera
+/// remplacée, R-158 : la dernière date saisie l'emporte).
+///
+/// # Errors
+///
+/// Comme [`commit_edit`].
+pub fn commit_edit_dates_forced(
+    state: &EditState,
+    session: &Session,
+    lang: text::Language,
+) -> Result<Batch, EditError> {
+    commit(state, session, lang, false)
+}
+
+/// Lot d'une saisie ; `same_dates` : applique R-260 d aux dates.
+fn commit(
+    state: &EditState,
+    session: &Session,
+    lang: text::Language,
+    same_dates: bool,
+) -> Result<Batch, EditError> {
     let mut batch = empty_batch(lang);
     if !editable(state.column) {
         return Err(EditError::NotEditable);
@@ -479,14 +511,31 @@ pub fn commit_edit(state: &EditState, session: &Session, lang: text::Language) -
                 return Ok(batch);
             }
             let mut op = update(uid);
+            // R-260 d : une valeur relue égale à la valeur courante ne
+            // produit aucune opération (aucune entrée d'annulation).
             match state.column {
+                Column::Name if buffer == task.name => return Ok(batch),
                 Column::Name => op.name = Patch::Set(buffer.to_owned()),
                 Column::Duration => {
-                    parse_duration(buffer, &ctx)?;
+                    if parse_duration(buffer, &ctx)? == task.duration {
+                        return Ok(batch);
+                    }
                     op.duration = Patch::Set(duration_text(buffer));
                 }
-                Column::Start => op.start = Patch::Set(parse_date(buffer, DateRole::Start, &ctx)?),
-                Column::Finish => op.finish = Patch::Set(parse_date(buffer, DateRole::Finish, &ctx)?),
+                Column::Start => {
+                    let date = parse_date(buffer, DateRole::Start, &ctx)?;
+                    if same_dates && same_entered(task, project, DateRole::Start, date) {
+                        return Ok(batch);
+                    }
+                    op.start = Patch::Set(date);
+                }
+                Column::Finish => {
+                    let date = parse_date(buffer, DateRole::Finish, &ctx)?;
+                    if same_dates && same_entered(task, project, DateRole::Finish, date) {
+                        return Ok(batch);
+                    }
+                    op.finish = Patch::Set(date);
+                }
                 Column::Predecessors => {
                     let wanted = read_predecessors(buffer, &ctx, project)?;
                     let ops = replace_links(task, &wanted, project, &ctx);
@@ -494,7 +543,11 @@ pub fn commit_edit(state: &EditState, session: &Session, lang: text::Language) -
                     return Ok(batch);
                 }
                 Column::PercentComplete => {
-                    batch.ops = vec![percent_update(uid, buffer, &ctx)?];
+                    let op = percent_update(uid, buffer, &ctx)?;
+                    if parse_percent(buffer, &ctx).is_ok_and(|p| p == task.progress.percent_complete) {
+                        return Ok(batch);
+                    }
+                    batch.ops = vec![op];
                     return Ok(batch);
                 }
                 // Colonnes calculées ou en lecture seule, et champs de la seconde
@@ -506,6 +559,25 @@ pub fn commit_edit(state: &EditState, session: &Session, lang: text::Language) -
         None => blank_row_ops(state.column, buffer, &ctx, project)?,
     };
     Ok(batch)
+}
+
+/// R-260 d : vrai si saisir `date` côté `role` sur `task` ne changerait
+/// rien : feuille automatique dont la contrainte est déjà celle que R-158
+/// poserait (« ne pas commencer avant » cette date depuis le début, « ne pas
+/// finir avant », SNLT et FNLT à rebours). Une tâche manuelle ou une
+/// récapitulative envoie toujours la saisie (le registre décide).
+fn same_entered(task: &Task, project: &Project, role: DateRole, date: Moment) -> bool {
+    if matches!(task.mode, SchedulingMode::Manual { .. }) || is_summary(project, task.uid()) {
+        return false;
+    }
+    let backward = matches!(project.anchor, planrs_core::ScheduleAnchor::FromFinish(_));
+    let wanted = match (role, backward) {
+        (DateRole::Start, false) => Constraint::StartNoEarlierThan { date },
+        (DateRole::Finish, false) => Constraint::FinishNoEarlierThan { date },
+        (DateRole::Start, true) => Constraint::StartNoLaterThan { date },
+        (DateRole::Finish, true) => Constraint::FinishNoLaterThan { date },
+    };
+    task.constraint == wanted
 }
 
 /// Durée envoyée en texte (lue par le registre dans la langue du lot).
@@ -819,5 +891,75 @@ mod tests {
         s.apply(&batch, ApplyMode::Commit).unwrap();
         let last = s.project().tasks.iter().last().unwrap();
         assert_eq!(last.predecessors.len(), 2);
+    }
+
+    /// R-260 a : un ID répété ne donne qu'un lien, la dernière occurrence
+    /// donnant le type et le décalage (« 6;6 », « 6;6SS »).
+    #[test]
+    fn r260_duplicate_ids_merged() {
+        // Ligne vide : « 6;6 » ⇒ une tâche, un seul `link.add`.
+        let got = ops(&typed(None, Column::Predecessors, "6;6"));
+        let adds: Vec<&LinkSpec> = got
+            .iter()
+            .filter_map(|op| match op {
+                Command::LinkAdd(spec) => Some(spec),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(adds.len(), 1, "{got:?}");
+        assert_eq!(adds[0].pred, TaskRef::Uid(uid(6)));
+        // Tâche 9 (« 7;6 ») : « 7;6;6 » ne change rien ; « 7;6;6SS » ⇒
+        // un seul `link.update` de 6 en DD.
+        assert_eq!(ops(&typed(Some(uid(9)), Column::Predecessors, "7;6;6")), []);
+        let got = ops(&typed(Some(uid(9)), Column::Predecessors, "7;6;6DD"));
+        let [Command::LinkUpdate(spec)] = &got[..] else {
+            panic!("{got:?}")
+        };
+        assert_eq!(spec.pred, TaskRef::Uid(uid(6)));
+        assert_eq!(spec.kind, Some(LinkTypeJson::from(LinkType::StartToStart)));
+        // Appliqué : un lien 6 → 9, en DD, une entrée.
+        let mut s = session();
+        let batch = commit_edit(
+            &typed(Some(uid(9)), Column::Predecessors, "6;6DD"),
+            &s,
+            TextLanguage::Fr,
+        )
+        .unwrap();
+        s.apply(&batch, ApplyMode::Commit).unwrap();
+        let links = &s.project().tasks.get(uid(9)).unwrap().predecessors;
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].kind, LinkType::StartToStart);
+        assert_eq!(s.history().entries.len(), 1);
+    }
+
+    /// R-260 d : une valeur relue égale à la valeur courante ne produit
+    /// aucune opération (durée, nom, %, date déjà contrainte, liens).
+    #[test]
+    fn r260_same_value_no_entry() {
+        let s = session();
+        let task = s.project().tasks.get(uid(3)).unwrap();
+        let name = task.name.clone();
+        assert_eq!(task.duration.minutes().get(), 10 * 480);
+        for (column, text) in [
+            (Column::Duration, "10 jours"),
+            (Column::Duration, "10j"),
+            (Column::Name, name.as_str()),
+            (Column::PercentComplete, "0"),
+            (Column::PercentComplete, "0%"),
+        ] {
+            assert_eq!(ops(&typed(Some(uid(3)), column, text)), [], "{column:?} {text}");
+        }
+        assert_eq!(ops(&typed(Some(uid(9)), Column::Predecessors, "6;7")), []);
+        // Début saisi : la première fois pose la contrainte, la seconde ne
+        // change rien.
+        let mut s = session();
+        let state = typed(Some(uid(3)), Column::Start, "15/03/2027");
+        let batch = commit_edit(&state, &s, TextLanguage::Fr).unwrap();
+        assert_eq!(batch.ops.len(), 1);
+        s.apply(&batch, ApplyMode::Commit).unwrap();
+        let again = commit_edit(&state, &s, TextLanguage::Fr).unwrap();
+        assert_eq!(again.ops, []);
+        // Une autre valeur passe toujours.
+        assert_eq!(ops(&typed(Some(uid(3)), Column::Duration, "11j")).len(), 1);
     }
 }

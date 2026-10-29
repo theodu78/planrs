@@ -307,11 +307,11 @@ fn ui_link_selection_fs_chain() {
     assert!(preds(app, uid(20)).contains(&(uid(14), LinkType::FinishToStart)));
     assert!(preds(app, uid(44)).contains(&(uid(20), LinkType::FinishToStart)));
 
-    // Doublon : tout le lot est refusé.
+    // Déjà liées : non-changement (R-260 b), aucun lot ni message.
     press(&mut harness, "link.add");
     let app = harness.state();
     assert_eq!(generation(app), 1);
-    assert_eq!(app.messages().len(), 1, "{:?}", app.messages());
+    assert_no_message(app);
 
     // Délier : seuls les liens entre tâches sélectionnées partent.
     press(&mut harness, "link.remove");

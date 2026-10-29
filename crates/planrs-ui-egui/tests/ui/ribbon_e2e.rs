@@ -215,8 +215,8 @@ fn e2e_ribbon() {
     assert_eq!(history(harness.state()), (0, 0));
 
     // 1. Tâche → Planification → Lier sur {2, 3}, déjà liées (2 → 3 FS) :
-    // lot refusé par le moteur (lien déjà présent), message au bandeau,
-    // rien n'est écrit, aucune entrée d'annulation.
+    // non-changement (R-260 b, seconde passe UX) : aucun lot, aucun
+    // message, rien n'est écrit, aucune entrée d'annulation.
     select(harness, 2, 3);
     let links_before = project(harness.state())
         .tasks
@@ -225,9 +225,9 @@ fn e2e_ribbon() {
         .predecessors
         .clone();
     ribbon_click(harness, RibbonTab::Task, &fr(TextId::RibbonLink));
-    // Refus du moteur affiché au bandeau (même chemin que Édition → Lier).
+    // Aucun refus (même chemin que Édition → Lier).
     assert!(
-        harness
+        !harness
             .state()
             .messages()
             .iter()

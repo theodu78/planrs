@@ -12,6 +12,11 @@ name: CI
 on:
   push:
   pull_request:
+  # Passe de nuit : propriétés à 10 000 cas (critère J2), trop longue pour
+  # chaque PR (2 h 09 le 2026-10-29) ; voir ADR-0019, note CI.
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -43,12 +48,12 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # Propriétés du moteur (P13 à P17) à 10 000 cas (critère J2) ; en local,
-      # 256 par défaut. Les autres propriétés fixent leur nombre de cas.
+      # Propriétés à 10 000 cas (critère J2) la nuit et à la demande ; 256 sur
+      # chaque push et PR (même réglage qu'en local), pour une CI en ~15 min.
       - name: Tests
         run: cargo test --workspace
         env:
-          PROPTEST_CASES: "10000"
+          PROPTEST_CASES: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '10000' || '256' }}
 
       # L'action passe `--all-features` par défaut : on le retire pour lancer
       # la même commande qu'en local. Les features sont réglées par

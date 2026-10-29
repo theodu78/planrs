@@ -735,6 +735,26 @@ pub struct ColumnState {
 }
 
 impl ColumnState {
+    /// Titre affiché de la colonne : celui de « Paramètres de champ »
+    /// (H-UI-115), sinon le titre par défaut du champ ([`Column::label`]).
+    #[must_use]
+    pub fn display_title(&self, texts: &crate::i18n::Texts) -> String {
+        self.title.clone().unwrap_or_else(|| self.column.label(texts))
+    }
+
+    /// Alignement des données (H-UI-115) : celui choisi, sinon celui du
+    /// champ.
+    #[must_use]
+    pub fn data_align(&self) -> CellAlign {
+        self.align.unwrap_or(self.column.align())
+    }
+
+    /// Alignement du titre (H-UI-115) : celui choisi, sinon centré.
+    #[must_use]
+    pub fn title_align(&self) -> CellAlign {
+        self.header_align.unwrap_or(CellAlign::Center)
+    }
+
     /// État par défaut d'une colonne.
     #[must_use]
     pub const fn default_for(column: Column) -> Self {
@@ -822,11 +842,15 @@ pub fn sort_key(column: Column) -> Option<SortKey> {
 
 impl crate::App {
     /// Opération sur les colonnes affichées (`Action::Column`, H-UI-114 à
-    /// H-UI-116) : une préférence d'affichage, hors de l'historique
-    /// d'annulation. Contrat L0 : insérer et masquer sont servis
-    /// (`UiState::insert_column`, `UiState::hide_column`, défilement
-    /// horizontal borné ensuite) ; déplacer, paramètres et fenêtres
-    /// répondent « non disponible » jusqu'au lot L6.
+    /// H-UI-116, lot L6) : une préférence d'affichage, hors de l'historique
+    /// d'annulation. Insérer (à gauche du rang donné ; champ déjà affiché :
+    /// déplacé ; 64 colonnes au plus, refus nommé), masquer, déplacer (l'ID
+    /// reste en premier, refus nommé), régler (« Paramètres de champ ») ;
+    /// ouvrir le sélecteur ou « Paramètres de champ » ([`ACTIVE_COLUMN`] :
+    /// colonne de la cellule active). Défilement horizontal borné et
+    /// curseur ramené au Nom si sa colonne disparaît.
+    ///
+    /// [`ACTIVE_COLUMN`]: crate::action::ACTIVE_COLUMN
     #[allow(
         clippy::needless_pass_by_value,
         reason = "action consommée par le réducteur (bras `Action::Column(op)`)"
@@ -834,19 +858,62 @@ impl crate::App {
     pub(crate) fn column_op(&mut self, op: crate::action::ColumnOp) {
         use crate::action::ColumnOp;
         let changed = match op {
-            ColumnOp::Insert { at, column } => self.state.insert_column(at, column),
+            ColumnOp::Insert { at, column } => {
+                let full = !self.state.shown(column) && self.state.columns.len() >= MAX_COLUMNS;
+                if full {
+                    let text = self.texts.get(TextId::ColumnsMaxReached);
+                    self.push_message(planrs_core::Severity::Info, text);
+                }
+                self.state.insert_column(at, column)
+            }
             ColumnOp::Hide(at) => self.state.hide_column(at),
-            ColumnOp::Move { .. }
-            | ColumnOp::Settings { .. }
-            | ColumnOp::OpenPicker { .. }
-            | ColumnOp::OpenSettings(_) => {
-                self.not_available();
+            ColumnOp::Move { from, to } => {
+                if (from == 0 || to == 0) && from != to && from < self.state.columns.len() {
+                    let text = self.texts.get(TextId::ColumnIdStaysFirst);
+                    self.push_message(planrs_core::Severity::Info, text);
+                }
+                self.state.move_column(from, to)
+            }
+            ColumnOp::Settings { at, settings } => self.state.set_column_settings(at, settings),
+            ColumnOp::OpenPicker { at } => {
+                if self.document.is_some() {
+                    let at = self.column_rank(at);
+                    self.view.picker = Some(crate::field::FieldPicker::insert_at(at));
+                }
+                false
+            }
+            ColumnOp::OpenSettings(at) => {
+                let at = self.column_rank(at);
+                if self.document.is_some()
+                    && let Some(state) = self.state.columns.get(at)
+                {
+                    let draft = crate::dialog::field_settings::FieldSettingsDraft::of(state);
+                    self.view.picker = Some(crate::field::FieldPicker {
+                        at,
+                        focus_pending: true,
+                        settings: Some(Box::new(draft)),
+                        ..crate::field::FieldPicker::default()
+                    });
+                }
                 false
             }
         };
         if changed {
             self.columns_changed();
         }
+    }
+
+    /// Rang dans `UiState.columns` : `at` lui-même, ou, pour
+    /// [`crate::action::ACTIVE_COLUMN`], celui de la colonne de la cellule
+    /// active (le Nom si elle n'est pas affichée).
+    fn column_rank(&self, at: usize) -> usize {
+        if at != crate::action::ACTIVE_COLUMN {
+            return at.min(self.state.columns.len());
+        }
+        let rank = |column: Column| self.state.columns.iter().position(|c| c.column == column);
+        rank(self.view.cursor.column)
+            .or_else(|| rank(Column::Name))
+            .unwrap_or(1)
     }
 
     /// Ajuste la largeur de `column` au contenu des lignes affichées et à
@@ -866,7 +933,10 @@ impl crate::App {
         if screen.inter() {
             font.family = egui::FontFamily::Name(crate::theme::PLAN_FAMILY.into());
         }
-        let title = self.texts.get(column.title());
+        let title = self.state.column(column).map_or_else(
+            || column.label(&self.texts),
+            |state| state.display_title(&self.texts),
+        );
         let outline = self.outline_triangles;
         let Some(rows) = self.visible_rows() else {
             return;

@@ -1025,9 +1025,15 @@ fn ribbon_dropdown_runs_menu_entry() {
         .click();
     harness.run();
     assert_eq!(harness.state().state.zoom, planrs_ui_egui::TimeScaleZoom::Week);
-    // Format → Colonnes ▾ : case « Durée ».
+    // Format → Colonnes ▾ → Affichage du tableau : case « Durée » (seconde
+    // passe UX, lot L6 : cases dans un sous-menu, COL-02).
     dispatch(&mut harness, Action::Ribbon(RibbonOp::Select(RibbonTab::Format)));
     node(&harness, &fr(TextId::RibbonColumns)).click();
+    harness.run();
+    let display_label = fr(TextId::MenuTableDisplay);
+    let display = harness.get_by_label(&display_label);
+    display.hover();
+    display.click();
     harness.run();
     let column = planrs_ui_egui::column::Column::Duration;
     let visible = |h: &Harness<'static, App>| h.state().state.shown(column);

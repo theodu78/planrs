@@ -110,29 +110,53 @@ const fn desc(column: Column, availability: Availability) -> FieldDesc {
     }
 }
 
-/// Catalogue du lot L0 : les 14 colonnes d'avant la passe, modifiables
-/// là où la table l'était déjà.
-static CATALOG: [FieldDesc; 14] = [
-    desc(Column::Id, Availability::ReadOnly),
-    desc(Column::Name, Availability::Ready),
-    desc(Column::Duration, Availability::Ready),
-    desc(Column::Start, Availability::Ready),
-    desc(Column::Finish, Availability::Ready),
-    desc(Column::Predecessors, Availability::Ready),
-    desc(Column::TotalSlack, Availability::ReadOnly),
-    desc(Column::Critical, Availability::ReadOnly),
-    desc(Column::PercentComplete, Availability::Ready),
-    desc(Column::ResourceNames, Availability::ReadOnly),
-    desc(Column::BaselineStart, Availability::ReadOnly),
-    desc(Column::BaselineFinish, Availability::ReadOnly),
-    desc(Column::FinishVariance, Availability::ReadOnly),
-    desc(Column::Mode, Availability::ReadOnly),
-];
+/// Disponibilité d'un champ au lot L6 (H-UI-117, liste) : les 14 colonnes
+/// d'avant la passe gardent la leur (modifiables là où la table l'était
+/// déjà) ; les coûts sont grisés ([`COSTS_REASON`]) ; les autres champs
+/// s'affichent en lecture seule, vides, jusqu'au lot L7 qui sert leurs
+/// valeurs et fixe leur disponibilité finale.
+#[must_use]
+pub const fn availability(column: Column) -> Availability {
+    match column {
+        Column::Name
+        | Column::Duration
+        | Column::Start
+        | Column::Finish
+        | Column::Predecessors
+        | Column::PercentComplete => Availability::Ready,
+        Column::Cost
+        | Column::FixedCost
+        | Column::ActualCost
+        | Column::RemainingCost
+        | Column::BaselineCost
+        | Column::CostVariance => Availability::Unavailable(COSTS_REASON),
+        _ => Availability::ReadOnly,
+    }
+}
+
+/// Catalogue complet des champs de tâche (H-UI-117) : les 14 colonnes
+/// d'avant la passe ([`Column::ALL`]) puis les champs de
+/// [`Column::FIELDS`], dans l'ordre de l'énumération ; les champs
+/// personnalisés sont ajoutés par le lot L9.
+static CATALOG: std::sync::LazyLock<Vec<FieldDesc>> = std::sync::LazyLock::new(|| {
+    Column::ALL
+        .into_iter()
+        .chain(Column::FIELDS)
+        .map(|column| desc(column, availability(column)))
+        .collect()
+});
 
 /// Champs proposés par le sélecteur, dans l'ordre du catalogue.
 #[must_use]
 pub fn catalog() -> &'static [FieldDesc] {
-    &CATALOG
+    CATALOG.as_slice()
+}
+
+/// Entrée du catalogue d'une colonne (`None` : champ hors catalogue, comme
+/// un champ personnalisé avant le lot L9).
+#[must_use]
+pub fn describe(column: Column) -> Option<&'static FieldDesc> {
+    catalog().iter().find(|d| d.column == column)
 }
 
 /// Catégorie d'une colonne (H-UI-117).
@@ -297,16 +321,59 @@ pub fn search(query: &str, lang: Language, aliases: &BTreeMap<CustomFieldId, Str
     out
 }
 
-/// Sélecteur de champ ouvert (H-UI-114, servi par le lot L6) : rang
-/// d'insertion, recherche et entrée en surbrillance.
+/// Fenêtre de colonne ouverte (H-UI-114, H-UI-115, lot L6) : sélecteur de
+/// champ (insertion au rang `at`) ou, si `settings` est posé, « Paramètres
+/// de champ » de la colonne de rang `at`. Une seule à la fois, hébergée par
+/// `ViewTransient::picker` (contrat L0) : la fenêtre « Paramètres de champ »
+/// n'a pas de `DialogKind` (préférence d'affichage, aucun brouillon du
+/// document), elle partage donc l'emplacement du sélecteur.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FieldPicker {
-    /// Rang d'insertion dans `UiState.columns`.
+    /// Rang d'insertion dans `UiState.columns` (sélecteur) ou rang de la
+    /// colonne réglée (`settings`).
     pub at: usize,
     /// Texte de recherche.
     pub query: String,
-    /// Rang de l'entrée en surbrillance dans la liste filtrée.
+    /// Rang de l'entrée en surbrillance parmi les entrées choisissables
+    /// de la liste filtrée ([`choices`]).
     pub highlighted: usize,
+    /// Focus à donner à la zone de saisie à la prochaine image (ouverture).
+    pub focus_pending: bool,
+    /// « Paramètres de champ » ouverts (H-UI-115) à la place du sélecteur.
+    pub settings: Option<Box<crate::dialog::field_settings::FieldSettingsDraft>>,
+}
+
+impl FieldPicker {
+    /// Sélecteur ouvert pour une insertion au rang `at`, recherche vide,
+    /// première entrée en surbrillance, focus à la recherche.
+    #[must_use]
+    pub fn insert_at(at: usize) -> Self {
+        Self {
+            at,
+            focus_pending: true,
+            ..Self::default()
+        }
+    }
+}
+
+/// Entrées choisissables du sélecteur pour la recherche `query` : champs
+/// trouvés ([`search`]) qui ne sont pas grisés, dans l'ordre d'affichage
+/// (par catégorie, puis ordre du catalogue). C'est la liste que ↑/↓
+/// parcourent et qu'Entrée insère (H-UI-114).
+#[must_use]
+pub fn choices(query: &str, lang: Language, aliases: &BTreeMap<CustomFieldId, String>) -> Vec<Column> {
+    let found = search(query, lang, aliases);
+    let mut out = Vec::with_capacity(found.len());
+    for cat in FieldCategory::ALL {
+        out.extend(found.iter().copied().filter(|c| {
+            category(*c) == cat
+                && !matches!(
+                    describe(*c).map(|d| d.availability),
+                    Some(Availability::Unavailable(_))
+                )
+        }));
+    }
+    out
 }
 
 /// Textes posés par le lot L0 pour l'insertion de colonnes, servis par le
@@ -369,14 +436,15 @@ mod tests {
     use crate::column::Column;
     use crate::i18n::{Language, Texts};
 
-    /// H-UI-117 (L0) : chaque colonne au plus une fois ; chaque titre (de
-    /// tous les champs, catégories et textes posés) traduit en français et
-    /// en anglais ; le catalogue L0 couvre les 14 colonnes.
+    /// H-UI-117 : chaque colonne au plus une fois ; chaque titre (de tous
+    /// les champs, catégories et textes posés) traduit en français et en
+    /// anglais ; le catalogue (lot L6) couvre les 14 colonnes et les champs
+    /// de [`Column::FIELDS`].
     #[test]
     fn field_catalog_unique() {
         let columns: BTreeSet<Column> = catalog().iter().map(|d| d.column).collect();
         assert_eq!(columns.len(), catalog().len());
-        assert_eq!(columns, Column::ALL.into_iter().collect());
+        assert_eq!(columns, Column::ALL.into_iter().chain(Column::FIELDS).collect());
         let mut ids: Vec<crate::i18n::TextId> = Column::ALL
             .into_iter()
             .chain(Column::FIELDS)
@@ -416,12 +484,15 @@ mod tests {
     fn field_search_accents() {
         let none = BTreeMap::new();
         assert_eq!(fold("Durée ŒUVRE"), "duree oeuvre");
-        assert_eq!(search("duree", Language::Fr, &none), [Column::Duration]);
-        assert_eq!(search("DURÉE", Language::Fr, &none), [Column::Duration]);
-        assert_eq!(search("duration", Language::En, &none), [Column::Duration]);
+        let first = |q: &str, lang| search(q, lang, &none).first().copied();
+        assert_eq!(first("duree", Language::Fr), Some(Column::Duration));
+        assert_eq!(first("DURÉE", Language::Fr), Some(Column::Duration));
+        assert_eq!(first("duration", Language::En), Some(Column::Duration));
+        assert!(search("duree", Language::Fr, &none).contains(&Column::RemainingDuration));
         assert_eq!(search("", Language::Fr, &none).len(), catalog().len());
-        let found = search("référence", Language::Fr, &none);
-        assert_eq!(found, [Column::BaselineStart, Column::BaselineFinish]);
+        let found = search("fin de référence", Language::Fr, &none);
+        assert_eq!(found.first(), Some(&Column::BaselineFinish));
+        assert!(found.contains(&Column::Baseline10Finish));
         assert_eq!(search("zzz", Language::Fr, &none).len(), 0);
         let lot = CustomFieldId::new(CustomKind::Text, 1).unwrap();
         let aliases = BTreeMap::from([(lot, "Lot à bâtir".to_owned())]);

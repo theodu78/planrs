@@ -540,16 +540,25 @@ pub(crate) fn dropdown_contents(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, cmd: R
     }
 }
 
-/// Une case par colonne de [`Column::ALL`] (ID et Nom grisées), comme le
-/// menu du titre de colonne (J7, lot L6).
+/// Colonnes (Format → Colonnes, liste du ruban ; seconde passe UX, lot
+/// L6, COL-02) : « Insérer une colonne », « Paramètres de champ… »
+/// (commandes partagées du ruban), puis les cases d'affichage des colonnes
+/// de [`Column::ALL`] (ID et Nom grisées) dans un sous-menu « Affichage du
+/// tableau ».
 fn column_choices(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
-    for column in Column::ALL {
-        let mut visible = fc.state.shown(column);
-        let check = egui::Checkbox::new(&mut visible, fc.texts.get(column.title()));
-        if ui.add_enabled(column.hideable(), check).clicked() {
-            fc.actions.push(Action::ToggleColumn(column));
+    twin_cmd(ui, fc, RibbonCmd::InsertColumn);
+    twin_cmd(ui, fc, RibbonCmd::FieldSettings);
+    ui.separator();
+    let texts = fc.texts;
+    ui.menu_button(texts.get(TextId::MenuTableDisplay), |ui| {
+        for column in Column::ALL {
+            let mut visible = fc.state.shown(column);
+            let check = egui::Checkbox::new(&mut visible, fc.texts.get(column.title()));
+            if ui.add_enabled(column.hideable(), check).clicked() {
+                fc.actions.push(Action::ToggleColumn(column));
+            }
         }
-    }
+    });
 }
 
 /// Entrée d'un sous-menu de la vue des tâches, raccourci de `binding`.

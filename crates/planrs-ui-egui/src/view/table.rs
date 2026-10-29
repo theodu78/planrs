@@ -22,7 +22,7 @@ use planrs_render::style::RowBanding;
 use super::main_view::HBarSpec;
 use super::task_view::TaskViewOp;
 use super::{FrameCtx, Pane, RowDrag, SelectDrag};
-use crate::action::{Action, CellOp, DialogKind, PressMode, PressTarget, SelectOp};
+use crate::action::{Action, CellOp, ColumnOp, DialogKind, PressMode, PressTarget, SelectOp};
 use crate::column::{CellAlign, Column};
 use crate::edit::{EditState, TableEdit, commit_edit, editable, initial_text, text_language};
 use crate::geom::index_to_f32;
@@ -96,6 +96,9 @@ pub struct TaskSheet<'a> {
     /// Triangles de repli (J8, lot L9) : un cran de retrait de plus pour
     /// chaque nom, où se dessine le triangle des récapitulatives.
     outline: bool,
+    /// Alignements des données choisis dans « Paramètres de champ »
+    /// (H-UI-115) ; vide le plus souvent.
+    aligns: Vec<(Column, CellAlign)>,
 }
 
 impl<'a> TaskSheet<'a> {
@@ -107,6 +110,10 @@ impl<'a> TaskSheet<'a> {
             columns: visible_columns(state),
             texts,
             outline: false,
+            aligns: state
+                .visible_columns()
+                .filter_map(|c| c.align.map(|align| (c.column, align)))
+                .collect(),
         }
     }
 
@@ -152,7 +159,10 @@ impl Sheet for TaskSheet<'_> {
     }
 
     fn align(&self, col: Column) -> CellAlign {
-        col.align()
+        self.aligns
+            .iter()
+            .find(|(c, _)| *c == col)
+            .map_or_else(|| col.align(), |(_, align)| *align)
     }
 
     fn style(&self, row: usize, col: Column, palette: &Palette) -> CellStyle {
@@ -199,16 +209,87 @@ impl Sheet for TaskSheet<'_> {
 /// en-tête de colonne, en points (H-UI-99 : ±4 px).
 pub const RESIZE_GRIP: f32 = 4.0;
 
-/// En-tête de la table : fond, titres des colonnes visibles (centrés,
-/// tronqués), séparateurs verticaux et trait bas, décalés de `scroll_x`
-/// (défilement horizontal de la table, J7 lot L6).
+/// Colonne « Ajouter une nouvelle colonne » en bout de table (H-UI-114) :
+/// affichée à partir du lot L10 ; les tests du lot L6 l'allument par
+/// [`set_add_column_slot`].
+pub const SHOW_ADD_COLUMN: bool = false;
+
+/// Largeur de la colonne « Ajouter une nouvelle colonne » (H-UI-114).
+pub const ADD_COLUMN_W: f32 = 120.0;
+
+/// Clé de la bascule de la colonne « Ajouter une nouvelle colonne ».
+fn add_column_id() -> Id {
+    Id::unique("planrs.table.add_column")
+}
+
+/// Allume ou éteint la colonne « Ajouter une nouvelle colonne » pour ce
+/// contexte (tests du lot L6 ; par défaut [`SHOW_ADD_COLUMN`]).
+pub fn set_add_column_slot(ctx: &egui::Context, on: bool) {
+    ctx.data_mut(|data| data.insert_temp(add_column_id(), on));
+}
+
+/// La colonne « Ajouter une nouvelle colonne » est-elle affichée ?
+#[must_use]
+pub fn add_column_slot(ctx: &egui::Context) -> bool {
+    ctx.data(|data| data.get_temp::<bool>(add_column_id()))
+        .unwrap_or(SHOW_ADD_COLUMN)
+}
+
+/// Clé, dans la mémoire d'egui, des colonnes sélectionnées entières à la
+/// dernière image (bloc de cellules sur toutes les lignes affichées),
+/// écrite par [`paint_body`] et lue par l'en-tête (H-UI-116).
+fn whole_columns_id() -> Id {
+    Id::unique("planrs.table.whole_columns")
+}
+
+/// Clé du déplacement de colonne en cours (H-UI-116).
+fn column_move_id() -> Id {
+    Id::unique("planrs.table.column_move")
+}
+
+/// Déplacement d'une colonne par son en-tête (H-UI-116), de l'appui au
+/// relâcher ; tenu dans la mémoire d'egui (vue seulement).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ColumnMove {
+    /// Colonne appuyée.
+    column: Column,
+    /// Rang de départ, place du trait d'insertion, refus.
+    drag: crate::column::ColumnDrag,
+    /// Seuil de glisser franchi.
+    armed: bool,
+}
+
+/// Déplacement de colonne en cours, s'il y en a un (tests).
+#[must_use]
+pub fn column_move(ctx: &egui::Context) -> Option<crate::column::ColumnDrag> {
+    ctx.data(|data| data.get_temp::<ColumnMove>(column_move_id()))
+        .filter(|m| m.armed)
+        .map(|m| m.drag)
+}
+
+/// Titres affichés et alignements de titre des colonnes visibles
+/// (« Paramètres de champ », H-UI-115).
+fn header_titles(fc: &FrameCtx<'_>) -> Vec<(Column, String, CellAlign)> {
+    fc.state
+        .visible_columns()
+        .map(|c| (c.column, c.display_title(fc.texts), c.title_align()))
+        .collect()
+}
+
+/// En-tête de la table : fond, titres des colonnes visibles (titre et
+/// alignement de « Paramètres de champ », centrés par défaut, tronqués),
+/// séparateurs verticaux et trait bas, décalés de `scroll_x` (défilement
+/// horizontal de la table, J7 lot L6).
 ///
 /// Chaque titre est une zone d'appui et de glisser (« Colonne Durée ») :
 /// l'appui sélectionne la colonne entière, le glisser plusieurs colonnes,
-/// le titre de l'ID tout (H-UI-90, `drag` : glisser de sélection) ; son
-/// clic droit ouvre le menu des colonnes ([`column_menu`]) ; le bord droit de
-/// chaque titre se glisse pour changer la largeur de la colonne
-/// (`Action::SetColumnWidth`, bornée par `UiState::set_column_width`).
+/// le titre de l'ID tout (H-UI-90, `drag` : glisser de sélection) ; sur une
+/// colonne déjà sélectionnée entière, le glisser la **déplace** (H-UI-116,
+/// trait d'insertion, Échap annule) ; son clic droit ouvre le menu des
+/// colonnes ([`column_menu`]) ; le bord droit de chaque titre se glisse
+/// pour changer la largeur de la colonne (`Action::SetColumnWidth`, bornée
+/// par `UiState::set_column_width`). En bout de table, la colonne « Ajouter
+/// une nouvelle colonne » ([`add_column_slot`]) ouvre le sélecteur.
 pub fn paint_header(
     ui: &mut egui::Ui,
     fc: &mut FrameCtx<'_>,
@@ -228,11 +309,24 @@ pub fn paint_header(
     painter.rect_filled(rect, 0.0, palette.header_bg);
     shapes = shapes.saturating_add(1);
     let columns = visible_columns(fc.state);
-    let texts = fc.texts;
-    let (edges, titles) = grid::paint_titles(
+    let titles = header_titles(fc);
+    let title_of = |column: Column| {
+        titles
+            .iter()
+            .find(|(c, _, _)| *c == column)
+            .map_or_else(String::new, |(_, title, _)| title.clone())
+    };
+    let align_of = |column: Column| {
+        titles
+            .iter()
+            .find(|(c, _, _)| *c == column)
+            .map_or(CellAlign::Center, |(_, _, align)| *align)
+    };
+    let (edges, drawn) = grid::paint_titles_aligned(
         &painter,
         &columns,
-        |column: Column| texts.get(column.title()),
+        title_of,
+        align_of,
         palette,
         HeaderPlace {
             rect,
@@ -241,14 +335,36 @@ pub fn paint_header(
         },
         &font,
     );
-    shapes = shapes.saturating_add(titles);
+    shapes = shapes.saturating_add(drawn);
+    let whole: Vec<Column> = ui
+        .ctx()
+        .data(|data| data.get_temp::<Vec<Column>>(whole_columns_id()))
+        .unwrap_or_default();
     for &(column, left, right) in &edges {
         let cell = Rect::from_min_max(pos2(left, rect.top()), pos2(right, rect.bottom())).intersect(clip);
         if cell.is_positive() {
-            header_cell(ui, fc, column, cell, drag);
+            let title = title_of(column);
+            let movable = whole.contains(&column);
+            header_cell(
+                ui,
+                fc,
+                &HeaderHit {
+                    column,
+                    cell,
+                    title: &title,
+                    movable,
+                },
+                drag,
+            );
         }
     }
     drag_over_headers(ui, fc, &edges, drag);
+    shapes = shapes.saturating_add(track_column_move(ui, &painter, fc, &edges, rect));
+    if add_column_slot(ui.ctx()) && !fc.state.chart_only {
+        let content: f32 = columns.iter().map(|(_, w)| f32::from(*w)).sum();
+        let left = rect.left() - scroll_x + content;
+        shapes = shapes.saturating_add(add_column_header(ui, &painter, fc, left, rect, clip, &font));
+    }
     painter.hline(
         rect.x_range(),
         rect.bottom() - 0.5,
@@ -260,6 +376,139 @@ pub fn paint_header(
     for (column, cell_left, right) in edges {
         resize_grip(ui, fc, column, cell_left, right, rect, clip);
     }
+}
+
+/// Titre grisé et zone de clic de la colonne « Ajouter une nouvelle
+/// colonne » (H-UI-114) à partir de l'abscisse `left` : un clic ouvre le
+/// sélecteur pour une insertion en fin de table. Rend le nombre de formes.
+fn add_column_header(
+    ui: &egui::Ui,
+    painter: &Painter,
+    fc: &mut FrameCtx<'_>,
+    left: f32,
+    rect: Rect,
+    clip: Rect,
+    font: &egui::FontId,
+) -> usize {
+    let slot = Rect::from_min_max(pos2(left, rect.top()), pos2(left + ADD_COLUMN_W, rect.bottom()));
+    let hit = slot.intersect(clip);
+    if !slot.is_finite() || !hit.is_positive() {
+        return 0;
+    }
+    let texts = fc.texts;
+    let label = texts.get(TextId::AddNewColumn);
+    let max_w = ADD_COLUMN_W - 2.0 * fc.metrics.pad_x;
+    let galley = grid::truncated_galley(painter, &label, font.clone(), max_w);
+    let size = galley.size();
+    let x = grid::aligned_x(CellAlign::Center, left, ADD_COLUMN_W, fc.metrics.pad_x, size.x);
+    painter.galley(
+        pos2(x, rect.center().y - size.y * 0.5),
+        galley,
+        fc.palette.text_weak,
+    );
+    painter.vline(
+        slot.right() - 0.5,
+        rect.y_range(),
+        Stroke::new(1.0, fc.palette.grid_major),
+    );
+    let response = ui.interact(hit, Id::unique("planrs.table.add_column.hit"), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label.clone()));
+    if response.clicked() {
+        fc.actions.push(Action::Column(ColumnOp::OpenPicker {
+            at: fc.state.columns.len(),
+        }));
+    }
+    2
+}
+
+/// Rang d'une colonne dans `UiState.columns` (ordre d'affichage).
+fn rank_of(fc: &FrameCtx<'_>, column: Column) -> Option<usize> {
+    fc.state.columns.iter().position(|c| c.column == column)
+}
+
+/// Rang devant lequel une colonne glissée irait, pointeur en `x` (bord des
+/// titres dessinés `edges`) : avant la première colonne dont le milieu est
+/// à droite de `x`, sinon après la dernière dessinée ; et abscisse du trait
+/// d'insertion. `None` sans titre dessiné ou `x` non fini.
+fn insertion_rank(fc: &FrameCtx<'_>, edges: &[(Column, f32, f32)], x: f32) -> Option<(usize, f32)> {
+    if !x.is_finite() {
+        return None;
+    }
+    for &(column, left, right) in edges {
+        if x < left.midpoint(right) {
+            return rank_of(fc, column).map(|rank| (rank, left));
+        }
+    }
+    let &(last, _, right) = edges.last()?;
+    rank_of(fc, last).map(|rank| (rank.saturating_add(1), right))
+}
+
+/// Déplacement de colonne en cours (H-UI-116) : seuil de glisser, trait
+/// d'insertion vertical de 2 px, curseur (interdit devant l'ID), Échap
+/// annule ; au relâcher, `ColumnOp::Move` si la place change et n'est pas
+/// refusée. Rend le nombre de formes.
+fn track_column_move(
+    ui: &egui::Ui,
+    painter: &Painter,
+    fc: &mut FrameCtx<'_>,
+    edges: &[(Column, f32, f32)],
+    rect: Rect,
+) -> usize {
+    let id = column_move_id();
+    let Some(mut moving) = ui.ctx().data(|data| data.get_temp::<ColumnMove>(id)) else {
+        return 0;
+    };
+    let clear = |ui: &egui::Ui| ui.ctx().data_mut(|data| data.remove::<ColumnMove>(id));
+    if rank_of(fc, moving.column) != Some(moving.drag.from) {
+        clear(ui);
+        return 0;
+    }
+    if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        clear(ui);
+        return 0;
+    }
+    let (down, pos) = ui.input(|i| (i.pointer.primary_down(), i.pointer.interact_pos()));
+    let pos = pos.filter(|p| p.is_finite());
+    if !down {
+        clear(ui);
+        let to = moving.drag.to;
+        let from = moving.drag.from;
+        if moving.armed && !moving.drag.refused && to != from && to != from.saturating_add(1) {
+            let to = if to > from { to.saturating_sub(1) } else { to };
+            fc.actions.push(Action::Column(ColumnOp::Move { from, to }));
+        }
+        return 0;
+    }
+    let Some(p) = pos else {
+        return 0;
+    };
+    if !moving.armed {
+        let threshold = ui.ctx().options(|o| o.input_options.max_click_dist);
+        moving.armed = ui
+            .input(|i| i.pointer.press_origin())
+            .filter(|o| o.is_finite())
+            .is_some_and(|o| o.distance(p) >= threshold);
+    }
+    let mut shapes = 0;
+    if moving.armed
+        && let Some((to, x)) = insertion_rank(fc, edges, p.x)
+    {
+        moving.drag.to = to;
+        moving.drag.refused = to == 0;
+        let icon = if moving.drag.refused {
+            egui::CursorIcon::NotAllowed
+        } else {
+            egui::CursorIcon::Grabbing
+        };
+        ui.ctx().set_cursor_icon(icon);
+        if !moving.drag.refused && x.is_finite() {
+            let line = Rect::from_min_max(pos2(x - 1.0, rect.top()), pos2(x + 1.0, rect.bottom()));
+            painter.rect_filled(line, 0.0, fc.palette.cursor);
+            shapes = 1;
+        }
+    }
+    ui.ctx().data_mut(|data| data.insert_temp(id, moving));
+    shapes
 }
 
 /// Mode d'un appui de sélection d'après les modificateurs (H-UI-87) :
@@ -281,17 +530,32 @@ fn pressed_now(ui: &egui::Ui, response: &Response) -> bool {
     ui.input(|i| i.pointer.primary_pressed()) && (response.is_pointer_button_down_on() || response.clicked())
 }
 
+/// Titre de colonne touché à une image.
+struct HeaderHit<'t> {
+    /// Colonne.
+    column: Column,
+    /// Rectangle du titre (découpé).
+    cell: Rect,
+    /// Titre affiché.
+    title: &'t str,
+    /// Colonne sélectionnée entière à la dernière image : l'appui suivi
+    /// d'un glisser la déplace (H-UI-116).
+    movable: bool,
+}
+
 /// Zone d'un titre de colonne : nœud d'accessibilité, menu des colonnes
 /// au clic droit, appui de sélection (H-UI-90 : colonne entière ; Maj :
 /// de l'ancre de colonnes à celle-ci ; titre de l'ID : tout) qui laisse le
-/// clavier à la table (H-UI-101).
-fn header_cell(
-    ui: &egui::Ui,
-    fc: &mut FrameCtx<'_>,
-    column: Column,
-    cell: Rect,
-    drag: &mut Option<SelectDrag>,
-) {
+/// clavier à la table (H-UI-101). Sur une colonne déjà sélectionnée
+/// entière (hors ID), l'appui ouvre un déplacement (H-UI-116) au lieu d'un
+/// glisser de sélection.
+fn header_cell(ui: &egui::Ui, fc: &mut FrameCtx<'_>, hit: &HeaderHit<'_>, drag: &mut Option<SelectDrag>) {
+    let &HeaderHit {
+        column,
+        cell,
+        title,
+        movable,
+    } = hit;
     let texts = fc.texts;
     let response = ui.interact(
         cell,
@@ -314,7 +578,25 @@ fn header_cell(
                 target: PressTarget::ColumnHeader,
                 mode,
             }));
-            if pressed {
+            let from = rank_of(fc, column);
+            if pressed
+                && movable
+                && mode == PressMode::Replace
+                && !fc.state.chart_only
+                && let Some(from) = from
+            {
+                let moving = ColumnMove {
+                    column,
+                    drag: crate::column::ColumnDrag {
+                        from,
+                        to: from,
+                        refused: false,
+                    },
+                    armed: false,
+                };
+                ui.ctx()
+                    .data_mut(|data| data.insert_temp(column_move_id(), moving));
+            } else if pressed {
                 *drag = Some(SelectDrag {
                     target: PressTarget::ColumnHeader,
                     last: (RowRef::Blank, column),
@@ -326,10 +608,7 @@ fn header_cell(
         fc.actions.push(Action::FocusPane(Pane::Table));
     }
     response.widget_info(|| {
-        let label = texts.get_args(
-            TextId::ColumnHeaderLabel,
-            &[("column", Arg::Str(texts.get(column.title()).into()))],
-        );
+        let label = texts.get_args(TextId::ColumnHeaderLabel, &[("column", Arg::Str(title.into()))]);
         egui::WidgetInfo::labeled(egui::Role::ColumnHeader, true, label)
     });
     let mut chosen = None;
@@ -392,19 +671,47 @@ fn drag_over_headers(
     }
 }
 
-/// Menu des colonnes (clic droit sur un titre, H-UI-99) : « Masquer la
-/// colonne » (grisé pour l'ID et le Nom, H-UI-12), « Ajuster la largeur »
+/// Menu des colonnes (clic droit sur un titre, H-UI-114, H-UI-99) :
+/// « Insérer une colonne » (sélecteur, insertion à gauche de la colonne
+/// cliquée), « Masquer la colonne » (grisé pour l'ID et le Nom, H-UI-12),
+/// « Paramètres de champ… » (H-UI-115), « Ajuster la largeur »
 /// (`FitColumn`, comme le double-clic sur la bordure), « Trier par ordre
 /// croissant » et « décroissant » (`TaskViewOp::SetSort` sur la clé de
 /// [`crate::column::sort_key`] ; grisés, raison en info-bulle, pour une
-/// colonne sans clé de tri), puis une case par colonne, cochée si elle est
-/// visible (ID et Nom cochés et grisés). Rend l'action choisie.
+/// colonne sans clé de tri). Les cases de colonnes d'avant la seconde passe
+/// sont remplacées par l'insertion (H-UI-114) ; elles restent au menu
+/// Format → Colonnes → Affichage du tableau. Rend l'action choisie.
 fn column_menu(ui: &mut egui::Ui, fc: &FrameCtx<'_>, clicked: Column) -> Option<Action> {
     let texts = fc.texts;
     let mut chosen = None;
+    let rank = rank_of(fc, clicked);
+    if ui
+        .add_enabled(
+            rank.is_some(),
+            egui::Button::new(texts.get(TextId::MenuInsertColumn)),
+        )
+        .clicked()
+        && let Some(at) = rank
+    {
+        chosen = Some(Action::Column(ColumnOp::OpenPicker { at }));
+    }
     let hide = egui::Button::new(texts.get(TextId::ColumnMenuHide));
-    if ui.add_enabled(clicked.hideable(), hide).clicked() {
-        chosen = Some(Action::ToggleColumn(clicked));
+    if ui.add_enabled(clicked.hideable(), hide).clicked()
+        && let Some(at) = rank
+    {
+        chosen = Some(Action::Column(ColumnOp::Hide(at)));
+    }
+    let mut settings = egui::Button::new(texts.get(TextId::MenuFieldSettings));
+    if let Some(shortcut) = crate::keymap::shortcut_for_os(
+        crate::keymap::Binding::Ui(crate::keymap::UiBinding::FieldSettings),
+        ui.ctx().os(),
+    ) {
+        settings = settings.shortcut_text(crate::keymap::shortcut_text(ui.ctx(), shortcut));
+    }
+    if ui.add_enabled(rank.is_some(), settings).clicked()
+        && let Some(at) = rank
+    {
+        chosen = Some(Action::Column(ColumnOp::OpenSettings(at)));
     }
     if ui.button(texts.get(TextId::MenuFitColumn)).clicked() {
         chosen = Some(Action::FitColumn(clicked));
@@ -421,14 +728,6 @@ fn column_menu(ui: &mut egui::Ui, fc: &FrameCtx<'_>, clicked: Column) -> Option<
             && let Some(key) = key
         {
             chosen = Some(sort_action(fc, key, descending));
-        }
-    }
-    ui.separator();
-    for column in Column::ALL {
-        let mut visible = fc.state.shown(column);
-        let check = egui::Checkbox::new(&mut visible, texts.get(column.title()));
-        if ui.add_enabled(column.hideable(), check).clicked() {
-            chosen = Some(Action::ToggleColumn(column));
         }
     }
     chosen
@@ -527,11 +826,17 @@ pub fn width_from_drag(dx: f32) -> Option<u16> {
 /// table : bande unie (comme avant J7) tant que les colonnes tiennent, barre
 /// glissable sinon. Rend le défilement demandé, en points.
 pub fn paint_hbar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, track: Rect, scroll_x: f32, view_w: f32) -> f32 {
+    let slot = if add_column_slot(ui.ctx()) && !fc.state.chart_only {
+        ADD_COLUMN_W
+    } else {
+        0.0
+    };
     let content_w: f32 = fc
         .state
         .visible_columns()
         .map(|state| f32::from(state.width))
-        .sum();
+        .sum::<f32>()
+        + slot;
     if !track.is_finite() || !track.is_positive() {
         return 0.0;
     }
@@ -629,6 +934,19 @@ pub fn paint_body(
     // Bloc de la sélection (H-UI-103) : une résolution par image, lue par
     // le dessin de chaque ligne ; survol hors de tout glisser.
     let marks = BlockMarks::of(fc, &sheet, cursor, cols_left);
+    // Colonnes sélectionnées entières (bloc de cellules sur toutes les
+    // lignes affichées), lues par l'en-tête de l'image suivante pour le
+    // déplacement d'une colonne (H-UI-116).
+    let whole: Vec<Column> = if marks.block.kind == crate::selection::SelectionKind::Cells
+        && blank > 0
+        && marks.block.rows.len() == blank
+    {
+        marks.block.columns.clone()
+    } else {
+        Vec::new()
+    };
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(whole_columns_id(), whole));
     let hover = hovered_row(
         ui,
         clip,
@@ -725,6 +1043,15 @@ pub fn paint_body(
         clip,
         palette.grid,
     ));
+    // Bord droit de la colonne « Ajouter une nouvelle colonne » (H-UI-114).
+    if add_column_slot(ui.ctx()) && !fc.state.chart_only {
+        let content: f32 = sheet.columns().iter().map(|(_, w)| f32::from(*w)).sum();
+        let x = cols_left + content + ADD_COLUMN_W;
+        if x.is_finite() && x > clip.left() && x <= clip.right() {
+            painter.vline(x - 0.5, clip.y_range(), Stroke::new(1.0, palette.grid));
+            shapes = shapes.saturating_add(1);
+        }
+    }
     // Bordure du bloc, au-dessus des séparateurs, sous le cadre actif.
     shapes = shapes.saturating_add(marks.paint_borders(&painter, palette, origin, row_h, &range, &mut drawn));
     ui.ctx()

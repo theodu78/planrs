@@ -2962,6 +2962,9 @@ fn show_view(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view_state: &mut ViewTran
         ViewKind::ResourceUsage => view::usage::show(ui, fc, view_state),
         ViewKind::Gantt => view::main_view::show(ui, fc, view_state),
     }
+    // Seconde passe UX (lot L6) : sélecteur de champ ou « Paramètres de
+    // champ » ouverts, au-dessus de la vue.
+    crate::dialog::field_picker::show(ui.ctx(), fc, &mut view_state.picker);
 }
 
 /// Pose les refus d'une tentative ; l'onglet affiché passe au premier

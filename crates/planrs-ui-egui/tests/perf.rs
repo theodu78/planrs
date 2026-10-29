@@ -2156,7 +2156,11 @@ fn splitter_drag_5000() {
         -1.0,
     ));
     bench.settle(&mut app);
-    assert_eq!(app.state.details.height, 280, "détails glissés de 60 points");
+    assert_eq!(
+        app.state.details.height,
+        planrs_ui_egui::state::DETAILS_HEIGHT_DEFAULT + 60,
+        "détails glissés de 60 points"
+    );
     assert_budget("splitter_drag_5000", samples, bench.last);
 }
 // --- UX2 L5 --- (`details_follow_5000`)

@@ -189,24 +189,6 @@ fn sentence(error: &CommandError, project: Option<&Project>, texts: &Texts) -> O
                 &[("detail", Arg::Str(list.join(", ").into()))],
             ))
         }
-        codes::CALENDAR_NAME_TAKEN => Some(texts.get(TextId::RefusalCalendarNameTaken)),
-        codes::CALENDAR_EXCEPTION_OVERLAP => Some(texts.get(TextId::RefusalCalendarOverlap)),
-        codes::CALENDAR_BASE_NOT_BASE => Some(texts.get(TextId::RefusalCalendarBase)),
-        codes::RESOURCE_HAS_ASSIGNMENTS => Some(texts.get(TextId::RefusalResourceAssigned)),
-        codes::ASSIGNMENT_KIND_MISMATCH => Some(texts.get(TextId::RefusalAssignmentKind)),
-        codes::TASK_OUTLINE_REFUSED => Some(texts.get(TextId::RefusalOutline)),
-        codes::TASK_HAS_CHILDREN => Some(texts.get(TextId::RefusalHasChildren)),
-        codes::TASK_MOVE_INTO_SUBTREE => Some(texts.get(TextId::RefusalMoveIntoSubtree)),
-        codes::TASK_COMPUTED_FIELD => Some(texts.get(TextId::RefusalComputedField)),
-        codes::ASSIGNMENT_ZERO_UNITS_FIXED_WORK => Some(texts.get(TextId::RefusalZeroUnitsFixedWork)),
-        codes::TASK_FIXED_WORK_EFFORT_DRIVEN => Some(texts.get(TextId::RefusalFixedWorkEffortDriven)),
-        codes::PROGRESS_SUMMARY_NOT_EDITABLE => Some(texts.get(TextId::RefusalProgressSummary)),
-        codes::PROGRESS_INACTIVE => Some(texts.get(TextId::RefusalProgressInactive)),
-        codes::PROGRESS_INVALID_ORDER => Some(texts.get(TextId::RefusalProgressOrder)),
-        codes::PROGRESS_DURATION_BELOW_ACTUAL => Some(texts.get(TextId::RefusalDurationBelowActual)),
-        codes::BASELINE_EXISTS => Some(texts.get(TextId::RefusalBaselineExists)),
-        codes::LINK_SELF => Some(texts.get(TextId::RefusalLinkSelf)),
-        codes::LINK_SUMMARY_DESCENDANT => Some(texts.get(TextId::RefusalLinkSummary)),
         codes::TASK_NOT_FOUND => {
             // L'UID d'une tâche introuvable n'a pas d'ID : phrase générique,
             // l'UID reste dans le détail.
@@ -226,10 +208,35 @@ fn sentence(error: &CommandError, project: Option<&Project>, texts: &Texts) -> O
             let first = diags.first()?;
             Some(diagnostic_sentence(first, project, texts))
         }
-        codes::PARAM_INVALID => Some(texts.get(TextId::RefusalParamInvalid)),
-        codes::LIMIT_EXCEEDED => Some(texts.get(TextId::RefusalLimitExceeded)),
-        _ => None,
+        _ => fixed_sentence(code).map(|id| texts.get(id)),
     }
+}
+
+/// Phrase sans argument d'un code du registre, s'il en a une.
+fn fixed_sentence(code: &str) -> Option<TextId> {
+    Some(match code {
+        codes::CALENDAR_NAME_TAKEN => TextId::RefusalCalendarNameTaken,
+        codes::CALENDAR_EXCEPTION_OVERLAP => TextId::RefusalCalendarOverlap,
+        codes::CALENDAR_BASE_NOT_BASE => TextId::RefusalCalendarBase,
+        codes::RESOURCE_HAS_ASSIGNMENTS => TextId::RefusalResourceAssigned,
+        codes::ASSIGNMENT_KIND_MISMATCH => TextId::RefusalAssignmentKind,
+        codes::TASK_OUTLINE_REFUSED => TextId::RefusalOutline,
+        codes::TASK_HAS_CHILDREN => TextId::RefusalHasChildren,
+        codes::TASK_MOVE_INTO_SUBTREE => TextId::RefusalMoveIntoSubtree,
+        codes::TASK_COMPUTED_FIELD => TextId::RefusalComputedField,
+        codes::ASSIGNMENT_ZERO_UNITS_FIXED_WORK => TextId::RefusalZeroUnitsFixedWork,
+        codes::TASK_FIXED_WORK_EFFORT_DRIVEN => TextId::RefusalFixedWorkEffortDriven,
+        codes::PROGRESS_SUMMARY_NOT_EDITABLE => TextId::RefusalProgressSummary,
+        codes::PROGRESS_INACTIVE => TextId::RefusalProgressInactive,
+        codes::PROGRESS_INVALID_ORDER => TextId::RefusalProgressOrder,
+        codes::PROGRESS_DURATION_BELOW_ACTUAL => TextId::RefusalDurationBelowActual,
+        codes::BASELINE_EXISTS => TextId::RefusalBaselineExists,
+        codes::LINK_SELF => TextId::RefusalLinkSelf,
+        codes::LINK_SUMMARY_DESCENDANT => TextId::RefusalLinkSummary,
+        codes::PARAM_INVALID => TextId::RefusalParamInvalid,
+        codes::LIMIT_EXCEEDED => TextId::RefusalLimitExceeded,
+        _ => return None,
+    })
 }
 
 /// Saisie illisible : le morceau fautif s'il est connu (unité, type de

@@ -1496,6 +1496,8 @@ column-id-stays-first = La colonne N° reste la première.
 menu-table-display = Affichage du tableau
 
 # --- UX2 L7 ---
+edit-error-bad-choice = Valeur non reconnue : saisissez { $detail }.
+edit-error-computed = Ce champ est calculé.
 
 # --- UX2 L8 ---
 

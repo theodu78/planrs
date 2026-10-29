@@ -1497,6 +1497,8 @@ column-id-stays-first = The ID column stays first.
 menu-table-display = Table display
 
 # --- UX2 L7 ---
+edit-error-bad-choice = Value not recognized: enter { $detail }.
+edit-error-computed = This field is calculated.
 
 # --- UX2 L8 ---
 

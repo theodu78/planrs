@@ -14,18 +14,23 @@
 use std::collections::BTreeMap;
 
 use planrs_automation::command::{
-    ConstraintKindJson, DurationJson, LagJson, LinkKey, LinkSpec, LinkTypeJson, PercentJson, ProgressUpdate,
-    SetConstraint, TaskAdd, TaskUpdate,
+    ConstraintKindJson, DurationJson, LagJson, LinkKey, LinkSpec, LinkTypeJson, ModeJson, PercentJson,
+    ProgressUpdate, SetConstraint, SetDeadline, TaskAdd, TaskTypeJson, TaskUpdate,
 };
 use planrs_automation::text::{
     self, DateRole, PredecessorRef, TextContext, TextError, format_date, format_duration,
     format_predecessors, parse_date, parse_duration, parse_percent, parse_predecessors,
 };
 use planrs_automation::{Batch, Command, CommandError, Patch, Placement, Session, TaskRef};
-use planrs_core::{Constraint, Duration, Lag, LinkType, Moment, Project, SchedulingMode, Task, TaskUid};
+use planrs_core::{
+    Constraint, ConstraintKind, Duration, Lag, LinkType, Moment, Project, Schedule, SchedulingMode, Task,
+    TaskOutcome, TaskType, TaskUid,
+};
 
 use crate::app::OpenDocument;
 use crate::column::Column;
+use crate::field::{fold, with_choice_labels};
+use crate::format::{CONSTRAINT_KINDS, TASK_TYPES, format_notes_line};
 use crate::i18n::{Arg, Language, TextId, Texts, error_text_id};
 use crate::rows::{Row, RowKind, RowModel};
 
@@ -45,6 +50,14 @@ pub enum EditError {
     /// Saisie vide sur une cellule qui ne peut pas être vide (R-259 : durée,
     /// date d'une tâche manuelle ou d'une récapitulative…).
     NotClearable,
+    /// Champ calculé de la seconde passe UX (marges, dates au plus tôt et
+    /// au plus tard, lignes de base, écarts…, H-UI-117) : « Ce champ est
+    /// calculé. »
+    Computed,
+    /// Valeur d'un champ à choix non reconnue (mode, type de contrainte, de
+    /// tâche, Oui/Non) ; porte la liste des valeurs admises, dans la langue
+    /// de la saisie.
+    BadChoice(String),
 }
 
 impl From<TextError> for EditError {
@@ -68,6 +81,11 @@ impl EditError {
             }
             Self::NotEditable => texts.get(TextId::EditErrorNotEditable),
             Self::NotClearable => texts.get_args(TextId::CellsNotClearable, &[("count", Arg::Count(1))]),
+            Self::Computed => texts.get(TextId::EditErrorComputed),
+            Self::BadChoice(choices) => texts.get_args(
+                TextId::EditErrorBadChoice,
+                &[("detail", Arg::Str(choices.clone().into()))],
+            ),
         }
     }
 }
@@ -149,7 +167,12 @@ impl TableEdit {
 }
 
 /// Colonnes éditables : Nom, Durée, Début, Fin, Prédécesseurs, % achevé
-/// (J7, lot L6).
+/// (J7, lot L6) ; seconde passe UX (lot L7, H-UI-117) : les champs dont le
+/// registre a la commande — Mode, Jalon, Notes, Actif, Successeurs, Type et
+/// Date de contrainte, Échéance, Type de tâche, Pilotée par l'effort,
+/// Travail (`task.update`, `task.set_constraint`, `task.set_deadline`,
+/// liens), % travail achevé, Début et Fin réels, Durées réelle et restante
+/// (`progress.update`). La priorité n'a pas d'opération : lecture seule.
 #[must_use]
 pub const fn editable(column: Column) -> bool {
     matches!(
@@ -160,6 +183,36 @@ pub const fn editable(column: Column) -> bool {
             | Column::Finish
             | Column::Predecessors
             | Column::PercentComplete
+            | Column::Mode
+            | Column::Milestone
+            | Column::Notes
+            | Column::Active
+            | Column::Successors
+            | Column::ConstraintType
+            | Column::ConstraintDate
+            | Column::Deadline
+            | Column::TaskType
+            | Column::EffortDriven
+            | Column::Work
+            | Column::PercentWorkComplete
+            | Column::ActualStart
+            | Column::ActualFinish
+            | Column::ActualDuration
+            | Column::RemainingDuration
+    )
+}
+
+/// Champs d'avancement (`progress.update`) : ni sur une récapitulative, ni
+/// sur une tâche exclue du calcul (R-216).
+const fn progress_field(column: Column) -> bool {
+    matches!(
+        column,
+        Column::PercentComplete
+            | Column::PercentWorkComplete
+            | Column::ActualStart
+            | Column::ActualFinish
+            | Column::ActualDuration
+            | Column::RemainingDuration
     )
 }
 
@@ -175,8 +228,18 @@ pub fn writable(row: &Row, column: Column) -> bool {
     }
     match row.kind {
         RowKind::Null => false,
-        RowKind::Summary => matches!(column, Column::Name | Column::Predecessors),
-        RowKind::Excluded => column != Column::PercentComplete,
+        // Récapitulative (lot L7 : champs saisis qui ne se calculent pas
+        // depuis les sous-tâches) ; hypothèse H-UI-117.
+        RowKind::Summary => matches!(
+            column,
+            Column::Name
+                | Column::Predecessors
+                | Column::Successors
+                | Column::Notes
+                | Column::Active
+                | Column::Deadline
+        ),
+        RowKind::Excluded => !progress_field(column),
         RowKind::Leaf | RowKind::Milestone => true,
     }
 }
@@ -237,7 +300,7 @@ pub fn clear_cell(task: &Task, project: &Project, column: Column, ctx: &TextCont
             vec![Command::TaskUpdate(op)]
         }
         Column::Predecessors => replace_links(task, &[], project, ctx),
-        Column::PercentComplete if is_summary(project, uid) || !task.active => {
+        Column::PercentComplete | Column::PercentWorkComplete if is_summary(project, uid) || !task.active => {
             return CellClear::NotClearable;
         }
         Column::PercentComplete if task.progress.percent_complete.get() == 0 => Vec::new(),
@@ -262,8 +325,35 @@ pub fn clear_cell(task: &Task, project: &Project, column: Column, ctx: &TextCont
                 })]
             }
         }
-        // Colonnes calculées ou en lecture seule, et champs de la seconde
-        // passe UX (à partir du lot L7).
+        // Seconde passe UX (lot L7, R-259 amendée).
+        Column::Notes if task.notes.is_empty() => Vec::new(),
+        Column::Notes => {
+            let mut op = update(uid);
+            op.notes = Patch::Set(String::new());
+            vec![Command::TaskUpdate(op)]
+        }
+        Column::Successors => replace_successors(task, &[], project, ctx),
+        Column::ConstraintType | Column::ConstraintDate => {
+            let default = Constraint::default_for(&project.anchor);
+            if task.constraint == default {
+                Vec::new()
+            } else {
+                vec![set_constraint(TaskRef::Uid(uid), default.kind(), None)]
+            }
+        }
+        Column::Deadline if task.deadline.is_none() => Vec::new(),
+        Column::Deadline => vec![Command::TaskSetDeadline(SetDeadline {
+            uid: TaskRef::Uid(uid),
+            deadline: Patch::Clear,
+        })],
+        Column::PercentWorkComplete if task.progress.percent_work_complete.get() == 0 => Vec::new(),
+        Column::PercentWorkComplete => {
+            let mut op = progress(TaskRef::Uid(uid));
+            op.percent_work_complete = Some(percent_json("0"));
+            vec![Command::ProgressUpdate(op)]
+        }
+        // Colonnes calculées ou en lecture seule ; champs à choix, travail,
+        // dates et durées réelles : toujours une valeur (non effaçables).
         _ => return CellClear::NotClearable,
     };
     if ops.is_empty() {
@@ -280,18 +370,31 @@ pub fn clear_cell(task: &Task, project: &Project, column: Column, ctx: &TextCont
 /// registre (bandeau).
 fn percent_update(uid: TaskUid, buffer: &str, ctx: &TextContext) -> Result<Command, EditError> {
     parse_percent(buffer, ctx)?;
+    let mut op = progress(TaskRef::Uid(uid));
+    op.percent_complete = Some(percent_json(buffer));
+    Ok(Command::ProgressUpdate(op))
+}
+
+/// Pourcentage envoyé en texte avec `%` (que le registre exige ; « 50 » se
+/// lit « 50% »).
+fn percent_json(buffer: &str) -> PercentJson {
     let trimmed = buffer.trim();
     let text = if trimmed.ends_with('%') {
         trimmed.to_owned()
     } else {
         format!("{trimmed}%")
     };
-    Ok(Command::ProgressUpdate(ProgressUpdate {
-        task: TaskRef::Uid(uid),
-        percent_complete: Some(PercentJson {
-            value: None,
-            text: Some(text),
-        }),
+    PercentJson {
+        value: None,
+        text: Some(text),
+    }
+}
+
+/// `progress.update` vide sur `target`.
+const fn progress(target: TaskRef) -> ProgressUpdate {
+    ProgressUpdate {
+        task: target,
+        percent_complete: None,
         actual_start: None,
         actual_finish: None,
         actual_duration: None,
@@ -299,7 +402,55 @@ fn percent_update(uid: TaskUid, buffer: &str, ctx: &TextContext) -> Result<Comma
         percent_work_complete: None,
         actual_work: None,
         physical_percent_complete: None,
-    }))
+    }
+}
+
+/// `task.set_constraint` de `kind` (date pour un type daté).
+fn set_constraint(target: TaskRef, kind: ConstraintKind, date: Option<Moment>) -> Command {
+    Command::TaskSetConstraint(SetConstraint {
+        uid: target,
+        kind: ConstraintKindJson::from(kind),
+        date,
+    })
+}
+
+/// Langue de l'interface correspondant à la langue des textes du moteur.
+const fn ui_language(lang: text::Language) -> Language {
+    match lang {
+        text::Language::Fr => Language::Fr,
+        text::Language::En => Language::En,
+    }
+}
+
+/// Lit un champ à choix (H-UI-117) : libellé exact (sans casse ni
+/// accents), sinon préfixe d'un seul libellé (« man » ⇒ « Manuelle ») ;
+/// sinon refus portant la liste des valeurs admises.
+fn choose<T: Copy>(buffer: &str, options: &[(&str, T)]) -> Result<T, EditError> {
+    let needle = fold(buffer.trim());
+    let refuse = || {
+        let list: Vec<&str> = options.iter().map(|(label, _)| *label).collect();
+        EditError::BadChoice(list.join(", "))
+    };
+    if needle.is_empty() {
+        return Err(refuse());
+    }
+    if let Some((_, value)) = options.iter().find(|(label, _)| fold(label) == needle) {
+        return Ok(*value);
+    }
+    let mut found = options
+        .iter()
+        .filter(|(label, _)| fold(label).starts_with(&needle));
+    match (found.next(), found.next()) {
+        (Some((_, value)), None) => Ok(*value),
+        _ => Err(refuse()),
+    }
+}
+
+/// Oui ou Non dans la langue `lang`.
+fn read_yes_no(buffer: &str, lang: text::Language) -> Result<bool, EditError> {
+    with_choice_labels(ui_language(lang), |l, _| {
+        choose(buffer, &[(l.yes.as_str(), true), (l.no.as_str(), false)])
+    })
 }
 
 /// Langue des textes du moteur correspondant à la langue de l'interface.
@@ -323,8 +474,13 @@ const fn empty_batch(lang: text::Language) -> Batch {
 
 /// `task.update` vide sur `uid`.
 const fn update(uid: TaskUid) -> TaskUpdate {
+    update_ref(TaskRef::Uid(uid))
+}
+
+/// `task.update` vide sur `target` (UID ou étiquette du lot).
+const fn update_ref(target: TaskRef) -> TaskUpdate {
     TaskUpdate {
-        uid: TaskRef::Uid(uid),
+        uid: target,
         name: Patch::Keep,
         duration: Patch::Keep,
         milestone: Patch::Keep,
@@ -434,6 +590,285 @@ fn replace_links(task: &Task, wanted: &[Resolved], project: &Project, ctx: &Text
     ops
 }
 
+/// Successeurs de `task` (UID, type, décalage), dans l'ordre des ID.
+fn successors(task: &Task, project: &Project) -> Vec<Resolved> {
+    let pred = task.uid();
+    project
+        .tasks
+        .iter()
+        .filter_map(|t| {
+            t.predecessors
+                .iter()
+                .find(|link| link.predecessor == pred)
+                .map(|link| (t.uid(), link.kind, link.lag))
+        })
+        .collect()
+}
+
+/// Lot qui remplace les successeurs de `task` par `wanted` (colonne
+/// Successeurs, lot L7) : liens inverses de [`replace_links`], même
+/// non-changement (R-260 a, d).
+fn replace_successors(
+    task: &Task,
+    wanted: &[Resolved],
+    project: &Project,
+    ctx: &TextContext,
+) -> Vec<Command> {
+    let pred = task.uid();
+    let old = successors(task, project);
+    let mut ops = Vec::new();
+    for (succ, _, _) in &old {
+        if !wanted.iter().any(|(uid, _, _)| uid == succ) {
+            ops.push(Command::LinkRemove(LinkKey {
+                pred: TaskRef::Uid(pred),
+                succ: TaskRef::Uid(*succ),
+            }));
+        }
+    }
+    for (succ, kind, lag) in wanted {
+        let spec = LinkSpec {
+            pred: TaskRef::Uid(pred),
+            succ: TaskRef::Uid(*succ),
+            kind: Some(LinkTypeJson::from(*kind)),
+            lag: Some(lag_json(lag, ctx)),
+        };
+        match old.iter().find(|(uid, _, _)| uid == succ) {
+            Some((_, k, l)) if k == kind && l == lag => {}
+            Some(_) => ops.push(Command::LinkUpdate(spec)),
+            None => ops.push(Command::LinkAdd(spec)),
+        }
+    }
+    ops
+}
+
+/// Début et fin planifiés d'une tâche (moteur), s'il y en a.
+fn planned(schedule: &Schedule, uid: TaskUid) -> Option<(Moment, Moment)> {
+    match schedule.tasks.get(&uid) {
+        Some(TaskOutcome::Scheduled(s)) => Some((s.start, s.finish)),
+        _ => None,
+    }
+}
+
+/// Travail saisi : un nombre sans unité est en heures (unité par défaut du
+/// travail dans MS Project, hypothèse H-UI-117).
+fn work_text(buffer: &str) -> String {
+    let trimmed = buffer.trim();
+    if trimmed.chars().any(char::is_alphabetic) {
+        trimmed.to_owned()
+    } else {
+        format!("{trimmed}h")
+    }
+}
+
+/// Opérations d'une saisie dans un champ de la seconde passe UX (lot L7,
+/// H-UI-117) sur `target` : la tâche `task` (non-changement de R-260 d
+/// appliqué) ou, sans tâche, celle que le lot crée sur la ligne vide
+/// (étiquette). Lectures par `planrs_automation::text` ; commandes du
+/// registre existantes.
+#[allow(
+    clippy::too_many_lines,
+    reason = "une branche par champ modifiable de H-UI-117"
+)]
+fn field_ops(
+    target: &TaskRef,
+    task: Option<&Task>,
+    column: Column,
+    buffer: &str,
+    session: &Session,
+    ctx: &TextContext,
+    lang: text::Language,
+) -> Result<Vec<Command>, EditError> {
+    let project = session.project();
+    let same = |eq: &dyn Fn(&Task) -> bool| task.is_some_and(eq);
+    let mut op = update_ref(target.clone());
+    match column {
+        Column::Notes => {
+            if same(&|t| t.notes == buffer || format_notes_line(&t.notes) == buffer) {
+                return Ok(Vec::new());
+            }
+            op.notes = Patch::Set(buffer.to_owned());
+        }
+        Column::Milestone | Column::Active | Column::EffortDriven => {
+            let value = read_yes_no(buffer, lang)?;
+            let current = |t: &Task| match column {
+                Column::Milestone => t.milestone,
+                Column::Active => t.active,
+                _ => t.effort_driven,
+            };
+            if same(&|t| current(t) == value) {
+                return Ok(Vec::new());
+            }
+            match column {
+                Column::Milestone => op.milestone = Patch::Set(value),
+                Column::Active => op.active = Patch::Set(value),
+                _ => op.effort_driven = Patch::Set(value),
+            }
+        }
+        Column::Mode => {
+            let manual = with_choice_labels(ui_language(lang), |l, _| {
+                choose(
+                    buffer,
+                    &[(l.mode_auto.as_str(), false), (l.mode_manual.as_str(), true)],
+                )
+            })?;
+            if same(&|t| matches!(t.mode, SchedulingMode::Manual { .. }) == manual) {
+                return Ok(Vec::new());
+            }
+            op.mode = Patch::Set(if manual { ModeJson::Manual } else { ModeJson::Auto });
+        }
+        Column::TaskType => {
+            let wanted = with_choice_labels(ui_language(lang), |_, fl| {
+                let options: Vec<(&str, TaskType)> =
+                    TASK_TYPES.iter().map(|t| (fl.task_type(*t), *t)).collect();
+                choose(buffer, &options)
+            })?;
+            if same(&|t| t.task_type == wanted) {
+                return Ok(Vec::new());
+            }
+            op.task_type = Patch::Set(TaskTypeJson::from(wanted));
+        }
+        Column::ConstraintType => {
+            let kind = with_choice_labels(ui_language(lang), |_, fl| {
+                let options: Vec<(&str, ConstraintKind)> =
+                    CONSTRAINT_KINDS.iter().map(|k| (fl.constraint(*k), *k)).collect();
+                choose(buffer, &options)
+            })?;
+            if same(&|t| t.constraint.kind() == kind) {
+                return Ok(Vec::new());
+            }
+            // Type daté : date en place, sinon début (ou fin) planifié de la
+            // tâche, comme MS Project quand on change le type seul.
+            let date = if kind.is_dated() {
+                let current = task.and_then(|t| t.constraint.date());
+                let planned = task.and_then(|t| planned(session.schedule(), t.uid()));
+                let pick = planned.map(|(start, finish)| if kind.is_start_side() { start } else { finish });
+                Some(current.or(pick).ok_or(EditError::Text(TextError::BadDate))?)
+            } else {
+                None
+            };
+            return Ok(vec![set_constraint(target.clone(), kind, date)]);
+        }
+        Column::ConstraintDate => {
+            // Type non daté : « Début au plus tôt le » (« le plus tard
+            // possible » : « Fin au plus tard le ») ; hypothèse H-UI-117.
+            let kind = match task.map_or(ConstraintKind::AsSoonAsPossible, |t| t.constraint.kind()) {
+                ConstraintKind::AsSoonAsPossible => ConstraintKind::StartNoEarlierThan,
+                ConstraintKind::AsLateAsPossible => ConstraintKind::FinishNoLaterThan,
+                dated => dated,
+            };
+            let role = if kind.is_start_side() {
+                DateRole::Start
+            } else {
+                DateRole::Finish
+            };
+            let date = parse_date(buffer, role, ctx)?;
+            if same(&|t| t.constraint.kind() == kind && t.constraint.date() == Some(date)) {
+                return Ok(Vec::new());
+            }
+            return Ok(vec![set_constraint(target.clone(), kind, Some(date))]);
+        }
+        Column::Deadline => {
+            let date = parse_date(buffer, DateRole::Finish, ctx)?;
+            if same(&|t| t.deadline == Some(date)) {
+                return Ok(Vec::new());
+            }
+            return Ok(vec![Command::TaskSetDeadline(SetDeadline {
+                uid: target.clone(),
+                deadline: Patch::Set(date),
+            })]);
+        }
+        Column::Work => {
+            let text = work_text(buffer);
+            let read = parse_duration(&text, ctx)?;
+            if same(&|t| t.work.minutes() == read.minutes()) {
+                return Ok(Vec::new());
+            }
+            op.work = Patch::Set(duration_text(&text));
+        }
+        Column::PercentWorkComplete => {
+            let read = parse_percent(buffer, ctx)?;
+            if same(&|t| t.progress.percent_work_complete == read) {
+                return Ok(Vec::new());
+            }
+            let mut p = progress(target.clone());
+            p.percent_work_complete = Some(percent_json(buffer));
+            return Ok(vec![Command::ProgressUpdate(p)]);
+        }
+        Column::ActualStart | Column::ActualFinish => {
+            let start = column == Column::ActualStart;
+            let role = if start { DateRole::Start } else { DateRole::Finish };
+            let date = parse_date(buffer, role, ctx)?;
+            let current = |t: &Task| {
+                if start {
+                    t.progress.actual_start
+                } else {
+                    t.progress.actual_finish
+                }
+            };
+            if same(&|t| current(t) == Some(date)) {
+                return Ok(Vec::new());
+            }
+            let mut p = progress(target.clone());
+            if start {
+                p.actual_start = Some(date);
+            } else {
+                p.actual_finish = Some(date);
+            }
+            return Ok(vec![Command::ProgressUpdate(p)]);
+        }
+        Column::ActualDuration | Column::RemainingDuration => {
+            let actual = column == Column::ActualDuration;
+            let read = parse_duration(buffer, ctx)?;
+            let current = |t: &Task| {
+                if actual {
+                    t.progress.actual_duration
+                } else {
+                    t.progress.remaining_duration
+                }
+            };
+            if same(&|t| current(t) == read.minutes()) {
+                return Ok(Vec::new());
+            }
+            let mut p = progress(target.clone());
+            if actual {
+                p.actual_duration = Some(duration_text(buffer));
+            } else {
+                p.remaining_duration = Some(duration_text(buffer));
+            }
+            return Ok(vec![Command::ProgressUpdate(p)]);
+        }
+        Column::Successors => {
+            let wanted = read_predecessors(buffer, ctx, project)?;
+            return Ok(match task {
+                Some(t) => replace_successors(t, &wanted, project, ctx),
+                None => wanted
+                    .iter()
+                    .map(|(succ, kind, lag)| {
+                        Command::LinkAdd(LinkSpec {
+                            pred: target.clone(),
+                            succ: TaskRef::Uid(*succ),
+                            kind: Some(LinkTypeJson::from(*kind)),
+                            lag: Some(lag_json(lag, ctx)),
+                        })
+                    })
+                    .collect(),
+            });
+        }
+        _ => return Err(not_editable(column)),
+    }
+    Ok(vec![Command::TaskUpdate(op)])
+}
+
+/// Refus d'une colonne non modifiable : champ calculé de la seconde passe
+/// UX (« Ce champ est calculé. »), colonne calculée d'avant sinon.
+const fn not_editable(column: Column) -> EditError {
+    if column.ordinal().is_none() {
+        EditError::Computed
+    } else {
+        EditError::NotEditable
+    }
+}
+
 /// Lot de commandes d'une saisie validée (fonction pure).
 ///
 /// - texte inchangé depuis l'ouverture → lot vide ;
@@ -487,7 +922,7 @@ fn commit(
 ) -> Result<Batch, EditError> {
     let mut batch = empty_batch(lang);
     if !editable(state.column) {
-        return Err(EditError::NotEditable);
+        return Err(not_editable(state.column));
     }
     if state.original.as_deref() == Some(state.buffer.as_str()) {
         return Ok(batch);
@@ -550,13 +985,23 @@ fn commit(
                     batch.ops = vec![op];
                     return Ok(batch);
                 }
-                // Colonnes calculées ou en lecture seule, et champs de la seconde
-                // passe UX (à partir du lot L7).
-                _ => return Err(EditError::NotEditable),
+                // Champs de la seconde passe UX (lot L7).
+                column => {
+                    batch.ops = field_ops(
+                        &TaskRef::Uid(uid),
+                        Some(task),
+                        column,
+                        buffer,
+                        session,
+                        &ctx,
+                        lang,
+                    )?;
+                    return Ok(batch);
+                }
             }
             vec![Command::TaskUpdate(op)]
         }
-        None => blank_row_ops(state.column, buffer, &ctx, project)?,
+        None => blank_row_ops(state.column, buffer, &ctx, session, lang)?,
     };
     Ok(batch)
 }
@@ -593,8 +1038,10 @@ fn blank_row_ops(
     column: Column,
     buffer: &str,
     ctx: &TextContext,
-    project: &Project,
+    session: &Session,
+    lang: text::Language,
 ) -> Result<Vec<Command>, EditError> {
+    let project = session.project();
     if buffer.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -621,9 +1068,18 @@ fn blank_row_ops(
             }));
             return Ok(ops);
         }
-        // Colonnes calculées ou en lecture seule, et champs de la seconde
-        // passe UX (à partir du lot L7).
-        _ => return Err(EditError::NotEditable),
+        // Champs de la seconde passe UX (lot L7) : la tâche créée (étiquette
+        // du lot) reçoit la valeur ; % achevé refusé (ci-dessous).
+        column if editable(column) && column != Column::PercentComplete => {
+            let target = TaskRef::Label(BLANK_LABEL.to_owned());
+            let fields = field_ops(&target, None, column, buffer, session, ctx, lang)?;
+            add.label = Some(BLANK_LABEL.to_owned());
+            let mut ops = vec![Command::TaskAdd(add)];
+            ops.extend(fields);
+            return Ok(ops);
+        }
+        // Colonnes calculées ou en lecture seule.
+        column => return Err(not_editable(column)),
     }
     Ok(vec![Command::TaskAdd(add)])
 }
@@ -717,6 +1173,22 @@ pub fn initial_text_in(
             |(_, finish)| date_edit_text(finish, display, DateRole::Finish, ctx),
         ),
         Column::Predecessors => predecessors_edit_text(task, project, display, ctx),
+        // Dates saisies de la seconde passe UX (lot L7).
+        Column::ConstraintDate => task.constraint.date().map_or_else(
+            || display.to_owned(),
+            |m| {
+                let role = if task.constraint.kind().is_start_side() {
+                    DateRole::Start
+                } else {
+                    DateRole::Finish
+                };
+                date_edit_text(m, display, role, ctx)
+            },
+        ),
+        Column::Deadline => task.deadline.map_or_else(
+            || display.to_owned(),
+            |m| date_edit_text(m, display, DateRole::Finish, ctx),
+        ),
         _ => display.to_owned(),
     }
 }
@@ -891,6 +1363,85 @@ mod tests {
         s.apply(&batch, ApplyMode::Commit).unwrap();
         let last = s.project().tasks.iter().last().unwrap();
         assert_eq!(last.predecessors.len(), 2);
+    }
+
+    /// Lot L7 : Successeurs sur la ligne vide ⇒ tâche créée (étiquette) et
+    /// liens vers les successeurs ; appliqué, la nouvelle tâche précède 3.
+    #[test]
+    fn l7_blank_row_successors_and_fields() {
+        let got = ops(&typed(None, Column::Successors, "3"));
+        assert!(
+            matches!(&got[..], [Command::TaskAdd(_), Command::LinkAdd(_)]),
+            "{got:?}"
+        );
+        let mut s = session();
+        let batch = Batch {
+            format_version: 1,
+            lang: None,
+            ops: got,
+            label: None,
+        };
+        s.apply(&batch, ApplyMode::Commit).unwrap();
+        let new = s.project().tasks.iter().last().unwrap().uid();
+        let three = s.project().tasks.get(uid(3)).unwrap();
+        assert!(three.predecessors.iter().any(|l| l.predecessor == new));
+        // Autres champs sur la ligne vide : tâche créée puis modifiée par
+        // son étiquette.
+        let got = ops(&typed(None, Column::Notes, "À voir"));
+        assert!(
+            matches!(&got[..], [Command::TaskAdd(_), Command::TaskUpdate(_)]),
+            "{got:?}"
+        );
+        let got = ops(&typed(None, Column::Deadline, "15/03/2027"));
+        assert!(
+            matches!(&got[..], [Command::TaskAdd(_), Command::TaskSetDeadline(_)]),
+            "{got:?}"
+        );
+        // Champ calculé : refus.
+        let err = commit_edit(
+            &typed(None, Column::FreeSlack, "1j"),
+            &session(),
+            TextLanguage::Fr,
+        )
+        .unwrap_err();
+        assert_eq!(err, EditError::Computed);
+    }
+
+    /// Lot L7 : champs d'avancement par `progress.update`, valeur identique
+    /// sans opération ; travail sans unité lu en heures ; le texte affiché
+    /// (« 16 heures ») se relit.
+    #[test]
+    fn l7_progress_and_work_fields() {
+        for (column, text) in [
+            (Column::PercentWorkComplete, "50"),
+            (Column::ActualStart, "09/11/2026"),
+            (Column::ActualDuration, "2j"),
+            (Column::RemainingDuration, "3j"),
+        ] {
+            let got = ops(&typed(Some(uid(3)), column, text));
+            assert!(
+                matches!(&got[..], [Command::ProgressUpdate(_)]),
+                "{column:?} {got:?}"
+            );
+        }
+        assert_eq!(ops(&typed(Some(uid(3)), Column::PercentWorkComplete, "0")), []);
+        assert_eq!(super::work_text(" 16 "), "16h");
+        assert_eq!(super::work_text("2j"), "2j");
+        let got = ops(&typed(Some(uid(3)), Column::Work, "16 heures"));
+        assert!(matches!(&got[..], [Command::TaskUpdate(_)]), "{got:?}");
+        // Mode, type et contrainte : préfixes.
+        let read = |column, text: &str| {
+            commit_edit(&typed(Some(uid(3)), column, text), &session(), TextLanguage::Fr)
+        };
+        assert!(read(Column::Mode, "auto").is_ok());
+        assert!(read(Column::ConstraintType, "dès").is_ok());
+        assert!(read(Column::TaskType, "capa").is_ok());
+        // « Fin au plus tôt le » et « Fin au plus tard le » : ambigu.
+        assert!(matches!(
+            read(Column::ConstraintType, "fin au plus t"),
+            Err(EditError::BadChoice(_))
+        ));
+        assert!(read(Column::ConstraintType, "fin au plus ta").is_ok());
     }
 
     /// R-260 a : un ID répété ne donne qu'un lien, la dernière occurrence

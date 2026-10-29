@@ -14,8 +14,8 @@ use std::fmt::Write as _;
 use chrono::Datelike as _;
 use planrs_automation::text::{self, DisplayLabels};
 use planrs_core::{
-    ConversionFactors, Duration, DurationUnit, Lag, Link, LinkType, Minutes, Moment, Percent, Project,
-    TimeBasis, Weekday,
+    ConstraintKind, ConversionFactors, Duration, DurationUnit, Lag, Link, LinkType, Minutes, Moment, Percent,
+    Priority, Project, TaskType, TimeBasis, Weekday,
 };
 
 /// Libellé d'une unité au singulier et au pluriel (« jour » / « jours »).
@@ -287,6 +287,120 @@ pub fn format_date(m: Moment, l: &FormatLabels) -> String {
 pub fn format_slack(m: Minutes, f: &ConversionFactors, l: &FormatLabels) -> String {
     format_minutes_as(m, DurationUnit::Day, TimeBasis::Working, f, l)
 }
+
+/// Libellés des champs à choix de la seconde passe UX (lot L7, H-UI-117) :
+/// types de contrainte et de tâche, résolus une fois par langue
+/// (`field::field_labels`) ; Oui, Non et les modes viennent de
+/// [`FormatLabels`]. Champs nommés : aucune indexation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FieldLabels {
+    /// « Dès que possible ».
+    pub asap: String,
+    /// « Le plus tard possible ».
+    pub alap: String,
+    /// « Doit commencer le ».
+    pub mso: String,
+    /// « Doit finir le ».
+    pub mfo: String,
+    /// « Début au plus tôt le ».
+    pub snet: String,
+    /// « Début au plus tard le ».
+    pub snlt: String,
+    /// « Fin au plus tôt le ».
+    pub fnet: String,
+    /// « Fin au plus tard le ».
+    pub fnlt: String,
+    /// « Capacité fixe ».
+    pub fixed_units: String,
+    /// « Durée fixe ».
+    pub fixed_duration: String,
+    /// « Travail fixe ».
+    pub fixed_work: String,
+}
+
+impl FieldLabels {
+    /// Nom d'un type de contrainte.
+    #[must_use]
+    pub fn constraint(&self, kind: ConstraintKind) -> &str {
+        match kind {
+            ConstraintKind::AsSoonAsPossible => &self.asap,
+            ConstraintKind::AsLateAsPossible => &self.alap,
+            ConstraintKind::MustStartOn => &self.mso,
+            ConstraintKind::MustFinishOn => &self.mfo,
+            ConstraintKind::StartNoEarlierThan => &self.snet,
+            ConstraintKind::StartNoLaterThan => &self.snlt,
+            ConstraintKind::FinishNoEarlierThan => &self.fnet,
+            ConstraintKind::FinishNoLaterThan => &self.fnlt,
+        }
+    }
+
+    /// Nom d'un type de tâche.
+    #[must_use]
+    pub fn task_type(&self, task_type: TaskType) -> &str {
+        match task_type {
+            TaskType::FixedUnits => &self.fixed_units,
+            TaskType::FixedDuration => &self.fixed_duration,
+            TaskType::FixedWork => &self.fixed_work,
+        }
+    }
+}
+
+/// Les huit types de contrainte, dans l'ordre de la fenêtre « Informations
+/// sur la tâche » (choix de la saisie, H-UI-117).
+pub const CONSTRAINT_KINDS: [ConstraintKind; 8] = [
+    ConstraintKind::AsSoonAsPossible,
+    ConstraintKind::AsLateAsPossible,
+    ConstraintKind::MustStartOn,
+    ConstraintKind::MustFinishOn,
+    ConstraintKind::StartNoEarlierThan,
+    ConstraintKind::StartNoLaterThan,
+    ConstraintKind::FinishNoEarlierThan,
+    ConstraintKind::FinishNoLaterThan,
+];
+
+/// Les trois types de tâche.
+pub const TASK_TYPES: [TaskType; 3] = [TaskType::FixedUnits, TaskType::FixedDuration, TaskType::FixedWork];
+
+/// « Oui » ou « Non ».
+#[must_use]
+pub fn format_yes_no(value: bool, l: &FormatLabels) -> String {
+    if value { l.yes.clone() } else { l.no.clone() }
+}
+
+/// Travail en heures ouvrées (« 40 heures », « 7,5 heures »), comme la
+/// colonne Travail de MS Project (hypothèse H-UI-117 : unité par défaut du
+/// travail) ; signé pour un écart de travail.
+#[must_use]
+pub fn format_work(m: Minutes, f: &ConversionFactors, l: &FormatLabels) -> String {
+    format_minutes_as(m, DurationUnit::Hour, TimeBasis::Working, f, l)
+}
+
+/// Priorité (« 500 »).
+#[must_use]
+pub fn format_priority(p: Priority) -> String {
+    p.get().to_string()
+}
+
+/// Notes sur une ligne (colonne Notes, H-UI-117) : fins de ligne et
+/// tabulations remplacées par une espace, espaces de bord retirées ; au
+/// plus [`NOTES_LINE_CHARS`] caractères, puis « … ».
+#[must_use]
+pub fn format_notes_line(notes: &str) -> String {
+    let mut out = String::with_capacity(notes.len().min(NOTES_LINE_CHARS));
+    let mut count = 0_usize;
+    for c in notes.trim().chars() {
+        if count == NOTES_LINE_CHARS {
+            out.push('…');
+            break;
+        }
+        out.push(if c.is_control() { ' ' } else { c });
+        count = count.saturating_add(1);
+    }
+    out
+}
+
+/// Longueur affichée d'une note dans la table (le reste est tronqué).
+pub const NOTES_LINE_CHARS: usize = 255;
 
 #[cfg(test)]
 mod tests {

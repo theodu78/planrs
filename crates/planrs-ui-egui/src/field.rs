@@ -5,7 +5,8 @@
 //! [`catalog`] réduit aux 14 colonnes d'avant la passe et [`search`]
 //! (sous-chaîne sans accents ni casse, titre et alias). Le lot L6 étend le
 //! catalogue à tous les champs de [`Column::FIELDS`] (sélecteur, insertion),
-//! L7 fixe leur disponibilité finale, L9 ajoute les champs personnalisés.
+//! L7 fixe leur disponibilité finale ([`availability`]) et les libellés des
+//! champs à choix ([`field_labels`]), L9 ajoute les champs personnalisés.
 //! Aucune indexation pouvant paniquer (règle 10).
 
 use std::cell::RefCell;
@@ -14,6 +15,7 @@ use std::collections::BTreeMap;
 use planrs_core::model::custom::CustomFieldId;
 
 use crate::column::{CellAlign, Column};
+use crate::format::{FieldLabels, FormatLabels};
 use crate::i18n::{Language, TextId, Texts};
 
 /// Catégorie du sélecteur de champs (H-UI-117).
@@ -110,26 +112,21 @@ const fn desc(column: Column, availability: Availability) -> FieldDesc {
     }
 }
 
-/// Disponibilité d'un champ au lot L6 (H-UI-117, liste) : les 14 colonnes
-/// d'avant la passe gardent la leur (modifiables là où la table l'était
-/// déjà) ; les coûts sont grisés ([`COSTS_REASON`]) ; les autres champs
-/// s'affichent en lecture seule, vides, jusqu'au lot L7 qui sert leurs
-/// valeurs et fixe leur disponibilité finale.
+/// Disponibilité finale d'un champ (lot L7, H-UI-117) : modifiable si le
+/// registre a la commande qui l'écrit (`edit::editable`), grisé pour les
+/// coûts ([`COSTS_REASON`]), en lecture seule sinon (valeur calculée par
+/// le moteur, ou champ que le registre n'écrit pas : la priorité, sans
+/// opération `task.update priority`, écart signalé dans ADR-0019).
 #[must_use]
 pub const fn availability(column: Column) -> Availability {
     match column {
-        Column::Name
-        | Column::Duration
-        | Column::Start
-        | Column::Finish
-        | Column::Predecessors
-        | Column::PercentComplete => Availability::Ready,
         Column::Cost
         | Column::FixedCost
         | Column::ActualCost
         | Column::RemainingCost
         | Column::BaselineCost
         | Column::CostVariance => Availability::Unavailable(COSTS_REASON),
+        _ if crate::edit::editable(column) => Availability::Ready,
         _ => Availability::ReadOnly,
     }
 }
@@ -321,6 +318,55 @@ pub fn search(query: &str, lang: Language, aliases: &BTreeMap<CustomFieldId, Str
     out
 }
 
+/// Libellés des champs à choix d'une langue (lot L7), lus dans les
+/// textes de la fenêtre « Informations sur la tâche ».
+#[must_use]
+pub fn field_labels(texts: &Texts) -> FieldLabels {
+    FieldLabels {
+        asap: texts.get(TextId::TaskInfoConstraintAsap),
+        alap: texts.get(TextId::TaskInfoConstraintAlap),
+        mso: texts.get(TextId::TaskInfoConstraintMso),
+        mfo: texts.get(TextId::TaskInfoConstraintMfo),
+        snet: texts.get(TextId::TaskInfoConstraintSnet),
+        snlt: texts.get(TextId::TaskInfoConstraintSnlt),
+        fnet: texts.get(TextId::TaskInfoConstraintFnet),
+        fnlt: texts.get(TextId::TaskInfoConstraintFnlt),
+        fixed_units: texts.get(TextId::TaskInfoTypeFixedUnits),
+        fixed_duration: texts.get(TextId::TaskInfoTypeFixedDuration),
+        fixed_work: texts.get(TextId::TaskInfoTypeFixedWork),
+    }
+}
+
+thread_local! {
+    /// Libellés des choix et de l'affichage de la dernière langue lue par
+    /// la saisie ([`with_choice_labels`]) : une validation ne relit pas les
+    /// fichiers fluent.
+    static CHOICES: RefCell<Option<(Language, FormatLabels, FieldLabels)>> = const { RefCell::new(None) };
+}
+
+/// Appelle `f` avec les libellés d'affichage et des champs à choix de la
+/// langue `lang` (lecture d'un choix saisi, `edit::commit_edit`), gardés
+/// d'un appel à l'autre.
+pub fn with_choice_labels<R>(lang: Language, f: impl FnOnce(&FormatLabels, &FieldLabels) -> R) -> R {
+    CHOICES.with(|cell| {
+        let mut cache = cell.borrow_mut();
+        let fresh = match cache.take() {
+            Some(entry) if entry.0 == lang => entry,
+            _ => {
+                let texts = Texts::new(lang);
+                (lang, texts.format_labels().clone(), field_labels(&texts))
+            }
+        };
+        let out = f(&fresh.1, &fresh.2);
+        *cache = Some(fresh);
+        out
+    })
+}
+
+/// Textes posés par le lot L7 : refus d'un choix non reconnu, champ
+/// calculé.
+pub const L7_TEXTS: [TextId; 2] = [TextId::EditErrorBadChoice, TextId::EditErrorComputed];
+
 /// Fenêtre de colonne ouverte (H-UI-114, H-UI-115, lot L6) : sélecteur de
 /// champ (insertion au rang `at`) ou, si `settings` est posé, « Paramètres
 /// de champ » de la colonne de rang `at`. Une seule à la fois, hébergée par
@@ -454,6 +500,7 @@ mod tests {
         ids.extend(super::L6_TEXTS);
         ids.extend(super::L6_MORE_TEXTS);
         ids.extend(super::L9_TEXTS);
+        ids.extend(super::L7_TEXTS);
         ids.push(super::COSTS_REASON);
         for lang in Language::ALL {
             let texts = Texts::new(lang);

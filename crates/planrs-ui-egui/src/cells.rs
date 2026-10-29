@@ -290,7 +290,11 @@ fn parse_detail(error: &EditError, lang: TextLanguage) -> String {
             TextLanguage::Fr => format!("aucune tâche d'ID {id}"),
             TextLanguage::En => format!("no task with ID {id}"),
         },
-        EditError::NotEditable | EditError::NotClearable => String::new(),
+        EditError::BadChoice(choices) => match lang {
+            TextLanguage::Fr => format!("valeurs admises : {choices}"),
+            TextLanguage::En => format!("accepted values: {choices}"),
+        },
+        EditError::NotEditable | EditError::NotClearable | EditError::Computed => String::new(),
     }
 }
 
@@ -323,7 +327,7 @@ fn write_existing(
             }
             b.push(batch.ops);
         }
-        Err(EditError::NotEditable | EditError::NotClearable) => b.skip(),
+        Err(EditError::NotEditable | EditError::NotClearable | EditError::Computed) => b.skip(),
         Err(error) => {
             return Err(CellError::Parse {
                 id: row.id,

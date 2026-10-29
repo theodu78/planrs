@@ -197,10 +197,11 @@ fn ux2_column_op_insert_hide() {
             Column::Predecessors
         ]
     );
-    // Nouvelle colonne : vide et en lecture seule jusqu'au lot L7.
+    // Nouvelle colonne : valeur du moteur dès l'image suivante (lot L7 :
+    // travail R-184 de la tâche, sans affectation ici).
     let uid = harness.state().selection.unwrap();
     let row = harness.state().rows().unwrap().index_of(uid).unwrap();
-    assert_eq!(harness.state().rows().unwrap().text(row, Column::Work), "");
+    assert_eq!(harness.state().rows().unwrap().text(row, Column::Work), "0 heure");
     // Déjà affichée : déplacée (en fin).
     harness.state_mut().dispatch(Action::Column(ColumnOp::Insert {
         at: 99,

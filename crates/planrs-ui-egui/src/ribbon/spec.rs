@@ -255,9 +255,9 @@ impl RibbonCmd {
             | Self::TimescaleMenu
             | Self::ThemeMenu
             | Self::LanguageMenu
-            | Self::ColumnsMenu
-            // Fenêtre « Champs personnalisés » : posée par le lot L9.
-            | Self::CustomFields => return None,
+            | Self::ColumnsMenu => return None,
+            // Fenêtre « Champs personnalisés » (lot L9, H-UI-118).
+            Self::CustomFields => Action::ShowDialog(DialogKind::CustomFields),
             // Comme le menu Affichage : le style du Gantt ramène à la vue
             // Gantt ; le moteur pousse aussi `SetGanttStyle` (voir
             // [`Self::gantt_style`]).

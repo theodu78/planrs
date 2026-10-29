@@ -1891,7 +1891,8 @@ impl App {
                 | DialogKind::ProjectInformation
                 | DialogKind::Baseline
                 | DialogKind::Reschedule
-                | DialogKind::AssignResources),
+                | DialogKind::AssignResources
+                | DialogKind::CustomFields),
             ) => self.open_window(kind),
             Action::CloseDialog => self.close_dialog(),
             // Contrat J7 (lot L0) : actions câblées par leur lot.
@@ -2535,7 +2536,8 @@ impl App {
                 | DialogBody::PasteSpecial(_)
                 | DialogBody::CsvImport(_)
                 | DialogBody::Gallery(_)
-                | DialogBody::PageSetup(_),
+                | DialogBody::PageSetup(_)
+                | DialogBody::CustomFields(_),
             )
             | None => Shown::TaskInfo(task_info::Outcome::Cancel),
         };

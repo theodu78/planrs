@@ -268,11 +268,19 @@ pub fn column_move(ctx: &egui::Context) -> Option<crate::column::ColumnDrag> {
 }
 
 /// Titres affichés et alignements de titre des colonnes visibles
-/// (« Paramètres de champ », H-UI-115).
+/// (« Paramètres de champ », H-UI-115 ; alias d'un champ personnalisé
+/// relu à chaque image, H-UI-118).
 fn header_titles(fc: &FrameCtx<'_>) -> Vec<(Column, String, CellAlign)> {
+    let project = fc.doc.map(crate::app::OpenDocument::project);
     fc.state
         .visible_columns()
-        .map(|c| (c.column, c.display_title(fc.texts), c.title_align()))
+        .map(|c| {
+            (
+                c.column,
+                crate::field::display_title(c, fc.texts, project),
+                c.title_align(),
+            )
+        })
         .collect()
 }
 

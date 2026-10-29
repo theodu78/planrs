@@ -693,8 +693,9 @@ impl Column {
         }
     }
 
-    /// Titre affiché par défaut (« Durée », « Texte1 ») ; un alias de
-    /// champ personnalisé (« Lot (Texte1) », H-UI-118) est ajouté par L9.
+    /// Titre affiché par défaut (« Durée », « Texte1 ») ; avec l'alias
+    /// d'un champ personnalisé (« Lot (Texte1) », H-UI-118) :
+    /// `field::column_label`.
     #[must_use]
     pub fn label(self, texts: &crate::i18n::Texts) -> String {
         match self {
@@ -933,9 +934,10 @@ impl crate::App {
         if screen.inter() {
             font.family = egui::FontFamily::Name(crate::theme::PLAN_FAMILY.into());
         }
+        let project = self.document.as_ref().map(crate::app::OpenDocument::project);
         let title = self.state.column(column).map_or_else(
-            || column.label(&self.texts),
-            |state| state.display_title(&self.texts),
+            || crate::field::column_label(column, &self.texts, project),
+            |state| crate::field::display_title(state, &self.texts, project),
         );
         let outline = self.outline_triangles;
         let Some(rows) = self.visible_rows() else {

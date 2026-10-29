@@ -9,13 +9,12 @@
 //! `ViewTransient::picker`, qui porte aussi « Paramètres de champ »
 //! ([`super::field_settings`]) : [`show`] dessine l'un ou l'autre.
 
-use std::collections::BTreeMap;
-
-use planrs_core::model::custom::CustomFieldId;
-
 use crate::action::{Action, ColumnOp};
 use crate::column::Column;
-use crate::field::{Availability, FieldCategory, FieldPicker, category, choices, describe, search};
+use crate::field::{
+    Availability, CustomCatalog, FieldCategory, FieldPicker, category, choices_in, custom_title, describe,
+    search_in,
+};
 use crate::i18n::{TextId, Texts};
 use crate::view::FrameCtx;
 
@@ -33,15 +32,18 @@ pub fn search_id() -> egui::Id {
     egui::Id::unique("planrs.field_picker.search")
 }
 
-/// Alias des champs personnalisés cherchés par le sélecteur (servis par le
-/// lot L9 ; vides jusque-là).
-fn aliases(_fc: &FrameCtx<'_>) -> BTreeMap<CustomFieldId, String> {
-    BTreeMap::new()
+/// Champs personnalisés du document vus par le sélecteur (lot L9,
+/// H-UI-118) : alias cherchés et affichés, champs définis par le fichier
+/// absents.
+fn custom_catalog(fc: &FrameCtx<'_>) -> CustomCatalog {
+    fc.doc
+        .map(|doc| CustomCatalog::of(doc.project()))
+        .unwrap_or_default()
 }
 
-/// Libellé d'une entrée : titre du champ, « déjà affiché » s'il l'est.
-fn entry_label(texts: &Texts, column: Column, shown: bool) -> String {
-    let title = column.label(texts);
+/// Libellé d'une entrée : titre du champ (`title`), « déjà affiché » s'il
+/// l'est.
+fn entry_label(texts: &Texts, title: String, shown: bool) -> String {
     if shown {
         format!("{title} — {}", texts.get(TextId::FieldPickerShown))
     } else {
@@ -91,11 +93,11 @@ fn picker_keys(ctx: &egui::Context, picker: &mut FieldPicker, list: &[Column]) -
 fn show_picker(ctx: &egui::Context, fc: &FrameCtx<'_>, picker: &mut FieldPicker) -> PickOutcome {
     let texts = fc.texts;
     let lang = texts.language();
-    let aliases = aliases(fc);
-    let list = choices(&picker.query, lang, &aliases);
+    let custom = custom_catalog(fc);
+    let list = choices_in(&picker.query, lang, &custom);
     let mut outcome = picker_keys(ctx, picker, &list);
     let highlighted = list.get(picker.highlighted).copied();
-    let found = search(&picker.query, lang, &aliases);
+    let found = search_in(&picker.query, lang, &custom);
     let focus = std::mem::take(&mut picker.focus_pending);
     egui::Modal::new(modal_id()).show(ctx, |ui| {
         ui.set_width(340.0);
@@ -131,7 +133,13 @@ fn show_picker(ctx: &egui::Context, fc: &FrameCtx<'_>, picker: &mut FieldPicker)
                     ui.label(egui::RichText::new(texts.get(cat.title())).strong());
                     for column in entries {
                         let shown = fc.state.shown(column);
-                        let label = entry_label(texts, column, shown);
+                        let title = match column {
+                            Column::Custom(id) => {
+                                custom_title(id, texts, custom.aliases.get(&id).map(String::as_str))
+                            }
+                            _ => column.label(texts),
+                        };
+                        let label = entry_label(texts, title, shown);
                         let reason = match describe(column).map(|d| d.availability) {
                             Some(Availability::Unavailable(reason)) => Some(reason),
                             _ => None,
@@ -209,9 +217,9 @@ mod tests {
     #[test]
     fn h_ui_114_entry_label_marks_shown() {
         let texts = Texts::new(Language::Fr);
-        assert_eq!(entry_label(&texts, Column::Work, false), "Travail");
+        assert_eq!(entry_label(&texts, Column::Work.label(&texts), false), "Travail");
         assert_eq!(
-            entry_label(&texts, Column::Duration, true),
+            entry_label(&texts, Column::Duration.label(&texts), true),
             "Durée — déjà affiché"
         );
     }

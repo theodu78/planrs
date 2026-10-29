@@ -6,15 +6,20 @@
 //! (sous-chaîne sans accents ni casse, titre et alias). Le lot L6 étend le
 //! catalogue à tous les champs de [`Column::FIELDS`] (sélecteur, insertion),
 //! L7 fixe leur disponibilité finale ([`availability`]) et les libellés des
-//! champs à choix ([`field_labels`]), L9 ajoute les champs personnalisés.
+//! champs à choix ([`field_labels`]), L9 ajoute les champs personnalisés
+//! (H-UI-118 : Texte1-30, Nombre1-20, Date1-10, Indicateur1-20 dans la
+//! catégorie Personnalisés, titre « Lot (Texte1) » quand le champ a un
+//! alias, champs définis par le fichier — formule, table de choix — absents
+//! du sélecteur, [`CustomCatalog`]).
 //! Aucune indexation pouvant paniquer (règle 10).
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use planrs_core::Project;
 use planrs_core::model::custom::CustomFieldId;
 
-use crate::column::{CellAlign, Column};
+use crate::column::{CellAlign, Column, ColumnState};
 use crate::format::{FieldLabels, FormatLabels};
 use crate::i18n::{Language, TextId, Texts};
 
@@ -133,8 +138,9 @@ pub const fn availability(column: Column) -> Availability {
 
 /// Catalogue complet des champs de tâche (H-UI-117) : les 14 colonnes
 /// d'avant la passe ([`Column::ALL`]) puis les champs de
-/// [`Column::FIELDS`], dans l'ordre de l'énumération ; les champs
-/// personnalisés sont ajoutés par le lot L9.
+/// [`Column::FIELDS`], dans l'ordre de l'énumération. Les champs
+/// personnalisés (lot L9) sont à part ([`custom_catalog`]) : leur titre
+/// dépend du numéro et de l'alias du document.
 static CATALOG: std::sync::LazyLock<Vec<FieldDesc>> = std::sync::LazyLock::new(|| {
     Column::ALL
         .into_iter()
@@ -143,17 +149,119 @@ static CATALOG: std::sync::LazyLock<Vec<FieldDesc>> = std::sync::LazyLock::new(|
         .collect()
 });
 
-/// Champs proposés par le sélecteur, dans l'ordre du catalogue.
+/// Champs personnalisés de tâche (H-UI-118, lot L9) : les 80 champs de
+/// [`CustomFieldId::all`], par type puis par numéro, catégorie
+/// Personnalisés, modifiables.
+static CUSTOM_CATALOG: std::sync::LazyLock<Vec<FieldDesc>> = std::sync::LazyLock::new(|| {
+    CustomFieldId::all()
+        .map(Column::Custom)
+        .map(|column| desc(column, availability(column)))
+        .collect()
+});
+
+/// Champs proposés par le sélecteur, dans l'ordre du catalogue (sans les
+/// champs personnalisés : [`custom_catalog`]).
 #[must_use]
 pub fn catalog() -> &'static [FieldDesc] {
     CATALOG.as_slice()
 }
 
-/// Entrée du catalogue d'une colonne (`None` : champ hors catalogue, comme
-/// un champ personnalisé avant le lot L9).
+/// Champs personnalisés (H-UI-118), par type puis par numéro.
+#[must_use]
+pub fn custom_catalog() -> &'static [FieldDesc] {
+    CUSTOM_CATALOG.as_slice()
+}
+
+/// Entrée du catalogue d'une colonne, champ personnalisé compris.
 #[must_use]
 pub fn describe(column: Column) -> Option<&'static FieldDesc> {
-    catalog().iter().find(|d| d.column == column)
+    match column {
+        Column::Custom(_) => custom_catalog().iter().find(|d| d.column == column),
+        _ => catalog().iter().find(|d| d.column == column),
+    }
+}
+
+/// Champs personnalisés d'un document vus par le sélecteur et les titres
+/// (H-UI-118) : alias posés (`Project.custom_fields`) et champs définis par
+/// le fichier (formule, table de choix : R-265), que le sélecteur ne
+/// propose pas.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CustomCatalog {
+    /// Alias des champs renommés.
+    pub aliases: BTreeMap<CustomFieldId, String>,
+    /// Champs définis par le fichier : absents du sélecteur.
+    pub hidden: BTreeSet<CustomFieldId>,
+}
+
+impl CustomCatalog {
+    /// Alias et champs étrangers du projet `project`.
+    #[must_use]
+    pub fn of(project: &Project) -> Self {
+        Self {
+            aliases: aliases(project),
+            hidden: planrs_mspdi::custom::foreign_fields(project),
+        }
+    }
+}
+
+/// Alias des champs personnalisés renommés de `project` (alias vides
+/// ignorés).
+#[must_use]
+pub fn aliases(project: &Project) -> BTreeMap<CustomFieldId, String> {
+    project
+        .custom_fields
+        .iter()
+        .filter_map(|(id, def)| {
+            def.alias
+                .as_ref()
+                .filter(|a| !a.is_empty())
+                .map(|a| (*id, a.clone()))
+        })
+        .collect()
+}
+
+/// Titre d'un champ personnalisé (H-UI-118) : son nom (« Texte1 »), ou
+/// « Lot (Texte1) » s'il a l'alias « Lot ».
+#[must_use]
+pub fn custom_title(id: CustomFieldId, texts: &Texts, alias: Option<&str>) -> String {
+    let name = Column::Custom(id).label(texts);
+    match alias.filter(|a| !a.is_empty()) {
+        Some(alias) => texts.get_args(
+            TextId::CustomFieldsAliasTitle,
+            &[
+                ("alias", crate::i18n::Arg::Str(alias.to_owned().into())),
+                ("column", crate::i18n::Arg::Str(name.into())),
+            ],
+        ),
+        None => name,
+    }
+}
+
+/// Titre par défaut d'une colonne (H-UI-118) : celui du champ
+/// ([`Column::label`]), avec l'alias du document pour un champ
+/// personnalisé renommé (`project`, `None` sans document).
+#[must_use]
+pub fn column_label(column: Column, texts: &Texts, project: Option<&Project>) -> String {
+    match column {
+        Column::Custom(id) => {
+            let alias = project
+                .and_then(|p| p.custom_fields.get(&id))
+                .and_then(|def| def.alias.as_deref());
+            custom_title(id, texts, alias)
+        }
+        _ => column.label(texts),
+    }
+}
+
+/// Titre affiché d'une colonne (en-tête de la table) : celui de
+/// « Paramètres de champ » s'il est posé (H-UI-115), sinon le titre par
+/// défaut, qui suit l'alias à chaque image ([`column_label`]).
+#[must_use]
+pub fn display_title(state: &ColumnState, texts: &Texts, project: Option<&Project>) -> String {
+    state
+        .title
+        .clone()
+        .unwrap_or_else(|| column_label(state.column, texts, project))
 }
 
 /// Catégorie d'une colonne (H-UI-117).
@@ -286,36 +394,44 @@ thread_local! {
 
 /// Champs dont le titre (langue `lang`) ou l'alias contient `query`
 /// (sous-chaîne, sans accents ni casse ; vide : tout le catalogue), dans
-/// l'ordre du catalogue, puis les champs personnalisés d'alias `aliases`
-/// qui correspondent, dans l'ordre de leurs identifiants.
+/// l'ordre du catalogue, puis les champs personnalisés (H-UI-118 : nom ou
+/// alias de `aliases`), dans l'ordre de leurs identifiants. Aucun champ
+/// masqué : voir [`search_in`].
 #[must_use]
 pub fn search(query: &str, lang: Language, aliases: &BTreeMap<CustomFieldId, String>) -> Vec<Column> {
+    let custom = CustomCatalog {
+        aliases: aliases.clone(),
+        hidden: BTreeSet::new(),
+    };
+    search_in(query, lang, &custom)
+}
+
+/// [`search`] sur les champs personnalisés d'un document : alias de
+/// `custom` cherchés avec le nom, champs `custom.hidden` (formule, table de
+/// choix) absents (H-UI-118).
+#[must_use]
+pub fn search_in(query: &str, lang: Language, custom: &CustomCatalog) -> Vec<Column> {
     let needle = fold(query.trim());
-    let found = TEXTS.with(|cell| {
+    TEXTS.with(|cell| {
         let mut cache = cell.borrow_mut();
         let texts = match cache.take() {
             Some(texts) if texts.language() == lang => texts,
             _ => Texts::new(lang),
         };
-        let found: Vec<Column> = catalog()
+        let mut found: Vec<Column> = catalog()
             .iter()
             .filter(|d| fold(&texts.get(d.title)).contains(&needle))
             .map(|d| d.column)
             .collect();
+        for id in CustomFieldId::all().filter(|id| !custom.hidden.contains(id)) {
+            let title = custom_title(id, &texts, custom.aliases.get(&id).map(String::as_str));
+            if fold(&title).contains(&needle) {
+                found.push(Column::Custom(id));
+            }
+        }
         *cache = Some(texts);
         found
-    });
-    let custom = aliases
-        .iter()
-        .filter(|(_, alias)| fold(alias).contains(&needle))
-        .map(|(id, _)| Column::Custom(*id));
-    let mut out = found;
-    for column in custom {
-        if !out.contains(&column) {
-            out.push(column);
-        }
-    }
-    out
+    })
 }
 
 /// Libellés des champs à choix d'une langue (lot L7), lus dans les
@@ -408,7 +524,18 @@ impl FieldPicker {
 /// parcourent et qu'Entrée insère (H-UI-114).
 #[must_use]
 pub fn choices(query: &str, lang: Language, aliases: &BTreeMap<CustomFieldId, String>) -> Vec<Column> {
-    let found = search(query, lang, aliases);
+    ordered(&search(query, lang, aliases))
+}
+
+/// [`choices`] sur les champs personnalisés d'un document
+/// ([`search_in`]).
+#[must_use]
+pub fn choices_in(query: &str, lang: Language, custom: &CustomCatalog) -> Vec<Column> {
+    ordered(&search_in(query, lang, custom))
+}
+
+/// Champs trouvés `found` non grisés, par catégorie puis dans leur ordre.
+fn ordered(found: &[Column]) -> Vec<Column> {
     let mut out = Vec::with_capacity(found.len());
     for cat in FieldCategory::ALL {
         out.extend(found.iter().copied().filter(|c| {
@@ -536,7 +663,10 @@ mod tests {
         assert_eq!(first("DURÉE", Language::Fr), Some(Column::Duration));
         assert_eq!(first("duration", Language::En), Some(Column::Duration));
         assert!(search("duree", Language::Fr, &none).contains(&Column::RemainingDuration));
-        assert_eq!(search("", Language::Fr, &none).len(), catalog().len());
+        assert_eq!(
+            search("", Language::Fr, &none).len(),
+            catalog().len() + super::custom_catalog().len()
+        );
         let found = search("fin de référence", Language::Fr, &none);
         assert_eq!(found.first(), Some(&Column::BaselineFinish));
         assert!(found.contains(&Column::Baseline10Finish));
@@ -544,5 +674,51 @@ mod tests {
         let lot = CustomFieldId::new(CustomKind::Text, 1).unwrap();
         let aliases = BTreeMap::from([(lot, "Lot à bâtir".to_owned())]);
         assert_eq!(search("batir", Language::Fr, &aliases), [Column::Custom(lot)]);
+    }
+
+    /// H-UI-118 : titre d'un champ personnalisé : nom, ou « alias (nom) » ;
+    /// le titre de « Paramètres de champ » l'emporte ; autre colonne : son
+    /// titre.
+    #[test]
+    fn h_ui_118_custom_titles() {
+        use planrs_core::model::custom::CustomFieldDef;
+
+        let fr = Texts::new(Language::Fr);
+        let en = Texts::new(Language::En);
+        let lot = CustomFieldId::new(CustomKind::Text, 1).unwrap();
+        assert_eq!(super::custom_title(lot, &fr, None), "Texte1");
+        assert_eq!(super::custom_title(lot, &fr, Some("")), "Texte1");
+        assert_eq!(super::custom_title(lot, &fr, Some("Lot")), "Lot (Texte1)");
+        assert_eq!(super::custom_title(lot, &en, Some("Lot")), "Lot (Text1)");
+        let now: planrs_core::Moment = "2026-10-19T08:00".parse().unwrap();
+        let mut project = planrs_core::Project::new(planrs_core::ProjectInit {
+            name: "P".to_owned(),
+            anchor: planrs_core::ScheduleAnchor::FromStart(now),
+            current_date: now,
+            calendar_names: planrs_core::BuiltinCalendarNames::default(),
+        });
+        project.custom_fields.insert(
+            lot,
+            CustomFieldDef {
+                alias: Some("Lot".to_owned()),
+            },
+        );
+        let column = Column::Custom(lot);
+        assert_eq!(super::column_label(column, &fr, Some(&project)), "Lot (Texte1)");
+        assert_eq!(super::column_label(column, &fr, None), "Texte1");
+        assert_eq!(
+            super::column_label(Column::Duration, &fr, Some(&project)),
+            "Durée"
+        );
+        let mut state = crate::column::ColumnState::default_for(column);
+        assert_eq!(super::display_title(&state, &fr, Some(&project)), "Lot (Texte1)");
+        state.title = Some("Lots".to_owned());
+        assert_eq!(super::display_title(&state, &fr, Some(&project)), "Lots");
+        assert_eq!(
+            super::aliases(&project).get(&lot).map(String::as_str),
+            Some("Lot")
+        );
+        assert_eq!(super::custom_catalog().len(), 80);
+        assert!(super::describe(column).is_some());
     }
 }

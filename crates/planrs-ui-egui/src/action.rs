@@ -509,6 +509,9 @@ pub enum DialogKind {
         /// Mode impression.
         print_mode: bool,
     },
+    /// « Champs personnalisés » (Projet → Champs personnalisés…, seconde
+    /// passe UX, lot L9, H-UI-118).
+    CustomFields,
 }
 
 /// Action d'interface d'un agent (`app.ui`, J7) : sans historique, sans

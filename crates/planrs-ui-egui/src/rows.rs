@@ -20,9 +20,11 @@ use std::ops::Range;
 
 use planrs_automation::text::format_resource_names;
 use planrs_core::baseline::{TaskVariance, variance};
+use planrs_core::model::custom::{CustomFieldId, CustomKind, CustomValue};
 use planrs_core::{
-    Assignment, BaselineNumber, Link, LinkType, Minutes, Moment, Percent, ProgressState, Project, Schedule,
-    SchedulingMode, Task, TaskBaseline, TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis, Work,
+    Assignment, BaselineNumber, Decimal, Link, LinkType, Minutes, Moment, Percent, ProgressState, Project,
+    Schedule, SchedulingMode, Task, TaskBaseline, TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis,
+    Work,
 };
 
 use crate::app::{App, OpenDocument};
@@ -31,6 +33,7 @@ use crate::field::{Availability, availability};
 use crate::format::{
     FieldLabels, FormatLabels, format_date, format_duration, format_minutes_as, format_notes_line,
     format_percent, format_predecessors, format_priority, format_slack, format_work, format_yes_no,
+    write_decimal,
 };
 
 /// Nature d'une ligne, pour le dessin.
@@ -182,8 +185,9 @@ impl RowModel {
     /// Calcule les textes des champs de `columns` qui ne le sont pas encore
     /// (lot L7, H-UI-117) : une colonne entière à la fois, `doc` étant le
     /// document dont le modèle a été construit. Les colonnes historiques
-    /// ([`Column::ALL`]), les coûts (grisés) et les champs personnalisés
-    /// (lot L9) n'ont rien à calculer ici.
+    /// ([`Column::ALL`]) et les coûts (grisés) n'ont rien à calculer ici ;
+    /// les champs personnalisés (lot L9) sont lus du modèle comme les
+    /// autres.
     pub fn ensure_columns(
         &mut self,
         doc: &OpenDocument,
@@ -523,12 +527,34 @@ fn base_date(
 
 /// Vrai si `column` est un champ de la seconde passe UX dont la valeur est
 /// servie par [`RowModel::ensure_columns`] (ni colonne historique, ni coût
-/// grisé, ni champ personnalisé : lot L9).
+/// grisé ; champs personnalisés compris, lot L9).
 fn served(column: Column) -> bool {
-    column.ordinal().is_none()
-        && !matches!(column, Column::Custom(_))
-        && !matches!(availability(column), Availability::Unavailable(_))
+    column.ordinal().is_none() && !matches!(availability(column), Availability::Unavailable(_))
 }
+
+/// Texte d'un champ personnalisé (lot L9, H-UI-118) : texte tel quel,
+/// nombre dans la langue (« 12,5 » en français, sans zéro final), date
+/// comme le Début, indicateur Oui/Non (absent : Non) ; vide sinon.
+fn custom_text(task: &Task, id: CustomFieldId, l: &FormatLabels) -> String {
+    match task.custom.get(&id) {
+        Some(CustomValue::Text(t)) => t.clone(),
+        Some(CustomValue::Number(n)) => Decimal::new(*n, CUSTOM_NUMBER_DECIMALS).map_or_else(
+            |_| l.unknown.clone(),
+            |d| {
+                let mut out = String::new();
+                write_decimal(&mut out, d, l.decimal_sep);
+                out
+            },
+        ),
+        Some(CustomValue::Date(m)) => format_date(*m, l),
+        Some(CustomValue::Flag(b)) => format_yes_no(*b, l),
+        None if id.kind() == CustomKind::Flag => format_yes_no(false, l),
+        None => String::new(),
+    }
+}
+
+/// Décimales du point fixe des nombres personnalisés (1/10 000, R-263).
+const CUSTOM_NUMBER_DECIMALS: u8 = 4;
 
 /// Grandeur d'une ligne de base affichée par une colonne.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -791,8 +817,9 @@ fn field_text(ctx: &FieldCtx<'_>, task: &Task, row: &Row, column: Column) -> Str
             .filter(|v| v.baseline.is_some())
             .map(|v| format_work(v.variance.work, f, l))
             .unwrap_or_default(),
-        // Colonnes historiques (textes pré-formatés), coûts grisés et
-        // champs personnalisés (lot L9) : rien ici.
+        Column::Custom(id) => custom_text(task, id, l),
+        // Colonnes historiques (textes pré-formatés) et coûts grisés : rien
+        // ici.
         _ => String::new(),
     }
 }

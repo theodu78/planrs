@@ -13,6 +13,7 @@
 
 use std::collections::BTreeMap;
 
+use planrs_automation::command::parse_custom_number;
 use planrs_automation::command::{
     ConstraintKindJson, DurationJson, LagJson, LinkKey, LinkSpec, LinkTypeJson, ModeJson, PercentJson,
     ProgressUpdate, SetConstraint, SetDeadline, TaskAdd, TaskTypeJson, TaskUpdate,
@@ -22,9 +23,10 @@ use planrs_automation::text::{
     format_predecessors, parse_date, parse_duration, parse_percent, parse_predecessors,
 };
 use planrs_automation::{Batch, Command, CommandError, Patch, Placement, Session, TaskRef};
+use planrs_core::model::custom::MAX_CUSTOM_TEXT_CHARS;
 use planrs_core::{
-    Constraint, ConstraintKind, Duration, Lag, LinkType, Moment, Project, Schedule, SchedulingMode, Task,
-    TaskOutcome, TaskType, TaskUid,
+    Constraint, ConstraintKind, CustomFieldId, CustomKind, CustomValue, Duration, Lag, LinkType, Moment,
+    Project, Schedule, SchedulingMode, Task, TaskOutcome, TaskType, TaskUid,
 };
 
 use crate::app::OpenDocument;
@@ -173,11 +175,15 @@ impl TableEdit {
 /// Travail (`task.update`, `task.set_constraint`, `task.set_deadline`,
 /// liens), % travail achevé, Début et Fin réels, Durées réelle et restante
 /// (`progress.update`). La priorité n'a pas d'opération : lecture seule.
+/// Lot L9 (H-UI-118) : les champs personnalisés (`task.update { custom }`,
+/// R-264 ; un champ défini par le fichier est refusé par le registre,
+/// `custom.read_only`).
 #[must_use]
 pub const fn editable(column: Column) -> bool {
     matches!(
         column,
-        Column::Name
+        Column::Custom(_)
+            | Column::Name
             | Column::Duration
             | Column::Start
             | Column::Finish
@@ -232,7 +238,8 @@ pub fn writable(row: &Row, column: Column) -> bool {
         // depuis les sous-tâches) ; hypothèse H-UI-117.
         RowKind::Summary => matches!(
             column,
-            Column::Name
+            Column::Custom(_)
+                | Column::Name
                 | Column::Predecessors
                 | Column::Successors
                 | Column::Notes
@@ -346,6 +353,14 @@ pub fn clear_cell(task: &Task, project: &Project, column: Column, ctx: &TextCont
             uid: TaskRef::Uid(uid),
             deadline: Patch::Clear,
         })],
+        // Champ personnalisé (lot L9, H-UI-118) : vide ⇒ valeur retirée
+        // (indicateur : « Non »).
+        Column::Custom(id) if !task.custom.contains_key(&id) => Vec::new(),
+        Column::Custom(id) => {
+            let mut op = update(uid);
+            op.custom.insert(id.to_string(), serde_json::Value::Null);
+            vec![Command::TaskUpdate(op)]
+        }
         Column::PercentWorkComplete if task.progress.percent_work_complete.get() == 0 => Vec::new(),
         Column::PercentWorkComplete => {
             let mut op = progress(TaskRef::Uid(uid));
@@ -837,6 +852,13 @@ fn field_ops(
             }
             return Ok(vec![Command::ProgressUpdate(p)]);
         }
+        Column::Custom(id) => {
+            let (value, json) = custom_value(id, buffer, ctx, lang)?;
+            if same(&|t| t.custom.get(&id) == value.as_ref()) {
+                return Ok(Vec::new());
+            }
+            op.custom.insert(id.to_string(), json);
+        }
         Column::Successors => {
             let wanted = read_predecessors(buffer, ctx, project)?;
             return Ok(match task {
@@ -857,6 +879,46 @@ fn field_ops(
         _ => return Err(not_editable(column)),
     }
     Ok(vec![Command::TaskUpdate(op)])
+}
+
+/// Valeur saisie d'un champ personnalisé (lot L9, H-UI-118, R-263) et sa
+/// forme JSON pour `task.update { custom }` (R-264) : texte d'au plus 255
+/// caractères ; nombre lu dans la langue du lot (« 12,5 » en français,
+/// « 12.5 » en anglais), envoyé tel quel ; date lue comme le Début, envoyée
+/// en `AAAA-MM-JJThh:mm` ; indicateur Oui/Non. `None` : valeur vide
+/// (indicateur à Non), effacée.
+fn custom_value(
+    id: CustomFieldId,
+    buffer: &str,
+    ctx: &TextContext,
+    lang: text::Language,
+) -> Result<(Option<CustomValue>, serde_json::Value), EditError> {
+    use serde_json::Value;
+    Ok(match id.kind() {
+        CustomKind::Text => {
+            if buffer.chars().nth(MAX_CUSTOM_TEXT_CHARS).is_some() {
+                return Err(EditError::Text(TextError::OutOfRange));
+            }
+            let value = (!buffer.is_empty()).then(|| CustomValue::Text(buffer.to_owned()));
+            (value, Value::String(buffer.to_owned()))
+        }
+        CustomKind::Number => {
+            let n =
+                parse_custom_number(buffer, lang).ok_or(EditError::Text(TextError::BadNumber { at: 0 }))?;
+            (
+                Some(CustomValue::Number(n)),
+                Value::String(buffer.trim().to_owned()),
+            )
+        }
+        CustomKind::Date => {
+            let m = parse_date(buffer, DateRole::Start, ctx)?;
+            (Some(CustomValue::Date(m)), Value::String(m.to_string()))
+        }
+        CustomKind::Flag => {
+            let b = read_yes_no(buffer, lang)?;
+            (b.then_some(CustomValue::Flag(true)), Value::Bool(b))
+        }
+    })
 }
 
 /// Refus d'une colonne non modifiable : champ calculé de la seconde passe
@@ -1189,6 +1251,11 @@ pub fn initial_text_in(
             || display.to_owned(),
             |m| date_edit_text(m, display, DateRole::Finish, ctx),
         ),
+        // Date personnalisée (lot L9) : relue comme le Début.
+        Column::Custom(id) => match task.custom.get(&id) {
+            Some(CustomValue::Date(m)) => date_edit_text(*m, display, DateRole::Start, ctx),
+            _ => display.to_owned(),
+        },
         _ => display.to_owned(),
     }
 }

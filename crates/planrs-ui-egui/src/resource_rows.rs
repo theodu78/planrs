@@ -24,7 +24,7 @@ use crate::app::OpenDocument;
 use crate::column::CellAlign;
 use crate::edit::text_language;
 use crate::grid::{CellStyle, Sheet};
-use crate::i18n::{Arg, Language, TextId, Texts, error_text_id};
+use crate::i18n::{Arg, Language, TextId, Texts};
 use crate::nav::RowRef;
 use crate::theme::Palette;
 
@@ -458,11 +458,16 @@ impl<'a> ResourceSheet<'a> {
         self.rows
     }
 
-    /// Refus traduit d'une commande du registre (code et détail).
-    fn refusal(&self, error: &planrs_automation::CommandError) -> String {
-        let detail = error.message(text_language(self.texts.language()));
-        self.texts
-            .get_args(error_text_id(error.code), &[("detail", Arg::Str(detail.into()))])
+    /// Refus d'une commande du registre en langage d'utilisateur
+    /// (H-UI-105, [`crate::error_text::user_message`]).
+    fn refusal(&self, error: &planrs_automation::CommandError, project: &Project) -> String {
+        crate::error_text::user_message(
+            error,
+            Some(project),
+            self.texts,
+            text_language(self.texts.language()),
+        )
+        .0
     }
 }
 
@@ -574,7 +579,7 @@ impl Sheet for ResourceSheet<'_> {
             ResourceColumn::MaxUnits => {
                 let units = units_json(text);
                 let ctx = TextContext::for_project(project, lang);
-                units.to_units(&ctx).map_err(|e| self.refusal(&e))?;
+                units.to_units(&ctx).map_err(|e| self.refusal(&e, project))?;
                 op.max_units = Patch::Set(units);
             }
             ResourceColumn::Calendar => {

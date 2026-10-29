@@ -675,3 +675,70 @@ fn details_sync_pure() {
     );
     assert!(sync(&mut state, s, None, key, TextLanguage::Fr));
 }
+
+/// Refus en langage d'utilisateur (relecture finale ux2, B1) : texte d'un
+/// refus du registre sans code, UID, « (opération n) » ni « erreur(s) ».
+fn assert_user_language(text: &str) {
+    for jargon in ["opération", "erreur(s)", "UID", "lot refusé", "link."] {
+        assert!(!text.contains(jargon), "jargon « {jargon} » dans « {text} »");
+    }
+}
+
+/// H-UI-105 (relecture finale ux2, B1) : 12 saisie en prédécesseur de 11,
+/// déjà son successeur, puis OK ⇒ boucle nommée par les ID des tâches,
+/// sous les champs et en notification (refus, détail repliable), rien
+/// d'écrit.
+#[test]
+fn h_ui_105_details_refusal_user_language() {
+    let mut harness = open(DetailsForm::PredecessorsSuccessors);
+    select(&mut harness, Some(11));
+    retype(
+        &mut harness,
+        &cell(TextId::DetailsPredecessors, TextId::DetailsColId, 2),
+        "12",
+    );
+    crate::click(&mut harness, &fr(TextId::DetailsOk));
+    let app = harness.state();
+    let want = fr_args(TextId::RefusalLinkCycle, &[("tasks", Arg::Str("11, 12".into()))]);
+    assert_eq!(history_len(app), 0, "rien d'écrit");
+    assert!(details(app).dirty, "brouillon gardé");
+    let errors = &details(app).errors;
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].message, want);
+    assert_user_language(&errors[0].message);
+    let message = app
+        .messages()
+        .iter()
+        .find(|m| m.text == want)
+        .unwrap_or_else(|| panic!("{:?}", app.messages()));
+    assert_eq!(message.severity, planrs_core::Severity::Error, "refus (M2)");
+    assert_eq!(message.title, Some(TextId::CommandErrorTitle));
+    assert!(
+        message.detail.as_deref().is_some_and(|d| d.contains("batch.")),
+        "détail technique repliable : {:?}",
+        message.detail
+    );
+}
+
+/// Masquer le volet (×, Affichage) avec un brouillon modifié : OK implicite
+/// (relecture finale ux2, M3) ; refus ⇒ le volet reste affiché.
+#[test]
+fn h_ui_113_hide_commits_draft() {
+    let mut harness = open(DetailsForm::default());
+    select(&mut harness, Some(11));
+    retype(&mut harness, &fr(TextId::DetailsName), "Fouilles masquées");
+    dispatch(&mut harness, Action::Pane(PaneOp::ShowDetails(false)));
+    let app = harness.state();
+    assert!(!app.state.details.visible);
+    assert_eq!(task_name(app, 11), "Fouilles masquées");
+    assert_eq!(history_len(app), 1);
+    // Refus : le volet reste, brouillon et refus gardés.
+    dispatch(&mut harness, Action::Pane(PaneOp::ShowDetails(true)));
+    retype(&mut harness, &fr(TextId::DetailsDuration), "abc");
+    dispatch(&mut harness, Action::Pane(PaneOp::ShowDetails(false)));
+    let app = harness.state();
+    assert!(app.state.details.visible, "volet gardé");
+    assert!(details(app).dirty);
+    assert!(!details(app).errors.is_empty());
+    assert_eq!(history_len(app), 1);
+}

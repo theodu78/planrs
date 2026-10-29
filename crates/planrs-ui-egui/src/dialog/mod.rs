@@ -56,7 +56,7 @@ use planrs_automation::{Batch, Command, SideEffect};
 use planrs_core::TaskUid;
 
 use crate::action::DialogKind;
-use crate::app::{App, EditOrigin};
+use crate::app::{App, EditOrigin, OpenDocument};
 
 /// Lu **avant** le dessin d'une fenêtre : Entrée la validera-t-elle à cette
 /// image ? Aucun widget focalisé, ou une zone de saisie d'une ligne (Entrée y
@@ -354,10 +354,14 @@ impl App {
             return;
         };
         let result = self.execute(&batch, EditOrigin::Dialog);
-        let message = result
-            .as_ref()
-            .err()
-            .map(|error| task_info::command_message(&self.texts, error, lang));
+        let message = result.as_ref().err().map(|error| {
+            task_info::command_message(
+                &self.texts,
+                error,
+                self.document.as_ref().map(OpenDocument::project),
+                lang,
+            )
+        });
         let Some(DialogState {
             body: DialogBody::Assign(state),
             ..
@@ -536,7 +540,12 @@ impl App {
         match self.execute(&batch, EditOrigin::Dialog) {
             Ok(_) => self.close_dialog(),
             Err(error) => {
-                let message = task_info::command_message(&self.texts, &error, lang);
+                let message = task_info::command_message(
+                    &self.texts,
+                    &error,
+                    self.document.as_ref().map(OpenDocument::project),
+                    lang,
+                );
                 let Some(dialog) = &mut self.view.dialog else {
                     return;
                 };
@@ -602,10 +611,14 @@ impl App {
             state.delete_batch(lang)
         };
         let result = self.execute(&batch, EditOrigin::Dialog);
-        let message = result
-            .as_ref()
-            .err()
-            .map(|error| task_info::command_message(&self.texts, error, lang));
+        let message = result.as_ref().err().map(|error| {
+            task_info::command_message(
+                &self.texts,
+                error,
+                self.document.as_ref().map(OpenDocument::project),
+                lang,
+            )
+        });
         let created = result.ok().and_then(|outcome| {
             outcome.side_effects.iter().find_map(|e| match e {
                 SideEffect::CalendarCreated(uid) => Some(*uid),

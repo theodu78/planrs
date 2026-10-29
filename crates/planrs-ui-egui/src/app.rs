@@ -1994,7 +1994,9 @@ impl App {
             // `view/details.rs` L5, `notify.rs` L1).
             Action::Pane(op) => self.pane_op(op),
             Action::Column(op) => self.column_op(op),
-            Action::Details(op) => self.details_op(op),
+            Action::Details(op) => {
+                self.details_op(op);
+            }
             Action::Message(crate::action::MessageOp::Dismiss(id)) => self.messages.dismiss(id),
             Action::Message(crate::action::MessageOp::ToggleHistory) => self.messages.toggle_history(),
             Action::CloseDocumentGuarded => self.request(Pending::Close, ctx),
@@ -2409,7 +2411,12 @@ impl App {
         match self.execute(&batch, EditOrigin::Dialog) {
             Ok(_) => self.close_dialog(),
             Err(error) => {
-                let message = task_info::command_message(&self.texts, &error, lang);
+                let message = task_info::command_message(
+                    &self.texts,
+                    &error,
+                    self.document.as_ref().map(OpenDocument::project),
+                    lang,
+                );
                 if let Some(DialogState {
                     body: DialogBody::Link(state),
                     ..
@@ -2604,7 +2611,12 @@ impl App {
             Ok(_) => self.close_dialog(),
             Err(error) => {
                 let (tab, field) = task_info::locate(&batch, &error);
-                let message = task_info::command_message(&self.texts, &error, lang);
+                let message = task_info::command_message(
+                    &self.texts,
+                    &error,
+                    self.document.as_ref().map(OpenDocument::project),
+                    lang,
+                );
                 if let Some(DialogState {
                     body: DialogBody::TaskInfo(state),
                     ..

@@ -183,7 +183,15 @@ impl crate::App {
             PaneOp::SetTimelineHeight(h) => {
                 self.state.timeline_height = h.clamp(TIMELINE_HEIGHT_MIN, PANE_HEIGHT_MAX);
             }
-            PaneOp::ShowDetails(on) => self.state.details.visible = on,
+            PaneOp::ShowDetails(on) => {
+                // Masquer le volet valide d'abord son brouillon (OK
+                // implicite, H-UI-113) : refus ⇒ le volet reste affiché
+                // avec son refus, rien n'est perdu sans le dire.
+                if !on && !self.details_op(crate::action::DetailsOp::Ok) {
+                    return;
+                }
+                self.state.details.visible = on;
+            }
             PaneOp::SetDetailsHeight(h) => {
                 self.state.details.height = h.clamp(DETAILS_HEIGHT_MIN, PANE_HEIGHT_MAX);
             }

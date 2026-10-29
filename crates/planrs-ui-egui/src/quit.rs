@@ -212,9 +212,11 @@ impl App {
         if !self.commit_open_cell(ctx, actions) {
             return false;
         }
-        // Volet de détails (H-UI-113) : OK implicite ; sans effet tant que
-        // le lot L5 ne sert pas `details_op`.
-        self.details_op(DetailsOp::Ok);
+        // Volet de détails (H-UI-113) : OK implicite ; refus ⇒ on reste,
+        // brouillon et refus affichés (H-UI-108).
+        if !self.details_op(DetailsOp::Ok) {
+            return false;
+        }
         self.cancel_windows();
         true
     }
@@ -280,16 +282,19 @@ impl App {
     }
 
     /// Ferme, comme par Annuler (ou Échap), la fenêtre ouverte, les
-    /// fenêtres « Trier » et « Filtre » et les confirmations de
-    /// suppression ; la table reprend le focus.
+    /// fenêtres « Trier » et « Filtre », le sélecteur de champ (et
+    /// « Paramètres de champ ») et les confirmations de suppression ; la
+    /// table reprend le focus.
     fn cancel_windows(&mut self) {
         let open = self.view.dialog.is_some()
             || self.view_dialog_open()
+            || self.view.picker.is_some()
             || self.pending_delete.is_some()
             || self.view.resources.pending_delete.is_some();
         self.close_dialog();
         self.view.sort_dialog = None;
         self.view.filter_dialog = None;
+        self.view.picker = None;
         self.pending_delete = None;
         self.view.resources.pending_delete = None;
         if open && self.document.is_some() {

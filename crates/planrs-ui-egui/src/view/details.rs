@@ -38,7 +38,7 @@ use crate::i18n::{Arg, TextId, Texts};
 use crate::state::DetailsForm;
 use crate::task_form::{
     AssignRow, CONSTRAINTS, FieldError, LINK_TYPES, LinkRow, LinkSide, TASK_TYPES, TaskFormDraft,
-    command_message, task_name_for_id,
+    task_name_for_id,
 };
 use crate::view::FrameCtx;
 
@@ -611,26 +611,28 @@ impl crate::App {
     /// changé ⇒ aucun lot, aucun message ; refus ⇒ brouillon gardé, refus
     /// sous les champs et en notification, cellule active rendue à la
     /// tâche du brouillon. Annuler : brouillon relu. Volet masqué : rien.
-    pub(crate) fn details_op(&mut self, op: DetailsOp) {
+    /// Rend `false` si l'OK a été refusé (le brouillon reste ouvert :
+    /// Cmd+Q et les demandes globales s'arrêtent là, H-UI-108).
+    pub(crate) fn details_op(&mut self, op: DetailsOp) -> bool {
         if !self.state.details.visible {
-            return;
+            return true;
         }
         let lang = self.text_language();
         let Some(doc) = self.document.as_ref() else {
-            return;
+            return true;
         };
         let key = doc.cache_key();
         let Some(st) = self.view.details.as_mut() else {
-            return;
+            return true;
         };
         let Some(uid) = st.draft.as_ref().map(|d| d.uid) else {
-            return;
+            return true;
         };
         if op == DetailsOp::Cancel || !st.dirty {
             if op == DetailsOp::Cancel || st.doc_key != Some(key) {
                 st.load(Some(uid), &doc.session, key, lang);
             }
-            return;
+            return true;
         }
         // Document changé depuis la dernière image : brouillon repris
         // (même tâche demandée : jamais d'OK implicite ici).
@@ -638,20 +640,20 @@ impl crate::App {
             sync(&mut self.view.details, &doc.session, Some(uid), key, lang);
         }
         let Some(st) = self.view.details.as_mut() else {
-            return;
+            return true;
         };
         let Some(draft) = st.draft.clone() else {
-            return;
+            return true;
         };
         let batch = match draft.to_pane_batch(&doc.session, lang) {
             Ok(Some(batch)) => batch,
             Ok(None) => {
                 st.load(Some(uid), &doc.session, key, lang);
-                return;
+                return true;
             }
             Err(errors) => {
-                self.refuse_details(uid, errors);
-                return;
+                self.refuse_details(uid, errors, None);
+                return false;
             }
         };
         match self.execute(&batch, EditOrigin::Dialog) {
@@ -659,9 +661,14 @@ impl crate::App {
                 if let (Some(doc), Some(st)) = (self.document.as_ref(), self.view.details.as_mut()) {
                     st.load(Some(uid), &doc.session, doc.cache_key(), lang);
                 }
+                true
             }
             Err(error) => {
-                let message = command_message(&self.texts, &error, lang);
+                // Refus du registre en langage d'utilisateur (H-UI-105) :
+                // phrase sous les champs, détail technique repliable dans
+                // la notification.
+                let project = self.document.as_ref().map(crate::app::OpenDocument::project);
+                let (message, detail) = crate::error_text::user_message(&error, project, &self.texts, lang);
                 self.refuse_details(
                     uid,
                     vec![FieldError {
@@ -670,7 +677,9 @@ impl crate::App {
                         row: None,
                         message,
                     }],
+                    Some(detail),
                 );
+                false
             }
         }
     }
@@ -678,7 +687,7 @@ impl crate::App {
     /// Refus du formulaire : refus posés sous les champs, premier refus en
     /// notification, cellule active rendue à la tâche `uid` du brouillon
     /// (H-UI-86).
-    fn refuse_details(&mut self, uid: TaskUid, errors: Vec<FieldError>) {
+    fn refuse_details(&mut self, uid: TaskUid, errors: Vec<FieldError>, detail: Option<String>) {
         let first = errors.first().map(|e| e.message.clone());
         if let Some(st) = self.view.details.as_mut() {
             st.errors = errors;
@@ -689,7 +698,10 @@ impl crate::App {
             self.sync_selection();
         }
         if let Some(message) = first {
-            self.push_message(Severity::Warning, message);
+            // Refus (H-UI-104) : gravité Erreur et titre des refus de
+            // commande, comme `App::report_command_error`.
+            let detail = detail.filter(|d| !d.is_empty());
+            self.push_detailed(Severity::Error, Some(TextId::CommandErrorTitle), message, detail);
         }
     }
 }

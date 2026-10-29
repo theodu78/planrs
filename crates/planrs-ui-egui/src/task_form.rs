@@ -34,12 +34,12 @@ use planrs_automation::text::{
 };
 use planrs_automation::{Batch, Command, CommandError, Patch, Session, TaskRef};
 use planrs_core::{
-    ConstraintKind, Decimal, LinkType, ResourceKind, ResourceUid, SchedulingMode, TaskOutcome, TaskRole,
-    TaskType, TaskUid,
+    ConstraintKind, Decimal, LinkType, Project, ResourceKind, ResourceUid, SchedulingMode, TaskOutcome,
+    TaskRole, TaskType, TaskUid,
 };
 
 use crate::edit::EditError;
-use crate::i18n::{self, Arg, TextId, Texts, error_text_id};
+use crate::i18n::{self, Arg, TextId, Texts};
 
 /// Onglet de la fenêtre « Informations sur la tâche » (section d'un champ
 /// du brouillon ; le volet de détails place ses refus par champ).
@@ -1036,15 +1036,17 @@ fn command_error(
         tab,
         field,
         row,
-        message: command_message(texts, e, ctx.language),
+        message: command_message(texts, e, None, ctx.language),
     }
 }
 
-/// Message traduit d'un refus du registre (comme le bandeau).
+/// Phrase d'un refus du registre en langage d'utilisateur, comme la
+/// notification (H-UI-105, [`crate::error_text::user_message`]) : sujets
+/// nommés par leur ID dans `project`, jamais de code, d'UID ni de numéro
+/// d'opération (le détail technique reste dans la notification).
 #[must_use]
-pub fn command_message(texts: &Texts, e: &CommandError, lang: Language) -> String {
-    let detail = e.message(lang);
-    texts.get_args(error_text_id(e.code), &[("detail", Arg::Str(detail.into()))])
+pub fn command_message(texts: &Texts, e: &CommandError, project: Option<&Project>, lang: Language) -> String {
+    crate::error_text::user_message(e, project, texts, lang).0
 }
 
 /// Onglet et champ d'un refus du registre sur le lot `batch` : opération

@@ -512,6 +512,38 @@ fn task_info_registry_refusal_in_dialog() {
     assert_eq!(state.errors[0].field, "name");
 }
 
+/// H-UI-105 (relecture finale ux2, B1) : un refus du registre dans
+/// « Informations sur la tâche » (12 en prédécesseur de 11, déjà son
+/// successeur : boucle) se dit en langage d'utilisateur, tâches nommées
+/// par leur ID, sans code, UID ni numéro d'opération.
+#[test]
+fn h_ui_105_task_info_refusal_user_language() {
+    let mut harness = harness();
+    open_demo(&mut harness);
+    open_info(&mut harness, 11);
+    if let Some(DialogState {
+        body: DialogBody::TaskInfo(state),
+        ..
+    }) = &mut harness.state_mut().view_mut().dialog
+    {
+        state.draft.links.push(LinkRow {
+            id: "12".to_owned(),
+            kind: LinkType::FinishToStart,
+            lag: String::new(),
+        });
+    }
+    harness.run();
+    click_label(&mut harness, &fr(TextId::TaskInfoOk));
+    let app = harness.state();
+    let state = info(app).expect("fenêtre gardée");
+    assert_eq!(generation(app), 0);
+    let want =
+        Texts::new(Language::Fr).get_args(TextId::RefusalLinkCycle, &[("tasks", Arg::Str("11, 12".into()))]);
+    assert_eq!(state.errors.len(), 1, "{:?}", state.errors);
+    assert_eq!(state.errors[0].message, want);
+    assert_eq!(state.errors[0].tab, Tab::Predecessors);
+}
+
 #[test]
 fn task_info_escape_closes_without_change() {
     let mut harness = harness();

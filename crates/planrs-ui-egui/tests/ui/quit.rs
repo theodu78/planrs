@@ -71,9 +71,13 @@ fn closed(h: &Harness<'static, App>) -> bool {
     viewport_commands(h).contains(&ViewportCommand::Close)
 }
 
-/// Aucune fenêtre ouverte (fenêtres de l'application, « Trier », « Filtre »).
+/// Aucune fenêtre ouverte (fenêtres de l'application, « Trier », « Filtre »,
+/// sélecteur de champ et « Paramètres de champ »).
 fn no_window(app: &App) -> bool {
-    app.view().dialog.is_none() && app.sort_dialog().is_none() && app.filter_dialog().is_none()
+    app.view().dialog.is_none()
+        && app.sort_dialog().is_none()
+        && app.filter_dialog().is_none()
+        && app.view().picker.is_none()
 }
 
 /// Indice de la première tâche simple de l'exemple.
@@ -124,6 +128,10 @@ fn open_window(h: &mut Harness<'static, App>, which: &str) {
             let uid = h.state().rows().unwrap().row(i).unwrap().uid;
             h.state_mut()
                 .dispatch(Action::ShowDialog(DialogKind::TaskInformation(uid)));
+        }
+        "picker" => {
+            // Sélecteur « Insérer une colonne » (egui::Modal).
+            h.state_mut().view_mut().picker = Some(planrs_ui_egui::field::FieldPicker::insert_at(1));
         }
         _ => panic!("fenêtre inconnue {which}"),
     }
@@ -178,11 +186,11 @@ fn h_ui_108_cmd_q_clean_closes() {
 }
 
 /// H-UI-108 (QUIT-01 passe 2) : fenêtre ouverte (Trier, Filtre, Collage
-/// spécial, Informations), Cmd+Q ⇒ fenêtre fermée comme par Annuler, puis
-/// bandeau ; rien d'appliqué par la fenêtre.
+/// spécial, Informations, sélecteur de champ), Cmd+Q ⇒ fenêtre fermée comme
+/// par Annuler, puis bandeau ; rien d'appliqué par la fenêtre.
 #[test]
 fn h_ui_108_cmd_q_in_modal() {
-    for which in ["sort", "filter", "paste", "info"] {
+    for which in ["sort", "filter", "paste", "info", "picker"] {
         let mut h = dirty_demo(OperatingSystem::Mac);
         let entries = h
             .state()
@@ -416,4 +424,41 @@ fn h_ui_109_web_leaves_w_p() {
     assert!(!web_intercepts(all, Modifiers::CTRL, Key::F4));
     // Une touche ordinaire reste retenue (contrôle du test).
     assert!(web_intercepts(all, Modifiers::COMMAND, Key::F));
+}
+
+/// H-UI-108 (relecture finale ux2, C1) : document intact, brouillon du
+/// volet de détails illisible (Durée « abc »), Cmd+Q ⇒ OK implicite
+/// refusé, on reste : refus sous les champs, brouillon gardé, ni bandeau
+/// ni fermeture.
+#[test]
+fn h_ui_108_cmd_q_details_refusal_stays() {
+    for os in [OperatingSystem::Mac, OperatingSystem::Nix] {
+        let mut h = demo_os(os);
+        let i = first_leaf(h.state());
+        let uid = h.state().rows().unwrap().row(i).unwrap().uid;
+        h.state_mut()
+            .dispatch(Action::Pane(planrs_ui_egui::action::PaneOp::ShowDetails(true)));
+        h.state_mut().dispatch(Action::Select(Some(uid)));
+        h.run();
+        {
+            let st = h
+                .state_mut()
+                .view_mut()
+                .details
+                .as_mut()
+                .expect("volet synchronisé");
+            st.draft.as_mut().expect("brouillon").general.duration = "abc".to_owned();
+            st.dirty = true;
+        }
+        cmd_q(&mut h);
+        assert!(!closed(&h), "{os:?} : fermée malgré le refus");
+        h.run();
+        assert!(!closed(&h), "{os:?}");
+        let app = h.state();
+        assert!(!app.confirmation_pending(), "{os:?}");
+        let st = app.view().details.as_ref().unwrap();
+        assert!(st.dirty, "{os:?} : brouillon perdu");
+        assert!(!st.errors.is_empty(), "{os:?} : refus non affiché");
+        assert!(!app.document.as_ref().unwrap().is_dirty());
+    }
 }

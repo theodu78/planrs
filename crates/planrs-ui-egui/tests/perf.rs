@@ -2189,3 +2189,75 @@ fn field_picker_5000() {
 }
 
 // --- UX2 L7 --- (`wide_table_5000`)
+
+/// Seconde passe UX, lot L7 (§ 2.5) : réseau de 5 000 tâches, ligne de
+/// base 0 posée puis une durée modifiée (écarts non nuls), 30 colonnes
+/// affichées (les 6 par défaut, lignes de base 0 à 3, écarts, marges,
+/// dates au plus tôt et au plus tard, travail, successeurs…) ; 120 images
+/// de molette verticale puis 60 de défilement horizontal de la table ;
+/// image médiane < 16 ms, p95 < 32 ms. Textes des colonnes calculés une
+/// fois (`RowModel::ensure_columns`), durée de ce calcul rapportée.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn wide_table_5000() {
+    use planrs_ui_egui::action::ColumnOp;
+    let (mut app, mut bench) = nav_bench();
+    set_baseline(&mut app, &mut bench);
+    let wide = [
+        Column::BaselineStart,
+        Column::BaselineFinish,
+        Column::BaselineDuration,
+        Column::BaselineWork,
+        Column::Baseline1Start,
+        Column::Baseline1Finish,
+        Column::Baseline2Start,
+        Column::Baseline3Finish,
+        Column::StartVariance,
+        Column::FinishVariance,
+        Column::DurationVariance,
+        Column::WorkVariance,
+        Column::TotalSlack,
+        Column::FreeSlack,
+        Column::EarlyStart,
+        Column::EarlyFinish,
+        Column::LateStart,
+        Column::LateFinish,
+        Column::Work,
+        Column::Successors,
+        Column::ConstraintType,
+        Column::Deadline,
+        Column::PercentComplete,
+        Column::Notes,
+    ];
+    // Actions appliquées à l'image suivante : insertions en fin de table.
+    for column in wide {
+        app.dispatch(Action::Column(ColumnOp::Insert { at: 64, column }));
+    }
+    let t0 = Instant::now();
+    bench.settle(&mut app);
+    let fill = t0.elapsed();
+    assert_eq!(app.state.columns.len(), 30);
+    for _ in 0..WARMUP {
+        bench.frame(&mut app, wheel_events(-WHEEL_STEP));
+    }
+    let doc = app.document.as_ref().unwrap();
+    let first = doc.project().tasks.at(10).unwrap().uid();
+    let rows = app.rows().unwrap();
+    assert_ne!(rows.text(rows.index_of(first).unwrap(), Column::LateFinish), "");
+    let vertical: Vec<Duration> = (0..120)
+        .map(|_| bench.frame(&mut app, wheel_events(-WHEEL_STEP)))
+        .collect();
+    let horizontal: Vec<Duration> = (0..60)
+        .map(|_| {
+            app.dispatch(Action::ScrollTableX(40.0));
+            bench.frame(&mut app, Vec::new())
+        })
+        .collect();
+    assert!(app.view().table_scroll_x > 0.0, "la table n'a pas défilé");
+    eprintln!(
+        "perf UI wide_table_5000 : calcul des 24 colonnes ajoutées (image comprise) {:.1} ms",
+        ms(fill)
+    );
+    assert_budget("wide_table_5000 vertical", vertical, bench.last);
+    assert_budget("wide_table_5000 horizontal", horizontal, bench.last);
+}

@@ -684,11 +684,14 @@ fn e2e_ux2() {
     // n° 5 (H-UI-112, H-UI-113) : Affichage → Détails ; le volet suit 11 ;
     // forme Prédécesseurs et successeurs (clic droit) ; successeur 14 ajouté,
     // OK ⇒ lien 11 → 14, une entrée ; Ctrl/Cmd+Z ⇒ retiré.
+    // Tâche 11 choisie d'abord : le volet (360 points par défaut depuis la
+    // relecture finale, C5) et la frise de 152 points laissent peu de
+    // lignes à la table.
+    click_cell(harness, 11, name, Modifiers::NONE);
     ribbon_click(harness, RibbonTab::View, &fr(TextId::RibbonDetails));
     assert!(harness.state().state.details.visible, "n° 5 : volet affiché");
-    click_cell(harness, 11, name, Modifiers::NONE);
-    // Séparateur au-dessus du volet tiré de 180 points vers le haut ⇒
-    // volet de 400 points (grilles entières).
+    // Séparateur au-dessus du volet tiré de 40 points vers le haut ⇒
+    // volet de 400 points.
     let grip = harness
         .state()
         .view()
@@ -697,7 +700,7 @@ fn e2e_ux2() {
         .and_then(|d| d.details_splitter)
         .expect("séparateur du volet")
         .center();
-    drag(harness, grip, grip - vec2(0.0, 180.0));
+    drag(harness, grip, grip - vec2(0.0, 40.0));
     assert_eq!(harness.state().state.details.height, 400, "n° 5 : volet agrandi");
     let pane = harness.state().view().panes.drawn.unwrap().details.unwrap();
     right_click(harness, pos2(pane.right() - 20.0, pane.bottom() - 10.0));

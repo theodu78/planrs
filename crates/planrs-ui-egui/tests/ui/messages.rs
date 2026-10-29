@@ -423,6 +423,11 @@ fn h_ui_105_every_ui_code_has_sentence() {
                     }])
                 }
                 codes::LIMIT_EXCEEDED => CommandErrorKind::Limit { what: "ops", max: 10 },
+                codes::CALENDAR_IN_USE => CommandErrorKind::CalendarInUse {
+                    calendar: planrs_core::CalendarUid::new(1),
+                    users: vec![Subject::Project, Subject::Task(TaskUid::new(2))],
+                    total: 3,
+                },
                 codes::ASSIGNMENT_DUPLICATE => CommandErrorKind::DuplicateAssignment {
                     task: TaskUid::new(2),
                     resource: planrs_core::ResourceUid::new(1),
@@ -479,7 +484,7 @@ fn h_ui_105_every_ui_code_has_sentence() {
         assert!(text.contains(&texts.get(TextId::RefusalDeletedTask)), "{text}");
         // Code inconnu de la table : phrase générique, code au détail.
         let other = CommandError::new(
-            codes::CALENDAR_NAME_TAKEN,
+            codes::EXPLAIN_NOT_SCHEDULED,
             CommandErrorKind::InvalidParam("x".to_owned()),
         );
         let (text, detail) = user_message(
@@ -489,7 +494,7 @@ fn h_ui_105_every_ui_code_has_sentence() {
             planrs_automation::text::Language::Fr,
         );
         assert_eq!(text, generic);
-        assert!(detail.contains(codes::CALENDAR_NAME_TAKEN));
+        assert!(detail.contains(codes::EXPLAIN_NOT_SCHEDULED));
     }
 }
 

@@ -10,7 +10,9 @@
 //!   personnalisé, lien absent, indentation, récapitulative supprimée
 //!   seule, déplacement dans son sous-arbre, champ calculé, affectation en
 //!   double ou à 0 % sur travail fixe, travail fixe non piloté par
-//!   l'effort, avancement, ligne de base déjà là) ; le sujet y est nommé par son **ID** de tâche (position
+//!   l'effort, avancement, ligne de base déjà là, calendrier utilisé, nom de calendrier pris,
+//!   exceptions qui se chevauchent, base invalide, ressource affectée,
+//!   champ contraire au type de la ressource) ; le sujet y est nommé par son **ID** de tâche (position
 //!   dans `project.tasks`), jamais par son UID ; une tâche disparue se dit
 //!   « une tâche supprimée » ; un code sans phrase dédiée retombe sur
 //!   « Cette modification n'est pas possible. » ;
@@ -32,8 +34,14 @@ use crate::i18n::{Arg, TextId, Texts};
 /// Codes du registre qu'un lot de l'interface peut produire et qui ont
 /// leur phrase dédiée (H-UI-105, test `h_ui_105_every_ui_code_has_sentence`).
 /// Les codes `text.*` et `custom.*` sont couverts par préfixe.
-pub const UI_CODES: [&str; 21] = [
+pub const UI_CODES: [&str; 27] = [
     codes::LINK_DUPLICATE,
+    codes::CALENDAR_IN_USE,
+    codes::CALENDAR_NAME_TAKEN,
+    codes::CALENDAR_EXCEPTION_OVERLAP,
+    codes::CALENDAR_BASE_NOT_BASE,
+    codes::RESOURCE_HAS_ASSIGNMENTS,
+    codes::ASSIGNMENT_KIND_MISMATCH,
     codes::LINK_NOT_FOUND,
     codes::TASK_OUTLINE_REFUSED,
     codes::TASK_HAS_CHILDREN,
@@ -76,6 +84,31 @@ fn task_label(uid: TaskUid, project: Option<&Project>, texts: &Texts) -> String 
         || texts.get(TextId::RefusalDeletedTask),
         |id| id.get().to_string(),
     )
+}
+
+/// Utilisateur d'un calendrier (`calendar.in_use`) : « le projet », « la
+/// tâche 12 » (ID), ressource ou calendrier par son nom.
+fn user_label(subject: &Subject, project: Option<&Project>, texts: &Texts) -> String {
+    let named = |id: TextId, name: String| texts.get_args(id, &[("name", Arg::Str(name.into()))]);
+    match subject {
+        Subject::Task(uid) => texts.get_args(
+            TextId::RefusalUserTask,
+            &[("id", Arg::Str(task_label(*uid, project, texts).into()))],
+        ),
+        Subject::Resource(uid) => named(
+            TextId::RefusalUserResource,
+            project
+                .and_then(|p| p.resources.get(*uid))
+                .map_or_else(|| uid.get().to_string(), |r| r.name.clone()),
+        ),
+        Subject::Calendar(uid) => named(
+            TextId::RefusalUserCalendar,
+            project
+                .and_then(|p| p.calendars.get(*uid))
+                .map_or_else(|| uid.get().to_string(), |c| c.name.clone()),
+        ),
+        _ => texts.get(TextId::RefusalUserProject),
+    }
 }
 
 /// Phrase dédiée au code de `error`, s'il en a une.
@@ -143,6 +176,24 @@ fn sentence(error: &CommandError, project: Option<&Project>, texts: &Texts) -> O
                 &[("id", Arg::Str(task_label(task, project, texts).into()))],
             ))
         }
+        codes::CALENDAR_IN_USE => {
+            let CommandErrorKind::CalendarInUse { users, total, .. } = &error.kind else {
+                return None;
+            };
+            let mut list: Vec<String> = users.iter().map(|u| user_label(u, project, texts)).collect();
+            if *total > users.len() {
+                list.push("…".to_owned());
+            }
+            Some(texts.get_args(
+                TextId::RefusalCalendarInUse,
+                &[("detail", Arg::Str(list.join(", ").into()))],
+            ))
+        }
+        codes::CALENDAR_NAME_TAKEN => Some(texts.get(TextId::RefusalCalendarNameTaken)),
+        codes::CALENDAR_EXCEPTION_OVERLAP => Some(texts.get(TextId::RefusalCalendarOverlap)),
+        codes::CALENDAR_BASE_NOT_BASE => Some(texts.get(TextId::RefusalCalendarBase)),
+        codes::RESOURCE_HAS_ASSIGNMENTS => Some(texts.get(TextId::RefusalResourceAssigned)),
+        codes::ASSIGNMENT_KIND_MISMATCH => Some(texts.get(TextId::RefusalAssignmentKind)),
         codes::TASK_OUTLINE_REFUSED => Some(texts.get(TextId::RefusalOutline)),
         codes::TASK_HAS_CHILDREN => Some(texts.get(TextId::RefusalHasChildren)),
         codes::TASK_MOVE_INTO_SUBTREE => Some(texts.get(TextId::RefusalMoveIntoSubtree)),
@@ -249,7 +300,7 @@ fn detail(error: &CommandError, texts: &Texts, engine: planrs_automation::text::
 /// Textes des refus en langage d'utilisateur (H-UI-105) : phrase
 /// générique, détail (code, opération), tâche supprimée, et une phrase par
 /// code du registre que l'interface produit.
-pub const L1_TEXTS: [TextId; 27] = [
+pub const L1_TEXTS: [TextId; 37] = [
     TextId::RefusalGeneric,
     TextId::RefusalDetailCode,
     TextId::RefusalDetailOperation,
@@ -277,6 +328,16 @@ pub const L1_TEXTS: [TextId; 27] = [
     TextId::RefusalLinkNotFound,
     TextId::RefusalBaselineExists,
     TextId::RefusalComputedField,
+    TextId::RefusalCalendarInUse,
+    TextId::RefusalUserProject,
+    TextId::RefusalUserTask,
+    TextId::RefusalUserResource,
+    TextId::RefusalUserCalendar,
+    TextId::RefusalCalendarNameTaken,
+    TextId::RefusalCalendarOverlap,
+    TextId::RefusalCalendarBase,
+    TextId::RefusalResourceAssigned,
+    TextId::RefusalAssignmentKind,
 ];
 
 #[cfg(test)]

@@ -235,7 +235,7 @@ mod tests {
         );
         // Non fini ⇒ défaut ; absents ⇒ 0.
         let h = layout(800.0, Some(f32::NAN), Some(f32::INFINITY));
-        assert_eq!((h.timeline, h.details), (72.0, 220.0));
+        assert_eq!((h.timeline, h.details), (72.0, 360.0));
         assert_eq!(layout(800.0, None, None).view, 800.0);
         // Bornes basses et hautes (relatives à la zone).
         let h = layout(1000.0, Some(1.0), Some(1.0));

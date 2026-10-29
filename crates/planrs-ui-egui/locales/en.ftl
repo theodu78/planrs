@@ -1414,6 +1414,16 @@ refusal-duration-below-actual = The duration cannot be less than the actual dura
 refusal-link-not-found = Task { $successor } does not have task { $predecessor } as a predecessor.
 refusal-baseline-exists = This baseline is already saved: choose to replace it to save it again.
 refusal-computed-field = This field of a summary task is calculated from its subtasks: it cannot be entered.
+refusal-calendar-in-use = Calendar used by { $detail }: it cannot be deleted.
+refusal-user-project = the project
+refusal-user-task = task { $id }
+refusal-user-resource = resource “{ $name }”
+refusal-user-calendar = calendar “{ $name }”
+refusal-calendar-name-taken = Calendar name already taken: choose another one.
+refusal-calendar-overlap = This exception overlaps another exception of the calendar.
+refusal-calendar-base = This calendar cannot be used as a base.
+refusal-resource-assigned = This resource is assigned to tasks: remove its assignments first.
+refusal-assignment-kind = This value does not match the resource type.
 
 # --- UX2 L2 ---
 paste-links-dropped = { $count ->

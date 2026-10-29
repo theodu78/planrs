@@ -216,7 +216,7 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
     // Volet de détails, séparateurs (après la table et le Gantt : ils
     // l'emportent sur les bords qu'ils chevauchent), puis F6.
     if let Some(rect) = slots.details {
-        details_pane(ui, fc, rect);
+        details_pane(ui, fc, &mut view.details, rect);
     }
     let drawn = pane_splitters(ui, fc, view, &slots);
     serve_focus_request(ui, view, &drawn);
@@ -451,7 +451,12 @@ pub(crate) fn close_button(
 
 /// Volet de détails dans `rect` (H-UI-112, cadre du lot L4) : en-tête de 22
 /// points « Formulaire tâche » et ×, puis le contenu (`details::show`).
-fn details_pane(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, rect: Rect) {
+fn details_pane(
+    ui: &mut egui::Ui,
+    fc: &mut FrameCtx<'_>,
+    details: &mut Option<super::details::DetailsTransient>,
+    rect: Rect,
+) {
     if !rect.is_finite() || rect.height() < 1.0 {
         return;
     }
@@ -479,7 +484,7 @@ fn details_pane(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, rect: Rect) {
         fc.actions.push(Action::Pane(PaneOp::ShowDetails(false)));
     }
     let body = Rect::from_min_max(pos2(rect.left(), header.bottom()), rect.max);
-    super::details::show(ui, fc, body);
+    super::details::show(ui, fc, details, body);
 }
 
 /// F6 / Maj+F6 en attente (H-UI-111) : volet courant lu au focus d'egui

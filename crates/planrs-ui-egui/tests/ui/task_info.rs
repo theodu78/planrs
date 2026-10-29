@@ -82,10 +82,10 @@ fn task_info_to_batch_order() {
     d.general.duration = "4j".to_owned();
     d.general.percent = "25".to_owned();
     // Prédécesseurs « 7;6 » → 6 gardé en DD, 7 retiré, 3 ajouté.
-    d.links.retain(|row| row.predecessor == "6");
+    d.links.retain(|row| row.id == "6");
     d.links[0].kind = LinkType::StartToStart;
     d.links.push(LinkRow {
-        predecessor: "3".to_owned(),
+        id: "3".to_owned(),
         kind: LinkType::FinishToStart,
         lag: "+1j".to_owned(),
     });
@@ -94,6 +94,7 @@ fn task_info_to_batch_order() {
     d.assignments.push(AssignRow {
         resource: ResourceUid::new(2),
         units: "5".to_owned(),
+        work: String::new(),
     });
     d.advanced.constraint = ConstraintKind::StartNoEarlierThan;
     d.advanced.constraint_date = "01/03/2027".to_owned();
@@ -164,12 +165,12 @@ fn task_info_field_errors_per_tab() {
     d.general.duration = "abc".to_owned();
     d.general.start = "31/02/2027".to_owned();
     d.links.push(LinkRow {
-        predecessor: "900".to_owned(),
+        id: "900".to_owned(),
         kind: LinkType::FinishToStart,
         lag: String::new(),
     });
     d.links.push(LinkRow {
-        predecessor: "7".to_owned(),
+        id: "7".to_owned(),
         kind: LinkType::FinishToStart,
         lag: String::new(),
     });

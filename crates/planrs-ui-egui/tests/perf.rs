@@ -2108,6 +2108,57 @@ fn best_fit_5000() {
 // remplies par leur lot (budgets du cahier `docs/plans/ux2.md` § 2.5).
 // --- UX2 L2 --- (`paste_cells_1000` et `paste_1000` tenus)
 // --- UX2 L4 --- (`splitter_drag_5000`)
+
+/// Glisse un séparateur de volets de `rect` (zone de saisie) sur 60
+/// images, d'un point par image dans le sens `dir`, puis lâche ; rend les
+/// durées des 60 images du glisser.
+fn drag_splitter(bench: &mut Bench, app: &mut App, grip: Rect, dir: f32) -> Vec<Duration> {
+    let start = grip.center();
+    press_frames(bench, app, start, true);
+    let mut samples = Vec::with_capacity(60);
+    for i in 1..=60_u16 {
+        let p = pos2(start.x, start.y + dir * f32::from(i));
+        samples.push(bench.frame(app, vec![Event::PointerMoved(p)]));
+    }
+    let end = pos2(start.x, start.y + dir * 60.0);
+    bench.frame(
+        app,
+        vec![Event::PointerButton {
+            pos: end,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        }],
+    );
+    samples
+}
+
+/// UX2 L4 (H-UI-111, § 2.5) : réseau de 5 000 tâches, frise affichée et
+/// volet de détails ouvert ; séparateur de la frise glissé 60 images vers
+/// le bas, puis celui des détails 60 images vers le haut (volets et table
+/// redisposés à chaque image, hauteurs écrites au relâcher). Image médiane
+/// < 16 ms, p95 < 32 ms.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn splitter_drag_5000() {
+    let (mut app, mut bench) = nav_bench();
+    app.dispatch(Action::Pane(planrs_ui_egui::action::PaneOp::ShowDetails(true)));
+    bench.settle(&mut app);
+    let drawn = app.view().panes.drawn.unwrap();
+    let mut samples = drag_splitter(&mut bench, &mut app, drawn.timeline_splitter.unwrap(), 1.0);
+    bench.settle(&mut app);
+    assert_eq!(app.state.timeline_height, 132, "frise glissée de 60 points");
+    let drawn = app.view().panes.drawn.unwrap();
+    samples.extend(drag_splitter(
+        &mut bench,
+        &mut app,
+        drawn.details_splitter.unwrap(),
+        -1.0,
+    ));
+    bench.settle(&mut app);
+    assert_eq!(app.state.details.height, 280, "détails glissés de 60 points");
+    assert_budget("splitter_drag_5000", samples, bench.last);
+}
 // --- UX2 L5 --- (`details_follow_5000`)
 // --- UX2 L6 --- (`field_picker_5000`)
 // --- UX2 L7 --- (`wide_table_5000`)

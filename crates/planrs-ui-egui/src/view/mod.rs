@@ -188,6 +188,9 @@ pub struct ViewTransient {
     pub picker: Option<crate::field::FieldPicker>,
     /// Volet de détails : brouillon du formulaire (H-UI-112, lot L5).
     pub details: Option<details::DetailsTransient>,
+    /// Volets : relevé de la dernière image et passage au clavier demandé
+    /// par F6 (H-UI-111, lot L4).
+    pub panes: main_view::PanesView,
 }
 
 /// Glisser de sélection en cours (ADR-0018, contrat L0).

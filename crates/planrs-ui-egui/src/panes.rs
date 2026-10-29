@@ -5,9 +5,9 @@
 //! Fonctions pures (aucun egui) : disposition des hauteurs ([`layout`]),
 //! glisser d'un séparateur ([`drag_split`]) et passage d'un volet à
 //! l'autre au clavier ([`next`], F6). Toute hauteur `f32` est testée
-//! finie et bornée avant usage (règle 10). Contrat posé par le lot L0 :
-//! `App::pane_op` écrit hauteurs, visibilité et forme dans `UiState` ; le
-//! lot L4 dessine les volets et les séparateurs.
+//! finie et bornée avant usage (règle 10). `App::pane_op` écrit hauteurs,
+//! visibilité et forme dans `UiState` ; `view::main_view` dessine les
+//! volets et les séparateurs (lot L4) et sert F6.
 
 use crate::action::PaneOp;
 use crate::state::{
@@ -78,16 +78,13 @@ pub fn layout(total: f32, timeline: Option<f32>, details: Option<f32>) -> PaneHe
         )
     });
     // Place manquante pour la vue : détails, puis chronologie, rétrécis
-    // jusqu'à leur minimum, puis retirés.
+    // jusqu'à leur minimum, puis retirés (détails d'abord).
+    let mut lack = VIEW_MIN - (total - t - d);
     for (pane, min) in [(&mut d, d_min), (&mut t, t_min)] {
-        let lack = VIEW_MIN - (total - *pane);
-        if *pane > 0.0 && lack > 0.0 {
-            *pane = (*pane - lack).max(min);
-        }
-    }
-    for pane in [&mut d, &mut t] {
-        if *pane > 0.0 && total - *pane < VIEW_MIN {
-            *pane = 0.0;
+        if lack > 0.0 && *pane > 0.0 {
+            let cut = lack.min(*pane - min).max(0.0);
+            *pane -= cut;
+            lack -= cut;
         }
     }
     if total - t - d < VIEW_MIN {
@@ -152,7 +149,7 @@ pub fn next(f: PaneFocus, visible: (bool, bool), back: bool) -> PaneFocus {
         .unwrap_or(PaneFocus::Table)
 }
 
-/// Glisser d'un séparateur en cours (H-UI-111, servi par le lot L4).
+/// Glisser d'un séparateur en cours (H-UI-111).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SplitDrag {
     /// Séparateur tiré.
@@ -177,8 +174,10 @@ impl crate::App {
     /// ([`TIMELINE_HEIGHT_MIN`], [`DETAILS_HEIGHT_MIN`],
     /// [`PANE_HEIGHT_MAX`]), visibilité et forme du volet de détails
     /// écrites dans `UiState` (préférences, hors de l'historique
-    /// d'annulation). L0 : rien n'est encore dessiné ; F6 répond « non
-    /// disponible » (lot L4).
+    /// d'annulation, enregistrées avec les autres préférences). F6 / Maj+F6
+    /// : demande servie par la vue Gantt à l'image suivante (volet courant
+    /// lu au focus d'egui, `view::main_view`) ; hors de la vue Gantt,
+    /// rien (un seul volet).
     pub(crate) fn pane_op(&mut self, op: PaneOp) {
         match op {
             PaneOp::SetTimelineHeight(h) => {
@@ -189,7 +188,11 @@ impl crate::App {
                 self.state.details.height = h.clamp(DETAILS_HEIGHT_MIN, PANE_HEIGHT_MAX);
             }
             PaneOp::SetDetailsForm(form) => self.state.details.form = form,
-            PaneOp::FocusNext { .. } => self.not_available(),
+            PaneOp::FocusNext { back } => {
+                if self.state.view == crate::state::ViewKind::Gantt && self.document.is_some() {
+                    self.view.panes.focus_request = Some(back);
+                }
+            }
         }
     }
 }
@@ -237,6 +240,10 @@ mod tests {
         let h = layout(1000.0, Some(900.0), Some(900.0));
         assert!(h.view >= VIEW_MIN, "{h:?}");
         assert_eq!(h.timeline + h.view + h.details, 1000.0);
+        // Les deux au plus dans une zone moyenne : détails rétrécis, pas
+        // retirés (relecture L4).
+        let h = layout(600.0, Some(4000.0), Some(4000.0));
+        assert_eq!((h.timeline, h.view, h.details), (240.0, 120.0, 240.0));
         // Peu de place : détails puis chronologie rétrécis puis retirés.
         let h = layout(300.0, Some(72.0), Some(220.0));
         assert!(h.view >= VIEW_MIN, "{h:?}");

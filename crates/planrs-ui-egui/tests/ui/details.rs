@@ -739,7 +739,7 @@ fn h_ui_113_hide_commits_draft() {
     let app = harness.state();
     assert!(app.state.details.visible, "volet gardé");
     assert!(details(app).dirty);
-    assert!(!details(app).errors.is_empty());
+    assert_ne!(details(app).errors.len(), 0, "refus affiché");
     assert_eq!(history_len(app), 1);
 }
 

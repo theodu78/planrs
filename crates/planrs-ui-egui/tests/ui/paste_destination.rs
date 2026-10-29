@@ -651,12 +651,17 @@ fn r261_rows_by_id_paste_not_skipped() {
         app.messages()
     );
     // Fonction pure : Nom, sinon première colonne après l'ID.
-    use planrs_ui_egui::cells::rows_paste_column;
     let all = [Column::Id, Column::Name, Column::Duration];
-    assert_eq!(rows_paste_column(Column::Id, &all), Column::Name);
-    assert_eq!(rows_paste_column(Column::Duration, &all), Column::Duration);
     assert_eq!(
-        rows_paste_column(Column::Id, &[Column::Id, Column::Duration]),
+        planrs_ui_egui::cells::rows_paste_column(Column::Id, &all),
+        Column::Name
+    );
+    assert_eq!(
+        planrs_ui_egui::cells::rows_paste_column(Column::Duration, &all),
+        Column::Duration
+    );
+    assert_eq!(
+        planrs_ui_egui::cells::rows_paste_column(Column::Id, &[Column::Id, Column::Duration]),
         Column::Duration
     );
 }

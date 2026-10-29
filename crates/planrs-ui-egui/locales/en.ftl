@@ -1515,5 +1515,15 @@ custom-type-date = Date
 custom-type-flag = Flag
 
 # --- UX2 L10 ---
+ribbon-fill-right = Right
+ribbon-details = Details
+ribbon-insert-column = Insert Column
+ribbon-field-settings = Field Settings
+ribbon-custom-fields = Custom Fields
+ribbon-tip-details = Shows the form of the selected task below the view: predecessors, successors and resources.
+ribbon-tip-insert-column = Inserts a column left of the active column; type to filter the list of fields.
+ribbon-tip-field-settings = Changes the field, title, alignment and width of the active column.
+ribbon-tip-custom-fields = Renames the Text, Number, Date and Flag custom fields.
+diagnostics-show-all = Show All
 
 # --- UX2 L11 ---

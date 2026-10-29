@@ -2239,7 +2239,13 @@ impl App {
     /// Borne le défilement horizontal de la table à `[0, Σ largeurs −
     /// largeur visible]` (largeur de l'image précédente).
     fn clamp_table_scroll(&mut self) {
-        let total: f32 = self.state.visible_columns().map(|c| f32::from(c.width)).sum();
+        // Colonne « Ajouter une nouvelle colonne » comptée (H-UI-114, L10).
+        let total: f32 = self
+            .state
+            .visible_columns()
+            .map(|c| f32::from(c.width))
+            .sum::<f32>()
+            + view::table::add_column_extra(None, self.state.chart_only);
         let max = total - self.view.last_table_width;
         let max = if max.is_finite() { max.max(0.0) } else { 0.0 };
         let x = self.view.table_scroll_x;

@@ -1514,5 +1514,15 @@ custom-type-date = Date
 custom-type-flag = Indicateur
 
 # --- UX2 L10 ---
+ribbon-fill-right = À droite
+ribbon-details = Détails
+ribbon-insert-column = Insérer une colonne
+ribbon-field-settings = Paramètres de champ
+ribbon-custom-fields = Champs personnalisés
+ribbon-tip-details = Affiche sous la vue le formulaire de la tâche sélectionnée : prédécesseurs, successeurs et ressources.
+ribbon-tip-insert-column = Insère une colonne à gauche de la colonne active ; la liste des champs se filtre en tapant.
+ribbon-tip-field-settings = Change le champ, le titre, l'alignement et la largeur de la colonne active.
+ribbon-tip-custom-fields = Renomme les champs personnalisés Texte, Nombre, Date et Indicateur.
+diagnostics-show-all = Tout afficher
 
 # --- UX2 L11 ---

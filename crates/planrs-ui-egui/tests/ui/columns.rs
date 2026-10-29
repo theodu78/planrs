@@ -480,6 +480,9 @@ fn table_horizontal_scroll_follows_cursor() {
     assert_eq!(harness.state().view().cursor.column, Column::Mode);
     let max = total - view_w;
     assert!((harness.state().view().table_scroll_x - max).abs() < 0.5);
+    // Défilement borné : colonne « Ajouter une nouvelle colonne » comptée
+    // (H-UI-114, lot L10).
+    let max = max + planrs_ui_egui::view::table::ADD_COLUMN_W;
     // Origine : premier champ, défilement ramené à 0.
     harness.state_mut().dispatch(Action::Nav {
         mv: NavMove::RowStart,

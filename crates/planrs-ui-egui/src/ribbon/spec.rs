@@ -204,8 +204,8 @@ pub enum RibbonCmd {
     /// Supprimer la tâche (Suppr ; menus seulement : pas d'élément du
     /// ruban).
     DeleteTask,
-    // --- Seconde passe UX (ADR-0019, contrat L0) : variantes seulement ;
-    // leurs éléments du ruban et jumeaux de menus sont posés par L10.
+    // --- Seconde passe UX (ADR-0019, contrat L0) : éléments du ruban et
+    // jumeaux de menus posés par L10.
     /// Case Détails (Affichage → Fractionner, H-UI-112).
     DetailsPane,
     /// Insérer une colonne… (Format → Colonnes, H-UI-114).
@@ -1189,6 +1189,15 @@ const PROJECT_GROUPS: &[GroupSpec] = &[
                 TextId::RibbonTipProjectInformation,
                 RibbonCmd::ProjectInformation,
             ),
+            // Seconde passe UX (L10, H-UI-118) : Champs personnalisés,
+            // groupe Propriétés comme Project.
+            plain(
+                Large,
+                Some(Icon::Tags),
+                TextId::RibbonCustomFields,
+                TextId::RibbonTipCustomFields,
+                RibbonCmd::CustomFields,
+            ),
             plain(
                 Large,
                 Some(Icon::CalendarCog),
@@ -1358,6 +1367,15 @@ const VIEW_GROUPS: &[GroupSpec] = &[
                 TextId::RibbonTipTimeline,
                 RibbonCmd::TimelineVisible,
             ),
+            // Seconde passe UX (L10, H-UI-112) : Détails à côté de
+            // Chronologie, comme le groupe Split View de Project.
+            plain(
+                Check,
+                None,
+                TextId::RibbonDetails,
+                TextId::RibbonTipDetails,
+                RibbonCmd::DetailsPane,
+            ),
             plain(
                 Check,
                 None,
@@ -1411,13 +1429,33 @@ const FORMAT_GROUPS: &[GroupSpec] = &[
     GroupSpec {
         label: TextId::RibbonGroupColumns,
         icon: Icon::Columns3,
-        items: &[plain(
-            Dropdown,
-            Some(Icon::Columns3),
-            TextId::RibbonColumns,
-            TextId::RibbonTipColumns,
-            RibbonCmd::ColumnsMenu,
-        )],
+        items: &[
+            // Seconde passe UX (L10, H-UI-114, H-UI-115) : Insérer une
+            // colonne et Paramètres de champ, comme le groupe Columns de
+            // Project ; la liste garde l'affichage du tableau.
+            plain(
+                Large,
+                Some(Icon::BetweenVerticalStart),
+                TextId::RibbonInsertColumn,
+                TextId::RibbonTipInsertColumn,
+                RibbonCmd::InsertColumn,
+            ),
+            item(
+                Small,
+                Some(Icon::Columns3Cog),
+                TextId::RibbonFieldSettings,
+                TextId::RibbonTipFieldSettings,
+                Some(ui(UiBinding::FieldSettings)),
+                RibbonCmd::FieldSettings,
+            ),
+            plain(
+                Dropdown,
+                Some(Icon::Columns3),
+                TextId::RibbonColumns,
+                TextId::RibbonTipColumns,
+                RibbonCmd::ColumnsMenu,
+            ),
+        ],
         shrink_rank: 4,
     },
     GroupSpec {

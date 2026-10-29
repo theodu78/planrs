@@ -210,9 +210,27 @@ impl Sheet for TaskSheet<'_> {
 pub const RESIZE_GRIP: f32 = 4.0;
 
 /// Colonne « Ajouter une nouvelle colonne » en bout de table (H-UI-114) :
-/// affichée à partir du lot L10 ; les tests du lot L6 l'allument par
+/// affichée depuis le lot L10 ; un test peut l'éteindre par
 /// [`set_add_column_slot`].
-pub const SHOW_ADD_COLUMN: bool = false;
+pub const SHOW_ADD_COLUMN: bool = true;
+
+/// Largeur ajoutée aux colonnes par la colonne « Ajouter une nouvelle
+/// colonne » pour le défilement horizontal de la table (0 en graphique
+/// seul ou si elle est éteinte dans `ctx` ; [`SHOW_ADD_COLUMN`] sans
+/// contexte).
+#[must_use]
+pub fn add_column_extra(ctx: Option<&egui::Context>, chart_only: bool) -> f32 {
+    let on = ctx.map_or(SHOW_ADD_COLUMN, add_column_slot);
+    if on && !chart_only { ADD_COLUMN_W } else { 0.0 }
+}
+
+/// Largeur du contenu de la table : colonnes affichées, plus la colonne
+/// « Ajouter une nouvelle colonne » (défilement horizontal, H-UI-114).
+#[must_use]
+pub fn content_width(ctx: &egui::Context, state: &crate::UiState) -> f32 {
+    state.visible_columns().map(|c| f32::from(c.width)).sum::<f32>()
+        + add_column_extra(Some(ctx), state.chart_only)
+}
 
 /// Largeur de la colonne « Ajouter une nouvelle colonne » (H-UI-114).
 pub const ADD_COLUMN_W: f32 = 120.0;

@@ -790,3 +790,355 @@ fn snapshot_example_block_option() {
     let missing = args(&["--p", "main", "--block", "2:name-99:name"]).unwrap();
     assert!(snapshot_example::prepared(&missing, None).is_err());
 }
+
+// --- Seconde passe UX (ADR-0019, lot L10) : volets, colonnes, champs
+// personnalisés, notifications ; volet des diagnostics (H-UI-119).
+
+/// UID de la tâche nommée `name` dans le document ouvert.
+fn uid_named(app: &App, name: &str) -> planrs_core::TaskUid {
+    let project = app.document.as_ref().unwrap().project();
+    project
+        .tasks
+        .iter()
+        .find(|t| t.name == name)
+        .map_or_else(|| panic!("tâche « {name} » absente"), planrs_core::Task::uid)
+}
+
+/// Applique un lot JSON au document (préparation d'une capture).
+fn exec_ops(harness: &mut Harness<'static, App>, ops: &serde_json::Value) {
+    let batch =
+        planrs_automation::Batch::from_json(serde_json::json!({ "format_version": 1, "ops": ops })).unwrap();
+    harness
+        .state_mut()
+        .execute(&batch, planrs_ui_egui::EditOrigin::User)
+        .unwrap();
+    harness.run();
+}
+
+/// H-UI-112 : volet de détails (Formulaire tâche) ouvert sur « Fouilles
+/// des fondations » de l'exemple, forme par défaut (ressources et
+/// prédécesseurs).
+fn details_capture(theme: ThemePref, name: &str) {
+    let mut harness = demo(LanguagePref::Fr, theme);
+    let uid = uid_named(harness.state(), "Fouilles des fondations");
+    harness.state_mut().dispatch(Action::Select(Some(uid)));
+    harness
+        .state_mut()
+        .dispatch(Action::Pane(planrs_ui_egui::action::PaneOp::ShowDetails(true)));
+    harness.run();
+    let app = harness.state();
+    assert!(app.state.details.visible);
+    assert_eq!(app.selection, Some(uid));
+    let title = Texts::new(Language::Fr).get(TextId::DetailsTitle);
+    assert!(harness.query_by_label(&title).is_some(), "volet absent");
+    snapshot(&mut harness, name);
+}
+
+#[test]
+fn snapshot_details_pane_fr_light() {
+    details_capture(ThemePref::Light, "details_pane_fr_light");
+}
+
+#[test]
+fn snapshot_details_pane_fr_dark() {
+    details_capture(ThemePref::Dark, "details_pane_fr_dark");
+}
+
+/// H-UI-114 : sélecteur de champ ouvert depuis la colonne Durée, « trav »
+/// tapé (Travail, Travail réel…).
+#[test]
+fn snapshot_field_picker_fr_light() {
+    let mut harness = demo(LanguagePref::Fr, ThemePref::Light);
+    let uid = uid_named(harness.state(), "Fouilles des fondations");
+    harness.state_mut().dispatch(Action::SelectOp(SelectOp::Press {
+        row: RowRef::Item(uid),
+        column: Column::Duration,
+        target: PressTarget::Cell,
+        mode: PressMode::Replace,
+    }));
+    harness.run();
+    harness
+        .state_mut()
+        .dispatch(Action::Column(planrs_ui_egui::action::ColumnOp::OpenPicker {
+            at: planrs_ui_egui::action::ACTIVE_COLUMN,
+        }));
+    harness.run();
+    harness.event(egui::Event::Text("trav".to_owned()));
+    harness.run();
+    let picker = harness.state().view().picker.clone().expect("sélecteur ouvert");
+    assert_eq!(picker.query, "trav");
+    snapshot(&mut harness, "field_picker_fr_light");
+}
+
+/// H-UI-104, H-UI-105 : refus d'un lien déjà présent en notification (en
+/// bas à droite, liseré et icône du refus, « Détails » replié), sans
+/// bandeau.
+fn toast_capture(theme: ThemePref, name: &str) {
+    let mut harness = demo(LanguagePref::Fr, theme);
+    let (pred, succ) = {
+        let project = harness.state().document.as_ref().unwrap().project();
+        project
+            .tasks
+            .iter()
+            .find_map(|t| {
+                t.predecessors
+                    .first()
+                    .map(|l| (l.predecessor.get(), t.uid().get()))
+            })
+            .unwrap()
+    };
+    let batch = planrs_automation::Batch::from_json(serde_json::json!({
+        "format_version": 1,
+        "ops": [{ "op": "link.add", "pred": pred, "succ": succ }]
+    }))
+    .unwrap();
+    assert!(
+        harness
+            .state_mut()
+            .execute(&batch, planrs_ui_egui::EditOrigin::User)
+            .is_err()
+    );
+    harness.run();
+    let store = harness.state().message_store();
+    assert_eq!(store.banner().len(), 0);
+    assert_eq!(store.toasts().len(), 1);
+    let text = store.toasts()[0].text.clone();
+    assert!(!text.contains("link.") && !text.contains("opération"), "{text}");
+    assert!(harness.query_by_label(&text).is_some());
+    snapshot(&mut harness, name);
+}
+
+#[test]
+fn snapshot_toast_fr_light() {
+    toast_capture(ThemePref::Light, "toast_fr_light");
+}
+
+#[test]
+fn snapshot_toast_fr_dark() {
+    toast_capture(ThemePref::Dark, "toast_fr_dark");
+}
+
+/// H-UI-111 : frise de « P » agrandie à 152 points (séparateur tiré de
+/// 80 points).
+#[test]
+fn snapshot_timeline_tall_fr_light() {
+    let mut harness = p_capture(
+        LanguagePref::Fr,
+        ThemePref::Light,
+        egui::vec2(1280.0, 720.0),
+        1.0,
+        &TIMELINE,
+    );
+    harness
+        .state_mut()
+        .dispatch(Action::Pane(planrs_ui_egui::action::PaneOp::SetTimelineHeight(
+            152,
+        )));
+    harness.run();
+    assert_eq!(harness.state().state.timeline_height, 152);
+    let drawn = harness
+        .state()
+        .view()
+        .timeline
+        .drawn
+        .clone()
+        .expect("frise dessinée");
+    assert_eq!(drawn.elements.len(), TIMELINE.len());
+    snapshot(&mut harness, "timeline_tall_fr_light");
+}
+
+/// H-UI-118 : Texte1 renommé « Lot » et Nombre1, insérés après le Nom,
+/// valeurs saisies sur quatre tâches de l'exemple.
+#[test]
+fn snapshot_custom_columns_fr_light() {
+    use planrs_core::{CustomFieldId, CustomKind};
+    let mut harness = demo(LanguagePref::Fr, ThemePref::Light);
+    let names = [
+        ("Installation du chantier", "Lot 1", "12,5"),
+        ("Décapage et terrassement", "Lot 1", "40"),
+        ("Fouilles des fondations", "Lot 2", "3,25"),
+        ("Coulage des fondations", "Lot 2", "18"),
+    ];
+    let mut ops = vec![serde_json::json!({ "op": "custom_field.rename", "field": "text1", "alias": "Lot" })];
+    for (name, lot, number) in names {
+        let uid = uid_named(harness.state(), name).get();
+        ops.push(serde_json::json!({
+            "op": "task.update", "uid": uid, "custom": { "text1": lot, "number1": number }
+        }));
+    }
+    exec_ops(&mut harness, &serde_json::Value::Array(ops));
+    let text1 = Column::Custom(CustomFieldId::new(CustomKind::Text, 1).unwrap());
+    let number1 = Column::Custom(CustomFieldId::new(CustomKind::Number, 1).unwrap());
+    for (at, column) in [(2, text1), (3, number1)] {
+        harness
+            .state_mut()
+            .dispatch(Action::Column(planrs_ui_egui::action::ColumnOp::Insert {
+                at,
+                column,
+            }));
+    }
+    let uid = uid_named(harness.state(), "Fouilles des fondations");
+    harness.state_mut().dispatch(Action::Select(Some(uid)));
+    harness.run();
+    let shown: Vec<Column> = harness
+        .state()
+        .state
+        .visible_columns()
+        .map(|c| c.column)
+        .collect();
+    assert_eq!(&shown[..4], &[Column::Id, Column::Name, text1, number1]);
+    let rows = harness.state().rows().unwrap();
+    let index = rows.index_of(uid).unwrap();
+    assert_eq!(rows.text(index, text1), "Lot 2");
+    assert_eq!(rows.text(index, number1), "3,25");
+    assert!(
+        harness
+            .query_all_by_label_contains("Lot (Texte1)")
+            .next()
+            .is_some()
+    );
+    snapshot(&mut harness, "custom_columns_fr_light");
+}
+
+/// H-UI-114 (L10) : la colonne « Ajouter une nouvelle colonne » est
+/// affichée par défaut en bout de table et comptée par le défilement.
+#[test]
+fn h_ui_114_add_new_column_shown_by_default() {
+    let harness = demo(LanguagePref::Fr, ThemePref::Light);
+    assert!(planrs_ui_egui::view::table::add_column_slot(&harness.ctx));
+    let state = &harness.state().state;
+    let columns: f32 = state.visible_columns().map(|c| f32::from(c.width)).sum();
+    let content = planrs_ui_egui::view::table::content_width(&harness.ctx, state);
+    assert!((content - columns - planrs_ui_egui::view::table::ADD_COLUMN_W).abs() < 0.01);
+}
+
+/// Projet de l'exemple avec un lien pendant (diagnostic d'import) et un
+/// lien vers une tâche absente (diagnostic de calcul ou d'import).
+fn demo_with_diagnostics() -> Harness<'static, App> {
+    let xml = std::str::from_utf8(planrs_ui_egui::DEMO_MSPDI).unwrap().replacen(
+        "<PredecessorUID>",
+        "<PredecessorUID>777",
+        1,
+    );
+    let mut harness = harness(LanguagePref::Fr, ThemePref::Light);
+    harness.run();
+    harness
+        .state_mut()
+        .open_bytes(xml.as_bytes(), DocOrigin::default());
+    harness.run();
+    assert!(harness.state().document.is_some());
+    assert_ne!(harness.state().diagnostics_view().entries.len(), 0);
+    harness
+}
+
+/// H-UI-119 : sans diagnostic (exemple embarqué, ou aucun document), la
+/// case Affichage → Diagnostics cochée ne dessine aucun volet (les
+/// pastilles disent déjà « aucune erreur ») ; avec un diagnostic, le
+/// volet est là.
+#[test]
+fn h_ui_119_no_empty_diagnostics_pane() {
+    use planrs_ui_egui::view::diagnostics::drawn;
+    let mut harness = demo(LanguagePref::Fr, ThemePref::Light);
+    harness.state_mut().dispatch(Action::ToggleDiagnostics);
+    harness.run();
+    assert!(harness.state().state.diagnostics_open, "case gardée cochée");
+    assert!(!drawn(&harness.ctx), "volet vide dessiné");
+    let none = Texts::new(Language::Fr).get_args(
+        TextId::StatusErrors,
+        &[("count", planrs_ui_egui::i18n::Arg::Count(0))],
+    );
+    assert_eq!(harness.query_all_by_label(&none).count(), 1, "pastille seule");
+    harness.state_mut().dispatch(Action::CloseDocument);
+    harness.run();
+    assert!(harness.state().document.is_none());
+    assert!(!drawn(&harness.ctx));
+    let mut harness = demo_with_diagnostics();
+    harness.state_mut().dispatch(Action::ToggleDiagnostics);
+    harness.run();
+    assert!(drawn(&harness.ctx));
+}
+
+/// H-UI-119 : clic sur la pastille d'une gravité présente ⇒ volet ouvert,
+/// filtré sur elle (ses seules lignes) ; même pastille ⇒ fermé ; volet
+/// fermé ⇒ filtre retiré (la case du menu l'ouvre sur tout) ; « Tout
+/// afficher » retire le filtre.
+#[test]
+fn h_ui_119_pill_opens_filtered() {
+    use planrs_core::Severity;
+    use planrs_ui_egui::i18n::Arg;
+    use planrs_ui_egui::view::diagnostics::{drawn, filter, severity_range};
+    let mut harness = demo_with_diagnostics();
+    let entries = harness.state().diagnostics_view().entries.clone();
+    let (severity, id, count) = [
+        (Severity::Error, TextId::StatusErrors),
+        (Severity::Warning, TextId::StatusWarnings),
+    ]
+    .into_iter()
+    .map(|(s, id)| (s, id, severity_range(&entries, s).len()))
+    .find(|(_, _, n)| *n > 0)
+    .expect("erreur ou avertissement attendu");
+    let count = i64::try_from(count).unwrap();
+    let pill = Texts::new(Language::Fr).get_args(id, &[("count", Arg::Count(count))]);
+    harness.get_by_label(&pill).click();
+    harness.run();
+    assert!(harness.state().state.diagnostics_open);
+    assert!(drawn(&harness.ctx));
+    assert_eq!(filter(&harness.ctx), Some(severity));
+    // Lignes de la gravité affichées, aucune autre.
+    for (s, text) in &entries {
+        let shown = harness.query_by_label(text).is_some();
+        assert_eq!(shown, *s == severity, "{s:?} {text}");
+    }
+    // « Tout afficher » : filtre retiré, volet ouvert.
+    let all = Texts::new(Language::Fr).get(TextId::DiagnosticsShowAll);
+    harness.get_by_label(&all).click();
+    harness.run();
+    assert_eq!(filter(&harness.ctx), None);
+    assert!(harness.state().state.diagnostics_open);
+    // Pastille de nouveau : filtre posé ; une seconde fois : fermé.
+    harness.get_all_by_label(&pill).next().unwrap().click();
+    harness.run();
+    assert_eq!(filter(&harness.ctx), Some(severity));
+    harness.get_all_by_label(&pill).next().unwrap().click();
+    harness.run();
+    assert!(!harness.state().state.diagnostics_open);
+    assert!(!drawn(&harness.ctx));
+    assert_eq!(filter(&harness.ctx), None, "filtre retiré à la fermeture");
+    // Case du menu : ouvert sur tous les diagnostics.
+    harness.state_mut().dispatch(Action::ToggleDiagnostics);
+    harness.run();
+    assert_eq!(filter(&harness.ctx), None);
+    assert!(drawn(&harness.ctx));
+}
+
+/// Exemple `snapshot` (lot L10) : `--details`, `--columns`, `--toast`.
+#[test]
+fn snapshot_example_l10_options() {
+    let args = |list: &[&str]| snapshot_example::parse_args(list.iter().map(std::ffi::OsString::from));
+    let parsed = args(&[
+        "--p",
+        "main",
+        "--details",
+        "--columns",
+        "name,work,text1,free_slack",
+        "--toast",
+    ])
+    .unwrap();
+    assert!(parsed.details && parsed.toast);
+    let text1 = Column::Custom(planrs_core::CustomFieldId::new(planrs_core::CustomKind::Text, 1).unwrap());
+    let columns = parsed.columns.clone().unwrap();
+    assert_eq!(columns.len(), 4);
+    assert_eq!(columns[0], Column::Name);
+    assert_eq!(columns[2], text1);
+    for bad in ["", "id", "name,name", "nom"] {
+        assert!(args(&["--p", "main", "--columns", bad]).is_err(), "{bad}");
+    }
+    let harness = snapshot_example::prepared(&parsed, None).unwrap();
+    let app = harness.state();
+    assert!(app.state.details.visible);
+    let shown: Vec<Column> = app.state.visible_columns().map(|c| c.column).collect();
+    assert_eq!(shown.len(), 5);
+    assert_eq!(shown[0], Column::Id);
+    assert_eq!(&shown[1..], columns.as_slice());
+    assert_eq!(app.message_store().toasts().len(), 1);
+}

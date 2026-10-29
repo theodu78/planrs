@@ -18,10 +18,12 @@ use crate::i18n::{Arg, TextId};
 use crate::io::SaveKind;
 use crate::keymap::{Binding, Shortcut, UiBinding, shortcut_for_os, shortcut_text};
 use crate::notify::{MessageKind, MessageStore};
+use crate::ribbon::icon_data::Icon;
+use crate::ribbon::icons::paint_icon;
 use crate::ribbon::spec::{PERCENT_STEPS, RibbonCmd, percent_value};
 use crate::state::{FilterChoice, MAX_OUTLINE_LEVEL};
 use crate::state::{LanguagePref, ThemePref};
-use crate::theme::Palette;
+use crate::theme::{Palette, ToastTokens};
 use crate::timescale::TimeScaleZoom;
 use crate::view::task_view::TaskViewOp;
 
@@ -261,6 +263,9 @@ fn view_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, _side_open: bool) {
         twin(ui, fc, RibbonCmd::Diagnostics, None);
         // --- Ruban L2 : chronologie (H-UI-78), repli du ruban (H-UI-72).
         twin(ui, fc, RibbonCmd::TimelineVisible, None);
+        // --- Seconde passe UX (L10) : volet de détails (H-UI-112), jumeau
+        // de la case Affichage → Fractionner → Détails.
+        twin(ui, fc, RibbonCmd::DetailsPane, None);
         twin(
             ui,
             fc,
@@ -314,7 +319,17 @@ fn file_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
         });
     });
     ui.separator();
-    menu_item(ui, fc, TextId::MenuClose, None, has_doc, Action::CloseDocument);
+    // Fermer (H-UI-109) : raccourci Ctrl/Cmd+W affiché (Ctrl+F4 aussi lu
+    // hors macOS) ; même fermeture gardée que la touche.
+    let close = Binding::Ui(UiBinding::CloseDocument);
+    menu_item(
+        ui,
+        fc,
+        TextId::MenuClose,
+        Some(close),
+        has_doc,
+        Action::CloseDocumentGuarded,
+    );
     // Quitter : le navigateur ne laisse pas une page fermer son onglet.
     if !cfg!(target_arch = "wasm32") {
         ui.separator();
@@ -364,6 +379,8 @@ fn project_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
         RibbonCmd::WorkingTime,
         RibbonCmd::SetBaseline,
         RibbonCmd::UpdateProject,
+        // Seconde passe UX (L10) : Projet → Champs personnalisés… (H-UI-118).
+        RibbonCmd::CustomFields,
     ] {
         twin(ui, fc, cmd, None);
     }
@@ -456,6 +473,9 @@ fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
         RibbonCmd::SelectAll,
     ] {
         twin_cmd(ui, fc, cmd);
+        if cmd == RibbonCmd::FillDown {
+            fill_right_item(ui, fc, TextId::MenuFillRight);
+        }
     }
     // --- J8 L15 : menu Tâche (%, mode, actif) ---
 }
@@ -503,6 +523,11 @@ fn format_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     twin(ui, fc, RibbonCmd::RelativeMonths, None);
     ui.separator();
     twin(ui, fc, RibbonCmd::PageSetup, None);
+    // --- Seconde passe UX (L10) : Insérer une colonne…, Paramètres de
+    // champ… (H-UI-114, H-UI-115), jumeaux du groupe Colonnes du ruban.
+    ui.separator();
+    twin_cmd(ui, fc, RibbonCmd::InsertColumn);
+    twin_cmd(ui, fc, RibbonCmd::FieldSettings);
     // --- Ruban L2 : colonnes.
     let has_doc = fc.doc.is_some();
     let texts = fc.texts;
@@ -535,8 +560,32 @@ pub(crate) fn dropdown_contents(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, cmd: R
                 let shortcut = cmd.shortcut(ui.ctx().os());
                 twin_item(ui, fc, cmd, fc.texts.get(label), shortcut);
             }
+            // Remplir ▾ → À droite (Ctrl/Cmd+R, R-258 amendée), comme la
+            // liste Fill de Project.
+            if cmd == RibbonCmd::FillDown {
+                fill_right_item(ui, fc, TextId::RibbonFillRight);
+            }
         }
         _ => {}
+    }
+}
+
+/// Entrée « Remplir à droite » (Ctrl/Cmd+R, R-258 amendée, H-UI-120) :
+/// mêmes prédicats que « Remplir vers le bas » ([`RibbonCmd::FillDown`]),
+/// action `CellOp::FillRight`, raccourci du `KEYMAP`.
+fn fill_right_item(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, label: TextId) {
+    let enabled = RibbonCmd::FillDown.enabled(fc);
+    let mut button = egui::Button::new(fc.texts.get(label));
+    if let Some(shortcut) = binding_shortcut(ui, Some(Binding::Ui(UiBinding::FillRight))) {
+        button = button.shortcut_text(shortcut_text(ui.ctx(), &shortcut));
+    }
+    let response = ui.add_enabled(enabled.yes, button);
+    let response = match enabled.reason {
+        Some(reason) => response.on_disabled_hover_text(fc.texts.get(reason)),
+        None => response,
+    };
+    if response.clicked() {
+        fc.actions.push(Action::Cells(crate::action::CellOp::FillRight));
     }
 }
 
@@ -906,16 +955,43 @@ fn status_contents(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     let errors = i64::try_from(fc.diagnostics.errors).unwrap_or(i64::MAX);
     let warnings = i64::try_from(fc.diagnostics.warnings).unwrap_or(i64::MAX);
     let counters = [
-        (TextId::StatusErrors, errors, ui.visuals().error_fg_color),
-        (TextId::StatusWarnings, warnings, ui.visuals().warn_fg_color),
+        (
+            TextId::StatusErrors,
+            errors,
+            ui.visuals().error_fg_color,
+            Severity::Error,
+        ),
+        (
+            TextId::StatusWarnings,
+            warnings,
+            ui.visuals().warn_fg_color,
+            Severity::Warning,
+        ),
     ];
-    for (id, count, color) in counters {
+    // H-UI-119 (lot L10) : une pastille ouvre le volet filtré sur sa
+    // gravité ; la même pastille, volet ouvert, le referme ; l'autre change
+    // le filtre. Volet fermé : filtre retiré (la case du menu Affichage
+    // l'ouvre sur tous les diagnostics).
+    let open = fc.state.diagnostics_open;
+    if !open {
+        super::diagnostics::closed(ui.ctx());
+    }
+    let filter = super::diagnostics::filter(ui.ctx());
+    for (id, count, color, severity) in counters {
         let mut text = egui::RichText::new(texts.get_args(id, &[("count", Arg::Count(count))]));
         if count > 0 {
             text = text.color(color);
         }
-        if ui.selectable_label(fc.state.diagnostics_open, text).clicked() {
-            fc.actions.push(Action::ToggleDiagnostics);
+        let selected = open && filter.is_none_or(|f| f == severity);
+        if ui.selectable_label(selected, text).clicked() {
+            if open && filter == Some(severity) {
+                fc.actions.push(Action::ToggleDiagnostics);
+            } else {
+                super::diagnostics::set_filter(ui.ctx(), Some(severity));
+                if !open {
+                    fc.actions.push(Action::ToggleDiagnostics);
+                }
+            }
         }
     }
     // --- J8 L9 : « Filtre : Critiques » (rien sans filtre).
@@ -951,28 +1027,21 @@ pub fn hovered_toast(ctx: &egui::Context) -> Option<u64> {
         .flatten()
 }
 
-/// Fond, liseré et texte d'un message selon sa sorte.
-fn message_colors(
-    kind: MessageKind,
-    palette: &Palette,
-    visuals: &egui::Visuals,
-) -> (egui::Color32, egui::Color32, egui::Color32) {
+/// Liseré et icône d'un message selon sa sorte (H-UI-104, jetons de
+/// [`ToastTokens`]).
+const fn toast_accent(kind: MessageKind, tokens: &ToastTokens) -> (egui::Color32, Icon) {
     match kind {
-        MessageKind::Refusal | MessageKind::Blocking => {
-            (palette.message_error_bg, palette.critical, palette.text_strong)
-        }
-        MessageKind::Warning => (
-            palette.message_warning_bg,
-            visuals.warn_fg_color,
-            palette.text_strong,
-        ),
-        MessageKind::Info => (
-            visuals.window_fill,
-            visuals.widgets.noninteractive.bg_stroke.color,
-            visuals.text_color(),
-        ),
+        MessageKind::Refusal | MessageKind::Blocking => (tokens.error, Icon::CircleX),
+        MessageKind::Warning => (tokens.warning, Icon::TriangleAlert),
+        MessageKind::Info => (tokens.info, Icon::Info),
     }
 }
+
+/// Côté de l'icône d'une notification.
+const TOAST_ICON: f32 = 16.0;
+
+/// Largeur du liseré gauche d'une notification.
+const TOAST_STRIPE: f32 = 4.0;
 
 /// Bouton de l'historique dans la barre d'état : « Messages », puis le
 /// compte des non lus s'il y en a.
@@ -1015,7 +1084,7 @@ fn toasts(ctx: &egui::Context, fc: &mut FrameCtx<'_>, toasts: &[UserMessage], ba
     if toasts.is_empty() {
         return None;
     }
-    let palette = fc.palette;
+    let tokens = ToastTokens::of(fc.palette);
     let close = fc.texts.get(TextId::NotifyClose);
     let mut hovered = None;
     let mut dismissed = Vec::new();
@@ -1026,37 +1095,85 @@ fn toasts(ctx: &egui::Context, fc: &mut FrameCtx<'_>, toasts: &[UserMessage], ba
             egui::vec2(-TOAST_MARGIN, -(bar_h + TOAST_MARGIN)),
         )
         .show(ctx, |ui| {
-            ui.set_max_width(TOAST_W);
+            // Largeur fixe (≤ `TOAST_W`, bornée par la fenêtre) : cartes
+            // alignées, quelle que soit la longueur de la phrase.
+            let screen = ctx.content_rect().width();
+            let width = if screen.is_finite() {
+                (screen - 2.0 * TOAST_MARGIN).clamp(160.0, TOAST_W)
+            } else {
+                TOAST_W
+            };
+            ui.set_width(width);
             for toast in toasts {
-                let (fill, accent, fg) = message_colors(toast.kind, palette, ui.visuals());
-                let frame = egui::Frame::popup(ui.style())
-                    .fill(fill)
-                    .stroke(egui::Stroke::new(1.0, accent))
-                    .inner_margin(egui::Margin::same(8));
+                let (accent, icon) = toast_accent(toast.kind, &tokens);
+                let frame = egui::Frame::new()
+                    .fill(tokens.bg)
+                    .stroke(egui::Stroke::new(1.0, tokens.border))
+                    .corner_radius(egui::CornerRadius::same(6))
+                    .shadow(egui::Shadow {
+                        offset: [0, 3],
+                        blur: 14,
+                        spread: 0,
+                        color: tokens.shadow,
+                    })
+                    .inner_margin(egui::Margin {
+                        left: 14,
+                        right: 6,
+                        top: 8,
+                        bottom: 8,
+                    });
                 let response = frame
                     .show(ui, |ui| {
-                        ui.set_max_width(TOAST_W);
+                        ui.set_width(width - 22.0);
                         ui.horizontal_top(|ui| {
+                            let (icon_rect, _) = ui.allocate_exact_size(
+                                egui::vec2(TOAST_ICON, TOAST_ICON),
+                                egui::Sense::hover(),
+                            );
+                            paint_icon(ui.painter(), icon_rect, icon, accent);
+                            ui.add_space(4.0);
                             ui.vertical(|ui| {
-                                ui.set_max_width(TOAST_W - 80.0);
-                                message_body(ui, fc, toast, fg, "planrs_toast_detail");
+                                ui.set_width((width - 22.0 - TOAST_ICON - 36.0).max(80.0));
+                                message_body(ui, fc, toast, tokens.text, "planrs_toast_detail");
                             });
                             // « × » (H-UI-104) : nom distinct des « Fermer » des
                             // fenêtres ; le texte traduit en infobulle.
-                            if ui
-                                .small_button(TOAST_CLOSE_GLYPH)
-                                .on_hover_text(close.as_str())
-                                .clicked()
-                            {
-                                dismissed.push(toast.id);
-                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                                let close_button = egui::Button::new(
+                                    egui::RichText::new(TOAST_CLOSE_GLYPH).color(tokens.text),
+                                )
+                                .frame(false)
+                                .small();
+                                if ui.add(close_button).on_hover_text(close.as_str()).clicked() {
+                                    dismissed.push(toast.id);
+                                }
+                            });
                         });
                     })
                     .response;
-                if ui.rect_contains_pointer(response.rect) {
+                // Liseré gauche, couleur de la sorte (coins gauches arrondis
+                // comme la carte).
+                let card = response.rect;
+                if card.is_finite() && card.is_positive() {
+                    let stripe = egui::Rect::from_min_max(
+                        card.left_top(),
+                        egui::pos2(card.left() + TOAST_STRIPE, card.bottom()),
+                    );
+                    ui.painter().rect_filled(
+                        stripe,
+                        egui::CornerRadius {
+                            nw: 6,
+                            sw: 6,
+                            ne: 0,
+                            se: 0,
+                        },
+                        accent,
+                    );
+                }
+                if ui.rect_contains_pointer(card) {
                     hovered = Some(toast.id);
                 }
-                ui.add_space(6.0);
+                ui.add_space(8.0);
             }
         });
     for id in dismissed {

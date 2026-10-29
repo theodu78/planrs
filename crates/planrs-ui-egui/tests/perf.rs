@@ -2160,6 +2160,43 @@ fn splitter_drag_5000() {
     assert_budget("splitter_drag_5000", samples, bench.last);
 }
 // --- UX2 L5 --- (`details_follow_5000`)
+
+/// UX2 L5 (H-UI-112, § 2.5) : réseau de 5 000 tâches, volet de détails
+/// ouvert (forme Prédécesseurs et successeurs) ; ↓ maintenue 120 images,
+/// la tâche suivie change à chaque image (brouillon relu, successeurs
+/// cherchés dans tout le projet). Image médiane < 16 ms, p95 < 32 ms ; rien
+/// d'écrit dans le document.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn details_follow_5000() {
+    use planrs_ui_egui::action::PaneOp;
+    use planrs_ui_egui::state::DetailsForm;
+    let (mut app, mut bench) = nav_bench();
+    app.dispatch(Action::Pane(PaneOp::ShowDetails(true)));
+    app.dispatch(Action::Pane(PaneOp::SetDetailsForm(
+        DetailsForm::PredecessorsSuccessors,
+    )));
+    bench.settle(&mut app);
+    let generation = app.document.as_ref().unwrap().generation();
+    for _ in 0..WARMUP {
+        bench.frame(&mut app, key_events(Key::ArrowDown, Modifiers::NONE));
+    }
+    let start = cursor_row(&app);
+    let samples: Vec<Duration> = (0..120)
+        .map(|_| bench.frame(&mut app, key_events(Key::ArrowDown, Modifiers::NONE)))
+        .collect();
+    assert_eq!(cursor_row(&app), start + 120, "une ligne par image");
+    bench.settle(&mut app);
+    let followed = app
+        .view()
+        .details
+        .as_ref()
+        .and_then(|d| d.draft.as_ref())
+        .map(|d| d.uid);
+    assert_eq!(followed, app.selection, "le volet suit la cellule active");
+    assert_eq!(app.document.as_ref().unwrap().generation(), generation);
+    assert_budget("details_follow_5000", samples, bench.last);
+}
 // --- UX2 L6 --- (`field_picker_5000`)
 
 /// Seconde passe UX, lot L6 (§ 2.5) : sélecteur de champ ouvert sur le

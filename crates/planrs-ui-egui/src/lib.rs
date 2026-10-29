@@ -42,6 +42,7 @@ pub mod selection;
 pub mod shell;
 pub mod state;
 pub mod structure;
+pub mod task_form;
 pub mod theme;
 pub mod timeline_ops;
 pub mod timephased;

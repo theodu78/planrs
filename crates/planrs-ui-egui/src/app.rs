@@ -2421,6 +2421,12 @@ impl App {
 
     /// Affiche le refus d'un geste du Gantt (bandeau), raison traduite.
     fn report_gesture(&mut self, error: GestureError) {
+        if error == GestureError::AlreadyLinked {
+            // R-260 c, H-UI-107 : rien n'est écrit ; simple information.
+            let text = self.texts.get(TextId::LinkAlreadyLinked);
+            self.push_message(Severity::Info, text);
+            return;
+        }
         let reason = match error {
             GestureError::NotDraggable(_, NotDraggable::Summary) => TextId::GanttReasonSummary,
             GestureError::NotDraggable(_, NotDraggable::Started) => TextId::GanttReasonStarted,
@@ -2431,6 +2437,7 @@ impl App {
             GestureError::NotDraggable(_, NotDraggable::Blank) => TextId::GanttReasonBlank,
             GestureError::SameTask => TextId::GanttReasonSameTask,
             GestureError::Overflow => TextId::GanttReasonOverflow,
+            GestureError::AlreadyLinked => TextId::LinkAlreadyLinked,
         };
         let detail = self.texts.get(reason);
         let text = self.texts.get_args(

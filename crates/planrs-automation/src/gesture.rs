@@ -15,7 +15,9 @@
 //!   minutes civiles ⇒ `task.update { duration }`.
 //! - R-242 : avancement = début + max(n, 0) jours ; % = ⌊travail × 100 / D⌋
 //!   × 100 ⇒ `progress.update { percent_complete }`.
-//! - R-243 : lien FS sans décalage ⇒ `link.add`.
+//! - R-243 : lien FS sans décalage ⇒ `link.add` ; paire déjà liée (dans un
+//!   sens ou dans l'autre) ⇒ [`GestureError::AlreadyLinked`], aucun lot
+//!   (R-260 c, seconde passe UX).
 
 use planrs_core::calendar::{CalendarSet, CompiledCalendar, TimeScale, builtin};
 use planrs_core::progress::facts;
@@ -75,11 +77,15 @@ pub enum GestureError {
     /// impossible).
     #[error("écart hors limites")]
     Overflow,
+    /// Les deux tâches sont déjà liées, dans un sens ou dans l'autre
+    /// (R-260 c) : aucun lot (l'interface en fait une information).
+    #[error("ces tâches sont déjà liées")]
+    AlreadyLinked,
 }
 
 impl GestureError {
     /// Code stable (`task.not_found`, `gesture.not_draggable`,
-    /// `link.self`, `limit.exceeded`).
+    /// `link.self`, `limit.exceeded`, `link.duplicate`).
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
@@ -87,6 +93,7 @@ impl GestureError {
             Self::NotDraggable(..) => codes::GESTURE_NOT_DRAGGABLE,
             Self::SameTask => codes::LINK_SELF,
             Self::Overflow => codes::LIMIT_EXCEEDED,
+            Self::AlreadyLinked => codes::LINK_DUPLICATE,
         }
     }
 }
@@ -365,20 +372,28 @@ pub fn progress_drag(
     }))))
 }
 
-/// Lien FS sans décalage de `predecessor` vers `successor` (R-243). Les
-/// refus du registre (doublon, cycle, R-059) viennent à l'application du
-/// lot.
+/// Lien FS sans décalage de `predecessor` vers `successor` (R-243). Une
+/// paire déjà liée, dans un sens ou dans l'autre, ne produit aucun lot
+/// (R-260 c) ; les autres refus du registre (cycle, R-059) viennent à
+/// l'application du lot.
 ///
 /// # Errors
 ///
 /// [`GestureError`] : [`GestureError::SameTask`], tâche inconnue, ligne
-/// vide, tâche exclue.
+/// vide, tâche exclue, [`GestureError::AlreadyLinked`].
 pub fn link_drag(s: &Session, predecessor: TaskUid, successor: TaskUid) -> Result<Batch, GestureError> {
     if predecessor == successor {
         return Err(GestureError::SameTask);
     }
-    for uid in [predecessor, successor] {
-        scheduled(s, uid)?;
+    let (pred_task, _) = scheduled(s, predecessor)?;
+    let (succ_task, _) = scheduled(s, successor)?;
+    let linked = succ_task
+        .predecessors
+        .iter()
+        .any(|l| l.predecessor == predecessor)
+        || pred_task.predecessors.iter().any(|l| l.predecessor == successor);
+    if linked {
+        return Err(GestureError::AlreadyLinked);
     }
     Ok(one(Command::LinkAdd(LinkSpec {
         pred: TaskRef::Uid(predecessor),

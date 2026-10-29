@@ -38,10 +38,26 @@
 //! macOS : le menu applicatif par défaut de winit est retiré
 //! ([`event_loop_hook`]). Son entrée « Quitter » (Cmd+Q) appelle
 //! `terminate:`, qui ferme la fenêtre sans `CloseRequested` : le garde des
-//! modifications non enregistrées ne la voyait pas. Sans ce menu, Cmd+Q
-//! arrive comme une touche et passe par le `KEYMAP` (confirmation). « Quitter »
-//! du Dock et la fermeture de session appellent toujours `terminate:` : non
+//! modifications non enregistrées ne la voyait pas. À sa place, un menu
+//! applicatif natif minimal (ADR-0019 D4, H-UI-108, crate `muda`) est posé
+//! à la création de l'application ([`mac_menu`]) : menu « planrs » (À propos,
+//! Masquer ⌘H, Masquer les autres ⌥⌘H, Tout afficher, Quitter ⌘Q) et menu
+//! Fenêtre (Réduire ⌘M, Zoom). « Quitter planrs » est un élément
+//! **personnalisé** : son clic (ou ⌘Q, pris par le menu avant la fenêtre)
+//! passe par [`App::shell_quit`], donc par la même garde que Ctrl/Cmd+Q
+//! (saisie validée, fenêtre fermée, bandeau « Enregistrer les
+//! modifications ? »), jamais par `terminate:`. Les autres éléments sont
+//! les éléments prédéfinis du système (masquer, réduire, zoom). Échec de
+//! création du menu : journal sur la sortie d'erreur, application sans
+//! menu (comportement de J7), jamais de panique. « Quitter » du Dock et la
+//! fermeture de session appellent toujours `terminate:` : non
 //! interceptables sans délégué Objective-C (limite, docs/features/ui.md § 5).
+//!
+//! Journal des touches (`PLANRS_LOG_KEYS=1`, H-UI-108) : un journaliseur
+//! minimal ([`install_key_log`]) imprime sur la sortie d'erreur les appuis
+//! reçus par l'interface (cible `planrs::keys`) et les clics du menu natif,
+//! pour diagnostiquer un raccourci muet sur Mac
+//! (`PLANRS_LOG_KEYS=1 /Applications/planrs.app/Contents/MacOS/planrs-desktop`).
 //!
 //! Version (J8, lot L1, C-REL-03) : `planrs-desktop --version` (ou `-V`)
 //! imprime `planrs <version>` et sort avant toute fenêtre
@@ -64,6 +80,7 @@ use planrs_automation::control::{
 };
 use planrs_automation::recovery::{Recorder, orphans, recovery_dir};
 use planrs_core::{Moment, PRODUCT_NAME, PRODUCT_VERSION};
+use planrs_ui_egui::i18n::{Arg, TextId, Texts};
 use planrs_ui_egui::relay::ScreenshotConfig;
 use planrs_ui_egui::{App, DocumentObserver, Env, Language, OpenDocument, PlanrsApp, RfdFileService};
 
@@ -221,6 +238,290 @@ fn event_loop_hook() -> Option<eframe::EventLoopBuilderHook> {
     }
 }
 
+/// Élément du menu applicatif natif (macOS), décrit sans `muda` pour être
+/// testé sur toutes les plateformes ([`menu_spec`]).
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "menu natif : macOS seulement, décrit et testé partout")
+)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MenuItemKind {
+    /// « À propos de planrs » (panneau standard du système).
+    About,
+    /// « Masquer planrs » (⌘H, élément du système).
+    Hide,
+    /// « Masquer les autres » (⌥⌘H, élément du système).
+    HideOthers,
+    /// « Tout afficher » (élément du système).
+    ShowAll,
+    /// « Quitter planrs » (⌘Q) : élément **personnalisé**, jamais
+    /// `terminate:` ([`App::shell_quit`]).
+    Quit,
+    /// « Réduire » (⌘M, élément du système).
+    Minimize,
+    /// « Zoom » (élément du système).
+    Zoom,
+    /// Séparateur.
+    Separator,
+}
+
+/// Une entrée de menu : genre, libellé traduit et raccourci affiché par le
+/// système (vide : aucun).
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "menu natif : macOS seulement, décrit et testé partout")
+)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MenuEntry {
+    kind: MenuItemKind,
+    label: String,
+    shortcut: &'static str,
+}
+
+/// Menu applicatif natif : menu « planrs » et menu « Fenêtre ».
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "menu natif : macOS seulement, décrit et testé partout")
+)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MenuSpec {
+    app_title: String,
+    app: Vec<MenuEntry>,
+    window_title: String,
+    window: Vec<MenuEntry>,
+}
+
+/// Identifiant de l'élément personnalisé « Quitter planrs ».
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "menu natif : macOS seulement, décrit et testé partout")
+)]
+const QUIT_MENU_ID: &str = "planrs.quit";
+
+/// Description du menu natif dans `language` (H-UI-108, H-UI-109 ; libellés
+/// des fichiers `.ftl`, `mac-menu-*`).
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "menu natif : macOS seulement, décrit et testé partout")
+)]
+fn menu_spec(language: Language) -> MenuSpec {
+    let texts = Texts::new(language);
+    let text = |id: TextId| texts.get_args(id, &[("product", Arg::Str(PRODUCT_NAME.into()))]);
+    let entry = |kind: MenuItemKind, id: TextId, shortcut: &'static str| MenuEntry {
+        kind,
+        label: text(id),
+        shortcut,
+    };
+    let separator = || MenuEntry {
+        kind: MenuItemKind::Separator,
+        label: String::new(),
+        shortcut: "",
+    };
+    MenuSpec {
+        app_title: PRODUCT_NAME.to_owned(),
+        app: vec![
+            entry(MenuItemKind::About, TextId::MacMenuAbout, ""),
+            separator(),
+            entry(MenuItemKind::Hide, TextId::MacMenuHide, "⌘H"),
+            entry(MenuItemKind::HideOthers, TextId::MacMenuHideOthers, "⌥⌘H"),
+            entry(MenuItemKind::ShowAll, TextId::MacMenuShowAll, ""),
+            separator(),
+            entry(MenuItemKind::Quit, TextId::MacMenuQuit, "⌘Q"),
+        ],
+        window_title: text(TextId::MacMenuWindow),
+        window: vec![
+            entry(MenuItemKind::Minimize, TextId::MacMenuMinimize, "⌘M"),
+            entry(MenuItemKind::Zoom, TextId::MacMenuZoom, ""),
+        ],
+    }
+}
+
+/// Menu applicatif natif de macOS (`muda`), construit depuis [`MenuSpec`].
+#[cfg(target_os = "macos")]
+mod mac_menu {
+    use muda::accelerator::{Accelerator, Code, Modifiers};
+    use muda::{AboutMetadata, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+    use planrs_core::{PRODUCT_NAME, PRODUCT_VERSION};
+
+    use super::{MenuEntry, MenuItemKind, MenuSpec, QUIT_MENU_ID};
+
+    /// Menu posé sur l'application ; gardé vivant tant qu'elle tourne.
+    pub struct NativeMenu {
+        _menu: Menu,
+        _window: Submenu,
+    }
+
+    /// Ajoute `entry` à `submenu`.
+    fn append(submenu: &Submenu, entry: &MenuEntry) -> muda::Result<()> {
+        let label = Some(entry.label.as_str());
+        match entry.kind {
+            MenuItemKind::About => {
+                let metadata = AboutMetadata {
+                    name: Some(PRODUCT_NAME.to_owned()),
+                    version: Some(PRODUCT_VERSION.to_owned()),
+                    ..AboutMetadata::default()
+                };
+                submenu.append(&PredefinedMenuItem::about(label, Some(metadata)))
+            }
+            MenuItemKind::Hide => submenu.append(&PredefinedMenuItem::hide(label)),
+            MenuItemKind::HideOthers => submenu.append(&PredefinedMenuItem::hide_others(label)),
+            MenuItemKind::ShowAll => submenu.append(&PredefinedMenuItem::show_all(label)),
+            MenuItemKind::Minimize => submenu.append(&PredefinedMenuItem::minimize(label)),
+            MenuItemKind::Zoom => submenu.append(&PredefinedMenuItem::zoom(label)),
+            MenuItemKind::Separator => submenu.append(&PredefinedMenuItem::separator()),
+            MenuItemKind::Quit => submenu.append(&MenuItem::with_id(
+                QUIT_MENU_ID,
+                &entry.label,
+                true,
+                Some(Accelerator::new(Modifiers::META, Code::KeyQ)),
+            )),
+        }
+    }
+
+    /// Pose le menu `spec` sur l'application et route « Quitter » vers
+    /// `on_quit` (fil principal, appelé par le système à chaque clic ou ⌘Q).
+    /// Hors du fil principal : rien (muda l'exige), signalé.
+    ///
+    /// # Errors
+    ///
+    /// Refus de `muda` (élément non ajouté) : message à journaliser.
+    pub fn install(
+        spec: &MenuSpec,
+        on_quit: impl Fn() + Send + Sync + 'static,
+    ) -> Result<NativeMenu, String> {
+        if std::thread::current().name() != Some("main") {
+            return Err("menu natif hors du fil principal".to_owned());
+        }
+        let build = || -> muda::Result<NativeMenu> {
+            let app = Submenu::new(&spec.app_title, true);
+            for entry in &spec.app {
+                append(&app, entry)?;
+            }
+            let window = Submenu::new(&spec.window_title, true);
+            for entry in &spec.window {
+                append(&window, entry)?;
+            }
+            let menu = Menu::new();
+            menu.append_items(&[&app, &window])?;
+            menu.init_for_nsapp();
+            window.set_as_windows_menu_for_nsapp();
+            Ok(NativeMenu {
+                _menu: menu,
+                _window: window,
+            })
+        };
+        let menu = build().map_err(|error| error.to_string())?;
+        MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+            log::info!(target: "planrs::keys", "menu natif : {}", event.id().as_ref());
+            if event.id == QUIT_MENU_ID {
+                on_quit();
+            }
+        }));
+        Ok(menu)
+    }
+}
+
+/// Journaliseur minimal du diagnostic des touches : cibles `planrs::*`,
+/// niveau `Info` et au-dessus, sur la sortie d'erreur (une erreur
+/// d'écriture est ignorée : jamais de panique).
+struct KeyLog;
+
+impl log::Log for KeyLog {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() <= log::Level::Info && metadata.target().starts_with("planrs::")
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if self.enabled(record.metadata()) {
+            use std::io::Write as _;
+            let _ = writeln!(std::io::stderr(), "[{}] {}", record.target(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+/// Le journal des touches est-il demandé (`PLANRS_LOG_KEYS=1`) ?
+fn key_log_requested(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|value| value == "1")
+}
+
+/// Installe [`KeyLog`] si `PLANRS_LOG_KEYS=1` (H-UI-108). Un autre
+/// journaliseur déjà installé est gardé.
+fn install_key_log() {
+    static LOGGER: KeyLog = KeyLog;
+    if key_log_requested(std::env::var_os("PLANRS_LOG_KEYS").as_deref()) && log::set_logger(&LOGGER).is_ok() {
+        log::set_max_level(log::LevelFilter::Info);
+    }
+}
+
+/// Application desktop : l'interface de `planrs-ui-egui` et, sur macOS, le
+/// menu natif dont « Quitter » arrive par `shell` (une demande par clic,
+/// lue à chaque image : [`App::shell_quit`]).
+struct DesktopApp {
+    inner: PlanrsApp,
+    /// Demandes « Quitter » du menu natif.
+    shell: Option<Receiver<()>>,
+    /// Menu natif posé (macOS) ; gardé vivant avec l'application.
+    #[cfg(target_os = "macos")]
+    _menu: Option<mac_menu::NativeMenu>,
+}
+
+impl DesktopApp {
+    /// Transmet à l'interface les « Quitter » du menu natif reçus depuis
+    /// la dernière image.
+    fn poll_shell(&mut self) {
+        let Some(shell) = &self.shell else {
+            return;
+        };
+        while shell.try_recv().is_ok() {
+            self.inner.app_mut().shell_quit();
+        }
+    }
+}
+
+impl eframe::App for DesktopApp {
+    fn raw_input_hook(&mut self, ctx: &eframe::egui::Context, raw_input: &mut eframe::egui::RawInput) {
+        self.inner.raw_input_hook(ctx, raw_input);
+    }
+
+    fn ui(&mut self, ui: &mut eframe::egui::Ui, frame: &mut eframe::Frame) {
+        self.poll_shell();
+        self.inner.ui(ui, frame);
+    }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.inner.save(storage);
+    }
+
+    fn persist_egui_memory(&self) -> bool {
+        self.inner.persist_egui_memory()
+    }
+}
+
+/// Pose le menu natif (macOS) dans la langue de l'interface au démarrage ;
+/// rend le récepteur de ses « Quitter ». Ailleurs : rien.
+#[cfg(target_os = "macos")]
+fn native_menu(
+    ctx: &eframe::egui::Context,
+    language: Language,
+) -> (Option<Receiver<()>>, Option<mac_menu::NativeMenu>) {
+    let (tx, rx) = sync_channel::<()>(8);
+    let ctx = ctx.clone();
+    let on_quit = move || {
+        // File pleine : une demande est déjà en attente, rien de perdu.
+        let _ = tx.try_send(());
+        ctx.request_repaint();
+    };
+    match mac_menu::install(&menu_spec(language), on_quit) {
+        Ok(menu) => (Some(rx), Some(menu)),
+        Err(error) => {
+            eprintln!("{PRODUCT_NAME} : menu natif indisponible ({error})");
+            (None, None)
+        }
+    }
+}
+
 /// Reprise après plantage : orphelins de `root` proposés (ceux sans
 /// modification supprimés ; ceux d'une autre version ou trop grands gardés
 /// et proposés, jamais supprimés sans l'accord de l'utilisateur), puis
@@ -302,6 +603,7 @@ fn main() -> ExitCode {
         eprintln!("{PRODUCT_NAME} : {error}");
         None
     });
+    install_key_log();
     let options = native_options();
     let result = eframe::run_native(
         PRODUCT_NAME,
@@ -328,7 +630,19 @@ fn main() -> ExitCode {
             if let Some(path) = &startup {
                 app.app_mut().open_path(path);
             }
-            Ok(Box::new(app))
+            #[cfg(target_os = "macos")]
+            let (shell, menu) = {
+                let language = Language::resolve(app.app_mut().state.language, Language::from_system());
+                native_menu(&cc.egui_ctx, language)
+            };
+            #[cfg(not(target_os = "macos"))]
+            let shell = None;
+            Ok(Box::new(DesktopApp {
+                inner: app,
+                shell,
+                #[cfg(target_os = "macos")]
+                _menu: menu,
+            }))
         }),
     );
     match result {
@@ -569,6 +883,101 @@ mod tests {
         assert_eq!(app.recovery_offers().len(), 1);
         assert!(app.recovery_offers().iter().all(|o| o.kept));
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// H-UI-108, H-UI-109 : menu natif de macOS, décrit partout. Menu
+    /// « planrs » (À propos, Masquer ⌘H, Masquer les autres ⌥⌘H, Tout
+    /// afficher, Quitter ⌘Q) et Fenêtre (Réduire ⌘M, Zoom) ; « Quitter » est
+    /// le seul élément personnalisé (aucun `terminate:`), libellés en
+    /// français et en anglais.
+    #[test]
+    fn macos_menu_spec() {
+        use planrs_ui_egui::Language;
+
+        use super::{MenuItemKind as K, menu_spec};
+
+        let fr = menu_spec(Language::Fr);
+        let kinds: Vec<K> = fr.app.iter().map(|e| e.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                K::About,
+                K::Separator,
+                K::Hide,
+                K::HideOthers,
+                K::ShowAll,
+                K::Separator,
+                K::Quit
+            ]
+        );
+        let labels: Vec<&str> = fr.app.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "À propos de planrs",
+                "",
+                "Masquer planrs",
+                "Masquer les autres",
+                "Tout afficher",
+                "",
+                "Quitter planrs"
+            ]
+        );
+        let shortcuts: Vec<&str> = fr.app.iter().map(|e| e.shortcut).collect();
+        assert_eq!(shortcuts, ["", "", "⌘H", "⌥⌘H", "", "", "⌘Q"]);
+        assert_eq!(fr.window_title, "Fenêtre");
+        let window: Vec<(K, &str, &str)> = fr
+            .window
+            .iter()
+            .map(|e| (e.kind, e.label.as_str(), e.shortcut))
+            .collect();
+        assert_eq!(window, [(K::Minimize, "Réduire", "⌘M"), (K::Zoom, "Zoom", "")]);
+        // Un seul « Quitter », dans le menu de l'application.
+        let quits = fr
+            .app
+            .iter()
+            .chain(&fr.window)
+            .filter(|e| e.kind == K::Quit)
+            .count();
+        assert_eq!(quits, 1);
+
+        let en = menu_spec(Language::En);
+        let labels: Vec<&str> = en.app.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "About planrs",
+                "",
+                "Hide planrs",
+                "Hide Others",
+                "Show All",
+                "",
+                "Quit planrs"
+            ]
+        );
+        assert_eq!(en.window_title, "Window");
+        assert_eq!(en.window.first().unwrap().label, "Minimize");
+        assert_eq!(super::QUIT_MENU_ID, "planrs.quit");
+    }
+
+    /// H-UI-108 : le journal des touches ne s'active que pour
+    /// `PLANRS_LOG_KEYS=1` ; le journaliseur ne garde que les cibles
+    /// `planrs::*` au niveau `Info` ou plus grave.
+    #[test]
+    fn desktop_key_log_switch_and_filter() {
+        use std::ffi::OsStr;
+
+        use log::Log as _;
+
+        assert!(super::key_log_requested(Some(OsStr::new("1"))));
+        assert!(!super::key_log_requested(Some(OsStr::new("0"))));
+        assert!(!super::key_log_requested(Some(OsStr::new("oui"))));
+        assert!(!super::key_log_requested(None));
+        let meta = |target: &'static str, level| log::Metadata::builder().target(target).level(level).build();
+        let logger = super::KeyLog;
+        assert!(logger.enabled(&meta("planrs::keys", log::Level::Info)));
+        assert!(!logger.enabled(&meta("planrs::keys", log::Level::Debug)));
+        assert!(!logger.enabled(&meta("wgpu_core", log::Level::Warn)));
     }
 
     /// Polices : le repli sur les polices du système reste actif (feature

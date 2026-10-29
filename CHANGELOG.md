@@ -10,7 +10,17 @@ Ruban à onglets et chronologie (ADR-0017, cahier `docs/plans/ribbon.md`), deman
 
 Passe UX (ADR-0018, cahier `docs/plans/ux.md`), après essai sur Mac : la table et le Gantt reprennent les gestes de MS Project et d'Excel (sélection à la souris, copier-coller de cellules, remplir, déplacer des lignes). Conventions au statut `hypothèse` sauf ce que disent les pages d'aide Microsoft relues.
 
+Seconde passe UX (ADR-0019, cahier `docs/plans/ux2.md`), après essai du DMG le 2026-10-28 (« davantage MS-like sur la gestion des fenêtres ») : messages discrets en langage d'utilisateur, collage selon la destination, Cmd+Q gardé sur macOS, volets façon MS Project (chronologie fermable et redimensionnable, Formulaire tâche), insertion de colonnes parmi environ 80 champs, champs personnalisés simples. Aucune convention n'est « vérifiée contre MS Project ».
+
 ### Ajouté
+- **Volet de détails « Formulaire tâche »** (Affichage → Détails) : suit la tâche de la cellule active ; nom, durée, dates, % achevé, mode, type, contrainte ; grilles Prédécesseurs, Successeurs (ID, nom, type, décalage) et Ressources (nom, unités, travail), forme choisie au clic droit ; OK = une annulation, Annuler relit la tâche ; changer de tâche valide le brouillon.
+- Chronologie **fermable** (× au survol, clic droit → Masquer la chronologie, case Affichage → Chronologie) et **redimensionnable** ; séparateurs tirables entre chronologie, vue et volet de détails (double-clic : hauteur par défaut) ; F6 / Maj+F6 passent d'un volet à l'autre ; hauteurs, volets et forme mémorisés.
+- **Insérer une colonne** (clic droit sur un en-tête, Format → Colonnes) et colonne « Ajouter une nouvelle colonne » en bout de table : sélecteur avec recherche sans accents, champs groupés par catégorie (Général, Planification, Avancement, Ligne de base 0 à 10, Écarts, Marges, Ressources, Coûts, Personnalisés) ; **Paramètres de champ** (Alt+F3 : titre, alignements, largeur) ; masquer une colonne ; déplacer une colonne en glissant son en-tête sélectionné.
+- Environ 80 champs de tâche affichables (travail, réels, restants, marges, dates au plus tôt et au plus tard, lignes de base, écarts, contraintes, échéance, notes, WBS, mode, actif…), lus du modèle ou du moteur ; modifiables là où le registre a la commande, refus « Ce champ est calculé. » sinon.
+- **Champs personnalisés** Texte1-30, Nombre1-20, Date1-10, Indicateur1-20 : colonnes, saisie, copier-coller et remplir ; Projet → Champs personnalisés… pour les renommer (« Lot (Texte1) ») ; lus et écrits en `ExtendedAttribute` MSPDI ; champ à formule ou à table de choix du fichier gardé à l'identique et non proposé. Commandes `custom_field.rename` et `task.update { custom }`, outil MCP `rename_custom_field`.
+- Notifications en bas à droite (information 5 s, avertissement 8 s, refus 10 s ; survol = pause ; × ; trois au plus) et historique des 20 derniers messages dans la barre d'état ; « Détails » repliable sous un refus (code, opération, texte du moteur).
+- macOS : menu applicatif natif (Quitter planrs ⌘Q gardé, Masquer ⌘H, Masquer les autres, Réduire ⌘M) ; journal des touches par `PLANRS_LOG_KEYS=1`.
+- Raccourcis : Ctrl/Cmd+W (et Ctrl+F4 hors macOS) ferme le document en demandant d'enregistrer ; Ctrl/Cmd+P ouvre le mode impression ; Ctrl/Cmd+R remplit à droite ; Ctrl+Maj+F5 défile jusqu'à la tâche.
 - **Ruban à onglets** Tâche, Ressource, Projet, Affichage, Format, sous la barre de menus : groupes nommés (Presse-papiers, Planification, Insérer, Propriétés, Édition, Zoom, Fractionner l'affichage…), grands et petits boutons à icône et libellé, listes déroulantes, cases ; barre d'accès rapide (Enregistrer, Annuler, Rétablir) ; info-bulles avec le raccourci clavier et, pour un élément grisé, la raison ; réduction progressive des groupes jusqu'à 800 px de large sans débordement. Chaque élément pousse la même action que son entrée de la barre de menus, qui reste (accès clavier, macOS).
 - Repli du ruban par double-clic sur un onglet, Ctrl+F1 (Cmd+F1 sur macOS) ou Affichage → Réduire le ruban ; replié, un clic sur un onglet ouvre le corps en surimpression. Onglet choisi et repli mémorisés.
 - Icônes Lucide 1.55.0 (ISC, MIT pour les icônes dérivées de Feather), vectorielles, à la couleur du thème, nettes à toute échelle ; aucune icône ni capture Microsoft.
@@ -25,6 +35,10 @@ Passe UX (ADR-0018, cahier `docs/plans/ux.md`), après essai sur Mac : la table 
 - Menus contextuels de la table, du Gantt et de l'en-tête de l'échelle construits sur les commandes du ruban (Couper, Copier, Coller, Remplir, Effacer, Insérer, Supprimer, Lier…) ; menu Édition : Remplir vers le bas, Effacer le contenu, Tout sélectionner.
 
 ### Modifié
+- Seconde passe UX : le collage suit la **sélection de destination** (bloc de cellules ⇒ collage de cellules, jamais d'insertion ; lignes copiées collées sur des cellules ⇒ refus expliqué ; lignes entières ⇒ insertion ; ligne vide ⇒ ajout en fin) ; une source plus petite que la destination est répétée ; les lignes collées restent sélectionnées.
+- Réécrire une valeur identique (même lien, même durée, « 6;6 ») ne fait rien, sans message ni entrée d'annulation ; Lier ne crée que les liens absents.
+- Les refus parlent la langue de l'utilisateur et nomment les tâches par leur ID (« Ce lien créerait une boucle entre les tâches 9, 10, 11, 12 ») ; le bandeau du haut est réservé aux décisions (enregistrer avant de quitter, fichier illisible) et chaque message s'y ferme seul ; le compte rendu d'un collage est une information.
+- Volet des diagnostics affiché seulement s'il y a des diagnostics ; les pastilles de la barre d'état l'ouvrent filtré sur leur gravité.
 - Le ruban remplace les deux rangées de boutons de J7 et J8 ; la vue Gantt commence sous la chronologie (repliable, masquable).
 - Suppr efface le contenu des cellules sélectionnées ; il supprime les tâches sur des lignes entières ou depuis l'ID et le Nom (message « n tâche(s) supprimée(s) ») ; valider une cellule vide l'efface au lieu d'un refus.
 - Un clic dans le Gantt laisse le clavier à la table (flèches, frappe, presse-papiers) ; glisser la barre d'une tâche d'une sélection multiple garde la sélection.
@@ -33,10 +47,13 @@ Passe UX (ADR-0018, cahier `docs/plans/ux.md`), après essai sur Mac : la table 
 ### Corrigé
 - Appliquer un modèle de la galerie vidait la liste de la chronologie du document ; elle est gardée, comme les couleurs de phase, et n'est jamais enregistrée dans un modèle personnel.
 - On ne pouvait pas sélectionner plusieurs cellules d'un coup à la souris (Maj obligatoire) ; coller « 7j » sur une Durée créait une tâche ; copier une cellule copiait la ligne entière.
+- Coller dans des cellules Prédécesseurs une ligne copiée créait une tâche (« Fouilles des fondations » en double) ; Lier refusait tout le lot dès qu'une paire était déjà liée ; un bandeau rose persistant affichait des noms de commandes et des numéros d'opération.
+- Cmd+Q ne quittait plus l'application sur macOS (DMG) ; il était muet sous une fenêtre ouverte et contournait la demande d'enregistrement pendant une saisie.
 
 ### Limites connues
 - Libellés français des onglets et groupes non relus sur l'interface française de Project ; Cmd+F1 peut être pris par macOS (le double-clic et le menu Affichage restent) ; ruban déplié et chronologie prennent environ 216 px au-dessus de la table (replier sur un petit écran).
-- Passe UX : Ctrl+Espace peut être pris par macOS (changement de source de saisie ; clic sur le titre de colonne à la place) ; un seul bloc à la fois (pas de blocs disjoints) ; pas de poignée de recopie ni de Ctrl+R ; glisser dans le vide du Gantt fait défiler (aucune sélection) ; colonnes non réordonnables au glisser.
+- Passe UX : Ctrl+Espace peut être pris par macOS (changement de source de saisie ; clic sur le titre de colonne à la place) ; un seul bloc à la fois (pas de blocs disjoints) ; pas de poignée de recopie (Ctrl/Cmd+R remplit à droite depuis la seconde passe) ; glisser dans le vide du Gantt fait défiler (aucune sélection).
+- Seconde passe UX : coûts listés mais grisés (non calculés) ; Priorité en lecture seule ; champs personnalisés sans formule ni table de choix, et seulement pour les tâches ; Quitter depuis le Dock sans demande d'enregistrement (le journal de reprise couvre la perte) ; Cmd+Q, Cmd+H et Cmd+M du menu natif à essayer sur le DMG ; Ctrl+− du pavé numérique reste le zoom arrière ; double-clic sur le séparateur du volet : hauteur par défaut (MS Project retire le volet).
 
 ## [1.0.0-rc.1] - 2026-10-26
 

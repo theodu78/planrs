@@ -9,22 +9,32 @@
 //! de contrainte, passes, sujets et bornes par leurs propres messages. Un
 //! code sans message (jamais attendu : un test parcourt tous les codes)
 //! retombe sur le `Display` français.
+//!
+//! [`DiagTexts::with_project`] (refus d'un lot, H-UI-105) nomme les
+//! tâches par leur **ID** dans le projet au lieu de leur UID ; une tâche
+//! absente du projet se dit « une tâche supprimée ».
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use planrs_core::model::ConstraintKind;
-use planrs_core::{DiagArg, Diagnostic, OverriddenBound, Pass, Subject};
+use planrs_core::{DiagArg, Diagnostic, OverriddenBound, Pass, Project, Subject, TaskUid};
 use planrs_mspdi::{ImportCode, ImportDiagnostic, MspdiError};
 
 use crate::format::format_date;
 use crate::i18n::{Arg, TextId, Texts, diag_key};
+
+/// Arguments de diagnostic qui portent des tâches (UID ⇒ ID avec
+/// [`DiagTexts::with_project`]).
+const TASK_ARGS: [&str; 4] = ["task", "predecessor", "successor", "tasks"];
 
 /// Traducteur de diagnostics d'une langue : table des messages `diag-*`
 /// construite une fois (un document peut porter 10 000 diagnostics).
 pub struct DiagTexts<'a> {
     texts: &'a Texts,
     keys: BTreeMap<&'static str, TextId>,
+    /// Projet où lire l'ID des tâches (sinon : UID tels quels).
+    project: Option<&'a Project>,
 }
 
 impl<'a> DiagTexts<'a> {
@@ -36,7 +46,31 @@ impl<'a> DiagTexts<'a> {
             .filter(|id| id.key().starts_with("diag-"))
             .map(|id| (id.key(), *id))
             .collect();
-        Self { texts, keys }
+        Self {
+            texts,
+            keys,
+            project: None,
+        }
+    }
+
+    /// Même traducteur, tâches nommées par leur ID dans `project`
+    /// (refus d'un lot, H-UI-105) ; `None` : UID tels quels.
+    #[must_use]
+    pub const fn with_project(mut self, project: Option<&'a Project>) -> Self {
+        self.project = project;
+        self
+    }
+
+    /// Tâche `uid` telle qu'affichée : son ID si un projet est posé (« une
+    /// tâche supprimée » si elle n'y est plus), sinon son UID.
+    fn task(&self, uid: u32) -> String {
+        match self.project {
+            None => uid.to_string(),
+            Some(project) => project.task_id(TaskUid::new(uid)).map_or_else(
+                || self.texts.get(TextId::RefusalDeletedTask),
+                |id| id.get().to_string(),
+            ),
+        }
     }
 
     /// Message du code `code`, s'il existe.
@@ -63,11 +97,16 @@ impl<'a> DiagTexts<'a> {
     fn arg(&self, name: &str, value: &DiagArg) -> Arg<'static> {
         match value {
             DiagArg::Int(n) => Arg::Count(*n),
+            DiagArg::Uid(uid) if TASK_ARGS.contains(&name) => Arg::Str(Cow::Owned(self.task(*uid))),
             DiagArg::Uid(uid) => Arg::Str(Cow::Owned(uid.to_string())),
             DiagArg::Uids(uids) => {
                 // Chaîne d'héritage en flèches, cycle de tâches en liste.
                 let sep = if name == "chain" { " -> " } else { ", " };
-                let list: Vec<String> = uids.iter().map(ToString::to_string).collect();
+                let list: Vec<String> = if TASK_ARGS.contains(&name) {
+                    uids.iter().map(|uid| self.task(*uid)).collect()
+                } else {
+                    uids.iter().map(ToString::to_string).collect()
+                };
                 Arg::Str(Cow::Owned(list.join(sep)))
             }
             DiagArg::Moment(m) => Arg::Str(Cow::Owned(format_date(*m, self.texts.format_labels()))),
@@ -100,15 +139,18 @@ impl<'a> DiagTexts<'a> {
         match subject {
             Subject::Project => self.texts.get(TextId::DiagSubjectProject),
             Subject::Calendar(c) => id(TextId::DiagSubjectCalendar, c.get()),
-            Subject::Task(t) => id(TextId::DiagSubjectTask, t.get()),
+            Subject::Task(t) => self.texts.get_args(
+                TextId::DiagSubjectTask,
+                &[("id", Arg::Str(Cow::Owned(self.task(t.get()))))],
+            ),
             Subject::Link {
                 predecessor,
                 successor,
             } => self.texts.get_args(
                 TextId::DiagSubjectLink,
                 &[
-                    ("predecessor", Arg::Str(Cow::Owned(predecessor.to_string()))),
-                    ("successor", Arg::Str(Cow::Owned(successor.to_string()))),
+                    ("predecessor", Arg::Str(Cow::Owned(self.task(predecessor.get())))),
+                    ("successor", Arg::Str(Cow::Owned(self.task(successor.get())))),
                 ],
             ),
             Subject::Resource(r) => id(TextId::DiagSubjectResource, r.get()),
@@ -120,7 +162,7 @@ impl<'a> DiagTexts<'a> {
     fn bound(&self, bound: OverriddenBound) -> String {
         let with = |id: TextId, name: &'static str, uid: u32| {
             self.texts
-                .get_args(id, &[(name, Arg::Str(Cow::Owned(uid.to_string())))])
+                .get_args(id, &[(name, Arg::Str(Cow::Owned(self.task(uid))))])
         };
         match bound {
             OverriddenBound::ProjectStart => self.texts.get(TextId::DiagBoundProjectStart),

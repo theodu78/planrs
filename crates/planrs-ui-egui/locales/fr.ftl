@@ -1400,6 +1400,19 @@ refusal-param-invalid = Une valeur saisie n'est pas valable.
 refusal-limit-exceeded = Cette modification dépasse une limite du projet.
 refusal-text-parse = « { $text } » ne se lit pas ici.
 refusal-custom-field = Ce champ personnalisé n'accepte pas cette valeur.
+refusal-outline = Cette tâche ne peut pas être indentée ou désindentée à cet endroit.
+refusal-has-children = Une tâche récapitulative ne se supprime pas seule : ses sous-tâches doivent être supprimées avec elle.
+refusal-move-into-subtree = Une tâche ne peut pas être déplacée parmi ses propres sous-tâches.
+refusal-assignment-duplicate = Cette ressource est déjà affectée à la tâche { $id }.
+refusal-zero-units-fixed-work = Une tâche à travail fixe ne peut pas recevoir une affectation à 0 %.
+refusal-fixed-work-effort-driven = Une tâche à travail fixe est toujours pilotée par l'effort.
+refusal-progress-summary = L'avancement d'une tâche récapitulative se calcule à partir de ses sous-tâches : il ne se saisit pas.
+refusal-progress-inactive = L'avancement d'une tâche inactive ne se saisit pas.
+refusal-progress-order = La fin réelle ne peut pas précéder le début réel.
+refusal-duration-below-actual = La durée ne peut pas être inférieure à la durée réelle déjà saisie : réduisez d'abord l'avancement.
+refusal-link-not-found = La tâche { $successor } n'a pas la tâche { $predecessor } pour prédécesseur.
+refusal-baseline-exists = Cette ligne de base est déjà enregistrée : choisissez de la remplacer pour l'enregistrer de nouveau.
+refusal-computed-field = Ce champ d'une tâche récapitulative se calcule à partir de ses sous-tâches : il ne se saisit pas.
 
 # --- UX2 L2 ---
 paste-links-dropped = { $count ->

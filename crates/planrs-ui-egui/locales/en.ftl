@@ -1401,6 +1401,19 @@ refusal-param-invalid = An entered value is not valid.
 refusal-limit-exceeded = This change exceeds a project limit.
 refusal-text-parse = “{ $text }” cannot be read here.
 refusal-custom-field = This custom field does not accept this value.
+refusal-outline = This task cannot be indented or outdented at this position.
+refusal-has-children = A summary task cannot be deleted on its own: its subtasks must be deleted with it.
+refusal-move-into-subtree = A task cannot be moved among its own subtasks.
+refusal-assignment-duplicate = This resource is already assigned to task { $id }.
+refusal-zero-units-fixed-work = A fixed-work task cannot have an assignment at 0%.
+refusal-fixed-work-effort-driven = A fixed-work task is always effort driven.
+refusal-progress-summary = The progress of a summary task is calculated from its subtasks: it cannot be entered.
+refusal-progress-inactive = The progress of an inactive task cannot be entered.
+refusal-progress-order = The actual finish cannot be before the actual start.
+refusal-duration-below-actual = The duration cannot be less than the actual duration already entered: reduce the progress first.
+refusal-link-not-found = Task { $successor } does not have task { $predecessor } as a predecessor.
+refusal-baseline-exists = This baseline is already saved: choose to replace it to save it again.
+refusal-computed-field = This field of a summary task is calculated from its subtasks: it cannot be entered.
 
 # --- UX2 L2 ---
 paste-links-dropped = { $count ->

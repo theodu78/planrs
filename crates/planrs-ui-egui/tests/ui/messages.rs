@@ -423,6 +423,10 @@ fn h_ui_105_every_ui_code_has_sentence() {
                     }])
                 }
                 codes::LIMIT_EXCEEDED => CommandErrorKind::Limit { what: "ops", max: 10 },
+                codes::ASSIGNMENT_DUPLICATE => CommandErrorKind::DuplicateAssignment {
+                    task: TaskUid::new(2),
+                    resource: planrs_core::ResourceUid::new(1),
+                },
                 c if c.starts_with("text.") => CommandErrorKind::Text(TextError::BadNumber { at: 1 }),
                 _ => CommandErrorKind::InvalidParam("x".to_owned()),
             };
@@ -475,8 +479,8 @@ fn h_ui_105_every_ui_code_has_sentence() {
         assert!(text.contains(&texts.get(TextId::RefusalDeletedTask)), "{text}");
         // Code inconnu de la table : phrase générique, code au détail.
         let other = CommandError::new(
-            codes::TASK_HAS_CHILDREN,
-            CommandErrorKind::HasChildren { count: 2 },
+            codes::CALENDAR_NAME_TAKEN,
+            CommandErrorKind::InvalidParam("x".to_owned()),
         );
         let (text, detail) = user_message(
             &other,
@@ -485,6 +489,49 @@ fn h_ui_105_every_ui_code_has_sentence() {
             planrs_automation::text::Language::Fr,
         );
         assert_eq!(text, generic);
-        assert!(detail.contains(codes::TASK_HAS_CHILDREN));
+        assert!(detail.contains(codes::CALENDAR_NAME_TAKEN));
     }
+}
+
+/// H-UI-105 (relecture finale ux2, C3) : un refus courant dit sa raison,
+/// pas la phrase générique : Indenter la première tâche.
+#[test]
+fn h_ui_105_outline_refusal_says_why() {
+    let mut harness = p_harness();
+    let error = harness
+        .state_mut()
+        .execute(
+            &batch(&[json!({ "op": "task.indent", "uid": 8 })]),
+            EditOrigin::User,
+        )
+        .unwrap_err();
+    harness.run();
+    assert_eq!(error.code, codes::TASK_OUTLINE_REFUSED);
+    let text = last_text(harness.state());
+    assert_eq!(text, fr(TextId::RefusalOutline));
+    assert_ne!(text, fr(TextId::RefusalGeneric));
+}
+
+/// H-UI-105 (relecture finale ux2, C4) : lot refusé pour un diagnostic
+/// autre que la boucle : ses tâches sont nommées par leur ID (UID 2 ⇒ ID
+/// 3), jamais par leur UID.
+#[test]
+fn h_ui_105_batch_diagnostic_task_ids() {
+    let app = p_app();
+    let project = app.document.as_ref().unwrap().project();
+    let error = CommandError::new(
+        codes::BATCH_WOULD_CREATE_ERRORS,
+        CommandErrorKind::WouldCreateErrors(vec![Diagnostic::TaskNegativeProgress {
+            task: TaskUid::new(2),
+        }]),
+    );
+    let texts = Texts::new(Language::Fr);
+    let (text, _) = user_message(
+        &error,
+        Some(project),
+        &texts,
+        planrs_automation::text::Language::Fr,
+    );
+    assert!(text.contains("tâche 3"), "{text}");
+    assert!(!text.contains("tâche 2"), "{text}");
 }

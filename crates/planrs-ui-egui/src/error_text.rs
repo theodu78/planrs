@@ -7,12 +7,17 @@
 //! - la **phrase** vient d'une table par code (lien en double, boucle,
 //!   lien vers soi, récapitulative, tâche introuvable, lot qui créerait
 //!   une erreur, saisie illisible, valeur refusée, limite, champ
-//!   personnalisé) ; le sujet y est nommé par son **ID** de tâche (position
+//!   personnalisé, lien absent, indentation, récapitulative supprimée
+//!   seule, déplacement dans son sous-arbre, champ calculé, affectation en
+//!   double ou à 0 % sur travail fixe, travail fixe non piloté par
+//!   l'effort, avancement, ligne de base déjà là) ; le sujet y est nommé par son **ID** de tâche (position
 //!   dans `project.tasks`), jamais par son UID ; une tâche disparue se dit
 //!   « une tâche supprimée » ; un code sans phrase dédiée retombe sur
 //!   « Cette modification n'est pas possible. » ;
 //! - le **détail** porte ce que la phrase tait : code, numéro d'opération,
-//!   champ et texte du moteur.
+//!   champ et texte du moteur ;
+//! - un lot refusé pour un autre diagnostic que la boucle cite ses tâches
+//!   par leur ID ([`DiagTexts::with_project`]).
 
 use std::borrow::Cow;
 
@@ -27,8 +32,21 @@ use crate::i18n::{Arg, TextId, Texts};
 /// Codes du registre qu'un lot de l'interface peut produire et qui ont
 /// leur phrase dédiée (H-UI-105, test `h_ui_105_every_ui_code_has_sentence`).
 /// Les codes `text.*` et `custom.*` sont couverts par préfixe.
-pub const UI_CODES: [&str; 8] = [
+pub const UI_CODES: [&str; 21] = [
     codes::LINK_DUPLICATE,
+    codes::LINK_NOT_FOUND,
+    codes::TASK_OUTLINE_REFUSED,
+    codes::TASK_HAS_CHILDREN,
+    codes::TASK_MOVE_INTO_SUBTREE,
+    codes::TASK_COMPUTED_FIELD,
+    codes::ASSIGNMENT_DUPLICATE,
+    codes::ASSIGNMENT_ZERO_UNITS_FIXED_WORK,
+    codes::TASK_FIXED_WORK_EFFORT_DRIVEN,
+    codes::PROGRESS_SUMMARY_NOT_EDITABLE,
+    codes::PROGRESS_INACTIVE,
+    codes::PROGRESS_INVALID_ORDER,
+    codes::PROGRESS_DURATION_BELOW_ACTUAL,
+    codes::BASELINE_EXISTS,
     codes::LINK_SELF,
     codes::LINK_SUMMARY_DESCENDANT,
     codes::TASK_NOT_FOUND,
@@ -92,6 +110,50 @@ fn sentence(error: &CommandError, project: Option<&Project>, texts: &Texts) -> O
                 ],
             ))
         }
+        codes::LINK_NOT_FOUND => {
+            let Some(Subject::Link {
+                predecessor,
+                successor,
+            }) = error.subject
+            else {
+                return None;
+            };
+            Some(texts.get_args(
+                TextId::RefusalLinkNotFound,
+                &[
+                    (
+                        "successor",
+                        Arg::Str(task_label(successor, project, texts).into()),
+                    ),
+                    (
+                        "predecessor",
+                        Arg::Str(task_label(predecessor, project, texts).into()),
+                    ),
+                ],
+            ))
+        }
+        codes::ASSIGNMENT_DUPLICATE => {
+            let task = match (&error.kind, error.subject) {
+                (CommandErrorKind::DuplicateAssignment { task, .. }, _) => *task,
+                (_, Some(Subject::Task(task))) => task,
+                _ => return None,
+            };
+            Some(texts.get_args(
+                TextId::RefusalAssignmentDuplicate,
+                &[("id", Arg::Str(task_label(task, project, texts).into()))],
+            ))
+        }
+        codes::TASK_OUTLINE_REFUSED => Some(texts.get(TextId::RefusalOutline)),
+        codes::TASK_HAS_CHILDREN => Some(texts.get(TextId::RefusalHasChildren)),
+        codes::TASK_MOVE_INTO_SUBTREE => Some(texts.get(TextId::RefusalMoveIntoSubtree)),
+        codes::TASK_COMPUTED_FIELD => Some(texts.get(TextId::RefusalComputedField)),
+        codes::ASSIGNMENT_ZERO_UNITS_FIXED_WORK => Some(texts.get(TextId::RefusalZeroUnitsFixedWork)),
+        codes::TASK_FIXED_WORK_EFFORT_DRIVEN => Some(texts.get(TextId::RefusalFixedWorkEffortDriven)),
+        codes::PROGRESS_SUMMARY_NOT_EDITABLE => Some(texts.get(TextId::RefusalProgressSummary)),
+        codes::PROGRESS_INACTIVE => Some(texts.get(TextId::RefusalProgressInactive)),
+        codes::PROGRESS_INVALID_ORDER => Some(texts.get(TextId::RefusalProgressOrder)),
+        codes::PROGRESS_DURATION_BELOW_ACTUAL => Some(texts.get(TextId::RefusalDurationBelowActual)),
+        codes::BASELINE_EXISTS => Some(texts.get(TextId::RefusalBaselineExists)),
         codes::LINK_SELF => Some(texts.get(TextId::RefusalLinkSelf)),
         codes::LINK_SUMMARY_DESCENDANT => Some(texts.get(TextId::RefusalLinkSummary)),
         codes::TASK_NOT_FOUND => {
@@ -155,7 +217,7 @@ fn diagnostic_sentence(d: &Diagnostic, project: Option<&Project>, texts: &Texts)
             );
         }
     }
-    let detail = DiagTexts::new(texts).core(d);
+    let detail = DiagTexts::new(texts).with_project(project).core(d);
     texts.get_args(TextId::RefusalBatchErrors, &[("detail", Arg::Str(detail.into()))])
 }
 
@@ -187,7 +249,7 @@ fn detail(error: &CommandError, texts: &Texts, engine: planrs_automation::text::
 /// Textes des refus en langage d'utilisateur (H-UI-105) : phrase
 /// générique, détail (code, opération), tâche supprimée, et une phrase par
 /// code du registre que l'interface produit.
-pub const L1_TEXTS: [TextId; 14] = [
+pub const L1_TEXTS: [TextId; 27] = [
     TextId::RefusalGeneric,
     TextId::RefusalDetailCode,
     TextId::RefusalDetailOperation,
@@ -202,6 +264,19 @@ pub const L1_TEXTS: [TextId; 14] = [
     TextId::RefusalLimitExceeded,
     TextId::RefusalTextParse,
     TextId::RefusalCustomField,
+    TextId::RefusalOutline,
+    TextId::RefusalHasChildren,
+    TextId::RefusalMoveIntoSubtree,
+    TextId::RefusalAssignmentDuplicate,
+    TextId::RefusalZeroUnitsFixedWork,
+    TextId::RefusalFixedWorkEffortDriven,
+    TextId::RefusalProgressSummary,
+    TextId::RefusalProgressInactive,
+    TextId::RefusalProgressOrder,
+    TextId::RefusalDurationBelowActual,
+    TextId::RefusalLinkNotFound,
+    TextId::RefusalBaselineExists,
+    TextId::RefusalComputedField,
 ];
 
 #[cfg(test)]

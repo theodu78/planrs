@@ -817,17 +817,40 @@ fn exec_ops(harness: &mut Harness<'static, App>, ops: &serde_json::Value) {
 
 /// H-UI-112 : volet de détails (Formulaire tâche) ouvert sur « Fouilles
 /// des fondations » de l'exemple, forme par défaut (ressources et
-/// prédécesseurs).
+/// prédécesseurs), 1 440 × 900, volet tiré à 360 points.
 fn details_capture(theme: ThemePref, name: &str) {
-    let mut harness = demo(LanguagePref::Fr, theme);
+    // Fenêtre du cahier (1 440 × 900) : formulaire et grilles lisibles.
+    let app = crate::common::app(LanguagePref::Fr, theme);
+    let mut harness = harness_sized(app, theme, egui::vec2(1440.0, 900.0), 1.0);
+    harness.run();
+    harness.state_mut().open_demo();
+    harness.run();
     let uid = uid_named(harness.state(), "Fouilles des fondations");
-    harness.state_mut().dispatch(Action::Select(Some(uid)));
+    harness.state_mut().dispatch(Action::SelectOp(SelectOp::Press {
+        row: RowRef::Item(uid),
+        column: Column::Name,
+        target: PressTarget::Cell,
+        mode: PressMode::Replace,
+    }));
     harness
         .state_mut()
         .dispatch(Action::Pane(planrs_ui_egui::action::PaneOp::ShowDetails(true)));
+    // Volet tiré à 360 points : les grilles du bas visibles sans défiler
+    // (à 220 points, hauteur par défaut, elles demandent un défilement).
+    harness
+        .state_mut()
+        .dispatch(Action::Pane(planrs_ui_egui::action::PaneOp::SetDetailsHeight(
+            360,
+        )));
+    harness.run();
+    // Table défilée jusqu'à la tâche suivie.
+    let index = harness.state().rows().unwrap().index_of(uid).unwrap();
+    harness.state_mut().dispatch(Action::ScrollToRow(index));
     harness.run();
     let app = harness.state();
     assert!(app.state.details.visible);
+    assert_eq!(app.state.details.height, 360);
+    assert!(app.last_frame.table_rows.contains(&index));
     assert_eq!(app.selection, Some(uid));
     let title = Texts::new(Language::Fr).get(TextId::DetailsTitle);
     assert!(harness.query_by_label(&title).is_some(), "volet absent");

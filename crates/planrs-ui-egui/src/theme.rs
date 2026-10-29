@@ -191,6 +191,86 @@ impl Palette {
     }
 }
 
+/// Contraste exigé du texte d'une notification sur son fond (H-UI-104,
+/// WCAG AA, millièmes).
+pub const TOAST_TEXT_CONTRAST: u32 = 4500;
+
+/// Contraste exigé du liseré et de l'icône d'une notification sur son fond
+/// (H-UI-104, élément graphique, WCAG 1.4.11, millièmes).
+pub const TOAST_ACCENT_CONTRAST: u32 = 3000;
+
+/// Ambres candidats du liseré d'un avertissement : le plus contrasté sur le
+/// fond de la notification est retenu (foncé sur fond clair, clair sur fond
+/// sombre).
+const TOAST_WARNING_CANDIDATES: [Color32; 2] = [
+    Color32::from_rgb(0x9A, 0x5B, 0x00),
+    Color32::from_rgb(0xF2, 0xB8, 0x4B),
+];
+
+/// Jetons de dessin des notifications (seconde passe UX, lot L10,
+/// H-UI-104) : carte au fond du planning, liseré gauche et icône colorés
+/// selon la sorte, ombre portée. Dérivés de la [`Palette`] de l'image
+/// (modèle et variante du document), jamais écrits en dur par modèle :
+/// texte ≥ 4,5:1 et liserés ≥ 3:1 sur le fond, testés pour chaque modèle
+/// et chaque variante (`h_ui_104_toast_contrast`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ToastTokens {
+    /// Fond de la carte.
+    pub bg: Color32,
+    /// Texte (titre, phrase, détails).
+    pub text: Color32,
+    /// Contour fin de la carte.
+    pub border: Color32,
+    /// Liseré et icône d'une information.
+    pub info: Color32,
+    /// Liseré et icône d'un avertissement.
+    pub warning: Color32,
+    /// Liseré et icône d'un refus.
+    pub error: Color32,
+    /// Ombre portée (translucide).
+    pub shadow: Color32,
+}
+
+impl ToastTokens {
+    /// Jetons des notifications pour la palette `p`.
+    #[must_use]
+    pub fn of(p: &Palette) -> Self {
+        let rgb = |c: Color32| Rgb(c.r(), c.g(), c.b());
+        let on_bg = |c: Color32| contrast_ratio(rgb(c), rgb(p.background));
+        // Le plus contrasté de `candidates` sur le fond (premier à égalité).
+        let best = |candidates: &[Color32]| {
+            candidates
+                .iter()
+                .copied()
+                .fold(None::<(Color32, u32)>, |acc, c| {
+                    let r = on_bg(c);
+                    match acc {
+                        Some((_, best)) if best >= r => acc,
+                        _ => Some((c, r)),
+                    }
+                })
+                .map_or(p.text_strong, |(c, _)| c)
+        };
+        // Fond clair : ombre légère ; fond sombre : ombre plus dense.
+        let light = on_bg(Color32::BLACK) >= on_bg(Color32::WHITE);
+        let shadow = if light {
+            Color32::from_black_alpha(48)
+        } else {
+            Color32::from_black_alpha(140)
+        };
+        Self {
+            bg: p.background,
+            text: best(&[p.text_strong, p.text]),
+            border: p.grid_major,
+            // Liserés : couleur du thème si elle se voit, sinon le texte.
+            info: best(&[p.cursor, p.text_strong]),
+            warning: best(&TOAST_WARNING_CANDIDATES),
+            error: best(&[p.critical, p.text_strong]),
+            shadow,
+        }
+    }
+}
+
 /// Teinte du bloc sur le fond (H-UI-103, millièmes) : seuil exigé.
 pub const SELECTION_ON_BG: u32 = 1500;
 
@@ -807,6 +887,49 @@ mod tests {
         let derived = super::SelectionTokens::derive(&c, 4500);
         assert_eq!(derived.selection, c.selection);
         assert_eq!(derived.border, c.cursor);
+    }
+
+    /// H-UI-104 (lot L10) : notifications lisibles dans chaque modèle et
+    /// chaque variante (et les palettes sans document) : texte ≥ 4,5:1 sur
+    /// le fond de la carte, liserés d'information, d'avertissement et de
+    /// refus ≥ 3:1 et distincts deux à deux ; fond et texte opaques ; ombre
+    /// translucide.
+    #[test]
+    fn h_ui_104_toast_contrast() {
+        let mut cases: Vec<(String, Palette)> = palettes()
+            .into_iter()
+            .map(|(name, p)| (name.to_owned(), p))
+            .collect();
+        for id in TemplateId::ALL {
+            let style = template(id);
+            for variant in [Variant::Light, Variant::Dark] {
+                cases.push((
+                    format!("{id:?} {variant:?}"),
+                    Palette::from_style(&style, variant),
+                ));
+            }
+        }
+        assert_eq!(cases.len(), 2 + 2 * TemplateId::ALL.len());
+        for (name, p) in cases {
+            let t = super::ToastTokens::of(&p);
+            assert_eq!((t.bg.a(), t.text.a(), t.border.a()), (255, 255, 255), "{name}");
+            let text = contrast(t.text, t.bg);
+            assert!(
+                text >= super::TOAST_TEXT_CONTRAST,
+                "{name} : texte sur notification = {text}‰"
+            );
+            for (label, accent) in [("info", t.info), ("avertissement", t.warning), ("refus", t.error)] {
+                assert_eq!(accent.a(), 255, "{name} {label}");
+                let ratio = contrast(accent, t.bg);
+                assert!(
+                    ratio >= super::TOAST_ACCENT_CONTRAST,
+                    "{name} : liseré {label} = {ratio}‰"
+                );
+            }
+            assert_ne!(t.info, t.warning, "{name}");
+            assert_ne!(t.warning, t.error, "{name}");
+            assert!(t.shadow.a() > 0 && t.shadow.a() < 255, "{name}");
+        }
     }
 
     #[test]

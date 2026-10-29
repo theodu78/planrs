@@ -78,10 +78,11 @@ pub use error::{
 pub use fixed::{Decimal, round_div};
 pub use ids::{AssignmentUid, BaselineNumber, CalendarUid, EntityUid, Guid, ResourceUid, TaskId, TaskUid};
 pub use model::{
-    Assignment, AssignmentBaseline, Constraint, ConstraintKind, ExtraEntry, Extras, LevelingDelay, Link,
-    LinkType, OutlineLevel, Priority, Progress, ProgressOption, ProgressOptions, Project, ProjectInfo,
-    ProjectInit, ProjectOptions, Resource, ResourceBaseline, ResourceKind, ScheduleAnchor, SchedulingMode,
-    Task, TaskBaseline, TaskType, WorkContour, resource_id,
+    Assignment, AssignmentBaseline, Constraint, ConstraintKind, CustomFieldDef, CustomFieldId, CustomKind,
+    CustomValue, CustomValueError, ExtraEntry, Extras, LevelingDelay, Link, LinkType, OutlineLevel, Priority,
+    Progress, ProgressOption, ProgressOptions, Project, ProjectInfo, ProjectInit, ProjectOptions, Resource,
+    ResourceBaseline, ResourceKind, ScheduleAnchor, SchedulingMode, Task, TaskBaseline, TaskType,
+    WorkContour, resource_id,
 };
 pub use progress::{ProgressFacts, ProgressState};
 pub use quantity::{Money, Percent, Rate, RateUnit, SignedPercent, Units};

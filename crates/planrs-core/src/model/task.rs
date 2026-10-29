@@ -15,6 +15,7 @@ use crate::error::ModelError;
 use crate::ids::{BaselineNumber, CalendarUid, Guid, TaskUid};
 use crate::model::Extras;
 use crate::model::baseline::TaskBaseline;
+use crate::model::custom::{CustomFieldId, CustomValue};
 use crate::model::leveling::LevelingDelay;
 use crate::model::link::Link;
 use crate::model::options::ProjectOptions;
@@ -385,6 +386,11 @@ pub struct Task {
     pub created: Option<Moment>,
     /// Lignes de base 0 à 10 (seule la n° 0 sera calculée en V1).
     pub baselines: BTreeMap<BaselineNumber, TaskBaseline>,
+    /// Champs personnalisés (R-263) : absent = vide (un texte vide et
+    /// `Flag(false)` ne sont pas stockés) ; absents du JSON quand il n'y en
+    /// a pas (sessions et journaux antérieurs relus tels quels).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub custom: BTreeMap<CustomFieldId, CustomValue>,
     /// Données hors modèle.
     pub extras: Extras,
 }
@@ -438,6 +444,7 @@ impl Task {
             recurring: false,
             created: None,
             baselines: BTreeMap::new(),
+            custom: BTreeMap::new(),
             extras: Extras::new(),
         }
     }

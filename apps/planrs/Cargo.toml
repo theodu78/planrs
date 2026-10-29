@@ -25,11 +25,18 @@ planrs-automation.workspace = true
 eframe = { workspace = true, features = ["persistence"] }
 # `clock` : « maintenant » est lu ici seulement, puis injecté (Env::now).
 chrono = { workspace = true, features = ["clock"] }
+# Journal des touches (`PLANRS_LOG_KEYS=1`, H-UI-108) : écrit sur la sortie
+# d'erreur par un journaliseur minimal installé ici seulement.
+log.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Menu applicatif par défaut retiré (Cmd+Q passe par le garde de fermeture,
 # docs/features/ui.md § 1.14).
 winit.workspace = true
+# Menu applicatif natif minimal (ADR-0019 D4) : « Quitter planrs ⌘Q » est un
+# élément personnalisé qui passe par la garde des modifications, jamais
+# `terminate:`. Sans GTK ni Windows (cible macOS seulement).
+muda = { version = "0.21.2", default-features = false }
 
 [lints]
 workspace = true

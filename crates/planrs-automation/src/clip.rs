@@ -633,6 +633,7 @@ const fn task_update(r: TaskRef) -> TaskUpdate {
         effort_driven: Patch::Keep,
         work: Patch::Keep,
         mode: Patch::Keep,
+        custom: std::collections::BTreeMap::new(),
     }
 }
 

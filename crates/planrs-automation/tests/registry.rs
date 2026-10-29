@@ -221,9 +221,10 @@ fn registry_j7_tools_listed() {
     assert_eq!(listed().count(), LISTED);
 }
 
-/// Outils listés : 49 en J7, plus les six `style.*` du lot L6 de J8 et
-/// `export_pdf` (lot L7).
-const LISTED: usize = 56;
+/// Outils listés : 49 en J7, plus les six `style.*` du lot L6 de J8,
+/// `export_pdf` (lot L7) et `rename_custom_field` (seconde passe UX, lot
+/// L8, R-264).
+const LISTED: usize = 57;
 
 /// Lot L6 J8 (ADR-0016 D7, H-UI-59 à H-UI-61) : les six entrées `style.*`
 /// sont listées ; trois écritures annulables avec `dry_run`, trois lectures

@@ -4,22 +4,36 @@
 //! et au changement de langue, jamais pendant le défilement ni le zoom. Les
 //! textes des cellules sont pré-formatés (ligne par ligne, une entrée par
 //! colonne de [`Column::ALL`]) ; les liens sont triés par ligne minimale.
+//!
+//! Champs de la seconde passe UX (lot L7, H-UI-117) : leurs textes ne sont
+//! calculés que pour les colonnes **affichées**, une colonne entière à la
+//! fois, à la première demande ([`RowModel::ensure_columns`], appelée par
+//! `App::ensure_row_columns` avant la vue des lignes) ; le modèle étant
+//! reconstruit à chaque génération, le cache vaut pour une génération et
+//! s'étend quand une colonne est insérée. Valeurs lues du modèle ou du
+//! `Schedule` du moteur, formatées par `format.rs` : aucune arithmétique de
+//! date ou de durée ici (règle 3), hormis la somme du travail restant des
+//! affectations d'une feuille (R-211 par affectation, hypothèse H-UI-117).
 
 use std::collections::BTreeMap;
 use std::ops::Range;
 
 use planrs_automation::text::format_resource_names;
 use planrs_core::baseline::{TaskVariance, variance};
+use planrs_core::model::custom::{CustomFieldId, CustomKind, CustomValue};
 use planrs_core::{
-    Assignment, BaselineNumber, LinkType, Minutes, Moment, Percent, Project, SchedulingMode, Task,
-    TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis,
+    Assignment, BaselineNumber, Decimal, Link, LinkType, Minutes, Moment, Percent, ProgressState, Project,
+    Schedule, SchedulingMode, Task, TaskBaseline, TaskOutcome, TaskRole, TaskSchedule, TaskUid, TimeBasis,
+    Work,
 };
 
-use crate::app::OpenDocument;
+use crate::app::{App, OpenDocument};
 use crate::column::Column;
+use crate::field::{Availability, availability};
 use crate::format::{
-    FormatLabels, format_date, format_duration, format_minutes_as, format_percent, format_predecessors,
-    format_slack,
+    FieldLabels, FormatLabels, format_date, format_duration, format_minutes_as, format_notes_line,
+    format_percent, format_predecessors, format_priority, format_slack, format_work, format_yes_no,
+    write_decimal,
 };
 
 /// Nature d'une ligne, pour le dessin.
@@ -98,6 +112,12 @@ pub struct RowModel {
     max_span: u32,
     /// Indice de ligne de chaque tâche.
     index: BTreeMap<TaskUid, usize>,
+    /// Textes des champs de la seconde passe UX déjà demandés (lot L7) :
+    /// une entrée par colonne, `rows.len()` textes dans l'ordre des lignes.
+    fields: BTreeMap<Column, Vec<String>>,
+    /// Écarts à la ligne de base 0 (dans l'ordre des UID ; vide sans ligne
+    /// de base 0), gardés pour les colonnes d'écart.
+    variances: Vec<TaskVariance>,
 }
 
 impl RowModel {
@@ -134,6 +154,82 @@ impl RowModel {
             links,
             max_span,
             index,
+            fields: BTreeMap::new(),
+            variances: extras.variances,
+        }
+    }
+
+    /// Construit le modèle puis les textes des champs `columns` (lot L7 ;
+    /// voir [`RowModel::ensure_columns`]).
+    #[must_use]
+    pub fn build_with(
+        doc: &OpenDocument,
+        labels: &FormatLabels,
+        fields: &FieldLabels,
+        columns: impl IntoIterator<Item = Column>,
+    ) -> Self {
+        let mut model = Self::build(doc, labels);
+        model.ensure_columns(doc, labels, fields, columns);
+        model
+    }
+
+    /// Vrai si les textes de toutes les colonnes `columns` sont prêts
+    /// (colonnes historiques, champs déjà calculés, champs sans valeur).
+    #[must_use]
+    pub fn has_columns(&self, columns: impl IntoIterator<Item = Column>) -> bool {
+        columns
+            .into_iter()
+            .all(|c| !served(c) || self.fields.contains_key(&c))
+    }
+
+    /// Calcule les textes des champs de `columns` qui ne le sont pas encore
+    /// (lot L7, H-UI-117) : une colonne entière à la fois, `doc` étant le
+    /// document dont le modèle a été construit. Les colonnes historiques
+    /// ([`Column::ALL`]) et les coûts (grisés) n'ont rien à calculer ici ;
+    /// les champs personnalisés (lot L9) sont lus du modèle comme les
+    /// autres.
+    pub fn ensure_columns(
+        &mut self,
+        doc: &OpenDocument,
+        labels: &FormatLabels,
+        fields: &FieldLabels,
+        columns: impl IntoIterator<Item = Column>,
+    ) {
+        let mut missing: Vec<Column> = Vec::new();
+        for c in columns {
+            if served(c) && !self.fields.contains_key(&c) && !missing.contains(&c) {
+                missing.push(c);
+            }
+        }
+        if missing.is_empty() {
+            return;
+        }
+        let project = doc.project();
+        let ctx = FieldCtx {
+            project,
+            schedule: doc.schedule(),
+            labels,
+            fields,
+            variances: &self.variances,
+            successors: if missing.contains(&Column::Successors) {
+                successors_of(project)
+            } else {
+                BTreeMap::new()
+            },
+            assignments: if missing.contains(&Column::RemainingWork) {
+                assignments_of(project)
+            } else {
+                BTreeMap::new()
+            },
+        };
+        for column in missing {
+            let texts: Vec<String> = project
+                .tasks
+                .iter()
+                .zip(&self.rows)
+                .map(|(task, row)| field_text(&ctx, task, row, column))
+                .collect();
+            self.fields.insert(column, texts);
         }
     }
 
@@ -158,10 +254,20 @@ impl RowModel {
     /// Texte pré-formaté d'une cellule ; chaîne vide hors bornes.
     #[must_use]
     pub fn text(&self, i: usize, c: Column) -> &str {
-        i.checked_mul(Column::COUNT)
-            .and_then(|base| base.checked_add(c.ordinal()))
-            .and_then(|k| self.texts.get(k))
-            .map_or("", String::as_str)
+        match c.ordinal() {
+            Some(ordinal) => i
+                .checked_mul(Column::COUNT)
+                .and_then(|base| base.checked_add(ordinal))
+                .and_then(|k| self.texts.get(k))
+                .map_or("", String::as_str),
+            // Champ de la seconde passe UX : texte de la colonne s'il a été
+            // demandé ([`RowModel::ensure_columns`]), vide sinon.
+            None => self
+                .fields
+                .get(&c)
+                .and_then(|texts| texts.get(i))
+                .map_or("", String::as_str),
+        }
     }
 
     /// Indice de la ligne d'une tâche (O(log n)).
@@ -397,6 +503,9 @@ fn push_texts(
                     SchedulingMode::Auto => l.mode_auto.clone(),
                     SchedulingMode::Manual { .. } => l.mode_manual.clone(),
                 },
+                // Champs de la seconde passe UX : hors de `Column::ALL`
+                // (valeurs servies par le lot L7).
+                _ => String::new(),
             }
         };
         texts.push(text);
@@ -414,6 +523,324 @@ fn base_date(
         .and_then(pick)
         .map(|m| format_date(m, l))
         .unwrap_or_default()
+}
+
+/// Vrai si `column` est un champ de la seconde passe UX dont la valeur est
+/// servie par [`RowModel::ensure_columns`] (ni colonne historique, ni coût
+/// grisé ; champs personnalisés compris, lot L9).
+fn served(column: Column) -> bool {
+    column.ordinal().is_none() && !matches!(availability(column), Availability::Unavailable(_))
+}
+
+/// Texte d'un champ personnalisé (lot L9, H-UI-118) : texte tel quel,
+/// nombre dans la langue (« 12,5 » en français, sans zéro final), date
+/// comme le Début, indicateur Oui/Non (absent : Non) ; vide sinon.
+fn custom_text(task: &Task, id: CustomFieldId, l: &FormatLabels) -> String {
+    match task.custom.get(&id) {
+        Some(CustomValue::Text(t)) => t.clone(),
+        Some(CustomValue::Number(n)) => Decimal::new(*n, CUSTOM_NUMBER_DECIMALS).map_or_else(
+            |_| l.unknown.clone(),
+            |d| {
+                let mut out = String::new();
+                write_decimal(&mut out, d, l.decimal_sep);
+                out
+            },
+        ),
+        Some(CustomValue::Date(m)) => format_date(*m, l),
+        Some(CustomValue::Flag(b)) => format_yes_no(*b, l),
+        None if id.kind() == CustomKind::Flag => format_yes_no(false, l),
+        None => String::new(),
+    }
+}
+
+/// Décimales du point fixe des nombres personnalisés (1/10 000, R-263).
+const CUSTOM_NUMBER_DECIMALS: u8 = 4;
+
+/// Grandeur d'une ligne de base affichée par une colonne.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BaseField {
+    /// Début.
+    Start,
+    /// Fin.
+    Finish,
+    /// Durée.
+    Duration,
+    /// Travail.
+    Work,
+}
+
+/// Ligne de base et grandeur d'une colonne de ligne de base (0 à 10) ;
+/// `None` pour une autre colonne.
+#[must_use]
+#[allow(
+    clippy::too_many_lines,
+    reason = "une ligne par colonne de ligne de base (44)"
+)]
+const fn baseline_field(column: Column) -> Option<(u8, BaseField)> {
+    use BaseField::{Duration, Finish, Start, Work};
+    Some(match column {
+        Column::BaselineStart => (0, Start),
+        Column::BaselineFinish => (0, Finish),
+        Column::BaselineDuration => (0, Duration),
+        Column::BaselineWork => (0, Work),
+        Column::Baseline1Start => (1, Start),
+        Column::Baseline1Finish => (1, Finish),
+        Column::Baseline1Duration => (1, Duration),
+        Column::Baseline1Work => (1, Work),
+        Column::Baseline2Start => (2, Start),
+        Column::Baseline2Finish => (2, Finish),
+        Column::Baseline2Duration => (2, Duration),
+        Column::Baseline2Work => (2, Work),
+        Column::Baseline3Start => (3, Start),
+        Column::Baseline3Finish => (3, Finish),
+        Column::Baseline3Duration => (3, Duration),
+        Column::Baseline3Work => (3, Work),
+        Column::Baseline4Start => (4, Start),
+        Column::Baseline4Finish => (4, Finish),
+        Column::Baseline4Duration => (4, Duration),
+        Column::Baseline4Work => (4, Work),
+        Column::Baseline5Start => (5, Start),
+        Column::Baseline5Finish => (5, Finish),
+        Column::Baseline5Duration => (5, Duration),
+        Column::Baseline5Work => (5, Work),
+        Column::Baseline6Start => (6, Start),
+        Column::Baseline6Finish => (6, Finish),
+        Column::Baseline6Duration => (6, Duration),
+        Column::Baseline6Work => (6, Work),
+        Column::Baseline7Start => (7, Start),
+        Column::Baseline7Finish => (7, Finish),
+        Column::Baseline7Duration => (7, Duration),
+        Column::Baseline7Work => (7, Work),
+        Column::Baseline8Start => (8, Start),
+        Column::Baseline8Finish => (8, Finish),
+        Column::Baseline8Duration => (8, Duration),
+        Column::Baseline8Work => (8, Work),
+        Column::Baseline9Start => (9, Start),
+        Column::Baseline9Finish => (9, Finish),
+        Column::Baseline9Duration => (9, Duration),
+        Column::Baseline9Work => (9, Work),
+        Column::Baseline10Start => (10, Start),
+        Column::Baseline10Finish => (10, Finish),
+        Column::Baseline10Duration => (10, Duration),
+        Column::Baseline10Work => (10, Work),
+        _ => return None,
+    })
+}
+
+/// Données partagées par le calcul des colonnes d'une passe
+/// ([`RowModel::ensure_columns`]).
+struct FieldCtx<'a> {
+    /// Projet du document.
+    project: &'a Project,
+    /// Planning du moteur.
+    schedule: &'a Schedule,
+    /// Libellés d'affichage.
+    labels: &'a FormatLabels,
+    /// Libellés des champs à choix.
+    fields: &'a FieldLabels,
+    /// Écarts à la ligne de base 0, dans l'ordre des UID.
+    variances: &'a [TaskVariance],
+    /// Successeurs de chaque tâche (liens inverses : `predecessor` porte le
+    /// successeur), dans l'ordre des ID ; rempli si la colonne Successeurs
+    /// est demandée.
+    successors: BTreeMap<TaskUid, Vec<Link>>,
+    /// Affectations de chaque tâche ; rempli si la colonne Travail restant
+    /// est demandée.
+    assignments: BTreeMap<TaskUid, Vec<&'a Assignment>>,
+}
+
+impl FieldCtx<'_> {
+    /// Écarts d'une tâche planifiée.
+    fn variance(&self, uid: TaskUid) -> Option<&TaskVariance> {
+        self.variances
+            .binary_search_by_key(&uid, |v| v.uid)
+            .ok()
+            .and_then(|i| self.variances.get(i))
+    }
+}
+
+/// Successeurs de chaque tâche, en liens inverses (`predecessor` = le
+/// successeur, type et décalage du lien), dans l'ordre des ID des
+/// successeurs.
+fn successors_of(project: &Project) -> BTreeMap<TaskUid, Vec<Link>> {
+    let mut out: BTreeMap<TaskUid, Vec<Link>> = BTreeMap::new();
+    for task in &project.tasks {
+        for link in &task.predecessors {
+            out.entry(link.predecessor).or_default().push(Link {
+                predecessor: task.uid(),
+                kind: link.kind,
+                lag: link.lag,
+            });
+        }
+    }
+    out
+}
+
+/// Affectations de chaque tâche, dans l'ordre du projet.
+fn assignments_of(project: &Project) -> BTreeMap<TaskUid, Vec<&Assignment>> {
+    let mut out: BTreeMap<TaskUid, Vec<&Assignment>> = BTreeMap::new();
+    for a in &project.assignments {
+        out.entry(a.task).or_default().push(a);
+    }
+    out
+}
+
+/// Texte d'un champ de la seconde passe UX pour une tâche (H-UI-117).
+/// Ligne vide : rien. Valeurs du moteur (`TaskSchedule`) vides pour une
+/// tâche exclue du calcul (H-UI-10) ; valeurs saisies (modèle) toujours.
+#[allow(
+    clippy::too_many_lines,
+    reason = "une branche par champ de la liste H-UI-117, sans logique partagée"
+)]
+fn field_text(ctx: &FieldCtx<'_>, task: &Task, row: &Row, column: Column) -> String {
+    if row.kind == RowKind::Null {
+        return String::new();
+    }
+    let (project, l, fl) = (ctx.project, ctx.labels, ctx.fields);
+    let f = &project.options.factors;
+    let uid = task.uid();
+    let schedule = scheduled(ctx.schedule.tasks.get(&uid));
+    let progress = schedule.and_then(|s| s.progress);
+    let date = |m: Option<Moment>| m.map(|m| format_date(m, l)).unwrap_or_default();
+    // Durée dans l'unité de la tâche (récapitulative : unité par défaut du
+    // projet, temps ouvré, comme la colonne Durée, H-UI-08).
+    let in_task_unit = |m: Minutes| {
+        if row.kind == RowKind::Summary {
+            format_minutes_as(m, project.options.default_duration_unit, TimeBasis::Working, f, l)
+        } else {
+            format_minutes_as(m, task.duration.unit(), task.duration.basis(), f, l)
+        }
+    };
+    if let Some((number, field)) = baseline_field(column) {
+        let base: Option<&TaskBaseline> = BaselineNumber::new(number)
+            .ok()
+            .and_then(|n| task.baselines.get(&n));
+        return match field {
+            BaseField::Start => date(base.and_then(|b| b.start)),
+            BaseField::Finish => date(base.and_then(|b| b.finish)),
+            BaseField::Duration => base
+                .and_then(|b| b.duration)
+                .map(|d| format_duration(&d, f, l))
+                .unwrap_or_default(),
+            BaseField::Work => base
+                .and_then(|b| b.work)
+                .map(|w| format_work(w.minutes(), f, l))
+                .unwrap_or_default(),
+        };
+    }
+    match column {
+        Column::UniqueId => uid.get().to_string(),
+        Column::Wbs => task.wbs.clone().unwrap_or_default(),
+        Column::OutlineLevel => task.outline_level.get().to_string(),
+        Column::Summary => schedule
+            .map(|s| format_yes_no(s.role == TaskRole::Summary, l))
+            .unwrap_or_default(),
+        Column::Milestone => format_yes_no(task.milestone, l),
+        Column::Notes => format_notes_line(&task.notes),
+        Column::Created => date(task.created),
+        Column::Priority => format_priority(task.priority),
+        Column::Active => format_yes_no(task.active, l),
+        Column::Successors => {
+            let links = ctx.successors.get(&uid).map_or(&[][..], Vec::as_slice);
+            format_predecessors(links, project, f, l)
+        }
+        Column::ConstraintType => fl.constraint(task.constraint.kind()).to_owned(),
+        Column::ConstraintDate => date(task.constraint.date()),
+        Column::Deadline => date(task.deadline),
+        Column::TaskType => fl.task_type(task.task_type).to_owned(),
+        Column::EffortDriven => format_yes_no(task.effort_driven, l),
+        // Travail du moteur (R-184) ; tâche exclue : travail saisi.
+        Column::Work => format_work(schedule.map_or(task.work, |s| s.work).minutes(), f, l),
+        Column::EarlyStart => date(schedule.map(|s| s.early.start)),
+        Column::EarlyFinish => date(schedule.map(|s| s.early.finish)),
+        Column::LateStart => date(schedule.map(|s| s.late.start)),
+        Column::LateFinish => date(schedule.map(|s| s.late.finish)),
+        Column::FreeSlack => schedule
+            .map(|s| format_slack(s.free_slack, f, l))
+            .unwrap_or_default(),
+        Column::PercentWorkComplete => format_percent(
+            progress.map_or(task.progress.percent_work_complete, |p| p.percent_work_complete),
+            l,
+        ),
+        // Début réel : tâche commencée seulement (MS Project : « NA »).
+        Column::ActualStart => date(
+            progress
+                .filter(|p| p.state != ProgressState::NotStarted)
+                .map(|p| p.actual_start),
+        ),
+        Column::ActualFinish => date(progress.and_then(|p| p.actual_finish)),
+        Column::ActualDuration => schedule
+            .map(|_| in_task_unit(progress.map_or(Minutes::ZERO, |p| p.actual_duration)))
+            .unwrap_or_default(),
+        // Reste du moteur (R-200) ; tâche non commencée : R-200 sur sa
+        // saisie (`progress::remaining_duration`), récapitulative : sa
+        // durée planifiée.
+        Column::RemainingDuration => schedule
+            .map(|s| {
+                let rest = match progress {
+                    Some(p) => p.remaining_duration,
+                    None if row.kind == RowKind::Summary => s.duration,
+                    None => planrs_core::progress::remaining_duration(task),
+                };
+                in_task_unit(rest)
+            })
+            .unwrap_or_default(),
+        Column::ActualWork => schedule
+            .map(|_| format_work(progress.map_or(Work::ZERO, |p| p.actual_work).minutes(), f, l))
+            .unwrap_or_default(),
+        // Travail restant : somme des restes de ses affectations (R-211,
+        // `progress::remaining_work`) ; récapitulative : vide (hypothèse,
+        // aucun agrégat du moteur).
+        Column::RemainingWork => match schedule {
+            Some(_) if row.kind != RowKind::Summary => {
+                let rest = ctx.assignments.get(&uid).map_or(0_i64, |list| {
+                    list.iter().fold(0_i64, |sum, a| {
+                        sum.saturating_add(planrs_core::progress::remaining_work(a).minutes().get())
+                    })
+                });
+                format_work(Minutes::new(rest), f, l)
+            }
+            _ => String::new(),
+        },
+        Column::StartVariance => ctx
+            .variance(uid)
+            .filter(|v| v.baseline.is_some_and(|b| b.start.is_some()))
+            .map(|v| format_slack(v.variance.start, f, l))
+            .unwrap_or_default(),
+        Column::DurationVariance => ctx
+            .variance(uid)
+            .filter(|v| v.baseline.is_some())
+            .map(|v| format_slack(v.variance.duration, f, l))
+            .unwrap_or_default(),
+        Column::WorkVariance => ctx
+            .variance(uid)
+            .filter(|v| v.baseline.is_some())
+            .map(|v| format_work(v.variance.work, f, l))
+            .unwrap_or_default(),
+        Column::Custom(id) => custom_text(task, id, l),
+        // Colonnes historiques (textes pré-formatés) et coûts grisés : rien
+        // ici.
+        _ => String::new(),
+    }
+}
+
+impl App {
+    /// Textes des champs affichés prêts dans le modèle de lignes (lot L7) :
+    /// calcule ceux des colonnes de `UiState.columns` qui manquent (après
+    /// une reconstruction ou l'insertion d'une colonne) ; rien sinon (un
+    /// parcours des colonnes affichées par appel). Appelée en tête de
+    /// `App::ensure_row_view`.
+    pub(crate) fn ensure_row_columns(&mut self) {
+        let (Some(doc), Some(rows)) = (self.document.as_ref(), self.rows.as_mut()) else {
+            return;
+        };
+        let shown = || self.state.columns.iter().map(|c| c.column);
+        if rows.has_columns(shown()) {
+            return;
+        }
+        let fields = crate::field::field_labels(&self.texts);
+        rows.ensure_columns(doc, self.texts.format_labels(), &fields, shown());
+    }
 }
 
 /// Liens entre lignes connues, triés par `min(from, to)` (tri stable :
@@ -514,6 +941,48 @@ mod tests {
             );
             assert_eq!(model.text(i, Column::ResourceNames), expected);
         }
+    }
+
+    /// Lot L7 : champs de la seconde passe calculés à la demande, une
+    /// colonne entière ; colonnes historiques, coûts et champs
+    /// personnalisés hors du cache ; Successeurs en liens inverses.
+    #[test]
+    fn rows_fields_on_demand() {
+        let doc = demo();
+        let texts = Texts::new(Language::Fr);
+        let mut model = RowModel::build(&doc, texts.format_labels());
+        assert_eq!(model.text(2, Column::Successors), "");
+        assert!(!model.has_columns([Column::Successors]));
+        assert!(model.has_columns([Column::Name, Column::Cost, Column::FinishVariance]));
+        let fields = crate::field::field_labels(&texts);
+        model.ensure_columns(
+            &doc,
+            texts.format_labels(),
+            &fields,
+            [Column::Successors, Column::Wbs],
+        );
+        assert!(model.has_columns([Column::Successors, Column::Wbs, Column::Name]));
+        assert_eq!(model.fields.len(), 2);
+        // La tâche 7 a « 7;6 » parmi les prédécesseurs de 9 ⇒ 9 parmi ses
+        // successeurs ; chaque lien vu des deux côtés.
+        let succ = model.text(6, Column::Successors);
+        assert!(succ.split(';').any(|s| s == "9"), "{succ}");
+        let pairs: usize = (0..model.len())
+            .map(|i| {
+                let t = model.text(i, Column::Successors);
+                if t.is_empty() { 0 } else { t.split(';').count() }
+            })
+            .sum();
+        assert_eq!(pairs, 46);
+        // Construit d'un coup : mêmes textes.
+        let again = RowModel::build_with(&doc, texts.format_labels(), &fields, [Column::Successors]);
+        for i in 0..model.len() {
+            assert_eq!(
+                again.text(i, Column::Successors),
+                model.text(i, Column::Successors)
+            );
+        }
+        assert_eq!(model.text(usize::MAX, Column::Successors), "");
     }
 
     #[test]

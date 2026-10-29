@@ -131,6 +131,22 @@ pub enum UiBinding {
     FillDown,
     /// Ctrl/Cmd+Suppr : effacer le contenu du bloc (R-259).
     ClearCells,
+    // --- Seconde passe UX (ADR-0019, contrat L0 ; H-UI-109, H-UI-111,
+    // H-UI-115, H-UI-120).
+    /// Ctrl/Cmd+W, Ctrl+F4 (hors macOS) : fermer le document, gardé.
+    CloseDocument,
+    /// Ctrl/Cmd+P : mode impression (« Mise en page » en mode impression).
+    PrintMode,
+    /// Ctrl+Maj+F5 : défiler jusqu'à la tâche.
+    ScrollToTask,
+    /// Ctrl/Cmd+R : remplir à droite (R-258 amendée).
+    FillRight,
+    /// Alt+F3 : « Paramètres de champ » de la colonne active.
+    FieldSettings,
+    /// F6 : volet suivant.
+    FocusNextPane,
+    /// Maj+F6 : volet précédent.
+    FocusPreviousPane,
 }
 
 /// Liaison d'un raccourci.
@@ -341,6 +357,7 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
     doc_ui(COMMAND, Key::Minus, UiBinding::ZoomCoarser),
     // --- J8 L9 : filtres, tri, recherche, repli (S61, S75, S79 ; H-UI-30 à
     // H-UI-34). Maj+F3 avant F3 ; Ctrl/Cmd+Maj+G avant Ctrl/Cmd+G.
+    table_ui(ALT, Key::F3, UiBinding::FieldSettings),
     doc_ui(SHIFT, Key::F3, UiBinding::SortById),
     doc_ui(NONE, Key::F3, UiBinding::ClearFilter),
     doc_ui(COMMAND, Key::F, UiBinding::Find),
@@ -368,6 +385,31 @@ pub const KEYMAP: &[(KeyContext, Shortcut, Binding)] = &[
     table_ui(SHIFT, Key::Space, UiBinding::SelectRows),
     table_ui(CTRL, Key::Space, UiBinding::SelectColumns),
     table_ui(COMMAND, Key::D, UiBinding::FillDown),
+    // --- Seconde passe UX (ADR-0019, contrat L0) : fermer le document
+    // (S95 « Close window. » Cmd+W ; Ctrl+F4 hors macOS), mode impression
+    // (S95 « Print workbook. »), défiler jusqu'à la tâche, remplir à droite
+    // (S95 « Fill cells right. »), « Paramètres de champ » (S61 « Display
+    // the Field Settings dialog box. » Alt+F3, avant F3 : egui ignore Alt
+    // en trop), volets (F6 ; Maj+F6 d'abord).
+    (
+        KeyContext::Global,
+        Shortcut::new(COMMAND, Key::W),
+        Binding::Ui(UiBinding::CloseDocument),
+    ),
+    (
+        KeyContext::Global,
+        Shortcut::new(CTRL, Key::F4),
+        Binding::Ui(UiBinding::CloseDocument),
+    ),
+    (
+        KeyContext::Global,
+        Shortcut::new(COMMAND, Key::P),
+        Binding::Ui(UiBinding::PrintMode),
+    ),
+    doc_ui(COMMAND_SHIFT, Key::F5, UiBinding::ScrollToTask),
+    table_ui(COMMAND, Key::R, UiBinding::FillRight),
+    doc_ui(SHIFT, Key::F6, UiBinding::FocusPreviousPane),
+    doc_ui(NONE, Key::F6, UiBinding::FocusNextPane),
 ];
 
 /// Raccourcis que le navigateur ne rend jamais à la page (Ctrl/Cmd+N, W,
@@ -387,10 +429,26 @@ pub const WEB_NEVER: &[Key] = &[Key::N, Key::W, Key::T, Key::Tab];
 ///   les garde de toute façon (nouvelle fenêtre, onglet), Tab reste à
 ///   eframe ;
 /// - « Quitter » : une page ne ferme pas son onglet, et Ctrl/Cmd+Q doit
-///   rester au navigateur.
+///   rester au navigateur ;
+/// - fermer le document, mode impression et remplir à droite (seconde
+///   passe UX, H-UI-109) : Ctrl/Cmd+W, Ctrl+F4, Ctrl/Cmd+P et Ctrl/Cmd+R
+///   restent au navigateur (fermer l'onglet, imprimer, recharger).
 #[must_use]
 pub fn web_interceptable(shortcut: &Shortcut, binding: Binding) -> bool {
-    !WEB_NEVER.contains(&shortcut.logical_key) && binding != Binding::Ui(UiBinding::Quit)
+    !WEB_NEVER.contains(&shortcut.logical_key)
+        && !matches!(
+            binding,
+            Binding::Ui(
+                UiBinding::Quit | UiBinding::CloseDocument | UiBinding::PrintMode | UiBinding::FillRight
+            )
+        )
+}
+
+/// L'entrée vaut-elle sur le système `os` ? Ctrl+F4 (fermer le document)
+/// hors macOS seulement (H-UI-109) ; toutes les autres partout.
+#[must_use]
+pub fn os_allows(shortcut: &Shortcut, os: egui::os::OperatingSystem) -> bool {
+    !(os == egui::os::OperatingSystem::Mac && shortcut.logical_key == Key::F4)
 }
 
 /// Raccourcis lus par l'image courante, vus du navigateur (H-UI-55) :
@@ -532,6 +590,15 @@ pub const fn ui_action(binding: UiBinding) -> Action {
         UiBinding::CollapseSelection => Action::SelectOp(SelectOp::Collapse),
         UiBinding::FillDown => Action::Cells(CellOp::FillDown),
         UiBinding::ClearCells => Action::Cells(CellOp::Clear),
+        UiBinding::CloseDocument => Action::CloseDocumentGuarded,
+        UiBinding::PrintMode => Action::ShowDialog(crate::action::DialogKind::PageSetup { print_mode: true }),
+        UiBinding::ScrollToTask => Action::ScrollToTask,
+        UiBinding::FillRight => Action::Cells(CellOp::FillRight),
+        UiBinding::FieldSettings => Action::Column(crate::action::ColumnOp::OpenSettings(
+            crate::action::ACTIVE_COLUMN,
+        )),
+        UiBinding::FocusNextPane => Action::Pane(crate::action::PaneOp::FocusNext { back: false }),
+        UiBinding::FocusPreviousPane => Action::Pane(crate::action::PaneOp::FocusNext { back: true }),
     }
 }
 
@@ -614,8 +681,9 @@ pub fn dispatch(ctx: &egui::Context, keys: KeyState, actions: &mut Vec<Action>) 
     if ctx.text_edit_focused() {
         return;
     }
+    let os = ctx.os();
     for (context, shortcut, binding) in KEYMAP {
-        if !keys.allows(*context) {
+        if !keys.allows(*context) || !os_allows(shortcut, os) {
             continue;
         }
         let presses =
@@ -1006,5 +1074,116 @@ mod tests {
         }
         let (_, binding, _) = resolve(super::ALT_SHIFT, Key::ArrowLeft).expect("Alt+Maj+←");
         assert_eq!(binding, Binding::Command("task.outdent"));
+    }
+
+    /// Seconde passe UX (contrat L0 ; H-UI-109, H-UI-111, H-UI-115,
+    /// H-UI-120) : chaque entrée nouvelle est résolue vers son action et son
+    /// contexte ; Ctrl/Cmd+W, Ctrl+F4, Ctrl/Cmd+P et Ctrl/Cmd+R restent au
+    /// navigateur (H-UI-109), Ctrl+Maj+F5, Alt+F3 et F6 lui sont retenus ;
+    /// Alt+F3 passe avant F3 ; Ctrl+F4 hors macOS seulement.
+    #[test]
+    fn keymap_ux2_bindings_resolve() {
+        use egui::os::OperatingSystem;
+
+        use super::{ALT, SHIFT, os_allows, shortcut_for, web_interceptable};
+        use crate::action::{ACTIVE_COLUMN, CellOp, ColumnOp, DialogKind, PaneOp};
+
+        let shift_ctrl = egui::Modifiers {
+            shift: true,
+            ..CTRL_PRESSED
+        };
+        let cases = [
+            (
+                CTRL_PRESSED,
+                Key::W,
+                KeyContext::Global,
+                UiBinding::CloseDocument,
+                Action::CloseDocumentGuarded,
+                false,
+            ),
+            (
+                CTRL_PRESSED,
+                Key::F4,
+                KeyContext::Global,
+                UiBinding::CloseDocument,
+                Action::CloseDocumentGuarded,
+                false,
+            ),
+            (
+                CTRL_PRESSED,
+                Key::P,
+                KeyContext::Global,
+                UiBinding::PrintMode,
+                Action::ShowDialog(DialogKind::PageSetup { print_mode: true }),
+                false,
+            ),
+            (
+                shift_ctrl,
+                Key::F5,
+                KeyContext::Document,
+                UiBinding::ScrollToTask,
+                Action::ScrollToTask,
+                true,
+            ),
+            (
+                CTRL_PRESSED,
+                Key::R,
+                KeyContext::Table,
+                UiBinding::FillRight,
+                Action::Cells(CellOp::FillRight),
+                false,
+            ),
+            (
+                ALT,
+                Key::F3,
+                KeyContext::Table,
+                UiBinding::FieldSettings,
+                Action::Column(ColumnOp::OpenSettings(ACTIVE_COLUMN)),
+                true,
+            ),
+            (
+                egui::Modifiers::NONE,
+                Key::F6,
+                KeyContext::Document,
+                UiBinding::FocusNextPane,
+                Action::Pane(PaneOp::FocusNext { back: false }),
+                true,
+            ),
+            (
+                SHIFT,
+                Key::F6,
+                KeyContext::Document,
+                UiBinding::FocusPreviousPane,
+                Action::Pane(PaneOp::FocusNext { back: true }),
+                true,
+            ),
+        ];
+        for (modifiers, key, context, binding, action, web) in cases {
+            let (found_context, found, resolved) = resolve(modifiers, key).expect("entrée trouvée");
+            assert_eq!(found_context, context, "{key:?}");
+            assert_eq!(found, Binding::Ui(binding), "{modifiers:?} {key:?}");
+            assert_eq!(resolved, Some(action.clone()));
+            assert_eq!(ui_action(binding), action);
+            let (_, shortcut, _) = KEYMAP
+                .iter()
+                .find(|(_, s, b)| *b == Binding::Ui(binding) && s.logical_key == key)
+                .expect("entrée");
+            assert_eq!(web_interceptable(shortcut, Binding::Ui(binding)), web, "{key:?}");
+            assert_eq!(os_allows(shortcut, OperatingSystem::Mac), key != Key::F4);
+            assert!(os_allows(shortcut, OperatingSystem::Windows));
+            assert!(shortcut_for(Binding::Ui(binding)).is_some());
+        }
+        // Alt+F3 avant Maj+F3 et F3 (egui ignore Alt en trop).
+        let index = |m: egui::Modifiers, k: Key| {
+            KEYMAP
+                .iter()
+                .position(|(_, s, _)| s.modifiers == m && s.logical_key == k)
+                .expect("entrée")
+        };
+        assert!(index(ALT, Key::F3) < index(egui::Modifiers::NONE, Key::F3));
+        assert!(index(SHIFT, Key::F6) < index(egui::Modifiers::NONE, Key::F6));
+        // F3 seul reste « retirer le filtre ».
+        let (_, binding, _) = resolve(egui::Modifiers::NONE, Key::F3).expect("F3");
+        assert_eq!(binding, Binding::Ui(UiBinding::ClearFilter));
     }
 }

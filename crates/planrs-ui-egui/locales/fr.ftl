@@ -632,6 +632,10 @@ error-pdf-glyph_missing = Caractère absent des polices du PDF : { $detail }
 error-pdf-logo_invalid = Logo illisible : { $detail }
 error-task-manual_finish_before_start = Fin avant le début de la tâche manuelle : { $detail }
 error-control-bad_endpoint = Adresse du canal de contrôle invalide : { $detail }
+error-custom-unknown_field = Champ personnalisé inconnu : { $detail }
+error-custom-value_type = Valeur de champ personnalisé refusée : { $detail }
+error-custom-too_long = Texte trop long : { $detail }
+error-custom-read_only = Champ défini par le fichier : { $detail }
 
 # --- J8 L1 ---
 
@@ -723,8 +727,8 @@ paste-report-tasks = { $count ->
        *[other] { $count } tâches collées
     }
 paste-report-links = { $count ->
-        [one] { $count } lien non recopié (un bout hors de la copie)
-       *[other] { $count } liens non recopiés (un bout hors de la copie)
+        [one] { $count } lien vers une tâche non copiée non repris
+       *[other] { $count } liens vers des tâches non copiées non repris
     }
 paste-report-assignments = { $count ->
         [one] { $count } affectation omise (ressource absente)
@@ -905,6 +909,7 @@ diag-baseline-task_skipped = { $count ->
     }
 diag-baseline-nothing_to_clear = ligne de base { $number } : rien à effacer
 diag-schedule-internal = incohérence interne du calcul (anomalie à signaler) : { $detail }
+diag-task-custom_invalid = la tâche { $task } a une valeur de { $field } du mauvais type ou hors des bornes
 diag-mspdi-invalid_value = valeur illisible ou hors bornes : valeur par défaut appliquée
 diag-mspdi-unknown_code = code inconnu ({ $code }) : valeur par défaut appliquée
 diag-mspdi-missing_required = élément obligatoire absent
@@ -924,6 +929,7 @@ diag-mspdi-progress_inconsistent = { $count ->
         [one] { $count } reste relu remplacé par le calcul
        *[other] { $count } restes relus remplacés par le calcul
     }
+diag-mspdi-custom_unreadable = valeur de champ personnalisé illisible : gardée telle quelle dans le fichier
 diag-style-ignored = style du document ignoré ({ $reason }) : modèle par défaut appliqué
 diag-mspdi-error-empty = document vide
 diag-mspdi-error-too_large = document trop grand : { $size } octets (limite { $max })
@@ -1284,3 +1290,262 @@ column-not-sortable = Cette colonne ne se trie pas : la fenêtre « Trier » 
 # --- UX L4 ---
 
 # --- UX L5 ---
+
+# --- UX2 L0 (ADR-0019) ---
+col-unique-id = N° unique
+col-wbs = WBS
+col-outline-level = Niveau hiérarchique
+col-summary = Récapitulative
+col-milestone = Jalon
+col-notes = Notes
+col-created = Créé le
+col-priority = Priorité
+col-active = Active
+col-successors = Successeurs
+col-constraint-type = Type de contrainte
+col-constraint-date = Date de contrainte
+col-deadline = Échéance
+col-task-type = Type de tâche
+col-effort-driven = Pilotée par l'effort
+col-work = Travail
+col-early-start = Début au plus tôt
+col-early-finish = Fin au plus tôt
+col-late-start = Début au plus tard
+col-late-finish = Fin au plus tard
+col-free-slack = Marge libre
+col-percent-work-complete = % travail achevé
+col-actual-start = Début réel
+col-actual-finish = Fin réelle
+col-actual-duration = Durée réelle
+col-remaining-duration = Durée restante
+col-actual-work = Travail réel
+col-remaining-work = Travail restant
+col-baseline-duration = Durée de référence
+col-baseline-work = Travail de référence
+col-baseline1-start = Début de référence1
+col-baseline1-finish = Fin de référence1
+col-baseline1-duration = Durée de référence1
+col-baseline1-work = Travail de référence1
+col-baseline2-start = Début de référence2
+col-baseline2-finish = Fin de référence2
+col-baseline2-duration = Durée de référence2
+col-baseline2-work = Travail de référence2
+col-baseline3-start = Début de référence3
+col-baseline3-finish = Fin de référence3
+col-baseline3-duration = Durée de référence3
+col-baseline3-work = Travail de référence3
+col-baseline4-start = Début de référence4
+col-baseline4-finish = Fin de référence4
+col-baseline4-duration = Durée de référence4
+col-baseline4-work = Travail de référence4
+col-baseline5-start = Début de référence5
+col-baseline5-finish = Fin de référence5
+col-baseline5-duration = Durée de référence5
+col-baseline5-work = Travail de référence5
+col-baseline6-start = Début de référence6
+col-baseline6-finish = Fin de référence6
+col-baseline6-duration = Durée de référence6
+col-baseline6-work = Travail de référence6
+col-baseline7-start = Début de référence7
+col-baseline7-finish = Fin de référence7
+col-baseline7-duration = Durée de référence7
+col-baseline7-work = Travail de référence7
+col-baseline8-start = Début de référence8
+col-baseline8-finish = Fin de référence8
+col-baseline8-duration = Durée de référence8
+col-baseline8-work = Travail de référence8
+col-baseline9-start = Début de référence9
+col-baseline9-finish = Fin de référence9
+col-baseline9-duration = Durée de référence9
+col-baseline9-work = Travail de référence9
+col-baseline10-start = Début de référence10
+col-baseline10-finish = Fin de référence10
+col-baseline10-duration = Durée de référence10
+col-baseline10-work = Travail de référence10
+col-start-variance = Variation de début
+col-duration-variance = Variation de durée
+col-work-variance = Variation de travail
+col-cost = Coût
+col-fixed-cost = Coût fixe
+col-actual-cost = Coût réel
+col-remaining-cost = Coût restant
+col-baseline-cost = Coût de référence
+col-cost-variance = Variation de coût
+col-custom-text = Texte{ $n }
+col-custom-number = Nombre{ $n }
+col-custom-date = Date{ $n }
+col-custom-flag = Indicateur{ $n }
+
+# --- UX2 L1 ---
+notify-history = Messages
+notify-unread = { $count ->
+    [one] 1 message non lu
+   *[other] { $count } messages non lus
+}
+notify-details = Détails
+notify-close = Fermer
+notify-history-empty = Aucun message.
+notify-history-title = Derniers messages
+refusal-generic = Cette modification n'est pas possible.
+refusal-detail-code = Code : { $code }
+refusal-detail-operation = opération { $n }
+refusal-deleted-task = une tâche supprimée
+refusal-link-duplicate = La tâche { $successor } a déjà la tâche { $predecessor } pour prédécesseur.
+refusal-link-cycle = Ce lien créerait une boucle entre les tâches { $tasks }.
+refusal-link-self = Une tâche ne peut pas être son propre prédécesseur.
+refusal-link-summary = Une tâche récapitulative ne peut pas être liée à l'une de ses sous-tâches.
+refusal-task-not-found = Il n'y a pas de tâche { $id }.
+refusal-batch-errors = Cette modification créerait une erreur : { $detail }
+refusal-param-invalid = Une valeur saisie n'est pas valable.
+refusal-limit-exceeded = Cette modification dépasse une limite du projet.
+refusal-text-parse = « { $text } » ne se lit pas ici.
+refusal-custom-field = Ce champ personnalisé n'accepte pas cette valeur.
+refusal-outline = Cette tâche ne peut pas être indentée ou désindentée à cet endroit.
+refusal-has-children = Une tâche récapitulative ne se supprime pas seule : ses sous-tâches doivent être supprimées avec elle.
+refusal-move-into-subtree = Une tâche ne peut pas être déplacée parmi ses propres sous-tâches.
+refusal-assignment-duplicate = Cette ressource est déjà affectée à la tâche { $id }.
+refusal-zero-units-fixed-work = Une tâche à travail fixe ne peut pas recevoir une affectation à 0 %.
+refusal-fixed-work-effort-driven = Une tâche à travail fixe est toujours pilotée par l'effort.
+refusal-progress-summary = L'avancement d'une tâche récapitulative se calcule à partir de ses sous-tâches : il ne se saisit pas.
+refusal-progress-inactive = L'avancement d'une tâche inactive ne se saisit pas.
+refusal-progress-order = La fin réelle ne peut pas précéder le début réel.
+refusal-duration-below-actual = La durée ne peut pas être inférieure à la durée réelle déjà saisie : réduisez d'abord l'avancement.
+refusal-link-not-found = La tâche { $successor } n'a pas la tâche { $predecessor } pour prédécesseur.
+refusal-baseline-exists = Cette ligne de base est déjà enregistrée : choisissez de la remplacer pour l'enregistrer de nouveau.
+refusal-computed-field = Ce champ d'une tâche récapitulative se calcule à partir de ses sous-tâches : il ne se saisit pas.
+refusal-calendar-in-use = Calendrier utilisé par { $detail } : il ne peut pas être supprimé.
+refusal-user-project = le projet
+refusal-user-task = la tâche { $id }
+refusal-user-resource = la ressource « { $name } »
+refusal-user-calendar = le calendrier « { $name } »
+refusal-calendar-name-taken = Nom de calendrier déjà pris : choisissez-en un autre.
+refusal-calendar-overlap = Cette exception chevauche une autre exception du calendrier.
+refusal-calendar-base = Ce calendrier ne peut pas servir de base.
+refusal-resource-assigned = Cette ressource est affectée à des tâches : retirez d'abord ses affectations.
+refusal-assignment-kind = Cette valeur ne convient pas au type de la ressource.
+
+# --- UX2 L2 ---
+paste-links-dropped = { $count ->
+    [one] 1 lien vers une tâche non copiée n'a pas été repris.
+   *[other] { $count } liens vers des tâches non copiées n'ont pas été repris.
+}
+paste-rows-on-cells = Vous avez copié des lignes entières : sélectionnez une ligne entière (clic sur son N°) pour les coller.
+paste-values-outside = { $count ->
+    [one] 1 valeur hors de la table n'a pas été collée.
+   *[other] { $count } valeurs hors de la table n'ont pas été collées.
+}
+link-already-linked = Ces tâches sont déjà liées.
+menu-fill-right = Remplir à droite
+
+# --- UX2 L3 ---
+mac-menu-about = À propos de { $product }
+mac-menu-hide = Masquer { $product }
+mac-menu-hide-others = Masquer les autres
+mac-menu-show-all = Tout afficher
+mac-menu-quit = Quitter { $product }
+mac-menu-window = Fenêtre
+mac-menu-minimize = Réduire
+mac-menu-zoom = Zoom
+menu-close-document = Fermer le document
+
+# --- UX2 L4 ---
+timeline-hide = Masquer la chronologie
+timeline-close-tip = Masquer la chronologie (Affichage → Chronologie la réaffiche)
+splitter-tip = Glisser pour redimensionner ; double-clic : hauteur par défaut
+details-close-tip = Fermer le volet de détails
+
+# --- UX2 L5 ---
+details-title = Formulaire tâche
+details-form-resources-predecessors = Ressources et prédécesseurs
+details-form-resources-successors = Ressources et successeurs
+details-form-predecessors-successors = Prédécesseurs et successeurs
+details-name = Nom
+details-duration = Durée
+details-effort-driven = Pilotée par l'effort
+details-manual = Planifiée manuellement
+details-start = Début
+details-finish = Fin
+details-task-type = Type de tâche
+details-percent = % achevé
+details-constraint = Contrainte
+details-constraint-date = Date de contrainte
+details-predecessors = Prédécesseurs
+details-successors = Successeurs
+details-resources = Ressources
+details-col-id = N°
+details-col-name = Nom
+details-col-type = Type
+details-col-lag = Décalage
+details-col-units = Unités
+details-col-work = Travail
+details-ok = OK
+details-cancel = Annuler
+details-batch-label = Formulaire tâche
+details-summary-reason = Calculé à partir des sous-tâches.
+menu-details-pane = Détails
+details-unknown-task = Il n'y a pas de tâche { $id }.
+details-draft-kept = Le document a changé ailleurs : vos modifications du formulaire sont gardées.
+details-select-task = Sélectionnez une tâche
+
+# --- UX2 L6 ---
+field-cat-general = Général
+field-cat-scheduling = Planification
+field-cat-progress = Avancement
+field-cat-baseline = Ligne de base
+field-cat-variance = Écarts
+field-cat-slack = Marges
+field-cat-resources = Ressources
+field-cat-costs = Coûts
+field-cat-custom = Personnalisés
+field-costs-not-computed = Coûts : non calculés dans cette version.
+menu-insert-column = Insérer une colonne
+menu-hide-column = Masquer la colonne
+menu-field-settings = Paramètres de champ…
+add-new-column = Ajouter une nouvelle colonne
+field-picker-search = Rechercher un champ
+field-picker-empty = Aucun champ ne correspond.
+field-picker-shown = déjà affiché
+field-settings-title = Paramètres de champ
+field-settings-field = Nom du champ
+field-settings-column-title = Titre
+field-settings-align-title = Aligner le titre
+field-settings-align-data = Aligner les données
+field-settings-width = Largeur
+align-left = Gauche
+align-center = Centre
+align-right = Droite
+columns-max-reached = La table affiche déjà 64 colonnes : masquez-en une pour en insérer une autre.
+column-id-stays-first = La colonne N° reste la première.
+menu-table-display = Affichage du tableau
+
+# --- UX2 L7 ---
+edit-error-bad-choice = Valeur non reconnue : saisissez { $detail }.
+edit-error-computed = Ce champ est calculé.
+
+# --- UX2 L8 ---
+
+# --- UX2 L9 ---
+menu-custom-fields = Champs personnalisés…
+custom-fields-title = Champs personnalisés
+custom-fields-rename = Renommer…
+custom-fields-alias-title = { $alias } ({ $column })
+custom-fields-batch-label = Champs personnalisés
+custom-fields-alias-too-long = Un nom de champ a 50 caractères au plus.
+custom-type-text = Texte
+custom-type-number = Nombre
+custom-type-date = Date
+custom-type-flag = Indicateur
+
+# --- UX2 L10 ---
+ribbon-fill-right = À droite
+ribbon-details = Détails
+ribbon-insert-column = Insérer une colonne
+ribbon-field-settings = Paramètres de champ
+ribbon-custom-fields = Champs personnalisés
+ribbon-tip-details = Affiche sous la vue le formulaire de la tâche sélectionnée : prédécesseurs, successeurs et ressources.
+ribbon-tip-insert-column = Insère une colonne à gauche de la colonne active ; la liste des champs se filtre en tapant.
+ribbon-tip-field-settings = Change le champ, le titre, l'alignement et la largeur de la colonne active.
+ribbon-tip-custom-fields = Renomme les champs personnalisés Texte, Nombre, Date et Indicateur.
+diagnostics-show-all = Tout afficher
+
+# --- UX2 L11 ---

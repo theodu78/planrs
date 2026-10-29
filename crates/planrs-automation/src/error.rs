@@ -5,7 +5,9 @@
 //! par le MCP, la CLI et l'interface (clé de traduction `.ftl`), et un
 //! message en français ou en anglais ([`CommandError::message`]).
 
-use planrs_core::{CalendarUid, Diagnostic, ModelError, Moment, ResourceUid, Subject, TaskUid};
+use planrs_core::{
+    CalendarUid, CustomFieldId, CustomKind, Diagnostic, ModelError, Moment, ResourceUid, Subject, TaskUid,
+};
 use planrs_mspdi::MspdiError;
 
 use crate::text::{Language, TextError};
@@ -162,6 +164,16 @@ pub mod codes {
     pub const TASK_MANUAL_FINISH_BEFORE_START: &str = "task.manual_finish_before_start";
     /// Adresse du canal de contrôle invalide (J8, C-CTL-11).
     pub const CONTROL_BAD_ENDPOINT: &str = "control.bad_endpoint";
+    /// Champ personnalisé inconnu (`text31`, `cost1`…) (R-264).
+    pub const CUSTOM_UNKNOWN_FIELD: &str = "custom.unknown_field";
+    /// Valeur d'un champ personnalisé d'un autre type, illisible ou hors
+    /// bornes (R-264).
+    pub const CUSTOM_VALUE_TYPE: &str = "custom.value_type";
+    /// Texte ou alias d'un champ personnalisé trop long (R-264).
+    pub const CUSTOM_TOO_LONG: &str = "custom.too_long";
+    /// Champ personnalisé défini par le fichier (formule, table de choix) :
+    /// ni valeur ni alias modifiables (R-264, R-265).
+    pub const CUSTOM_READ_ONLY: &str = "custom.read_only";
 }
 
 /// Commande refusée. L'état de la session est intact (atomicité du lot).
@@ -311,6 +323,23 @@ pub enum CommandErrorKind {
         /// Calendriers qui en dérivent.
         count: usize,
     },
+    /// Champ personnalisé inconnu : la clé telle que reçue (R-264).
+    CustomUnknownField(String),
+    /// Valeur d'un champ personnalisé d'un autre type, illisible ou hors
+    /// bornes (R-264).
+    CustomValueType {
+        /// Champ.
+        field: CustomFieldId,
+        /// Type attendu.
+        expected: CustomKind,
+    },
+    /// Texte ou alias trop long (R-264) : longueur maximale, en caractères.
+    CustomTooLong {
+        /// Longueur maximale.
+        max: usize,
+    },
+    /// Champ défini par le fichier (formule, table de choix) (R-264).
+    CustomReadOnly(CustomFieldId),
     /// Calendrier utilisé : suppression refusée (J7, R-248).
     CalendarInUse {
         /// Calendrier.
@@ -725,6 +754,51 @@ fn kind_message(kind: &CommandErrorKind, lang: Language) -> String {
             users,
             total,
         } => calendar_in_use_message(*calendar, users, *total, fr),
+        K::CustomUnknownField(key) => {
+            if fr {
+                format!(
+                    "champ personnalisé inconnu : « {key} » (text1 à text30, number1 à number20, date1 à date10, flag1 à flag20)"
+                )
+            } else {
+                format!(
+                    "unknown custom field: \u{201c}{key}\u{201d} (text1 to text30, number1 to number20, date1 to date10, flag1 to flag20)"
+                )
+            }
+        }
+        K::CustomValueType { field, expected } => {
+            let (what_fr, what_en) = match expected {
+                CustomKind::Text => ("un texte", "a text"),
+                CustomKind::Number => (
+                    "un nombre (12,5 ; au plus 10^14)",
+                    "a number (12.5; at most 10^14)",
+                ),
+                CustomKind::Date => ("une date (2026-11-02T08:00)", "a date (2026-11-02T08:00)"),
+                CustomKind::Flag => ("oui ou non (true, false)", "yes or no (true, false)"),
+            };
+            if fr {
+                format!("{field} attend {what_fr}")
+            } else {
+                format!("{field} expects {what_en}")
+            }
+        }
+        K::CustomTooLong { max } => {
+            if fr {
+                format!("texte trop long : {max} caractères au plus")
+            } else {
+                format!("text too long: at most {max} characters")
+            }
+        }
+        K::CustomReadOnly(field) => {
+            if fr {
+                format!(
+                    "{field} est calculé par une formule ou lié à une table de choix du fichier : il ne se modifie pas ici"
+                )
+            } else {
+                format!(
+                    "{field} is computed by a formula or tied to a lookup table in the file: it cannot be edited here"
+                )
+            }
+        }
     }
 }
 

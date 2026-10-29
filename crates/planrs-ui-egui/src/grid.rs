@@ -345,6 +345,20 @@ pub fn paint_titles<C: Copy>(
     at: HeaderPlace,
     font: &FontId,
 ) -> (Vec<(C, f32, f32)>, usize) {
+    paint_titles_aligned(painter, columns, title, |_| CellAlign::Center, palette, at, font)
+}
+
+/// Comme [`paint_titles`], chaque titre aligné selon `align` (« Paramètres
+/// de champ », H-UI-115, seconde passe UX lot L6).
+pub fn paint_titles_aligned<C: Copy>(
+    painter: &Painter,
+    columns: &[(C, u16)],
+    title: impl Fn(C) -> String,
+    align: impl Fn(C) -> CellAlign,
+    palette: &Palette,
+    at: HeaderPlace,
+    font: &FontId,
+) -> (Vec<(C, f32, f32)>, usize) {
     let HeaderPlace { rect, left, pad } = at;
     let mut shapes = 0_usize;
     let mut edges = Vec::new();
@@ -363,7 +377,7 @@ pub fn paint_titles<C: Copy>(
         if max_w >= MIN_TEXT_WIDTH {
             let galley = truncated_galley(painter, &title(column), font.clone(), max_w);
             let size = galley.size();
-            let x = aligned_x(CellAlign::Center, left, w, pad, size.x);
+            let x = aligned_x(align(column), left, w, pad, size.x);
             let y = rect.center().y - size.y * 0.5;
             painter.galley(pos2(x, y), galley, palette.text_strong);
             shapes = shapes.saturating_add(1);

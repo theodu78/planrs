@@ -1,12 +1,15 @@
 //! Colonnes de la table des tâches et leurs métadonnées.
 //!
-//! L'ordre des variantes de [`Column`] est l'ordre d'affichage : pas de tri ni
-//! de réordonnancement dans les fondations (l'ordre des lignes est celui des
-//! ID, l'ordre des colonnes celui de [`Column::ALL`]). Colonnes J7 (contrat
-//! L0, ADR-0015) : % achevé, Noms ressources, Début et Fin de référence,
-//! Variation de fin, masquées par défaut, à la fin ; leurs textes sont
-//! remplis par le lot L6 (vides jusque-là).
+//! [`Column::ALL`] liste les 14 colonnes d'avant la seconde passe UX, dans
+//! leur ordre historique (textes pré-formatés du `RowModel`, cases du menu
+//! Colonnes, ordre de migration de l'état v1). Seconde passe UX (ADR-0019
+//! D7, contrat L0) : les champs de H-UI-117 ([`Column::FIELDS`], titres
+//! compris) et les champs personnalisés ([`Column::Custom`]) ; l'ordre
+//! d'affichage est celui de `UiState.columns` (version 2), libre. Les
+//! valeurs des nouveaux champs sont servies par le lot L7 (vides et en
+//! lecture seule jusque-là), les champs personnalisés par L9.
 
+use planrs_core::model::custom::{CustomFieldId, CustomKind};
 use serde::{Deserialize, Serialize};
 
 use crate::i18n::TextId;
@@ -48,10 +51,173 @@ pub enum Column {
     /// Mode de planification, « Manuelle » / « Automatique » (J8, lot L11,
     /// H-UI-36 ; lecture seule, masquée par défaut).
     Mode,
+    // --- Seconde passe UX (ADR-0019 D7, contrat L0, H-UI-117) : valeurs
+    // servies par le lot L7.
+    /// Identifiant unique (UID) de la tâche, lecture seule.
+    UniqueId,
+    /// Code WBS, lecture seule.
+    Wbs,
+    /// Niveau hiérarchique, lecture seule.
+    OutlineLevel,
+    /// Tâche récapitulative (oui / non), lecture seule.
+    Summary,
+    /// Jalon (oui / non).
+    Milestone,
+    /// Notes, sur une ligne.
+    Notes,
+    /// Date de création, lecture seule.
+    Created,
+    /// Priorité (0 à 1 000).
+    Priority,
+    /// Tâche active (oui / non).
+    Active,
+    /// Successeurs (« 7;9DD »).
+    Successors,
+    /// Type de contrainte.
+    ConstraintType,
+    /// Date de contrainte.
+    ConstraintDate,
+    /// Échéance.
+    Deadline,
+    /// Type de tâche (unités, durée ou travail fixe).
+    TaskType,
+    /// Pilotée par l'effort (oui / non).
+    EffortDriven,
+    /// Travail.
+    Work,
+    /// Début au plus tôt (moteur), lecture seule.
+    EarlyStart,
+    /// Fin au plus tôt (moteur), lecture seule.
+    EarlyFinish,
+    /// Début au plus tard (moteur), lecture seule.
+    LateStart,
+    /// Fin au plus tard (moteur), lecture seule.
+    LateFinish,
+    /// Marge libre (moteur), lecture seule.
+    FreeSlack,
+    /// % travail achevé.
+    PercentWorkComplete,
+    /// Début réel.
+    ActualStart,
+    /// Fin réelle.
+    ActualFinish,
+    /// Durée réelle.
+    ActualDuration,
+    /// Durée restante.
+    RemainingDuration,
+    /// Travail réel, lecture seule.
+    ActualWork,
+    /// Travail restant, lecture seule.
+    RemainingWork,
+    /// Durée de la ligne de base 0, lecture seule.
+    BaselineDuration,
+    /// Travail de la ligne de base 0, lecture seule.
+    BaselineWork,
+    /// Début de la ligne de base 1, lecture seule.
+    Baseline1Start,
+    /// Fin de la ligne de base 1, lecture seule.
+    Baseline1Finish,
+    /// Durée de la ligne de base 1, lecture seule.
+    Baseline1Duration,
+    /// Travail de la ligne de base 1, lecture seule.
+    Baseline1Work,
+    /// Début de la ligne de base 2, lecture seule.
+    Baseline2Start,
+    /// Fin de la ligne de base 2, lecture seule.
+    Baseline2Finish,
+    /// Durée de la ligne de base 2, lecture seule.
+    Baseline2Duration,
+    /// Travail de la ligne de base 2, lecture seule.
+    Baseline2Work,
+    /// Début de la ligne de base 3, lecture seule.
+    Baseline3Start,
+    /// Fin de la ligne de base 3, lecture seule.
+    Baseline3Finish,
+    /// Durée de la ligne de base 3, lecture seule.
+    Baseline3Duration,
+    /// Travail de la ligne de base 3, lecture seule.
+    Baseline3Work,
+    /// Début de la ligne de base 4, lecture seule.
+    Baseline4Start,
+    /// Fin de la ligne de base 4, lecture seule.
+    Baseline4Finish,
+    /// Durée de la ligne de base 4, lecture seule.
+    Baseline4Duration,
+    /// Travail de la ligne de base 4, lecture seule.
+    Baseline4Work,
+    /// Début de la ligne de base 5, lecture seule.
+    Baseline5Start,
+    /// Fin de la ligne de base 5, lecture seule.
+    Baseline5Finish,
+    /// Durée de la ligne de base 5, lecture seule.
+    Baseline5Duration,
+    /// Travail de la ligne de base 5, lecture seule.
+    Baseline5Work,
+    /// Début de la ligne de base 6, lecture seule.
+    Baseline6Start,
+    /// Fin de la ligne de base 6, lecture seule.
+    Baseline6Finish,
+    /// Durée de la ligne de base 6, lecture seule.
+    Baseline6Duration,
+    /// Travail de la ligne de base 6, lecture seule.
+    Baseline6Work,
+    /// Début de la ligne de base 7, lecture seule.
+    Baseline7Start,
+    /// Fin de la ligne de base 7, lecture seule.
+    Baseline7Finish,
+    /// Durée de la ligne de base 7, lecture seule.
+    Baseline7Duration,
+    /// Travail de la ligne de base 7, lecture seule.
+    Baseline7Work,
+    /// Début de la ligne de base 8, lecture seule.
+    Baseline8Start,
+    /// Fin de la ligne de base 8, lecture seule.
+    Baseline8Finish,
+    /// Durée de la ligne de base 8, lecture seule.
+    Baseline8Duration,
+    /// Travail de la ligne de base 8, lecture seule.
+    Baseline8Work,
+    /// Début de la ligne de base 9, lecture seule.
+    Baseline9Start,
+    /// Fin de la ligne de base 9, lecture seule.
+    Baseline9Finish,
+    /// Durée de la ligne de base 9, lecture seule.
+    Baseline9Duration,
+    /// Travail de la ligne de base 9, lecture seule.
+    Baseline9Work,
+    /// Début de la ligne de base 10, lecture seule.
+    Baseline10Start,
+    /// Fin de la ligne de base 10, lecture seule.
+    Baseline10Finish,
+    /// Durée de la ligne de base 10, lecture seule.
+    Baseline10Duration,
+    /// Travail de la ligne de base 10, lecture seule.
+    Baseline10Work,
+    /// Variation de début (ligne de base 0), lecture seule.
+    StartVariance,
+    /// Variation de durée (ligne de base 0), lecture seule.
+    DurationVariance,
+    /// Variation de travail (ligne de base 0), lecture seule.
+    WorkVariance,
+    /// Coût (non calculé : grisé).
+    Cost,
+    /// Coût fixe (non calculé : grisé).
+    FixedCost,
+    /// Coût réel (non calculé : grisé).
+    ActualCost,
+    /// Coût restant (non calculé : grisé).
+    RemainingCost,
+    /// Coût de la ligne de base 0 (non calculé : grisé).
+    BaselineCost,
+    /// Variation de coût (non calculé : grisé).
+    CostVariance,
+    /// Champ personnalisé (Texte1, Nombre1… ; H-UI-118, servi par L9).
+    Custom(CustomFieldId),
 }
 
-/// Alignement horizontal du texte d'une cellule.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Alignement horizontal du texte d'une cellule (ou d'un titre, H-UI-115).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CellAlign {
     /// Aligné à gauche.
     Left,
@@ -62,7 +228,8 @@ pub enum CellAlign {
 }
 
 impl Column {
-    /// Toutes les colonnes, dans l'ordre d'affichage.
+    /// Les 14 colonnes d'avant la seconde passe UX, dans leur ordre
+    /// historique.
     pub const ALL: [Self; 14] = [
         Self::Id,
         Self::Name,
@@ -80,8 +247,92 @@ impl Column {
         Self::Mode,
     ];
 
-    /// Nombre de colonnes (longueur de [`Column::ALL`]).
+    /// Nombre de colonnes historiques (longueur de [`Column::ALL`]).
     pub const COUNT: usize = Self::ALL.len();
+
+    /// Champs ajoutés par la seconde passe UX (H-UI-117), dans l'ordre de
+    /// l'énumération (champs personnalisés exclus).
+    pub const FIELDS: [Self; 79] = [
+        Self::UniqueId,
+        Self::Wbs,
+        Self::OutlineLevel,
+        Self::Summary,
+        Self::Milestone,
+        Self::Notes,
+        Self::Created,
+        Self::Priority,
+        Self::Active,
+        Self::Successors,
+        Self::ConstraintType,
+        Self::ConstraintDate,
+        Self::Deadline,
+        Self::TaskType,
+        Self::EffortDriven,
+        Self::Work,
+        Self::EarlyStart,
+        Self::EarlyFinish,
+        Self::LateStart,
+        Self::LateFinish,
+        Self::FreeSlack,
+        Self::PercentWorkComplete,
+        Self::ActualStart,
+        Self::ActualFinish,
+        Self::ActualDuration,
+        Self::RemainingDuration,
+        Self::ActualWork,
+        Self::RemainingWork,
+        Self::BaselineDuration,
+        Self::BaselineWork,
+        Self::Baseline1Start,
+        Self::Baseline1Finish,
+        Self::Baseline1Duration,
+        Self::Baseline1Work,
+        Self::Baseline2Start,
+        Self::Baseline2Finish,
+        Self::Baseline2Duration,
+        Self::Baseline2Work,
+        Self::Baseline3Start,
+        Self::Baseline3Finish,
+        Self::Baseline3Duration,
+        Self::Baseline3Work,
+        Self::Baseline4Start,
+        Self::Baseline4Finish,
+        Self::Baseline4Duration,
+        Self::Baseline4Work,
+        Self::Baseline5Start,
+        Self::Baseline5Finish,
+        Self::Baseline5Duration,
+        Self::Baseline5Work,
+        Self::Baseline6Start,
+        Self::Baseline6Finish,
+        Self::Baseline6Duration,
+        Self::Baseline6Work,
+        Self::Baseline7Start,
+        Self::Baseline7Finish,
+        Self::Baseline7Duration,
+        Self::Baseline7Work,
+        Self::Baseline8Start,
+        Self::Baseline8Finish,
+        Self::Baseline8Duration,
+        Self::Baseline8Work,
+        Self::Baseline9Start,
+        Self::Baseline9Finish,
+        Self::Baseline9Duration,
+        Self::Baseline9Work,
+        Self::Baseline10Start,
+        Self::Baseline10Finish,
+        Self::Baseline10Duration,
+        Self::Baseline10Work,
+        Self::StartVariance,
+        Self::DurationVariance,
+        Self::WorkVariance,
+        Self::Cost,
+        Self::FixedCost,
+        Self::ActualCost,
+        Self::RemainingCost,
+        Self::BaselineCost,
+        Self::CostVariance,
+    ];
 
     /// Largeur minimale d'une colonne, en points logiques.
     pub const MIN_WIDTH: u16 = 24;
@@ -89,10 +340,11 @@ impl Column {
     /// Largeur maximale d'une colonne, en points logiques.
     pub const MAX_WIDTH: u16 = 2_000;
 
-    /// Position dans [`Column::ALL`] (sert d'indice des textes pré-formatés).
+    /// Position dans [`Column::ALL`] (indice des textes pré-formatés du
+    /// `RowModel`) ; `None` pour un champ de la seconde passe.
     #[must_use]
-    pub const fn ordinal(self) -> usize {
-        match self {
+    pub const fn ordinal(self) -> Option<usize> {
+        Some(match self {
             Self::Id => 0,
             Self::Name => 1,
             Self::Duration => 2,
@@ -107,38 +359,117 @@ impl Column {
             Self::BaselineFinish => 11,
             Self::FinishVariance => 12,
             Self::Mode => 13,
-        }
+            _ => return None,
+        })
     }
 
     /// Largeur par défaut, en points logiques (colonnes visibles : 642 au
     /// total).
     #[must_use]
+    #[allow(clippy::too_many_lines, reason = "une ligne par champ de la liste H-UI-117")]
     pub const fn default_width(self) -> u16 {
         match self {
             Self::Id => 40,
             Self::Name => 220,
-            Self::Duration | Self::TotalSlack | Self::FinishVariance => 80,
-            Self::Start | Self::Finish | Self::BaselineStart | Self::BaselineFinish => 96,
-            Self::Predecessors | Self::Mode => 110,
-            Self::Critical | Self::PercentComplete => 60,
-            Self::ResourceNames => 140,
+            Self::Duration
+            | Self::TotalSlack
+            | Self::FinishVariance
+            | Self::Wbs
+            | Self::EffortDriven
+            | Self::Work
+            | Self::FreeSlack
+            | Self::ActualDuration
+            | Self::RemainingDuration
+            | Self::ActualWork
+            | Self::RemainingWork
+            | Self::BaselineDuration
+            | Self::BaselineWork
+            | Self::Baseline1Duration
+            | Self::Baseline1Work
+            | Self::Baseline2Duration
+            | Self::Baseline2Work
+            | Self::Baseline3Duration
+            | Self::Baseline3Work
+            | Self::Baseline4Duration
+            | Self::Baseline4Work
+            | Self::Baseline5Duration
+            | Self::Baseline5Work
+            | Self::Baseline6Duration
+            | Self::Baseline6Work
+            | Self::Baseline7Duration
+            | Self::Baseline7Work
+            | Self::Baseline8Duration
+            | Self::Baseline8Work
+            | Self::Baseline9Duration
+            | Self::Baseline9Work
+            | Self::Baseline10Duration
+            | Self::Baseline10Work
+            | Self::StartVariance
+            | Self::DurationVariance
+            | Self::WorkVariance
+            | Self::Cost
+            | Self::FixedCost
+            | Self::ActualCost
+            | Self::RemainingCost
+            | Self::BaselineCost
+            | Self::CostVariance => 80,
+            Self::Start
+            | Self::Finish
+            | Self::BaselineStart
+            | Self::BaselineFinish
+            | Self::Created
+            | Self::ConstraintDate
+            | Self::Deadline
+            | Self::EarlyStart
+            | Self::EarlyFinish
+            | Self::LateStart
+            | Self::LateFinish
+            | Self::ActualStart
+            | Self::ActualFinish
+            | Self::Baseline1Start
+            | Self::Baseline1Finish
+            | Self::Baseline2Start
+            | Self::Baseline2Finish
+            | Self::Baseline3Start
+            | Self::Baseline3Finish
+            | Self::Baseline4Start
+            | Self::Baseline4Finish
+            | Self::Baseline5Start
+            | Self::Baseline5Finish
+            | Self::Baseline6Start
+            | Self::Baseline6Finish
+            | Self::Baseline7Start
+            | Self::Baseline7Finish
+            | Self::Baseline8Start
+            | Self::Baseline8Finish
+            | Self::Baseline9Start
+            | Self::Baseline9Finish
+            | Self::Baseline10Start
+            | Self::Baseline10Finish => 96,
+            Self::Predecessors | Self::Mode | Self::Successors | Self::TaskType => 110,
+            Self::Critical
+            | Self::PercentComplete
+            | Self::Milestone
+            | Self::Active
+            | Self::PercentWorkComplete => 60,
+            Self::ResourceNames | Self::ConstraintType => 140,
+            Self::UniqueId | Self::OutlineLevel | Self::Summary | Self::Priority => 70,
+            Self::Notes => 160,
+            Self::Custom(id) => match id.kind() {
+                CustomKind::Text => 120,
+                CustomKind::Date => 96,
+                CustomKind::Number => 80,
+                CustomKind::Flag => 60,
+            },
         }
     }
 
-    /// Visible par défaut : toutes sauf la marge totale, « Critique » et
-    /// les colonnes J7.
+    /// Visible par défaut : ID, Nom, Durée, Début, Fin, Prédécesseurs.
     #[must_use]
     pub const fn default_visible(self) -> bool {
-        !matches!(
+        matches!(
             self,
-            Self::TotalSlack
-                | Self::Critical
-                | Self::PercentComplete
-                | Self::ResourceNames
-                | Self::BaselineStart
-                | Self::BaselineFinish
-                | Self::FinishVariance
-                | Self::Mode
+            Self::Id | Self::Name | Self::Duration | Self::Start | Self::Finish | Self::Predecessors
         )
     }
 
@@ -150,14 +481,59 @@ impl Column {
     }
 
     /// Alignement du texte des cellules : nombres à droite (ID, durée,
-    /// marge), indicateur « Critique » centré, le reste à gauche.
+    /// marge), indicateurs centrés, le reste à gauche.
     #[must_use]
     pub const fn align(self) -> CellAlign {
         match self {
-            Self::Id | Self::Duration | Self::TotalSlack | Self::PercentComplete | Self::FinishVariance => {
-                CellAlign::Right
+            Self::Id
+            | Self::Duration
+            | Self::TotalSlack
+            | Self::PercentComplete
+            | Self::FinishVariance
+            | Self::UniqueId
+            | Self::OutlineLevel
+            | Self::Priority
+            | Self::Work
+            | Self::FreeSlack
+            | Self::PercentWorkComplete
+            | Self::ActualDuration
+            | Self::RemainingDuration
+            | Self::ActualWork
+            | Self::RemainingWork
+            | Self::BaselineDuration
+            | Self::BaselineWork
+            | Self::Baseline1Duration
+            | Self::Baseline1Work
+            | Self::Baseline2Duration
+            | Self::Baseline2Work
+            | Self::Baseline3Duration
+            | Self::Baseline3Work
+            | Self::Baseline4Duration
+            | Self::Baseline4Work
+            | Self::Baseline5Duration
+            | Self::Baseline5Work
+            | Self::Baseline6Duration
+            | Self::Baseline6Work
+            | Self::Baseline7Duration
+            | Self::Baseline7Work
+            | Self::Baseline8Duration
+            | Self::Baseline8Work
+            | Self::Baseline9Duration
+            | Self::Baseline9Work
+            | Self::Baseline10Duration
+            | Self::Baseline10Work
+            | Self::StartVariance
+            | Self::DurationVariance
+            | Self::WorkVariance
+            | Self::Cost
+            | Self::FixedCost
+            | Self::ActualCost
+            | Self::RemainingCost
+            | Self::BaselineCost
+            | Self::CostVariance => CellAlign::Right,
+            Self::Critical | Self::Summary | Self::Milestone | Self::Active | Self::EffortDriven => {
+                CellAlign::Center
             }
-            Self::Critical => CellAlign::Center,
             Self::Name
             | Self::Start
             | Self::Finish
@@ -165,12 +541,54 @@ impl Column {
             | Self::ResourceNames
             | Self::BaselineStart
             | Self::BaselineFinish
-            | Self::Mode => CellAlign::Left,
+            | Self::Mode
+            | Self::Wbs
+            | Self::Notes
+            | Self::Created
+            | Self::Successors
+            | Self::ConstraintType
+            | Self::ConstraintDate
+            | Self::Deadline
+            | Self::TaskType
+            | Self::EarlyStart
+            | Self::EarlyFinish
+            | Self::LateStart
+            | Self::LateFinish
+            | Self::ActualStart
+            | Self::ActualFinish
+            | Self::Baseline1Start
+            | Self::Baseline1Finish
+            | Self::Baseline2Start
+            | Self::Baseline2Finish
+            | Self::Baseline3Start
+            | Self::Baseline3Finish
+            | Self::Baseline4Start
+            | Self::Baseline4Finish
+            | Self::Baseline5Start
+            | Self::Baseline5Finish
+            | Self::Baseline6Start
+            | Self::Baseline6Finish
+            | Self::Baseline7Start
+            | Self::Baseline7Finish
+            | Self::Baseline8Start
+            | Self::Baseline8Finish
+            | Self::Baseline9Start
+            | Self::Baseline9Finish
+            | Self::Baseline10Start
+            | Self::Baseline10Finish => CellAlign::Left,
+            Self::Custom(id) => match id.kind() {
+                CustomKind::Number => CellAlign::Right,
+                CustomKind::Flag => CellAlign::Center,
+                CustomKind::Text | CustomKind::Date => CellAlign::Left,
+            },
         }
     }
 
-    /// Identifiant du titre traduit de la colonne.
+    /// Identifiant du titre traduit de la colonne ; champ personnalisé : le
+    /// titre de son type, à compléter du numéro (`$n`) par
+    /// [`Column::label`].
     #[must_use]
+    #[allow(clippy::too_many_lines, reason = "une ligne par champ de la liste H-UI-117")]
     pub const fn title(self) -> TextId {
         match self {
             Self::Id => TextId::ColId,
@@ -187,32 +605,180 @@ impl Column {
             Self::BaselineFinish => TextId::ColBaselineFinish,
             Self::FinishVariance => TextId::ColFinishVariance,
             Self::Mode => TextId::ColMode,
+            Self::UniqueId => TextId::ColUniqueId,
+            Self::Wbs => TextId::ColWbs,
+            Self::OutlineLevel => TextId::ColOutlineLevel,
+            Self::Summary => TextId::ColSummary,
+            Self::Milestone => TextId::ColMilestone,
+            Self::Notes => TextId::ColNotes,
+            Self::Created => TextId::ColCreated,
+            Self::Priority => TextId::ColPriority,
+            Self::Active => TextId::ColActive,
+            Self::Successors => TextId::ColSuccessors,
+            Self::ConstraintType => TextId::ColConstraintType,
+            Self::ConstraintDate => TextId::ColConstraintDate,
+            Self::Deadline => TextId::ColDeadline,
+            Self::TaskType => TextId::ColTaskType,
+            Self::EffortDriven => TextId::ColEffortDriven,
+            Self::Work => TextId::ColWork,
+            Self::EarlyStart => TextId::ColEarlyStart,
+            Self::EarlyFinish => TextId::ColEarlyFinish,
+            Self::LateStart => TextId::ColLateStart,
+            Self::LateFinish => TextId::ColLateFinish,
+            Self::FreeSlack => TextId::ColFreeSlack,
+            Self::PercentWorkComplete => TextId::ColPercentWorkComplete,
+            Self::ActualStart => TextId::ColActualStart,
+            Self::ActualFinish => TextId::ColActualFinish,
+            Self::ActualDuration => TextId::ColActualDuration,
+            Self::RemainingDuration => TextId::ColRemainingDuration,
+            Self::ActualWork => TextId::ColActualWork,
+            Self::RemainingWork => TextId::ColRemainingWork,
+            Self::BaselineDuration => TextId::ColBaselineDuration,
+            Self::BaselineWork => TextId::ColBaselineWork,
+            Self::Baseline1Start => TextId::ColBaseline1Start,
+            Self::Baseline1Finish => TextId::ColBaseline1Finish,
+            Self::Baseline1Duration => TextId::ColBaseline1Duration,
+            Self::Baseline1Work => TextId::ColBaseline1Work,
+            Self::Baseline2Start => TextId::ColBaseline2Start,
+            Self::Baseline2Finish => TextId::ColBaseline2Finish,
+            Self::Baseline2Duration => TextId::ColBaseline2Duration,
+            Self::Baseline2Work => TextId::ColBaseline2Work,
+            Self::Baseline3Start => TextId::ColBaseline3Start,
+            Self::Baseline3Finish => TextId::ColBaseline3Finish,
+            Self::Baseline3Duration => TextId::ColBaseline3Duration,
+            Self::Baseline3Work => TextId::ColBaseline3Work,
+            Self::Baseline4Start => TextId::ColBaseline4Start,
+            Self::Baseline4Finish => TextId::ColBaseline4Finish,
+            Self::Baseline4Duration => TextId::ColBaseline4Duration,
+            Self::Baseline4Work => TextId::ColBaseline4Work,
+            Self::Baseline5Start => TextId::ColBaseline5Start,
+            Self::Baseline5Finish => TextId::ColBaseline5Finish,
+            Self::Baseline5Duration => TextId::ColBaseline5Duration,
+            Self::Baseline5Work => TextId::ColBaseline5Work,
+            Self::Baseline6Start => TextId::ColBaseline6Start,
+            Self::Baseline6Finish => TextId::ColBaseline6Finish,
+            Self::Baseline6Duration => TextId::ColBaseline6Duration,
+            Self::Baseline6Work => TextId::ColBaseline6Work,
+            Self::Baseline7Start => TextId::ColBaseline7Start,
+            Self::Baseline7Finish => TextId::ColBaseline7Finish,
+            Self::Baseline7Duration => TextId::ColBaseline7Duration,
+            Self::Baseline7Work => TextId::ColBaseline7Work,
+            Self::Baseline8Start => TextId::ColBaseline8Start,
+            Self::Baseline8Finish => TextId::ColBaseline8Finish,
+            Self::Baseline8Duration => TextId::ColBaseline8Duration,
+            Self::Baseline8Work => TextId::ColBaseline8Work,
+            Self::Baseline9Start => TextId::ColBaseline9Start,
+            Self::Baseline9Finish => TextId::ColBaseline9Finish,
+            Self::Baseline9Duration => TextId::ColBaseline9Duration,
+            Self::Baseline9Work => TextId::ColBaseline9Work,
+            Self::Baseline10Start => TextId::ColBaseline10Start,
+            Self::Baseline10Finish => TextId::ColBaseline10Finish,
+            Self::Baseline10Duration => TextId::ColBaseline10Duration,
+            Self::Baseline10Work => TextId::ColBaseline10Work,
+            Self::StartVariance => TextId::ColStartVariance,
+            Self::DurationVariance => TextId::ColDurationVariance,
+            Self::WorkVariance => TextId::ColWorkVariance,
+            Self::Cost => TextId::ColCost,
+            Self::FixedCost => TextId::ColFixedCost,
+            Self::ActualCost => TextId::ColActualCost,
+            Self::RemainingCost => TextId::ColRemainingCost,
+            Self::BaselineCost => TextId::ColBaselineCost,
+            Self::CostVariance => TextId::ColCostVariance,
+            Self::Custom(id) => match id.kind() {
+                CustomKind::Text => TextId::ColCustomText,
+                CustomKind::Number => TextId::ColCustomNumber,
+                CustomKind::Date => TextId::ColCustomDate,
+                CustomKind::Flag => TextId::ColCustomFlag,
+            },
+        }
+    }
+
+    /// Titre affiché par défaut (« Durée », « Texte1 ») ; avec l'alias
+    /// d'un champ personnalisé (« Lot (Texte1) », H-UI-118) :
+    /// `field::column_label`.
+    #[must_use]
+    pub fn label(self, texts: &crate::i18n::Texts) -> String {
+        match self {
+            Self::Custom(id) => texts.get_args(
+                self.title(),
+                &[("n", crate::i18n::Arg::Count(i64::from(id.index())))],
+            ),
+            _ => texts.get(self.title()),
         }
     }
 }
 
-/// État persistant d'une colonne : visibilité et largeur (points entiers,
-/// aucun flottant dans l'état sérialisé).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Plafond de colonnes affichées (H-UI-114, P63).
+pub const MAX_COLUMNS: usize = 64;
+
+/// Longueur maximale d'un titre de colonne, en caractères (H-UI-115).
+pub const MAX_COLUMN_TITLE: usize = 64;
+
+/// État persistant d'une colonne **affichée** (`UiState` version 2) :
+/// largeur en points entiers (aucun flottant dans l'état sérialisé),
+/// titre et alignements de « Paramètres de champ » (H-UI-115, `None` : par
+/// défaut). Masquer une colonne la retire de la liste.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ColumnState {
     /// Colonne concernée.
     pub column: Column,
-    /// Affichée ou masquée.
-    pub visible: bool,
     /// Largeur en points logiques.
     pub width: u16,
+    /// Titre choisi (≤ [`MAX_COLUMN_TITLE`] caractères, jamais vide).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Alignement des données choisi.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<CellAlign>,
+    /// Alignement du titre choisi.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_align: Option<CellAlign>,
 }
 
 impl ColumnState {
+    /// Titre affiché de la colonne : celui de « Paramètres de champ »
+    /// (H-UI-115), sinon le titre par défaut du champ ([`Column::label`]).
+    #[must_use]
+    pub fn display_title(&self, texts: &crate::i18n::Texts) -> String {
+        self.title.clone().unwrap_or_else(|| self.column.label(texts))
+    }
+
+    /// Alignement des données (H-UI-115) : celui choisi, sinon celui du
+    /// champ.
+    #[must_use]
+    pub fn data_align(&self) -> CellAlign {
+        self.align.unwrap_or(self.column.align())
+    }
+
+    /// Alignement du titre (H-UI-115) : celui choisi, sinon centré.
+    #[must_use]
+    pub fn title_align(&self) -> CellAlign {
+        self.header_align.unwrap_or(CellAlign::Center)
+    }
+
     /// État par défaut d'une colonne.
     #[must_use]
     pub const fn default_for(column: Column) -> Self {
         Self {
             column,
-            visible: column.default_visible(),
             width: column.default_width(),
+            title: None,
+            align: None,
+            header_align: None,
         }
     }
+}
+
+/// Glisser d'un en-tête de colonne en cours (H-UI-116, servi par le lot
+/// L6) : colonne déplacée et place du trait d'insertion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ColumnDrag {
+    /// Rang de la colonne glissée dans `UiState.columns`.
+    pub from: usize,
+    /// Rang devant lequel elle irait (`columns.len()` : en fin).
+    pub to: usize,
+    /// Le lâcher à cet endroit est refusé (avant l'ID).
+    pub refused: bool,
 }
 
 /// Entrées ajoutées au menu de l'en-tête de colonne (H-UI-99, ADR-0018 D7 :
@@ -276,6 +842,81 @@ pub fn sort_key(column: Column) -> Option<SortKey> {
 }
 
 impl crate::App {
+    /// Opération sur les colonnes affichées (`Action::Column`, H-UI-114 à
+    /// H-UI-116, lot L6) : une préférence d'affichage, hors de l'historique
+    /// d'annulation. Insérer (à gauche du rang donné ; champ déjà affiché :
+    /// déplacé ; 64 colonnes au plus, refus nommé), masquer, déplacer (l'ID
+    /// reste en premier, refus nommé), régler (« Paramètres de champ ») ;
+    /// ouvrir le sélecteur ou « Paramètres de champ » ([`ACTIVE_COLUMN`] :
+    /// colonne de la cellule active). Défilement horizontal borné et
+    /// curseur ramené au Nom si sa colonne disparaît.
+    ///
+    /// [`ACTIVE_COLUMN`]: crate::action::ACTIVE_COLUMN
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "action consommée par le réducteur (bras `Action::Column(op)`)"
+    )]
+    pub(crate) fn column_op(&mut self, op: crate::action::ColumnOp) {
+        use crate::action::ColumnOp;
+        let changed = match op {
+            ColumnOp::Insert { at, column } => {
+                let full = !self.state.shown(column) && self.state.columns.len() >= MAX_COLUMNS;
+                if full {
+                    let text = self.texts.get(TextId::ColumnsMaxReached);
+                    self.push_message(planrs_core::Severity::Info, text);
+                }
+                self.state.insert_column(at, column)
+            }
+            ColumnOp::Hide(at) => self.state.hide_column(at),
+            ColumnOp::Move { from, to } => {
+                if (from == 0 || to == 0) && from != to && from < self.state.columns.len() {
+                    let text = self.texts.get(TextId::ColumnIdStaysFirst);
+                    self.push_message(planrs_core::Severity::Info, text);
+                }
+                self.state.move_column(from, to)
+            }
+            ColumnOp::Settings { at, settings } => self.state.set_column_settings(at, settings),
+            ColumnOp::OpenPicker { at } => {
+                if self.document.is_some() {
+                    let at = self.column_rank(at);
+                    self.view.picker = Some(crate::field::FieldPicker::insert_at(at));
+                }
+                false
+            }
+            ColumnOp::OpenSettings(at) => {
+                let at = self.column_rank(at);
+                if self.document.is_some()
+                    && let Some(state) = self.state.columns.get(at)
+                {
+                    let draft = crate::dialog::field_settings::FieldSettingsDraft::of(state);
+                    self.view.picker = Some(crate::field::FieldPicker {
+                        at,
+                        focus_pending: true,
+                        settings: Some(Box::new(draft)),
+                        ..crate::field::FieldPicker::default()
+                    });
+                }
+                false
+            }
+        };
+        if changed {
+            self.columns_changed();
+        }
+    }
+
+    /// Rang dans `UiState.columns` : `at` lui-même, ou, pour
+    /// [`crate::action::ACTIVE_COLUMN`], celui de la colonne de la cellule
+    /// active (le Nom si elle n'est pas affichée).
+    fn column_rank(&self, at: usize) -> usize {
+        if at != crate::action::ACTIVE_COLUMN {
+            return at.min(self.state.columns.len());
+        }
+        let rank = |column: Column| self.state.columns.iter().position(|c| c.column == column);
+        rank(self.view.cursor.column)
+            .or_else(|| rank(Column::Name))
+            .unwrap_or(1)
+    }
+
     /// Ajuste la largeur de `column` au contenu des lignes affichées et à
     /// son titre (`Action::FitColumn`, double-clic sur la bordure ou menu
     /// d'en-tête, H-UI-99) : galley de chaque texte du `RowModel` des lignes
@@ -293,7 +934,11 @@ impl crate::App {
         if screen.inter() {
             font.family = egui::FontFamily::Name(crate::theme::PLAN_FAMILY.into());
         }
-        let title = self.texts.get(column.title());
+        let project = self.document.as_ref().map(crate::app::OpenDocument::project);
+        let title = self.state.column(column).map_or_else(
+            || crate::field::column_label(column, &self.texts, project),
+            |state| crate::field::display_title(state, &self.texts, project),
+        );
         let outline = self.outline_triangles;
         let Some(rows) = self.visible_rows() else {
             return;
@@ -431,7 +1076,13 @@ mod tests {
     fn column_ordinal_matches_all() {
         assert_eq!(Column::COUNT, 14);
         for (index, column) in Column::ALL.iter().enumerate() {
-            assert_eq!(column.ordinal(), index, "{column:?}");
+            assert_eq!(column.ordinal(), Some(index), "{column:?}");
+        }
+        for column in Column::FIELDS {
+            assert_eq!(column.ordinal(), None, "{column:?}");
+            assert!(!column.default_visible() && column.hideable());
+            let width = column.default_width();
+            assert!((Column::MIN_WIDTH..=Column::MAX_WIDTH).contains(&width));
         }
     }
 
@@ -496,12 +1147,18 @@ mod tests {
             state,
             ColumnState {
                 column: Column::Critical,
-                visible: false,
-                width: 60
+                width: 60,
+                title: None,
+                align: None,
+                header_align: None,
             }
         );
         let state = ColumnState::default_for(Column::Name);
-        assert!(state.visible);
         assert_eq!(state.width, 220);
+        // État v2 : réglages absents non écrits.
+        assert_eq!(
+            serde_json::to_string(&state).unwrap(),
+            r#"{"column":"name","width":220}"#
+        );
     }
 }

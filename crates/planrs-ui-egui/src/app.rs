@@ -65,8 +65,9 @@ use crate::timescale::{
 use crate::view::table::table_id;
 use crate::view::{self, DiagnosticsView, FrameCtx, FrameStats, Metrics, Pane, ViewTransient};
 
-/// Nombre maximal de messages conservés dans le bandeau (les plus récents).
-pub const MAX_MESSAGES: usize = 3;
+/// Messages à l'utilisateur : déplacés dans [`crate::notify`] (seconde
+/// passe UX, lot L0) ; réexportés pour les vues qui les lisaient ici.
+pub use crate::notify::{MAX_MESSAGES, UserMessage};
 
 /// Provenance d'un document ouvert.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -268,18 +269,6 @@ struct SaveJob {
     adjusted: usize,
 }
 
-/// Message affiché à l'utilisateur (bandeau).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UserMessage {
-    /// Gravité.
-    pub severity: Severity,
-    /// Titre affiché au-dessus du message (« Impossible d'ouvrir le
-    /// fichier », « Modification refusée »), s'il y en a un.
-    pub title: Option<TextId>,
-    /// Texte déjà traduit.
-    pub text: String,
-}
-
 /// Clé du cache de la vue des lignes ([`RowView`]) : elle est reconstruite
 /// seulement quand l'un de ces éléments change (ADR-0016 D1).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -339,8 +328,12 @@ pub struct App {
     pub(crate) style_cache: crate::theme::StyleCache,
     /// File des actions en attente.
     pub(crate) actions: Vec<Action>,
-    /// Messages affichés.
-    messages: Vec<UserMessage>,
+    /// Messages affichés : notifications, bandeau, historique (seconde
+    /// passe UX, H-UI-104).
+    pub(crate) messages: crate::notify::MessageStore,
+    /// Instant de l'image courante (secondes d'egui, `ctx.input(time)`) :
+    /// date de publication des messages.
+    pub(crate) clock: f64,
     /// Émetteur des résultats d'ouverture (cloné vers le sélecteur).
     tx: Sender<OpenEvent>,
     /// Récepteur des résultats d'ouverture.
@@ -438,7 +431,8 @@ impl App {
             outline_triangles: true,
             style_cache: crate::theme::StyleCache::default(),
             actions: Vec::new(),
-            messages: Vec::new(),
+            messages: crate::notify::MessageStore::default(),
+            clock: 0.0,
             tx,
             rx,
             applied_theme: None,
@@ -675,6 +669,8 @@ impl App {
     /// liste ; aucune si rien n'est affiché). Une saisie ouverte sur une
     /// ligne masquée est abandonnée. Sans document : vue vide.
     pub(crate) fn ensure_row_view(&mut self) {
+        // Textes des champs affichés (seconde passe UX, lot L7, `rows.rs`).
+        self.ensure_row_columns();
         let (Some(document), Some(model)) = (&self.document, &self.rows) else {
             self.row_view = RowView::default();
             self.row_view_key = None;
@@ -1351,9 +1347,17 @@ impl App {
         self.actions.push(action);
     }
 
-    /// Messages affichés.
+    /// Messages affichés (bandeau des décisions et notifications), dans
+    /// l'ordre de publication (H-UI-104).
     #[must_use]
     pub fn messages(&self) -> &[UserMessage] {
+        self.messages.live()
+    }
+
+    /// Pile des messages : notifications, bandeau, historique, non lus
+    /// (H-UI-104).
+    #[must_use]
+    pub const fn message_store(&self) -> &crate::notify::MessageStore {
         &self.messages
     }
 
@@ -1446,16 +1450,25 @@ impl App {
 
     /// Comme [`App::push_message`], avec un titre.
     pub(crate) fn push_titled(&mut self, severity: Severity, title: Option<TextId>, text: String) {
-        self.messages.retain(|message| message.text != text);
-        self.messages.push(UserMessage {
-            severity,
-            title,
-            text,
+        self.push_detailed(severity, title, text, None);
+    }
+
+    /// Comme [`App::push_titled`], avec un détail technique repliable
+    /// (H-UI-105) : publié dans [`crate::notify::MessageStore`], sorte
+    /// déduite de la gravité et du titre ([`crate::notify::kind_for`]).
+    pub(crate) fn push_detailed(
+        &mut self,
+        severity: Severity,
+        title: Option<TextId>,
+        text: String,
+        detail: Option<String>,
+    ) {
+        let kind = crate::notify::kind_for(severity, title);
+        self.messages.post(UserMessage {
+            detail,
+            posted_at: self.clock,
+            ..UserMessage::new(kind, severity, title, text)
         });
-        let excess = self.messages.len().saturating_sub(MAX_MESSAGES);
-        if excess > 0 {
-            self.messages.drain(..excess);
-        }
     }
 
     /// Retire les messages de titre `title` (refus devenus caducs).
@@ -1466,11 +1479,11 @@ impl App {
     /// Affiche un refus de commande : message traduit par son code, détail
     /// du moteur dans la langue de l'interface.
     fn report_command_error(&mut self, error: &CommandError) {
-        let detail = error.message(self.text_language());
-        let text = self
-            .texts
-            .get_args(error_text_id(error.code), &[("detail", Arg::Str(detail.into()))]);
-        self.push_titled(Severity::Error, Some(TextId::CommandErrorTitle), text);
+        let project = self.document.as_ref().map(OpenDocument::project);
+        let (text, detail) =
+            crate::error_text::user_message(error, project, &self.texts, self.text_language());
+        let detail = (!detail.is_empty()).then_some(detail);
+        self.push_detailed(Severity::Error, Some(TextId::CommandErrorTitle), text, detail);
     }
 
     /// Signale (une fois) un état d'interface illisible ou trop récent.
@@ -1479,7 +1492,16 @@ impl App {
             TextId::StateLoadWarning,
             &[("detail", Arg::Str(error.to_string().into()))],
         );
-        self.push_message(Severity::Warning, text);
+        // État illisible : constat qui attend d'être lu (bandeau, H-UI-104).
+        self.messages.post(UserMessage {
+            posted_at: self.clock,
+            ..UserMessage::new(
+                crate::notify::MessageKind::Blocking,
+                Severity::Warning,
+                None,
+                text,
+            )
+        });
     }
 
     /// Vue remise à zéro pour un nouveau document (ou aucun), en gardant la
@@ -1779,7 +1801,7 @@ impl App {
                 self.view.pending_scroll_y = Some(geom::index_to_f32(row) * self.row_h());
             }
             Action::ToggleDiagnostics => self.state.diagnostics_open = !self.state.diagnostics_open,
-            Action::DismissMessage => self.messages.clear(),
+            Action::DismissMessage => self.messages.clear_live(),
             // Le refus est affiché par `execute` ; rien d'autre à faire ici.
             Action::Exec(batch) => drop(self.execute(&batch, EditOrigin::User)),
             Action::ExecOn { opening, batch } => {
@@ -1869,7 +1891,8 @@ impl App {
                 | DialogKind::ProjectInformation
                 | DialogKind::Baseline
                 | DialogKind::Reschedule
-                | DialogKind::AssignResources),
+                | DialogKind::AssignResources
+                | DialogKind::CustomFields),
             ) => self.open_window(kind),
             Action::CloseDialog => self.close_dialog(),
             // Contrat J7 (lot L0) : actions câblées par leur lot.
@@ -1965,6 +1988,18 @@ impl App {
             Action::Cells(op) => self.cells_op(op, ctx),
             Action::MoveRows { before } => self.move_rows(before),
             Action::FitColumn(column) => self.fit_column(column, ctx),
+            // --- Seconde passe UX (ADR-0019, contrat L0) : bras posés une
+            // fois ; les fonctions appelées vivent dans le fichier du lot
+            // qui les sert (`panes.rs` L4, `column.rs` L6,
+            // `view/details.rs` L5, `notify.rs` L1).
+            Action::Pane(op) => self.pane_op(op),
+            Action::Column(op) => self.column_op(op),
+            Action::Details(op) => {
+                self.details_op(op);
+            }
+            Action::Message(crate::action::MessageOp::Dismiss(id)) => self.messages.dismiss(id),
+            Action::Message(crate::action::MessageOp::ToggleHistory) => self.messages.toggle_history(),
+            Action::CloseDocumentGuarded => self.request(Pending::Close, ctx),
         }
     }
 
@@ -2189,11 +2224,15 @@ impl App {
     /// Affiche ou masque une colonne (J7, lot L6) ; masquer la colonne du
     /// curseur le ramène sur le Nom (toujours visible).
     fn toggle_column(&mut self, column: Column) {
-        if !self.state.toggle_column(column) {
-            return;
+        if self.state.toggle_column(column) {
+            self.columns_changed();
         }
-        let visible = self.state.column(column).is_some_and(|state| state.visible);
-        if !visible && self.view.cursor.column == column {
+    }
+
+    /// Après un changement des colonnes affichées : curseur ramené au Nom
+    /// si sa colonne est masquée, défilement horizontal borné.
+    pub(crate) fn columns_changed(&mut self) {
+        if !self.state.shown(self.view.cursor.column) {
             self.view.cursor.column = Column::Name;
         }
         self.clamp_table_scroll();
@@ -2202,7 +2241,13 @@ impl App {
     /// Borne le défilement horizontal de la table à `[0, Σ largeurs −
     /// largeur visible]` (largeur de l'image précédente).
     fn clamp_table_scroll(&mut self) {
-        let total: f32 = self.state.visible_columns().map(|c| f32::from(c.width)).sum();
+        // Colonne « Ajouter une nouvelle colonne » comptée (H-UI-114, L10).
+        let total: f32 = self
+            .state
+            .visible_columns()
+            .map(|c| f32::from(c.width))
+            .sum::<f32>()
+            + view::table::add_column_extra(None, self.state.chart_only);
         let max = total - self.view.last_table_width;
         let max = if max.is_finite() { max.max(0.0) } else { 0.0 };
         let x = self.view.table_scroll_x;
@@ -2366,7 +2411,12 @@ impl App {
         match self.execute(&batch, EditOrigin::Dialog) {
             Ok(_) => self.close_dialog(),
             Err(error) => {
-                let message = task_info::command_message(&self.texts, &error, lang);
+                let message = task_info::command_message(
+                    &self.texts,
+                    &error,
+                    self.document.as_ref().map(OpenDocument::project),
+                    lang,
+                );
                 if let Some(DialogState {
                     body: DialogBody::Link(state),
                     ..
@@ -2380,6 +2430,12 @@ impl App {
 
     /// Affiche le refus d'un geste du Gantt (bandeau), raison traduite.
     fn report_gesture(&mut self, error: GestureError) {
+        if error == GestureError::AlreadyLinked {
+            // R-260 c, H-UI-107 : rien n'est écrit ; simple information.
+            let text = self.texts.get(TextId::LinkAlreadyLinked);
+            self.push_message(Severity::Info, text);
+            return;
+        }
         let reason = match error {
             GestureError::NotDraggable(_, NotDraggable::Summary) => TextId::GanttReasonSummary,
             GestureError::NotDraggable(_, NotDraggable::Started) => TextId::GanttReasonStarted,
@@ -2390,6 +2446,7 @@ impl App {
             GestureError::NotDraggable(_, NotDraggable::Blank) => TextId::GanttReasonBlank,
             GestureError::SameTask => TextId::GanttReasonSameTask,
             GestureError::Overflow => TextId::GanttReasonOverflow,
+            GestureError::AlreadyLinked => TextId::LinkAlreadyLinked,
         };
         let detail = self.texts.get(reason);
         let text = self.texts.get_args(
@@ -2492,7 +2549,8 @@ impl App {
                 | DialogBody::PasteSpecial(_)
                 | DialogBody::CsvImport(_)
                 | DialogBody::Gallery(_)
-                | DialogBody::PageSetup(_),
+                | DialogBody::PageSetup(_)
+                | DialogBody::CustomFields(_),
             )
             | None => Shown::TaskInfo(task_info::Outcome::Cancel),
         };
@@ -2553,7 +2611,12 @@ impl App {
             Ok(_) => self.close_dialog(),
             Err(error) => {
                 let (tab, field) = task_info::locate(&batch, &error);
-                let message = task_info::command_message(&self.texts, &error, lang);
+                let message = task_info::command_message(
+                    &self.texts,
+                    &error,
+                    self.document.as_ref().map(OpenDocument::project),
+                    lang,
+                );
                 if let Some(DialogState {
                     body: DialogBody::TaskInfo(state),
                     ..
@@ -2651,6 +2714,11 @@ impl App {
     /// n'atteint aucun widget). Fenêtre ouverte : dessinée d'abord, ses
     /// touches non prises retirées ; saisie de cellule ouverte : aucun.
     fn read_keys(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        // Touches globales de sortie et de fermeture (seconde passe UX,
+        // `quit.rs`) : lues avant tout le reste.
+        if self.global_keys(ctx, actions) {
+            return;
+        }
         if self.view.dialog.is_some() {
             // « Affecter des ressources » (non modale) : les raccourcis à
             // Ctrl/Cmd qui ne touchent pas la structure (enregistrer,
@@ -2734,6 +2802,10 @@ impl App {
     )]
     pub(crate) fn show(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        // Horloge des messages (H-UI-104) : notifications échues retirées.
+        self.clock = ctx.input(|input| input.time);
+        self.messages
+            .expire(self.clock, view::chrome::hovered_toast(&ctx));
         // Appels relayés d'un agent d'abord (ADR-0015 D9) : la session vue
         // par l'image est celle qui a répondu.
         #[cfg(not(target_arch = "wasm32"))]
@@ -2905,6 +2977,9 @@ fn show_view(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view_state: &mut ViewTran
         ViewKind::ResourceUsage => view::usage::show(ui, fc, view_state),
         ViewKind::Gantt => view::main_view::show(ui, fc, view_state),
     }
+    // Seconde passe UX (lot L6) : sélecteur de champ ou « Paramètres de
+    // champ » ouverts, au-dessus de la vue.
+    crate::dialog::field_picker::show(ui.ctx(), fc, &mut view_state.picker);
 }
 
 /// Pose les refus d'une tentative ; l'onglet affiché passe au premier

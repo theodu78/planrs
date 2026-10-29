@@ -61,7 +61,9 @@ pub enum Action {
     ScrollToRow(usize),
     /// Ouvre ou referme le panneau des diagnostics.
     ToggleDiagnostics,
-    /// Referme le bandeau de messages.
+    /// Ferme tous les messages affichés (bandeau et notifications ;
+    /// l'historique est gardé). Le « Fermer » de chaque message pousse
+    /// `Message(MessageOp::Dismiss)`.
     DismissMessage,
     /// Applique un lot de commandes à la session du document (toute
     /// édition passe par le registre). Sans effet jusqu'au lot L11.
@@ -230,6 +232,104 @@ pub enum Action {
     /// Ajuste la largeur d'une colonne à son contenu (double-clic sur la
     /// bordure de l'en-tête, H-UI-99) : `App::fit_column` (`column.rs`).
     FitColumn(Column),
+    // --- Seconde passe UX (ADR-0019, contrat L0) : bras posés une fois
+    // dans le réducteur ; les fonctions appelées sont servies par leur lot
+    // (`panes.rs` L4, `column.rs` L6, `view/details.rs` L5, `notify.rs`
+    // L1).
+    /// Volets : chronologie, volet de détails, F6 (H-UI-110 à H-UI-112) :
+    /// `App::pane_op` (`panes.rs`).
+    Pane(PaneOp),
+    /// Colonnes affichées : insérer, masquer, déplacer, paramètres
+    /// (H-UI-114 à H-UI-116) : `App::column_op` (`column.rs`).
+    Column(ColumnOp),
+    /// OK ou Annuler du volet de détails (H-UI-113) : `App::details_op`
+    /// (`view/details.rs`).
+    Details(DetailsOp),
+    /// Notifications et historique des messages (H-UI-104).
+    Message(MessageOp),
+    /// Fermer le document, après confirmation s'il est modifié (Ctrl/Cmd+W,
+    /// Ctrl+F4, H-UI-109) ; la fenêtre reste ouverte (écran d'accueil).
+    CloseDocumentGuarded,
+}
+
+/// Opération sur les volets (seconde passe UX, ADR-0019 D5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaneOp {
+    /// Hauteur de la chronologie, en points (séparateur relâché).
+    SetTimelineHeight(u16),
+    /// Affiche ou masque le volet de détails (Affichage → Détails, ×).
+    ShowDetails(bool),
+    /// Hauteur du volet de détails, en points.
+    SetDetailsHeight(u16),
+    /// Forme du volet de détails (clic droit dans le volet).
+    SetDetailsForm(crate::state::DetailsForm),
+    /// F6 / Maj+F6 : clavier au volet suivant / précédent.
+    FocusNext {
+        /// Maj+F6 : précédent.
+        back: bool,
+    },
+}
+
+/// Rang de colonne « colonne active » de [`ColumnOp::OpenSettings`]
+/// (Alt+F3) : résolu par le réducteur sur la colonne de la cellule active.
+pub const ACTIVE_COLUMN: usize = usize::MAX;
+
+/// Opération sur les colonnes affichées (`UiState.columns`, seconde passe
+/// UX, ADR-0019 D7) : une préférence d'affichage, hors de l'historique
+/// d'annulation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ColumnOp {
+    /// Insère `column` au rang `at` (à gauche de la colonne cliquée ; déjà
+    /// affichée : déplacée).
+    Insert {
+        /// Rang d'insertion.
+        at: usize,
+        /// Champ inséré.
+        column: Column,
+    },
+    /// Masque la colonne de rang donné.
+    Hide(usize),
+    /// Déplace la colonne de rang `from` au rang `to`.
+    Move {
+        /// Rang de départ.
+        from: usize,
+        /// Rang d'arrivée.
+        to: usize,
+    },
+    /// Réglages de « Paramètres de champ » pour la colonne de rang `at`.
+    Settings {
+        /// Rang de la colonne.
+        at: usize,
+        /// Réglages (champ, titre, alignements, largeur).
+        settings: crate::column::ColumnState,
+    },
+    /// Ouvre le sélecteur de champ pour une insertion au rang `at`.
+    OpenPicker {
+        /// Rang d'insertion.
+        at: usize,
+    },
+    /// Ouvre « Paramètres de champ » de la colonne de rang donné
+    /// ([`ACTIVE_COLUMN`] : colonne de la cellule active).
+    OpenSettings(usize),
+}
+
+/// Bouton du volet de détails (H-UI-113).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DetailsOp {
+    /// OK (ou Entrée hors grille) : écrit le brouillon en un lot.
+    Ok,
+    /// Annuler (ou Échap) : relit le brouillon.
+    Cancel,
+}
+
+/// Opération sur les messages (H-UI-104).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageOp {
+    /// Ferme le message d'identifiant donné (notification ou bandeau) ;
+    /// `Action::DismissMessage` ferme tous les messages affichés.
+    Dismiss(u64),
+    /// Ouvre ou ferme l'historique des messages.
+    ToggleHistory,
 }
 
 /// Geste de sélection de la table (ADR-0018 D1, D2).
@@ -312,6 +412,9 @@ pub enum CellOp {
     DeleteKey,
     /// Ctrl/Cmd+Entrée : texte saisi écrit dans tout le bloc (H-UI-98).
     FillTyped(String),
+    /// Ctrl/Cmd+R : remplir à droite (R-258 amendée, H-UI-120 ; seconde
+    /// passe UX, servi par le lot L2).
+    FillRight,
 }
 
 /// Opération de la chronologie (ADR-0017 D7).
@@ -406,6 +509,9 @@ pub enum DialogKind {
         /// Mode impression.
         print_mode: bool,
     },
+    /// « Champs personnalisés » (Projet → Champs personnalisés…, seconde
+    /// passe UX, lot L9, H-UI-118).
+    CustomFields,
 }
 
 /// Action d'interface d'un agent (`app.ui`, J7) : sans historique, sans

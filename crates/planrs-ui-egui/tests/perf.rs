@@ -872,7 +872,7 @@ fn frame_counts_equal_at_1000_and_5000_tasks() {
         // J7 L6 : toutes les colonnes affichées (textes des colonnes de
         // suivi), table défilée horizontalement par Fin.
         for column in Column::ALL {
-            if !app.state.column(column).is_some_and(|c| c.visible) {
+            if !app.state.shown(column) {
                 app.dispatch(Action::ToggleColumn(column));
             }
         }
@@ -2102,4 +2102,203 @@ fn best_fit_5000() {
         serde_json::json!({ "budget_median_ms": 50 }),
     );
     assert!(median < Duration::from_millis(50), "ajustement : {median:?}");
+}
+
+// --- Seconde passe UX (ADR-0019, contrat L0) : sections posées vides,
+// remplies par leur lot (budgets du cahier `docs/plans/ux2.md` § 2.5).
+// --- UX2 L2 --- (`paste_cells_1000` et `paste_1000` tenus)
+// --- UX2 L4 --- (`splitter_drag_5000`)
+
+/// Glisse un séparateur de volets de `rect` (zone de saisie) sur 60
+/// images, d'un point par image dans le sens `dir`, puis lâche ; rend les
+/// durées des 60 images du glisser.
+fn drag_splitter(bench: &mut Bench, app: &mut App, grip: Rect, dir: f32) -> Vec<Duration> {
+    let start = grip.center();
+    press_frames(bench, app, start, true);
+    let mut samples = Vec::with_capacity(60);
+    for i in 1..=60_u16 {
+        let p = pos2(start.x, start.y + dir * f32::from(i));
+        samples.push(bench.frame(app, vec![Event::PointerMoved(p)]));
+    }
+    let end = pos2(start.x, start.y + dir * 60.0);
+    bench.frame(
+        app,
+        vec![Event::PointerButton {
+            pos: end,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        }],
+    );
+    samples
+}
+
+/// UX2 L4 (H-UI-111, § 2.5) : réseau de 5 000 tâches, frise affichée et
+/// volet de détails ouvert ; séparateur de la frise glissé 60 images vers
+/// le bas, puis celui des détails 60 images vers le haut (volets et table
+/// redisposés à chaque image, hauteurs écrites au relâcher). Image médiane
+/// < 16 ms, p95 < 32 ms.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn splitter_drag_5000() {
+    let (mut app, mut bench) = nav_bench();
+    app.dispatch(Action::Pane(planrs_ui_egui::action::PaneOp::ShowDetails(true)));
+    bench.settle(&mut app);
+    let drawn = app.view().panes.drawn.unwrap();
+    let mut samples = drag_splitter(&mut bench, &mut app, drawn.timeline_splitter.unwrap(), 1.0);
+    bench.settle(&mut app);
+    assert_eq!(app.state.timeline_height, 132, "frise glissée de 60 points");
+    let drawn = app.view().panes.drawn.unwrap();
+    samples.extend(drag_splitter(
+        &mut bench,
+        &mut app,
+        drawn.details_splitter.unwrap(),
+        -1.0,
+    ));
+    bench.settle(&mut app);
+    assert_eq!(
+        app.state.details.height,
+        planrs_ui_egui::state::DETAILS_HEIGHT_DEFAULT + 60,
+        "détails glissés de 60 points"
+    );
+    assert_budget("splitter_drag_5000", samples, bench.last);
+}
+// --- UX2 L5 --- (`details_follow_5000`)
+
+/// UX2 L5 (H-UI-112, § 2.5) : réseau de 5 000 tâches, volet de détails
+/// ouvert (forme Prédécesseurs et successeurs) ; ↓ maintenue 120 images,
+/// la tâche suivie change à chaque image (brouillon relu, successeurs
+/// cherchés dans tout le projet). Image médiane < 16 ms, p95 < 32 ms ; rien
+/// d'écrit dans le document.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn details_follow_5000() {
+    use planrs_ui_egui::action::PaneOp;
+    use planrs_ui_egui::state::DetailsForm;
+    let (mut app, mut bench) = nav_bench();
+    app.dispatch(Action::Pane(PaneOp::ShowDetails(true)));
+    app.dispatch(Action::Pane(PaneOp::SetDetailsForm(
+        DetailsForm::PredecessorsSuccessors,
+    )));
+    bench.settle(&mut app);
+    let generation = app.document.as_ref().unwrap().generation();
+    for _ in 0..WARMUP {
+        bench.frame(&mut app, key_events(Key::ArrowDown, Modifiers::NONE));
+    }
+    let start = cursor_row(&app);
+    let samples: Vec<Duration> = (0..120)
+        .map(|_| bench.frame(&mut app, key_events(Key::ArrowDown, Modifiers::NONE)))
+        .collect();
+    assert_eq!(cursor_row(&app), start + 120, "une ligne par image");
+    bench.settle(&mut app);
+    let followed = app
+        .view()
+        .details
+        .as_ref()
+        .and_then(|d| d.draft.as_ref())
+        .map(|d| d.uid);
+    assert_eq!(followed, app.selection, "le volet suit la cellule active");
+    assert_eq!(app.document.as_ref().unwrap().generation(), generation);
+    assert_budget("details_follow_5000", samples, bench.last);
+}
+// --- UX2 L6 --- (`field_picker_5000`)
+
+/// Seconde passe UX, lot L6 (§ 2.5) : sélecteur de champ ouvert sur le
+/// réseau de 5 000 tâches, 6 caractères tapés, un par image (recherche
+/// relancée à chaque frappe), cinq fois ; image médiane < 16 ms, p95
+/// < 32 ms. Rien d'écrit dans le document.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn field_picker_5000() {
+    use planrs_ui_egui::action::ColumnOp;
+    let (mut app, mut bench) = nav_bench();
+    let generation = app.document.as_ref().unwrap().generation();
+    let mut samples = Vec::new();
+    for _ in 0..5 {
+        app.dispatch(Action::Column(ColumnOp::OpenPicker { at: 2 }));
+        bench.settle(&mut app);
+        for c in "travai".chars() {
+            samples.push(bench.frame(&mut app, vec![Event::Text(c.to_string())]));
+        }
+        assert_eq!(app.view().picker.as_ref().unwrap().query, "travai");
+        bench.frame(&mut app, key_events(Key::Escape, Modifiers::NONE));
+        bench.settle(&mut app);
+        assert!(app.view().picker.is_none());
+    }
+    assert_eq!(app.document.as_ref().unwrap().generation(), generation);
+    assert_budget("field_picker_5000", samples, bench.last);
+}
+
+// --- UX2 L7 --- (`wide_table_5000`)
+
+/// Seconde passe UX, lot L7 (§ 2.5) : réseau de 5 000 tâches, ligne de
+/// base 0 posée puis une durée modifiée (écarts non nuls), 30 colonnes
+/// affichées (les 6 par défaut, lignes de base 0 à 3, écarts, marges,
+/// dates au plus tôt et au plus tard, travail, successeurs…) ; 120 images
+/// de molette verticale puis 60 de défilement horizontal de la table ;
+/// image médiane < 16 ms, p95 < 32 ms. Textes des colonnes calculés une
+/// fois (`RowModel::ensure_columns`), durée de ce calcul rapportée.
+#[test]
+#[ignore = "mesure, à lancer en --release : cargo test -p planrs-ui-egui --release --test perf -- --ignored --nocapture"]
+fn wide_table_5000() {
+    use planrs_ui_egui::action::ColumnOp;
+    let (mut app, mut bench) = nav_bench();
+    set_baseline(&mut app, &mut bench);
+    let wide = [
+        Column::BaselineStart,
+        Column::BaselineFinish,
+        Column::BaselineDuration,
+        Column::BaselineWork,
+        Column::Baseline1Start,
+        Column::Baseline1Finish,
+        Column::Baseline2Start,
+        Column::Baseline3Finish,
+        Column::StartVariance,
+        Column::FinishVariance,
+        Column::DurationVariance,
+        Column::WorkVariance,
+        Column::TotalSlack,
+        Column::FreeSlack,
+        Column::EarlyStart,
+        Column::EarlyFinish,
+        Column::LateStart,
+        Column::LateFinish,
+        Column::Work,
+        Column::Successors,
+        Column::ConstraintType,
+        Column::Deadline,
+        Column::PercentComplete,
+        Column::Notes,
+    ];
+    // Actions appliquées à l'image suivante : insertions en fin de table.
+    for column in wide {
+        app.dispatch(Action::Column(ColumnOp::Insert { at: 64, column }));
+    }
+    let t0 = Instant::now();
+    bench.settle(&mut app);
+    let fill = t0.elapsed();
+    assert_eq!(app.state.columns.len(), 30);
+    for _ in 0..WARMUP {
+        bench.frame(&mut app, wheel_events(-WHEEL_STEP));
+    }
+    let doc = app.document.as_ref().unwrap();
+    let first = doc.project().tasks.at(10).unwrap().uid();
+    let rows = app.rows().unwrap();
+    assert_ne!(rows.text(rows.index_of(first).unwrap(), Column::LateFinish), "");
+    let vertical: Vec<Duration> = (0..120)
+        .map(|_| bench.frame(&mut app, wheel_events(-WHEEL_STEP)))
+        .collect();
+    let horizontal: Vec<Duration> = (0..60)
+        .map(|_| {
+            app.dispatch(Action::ScrollTableX(40.0));
+            bench.frame(&mut app, Vec::new())
+        })
+        .collect();
+    assert!(app.view().table_scroll_x > 0.0, "la table n'a pas défilé");
+    eprintln!(
+        "perf UI wide_table_5000 : calcul des 24 colonnes ajoutées (image comprise) {:.1} ms",
+        ms(fill)
+    );
+    assert_budget("wide_table_5000 vertical", vertical, bench.last);
+    assert_budget("wide_table_5000 horizontal", horizontal, bench.last);
 }

@@ -20,6 +20,7 @@ use planrs_core::{
 };
 
 use super::assignment::{Balance, balance_of};
+use super::custom;
 use super::exec::Ctx;
 use super::extras_invalidation::TaskChange;
 use super::outline::{
@@ -389,6 +390,7 @@ pub(super) fn is_pure_freeze(op: &TaskUpdate) -> bool {
         && op.task_type.is_keep()
         && op.effort_driven.is_keep()
         && op.work.is_keep()
+        && op.custom.is_empty()
 }
 
 /// R-253 : valeurs manuelles d'une tâche qui passe en manuel : ses dates
@@ -664,6 +666,8 @@ pub(super) fn update(op: &TaskUpdate, ctx: &mut Ctx<'_>) -> Result<(), CommandEr
         summary,
         duration.as_ref().map(planrs_core::Duration::minutes),
     )?;
+    // R-264 : champs personnalisés, contrôlés avant toute modification.
+    let custom_edits = custom::plan_values(&op.custom, ctx, uid)?;
 
     let Some(t) = ctx.project.tasks.get_mut(uid) else {
         return Err(CommandError::new(
@@ -726,6 +730,9 @@ pub(super) fn update(op: &TaskUpdate, ctx: &mut Ctx<'_>) -> Result<(), CommandEr
     if let Some(b) = &balance {
         set_scheduling(t, b, !op.work.is_keep(), &mut changes);
     }
+    // R-264 : aucune valeur calculée n'en dépend, aucun `Extras` de
+    // planning jeté (R-161).
+    custom::apply_values(t, &custom_edits);
     if let Some((side, date)) = entered
         && set_entered(ctx, uid, side, date)
     {

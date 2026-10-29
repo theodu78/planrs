@@ -10,7 +10,8 @@
 //! réservée au jalon 8 par le contrat L0, activée par le lot L7, et les six
 //! entrées `style.*` du lot L6 (`style.apply`, `style.get`, `style.list`,
 //! posées par L0, plus `style.set_bar_role`, `style.reset_to_template`,
-//! `style.save_as_template`). Une entrée réservée à un jalon futur
+//! `style.save_as_template`), et `custom_field.rename` (seconde passe UX,
+//! lot L8, R-264). Une entrée réservée à un jalon futur
 //! (`Availability::Milestone`) n'est pas listée et est refusée
 //! `command.not_yet_available`. Les trois entrées `app.*` (genre [`Kind::Ui`]) ne sont servies que
 //! par une application rattachée (`Availability::Attached`, ADR-0015 D11) :
@@ -31,10 +32,10 @@ use crate::command::params::{
 use crate::command::style::{StyleApply, StyleResetToTemplate, StyleSaveAsTemplate, StyleSetBarRole};
 use crate::command::{
     AnchorSpec, AssignmentAdd, AssignmentKey, AssignmentUpdate, BaselineClear, BaselineSet, CalendarAdd,
-    CalendarDelete, CalendarException, CalendarExceptionKey, CalendarSetWeek, CalendarUpdate, LinkKey,
-    LinkSpec, ProgressReschedule, ProgressUpdate, ProjectInfoPatch, ResourceAdd, ResourceDelete,
-    ResourceUpdate, SetConstraint, SetDeadline, SetStatusDate, TaskAdd, TaskDelete, TaskMove, TaskOne,
-    TaskUpdate,
+    CalendarDelete, CalendarException, CalendarExceptionKey, CalendarSetWeek, CalendarUpdate,
+    CustomFieldRename, LinkKey, LinkSpec, ProgressReschedule, ProgressUpdate, ProjectInfoPatch, ResourceAdd,
+    ResourceDelete, ResourceUpdate, SetConstraint, SetDeadline, SetStatusDate, TaskAdd, TaskDelete, TaskMove,
+    TaskOne, TaskUpdate,
 };
 use crate::text::Language;
 
@@ -340,6 +341,14 @@ pub static REGISTRY: &[CommandSpec] = &[
         schema_of::<CalendarUpdate>,
         "Renomme un calendrier ou change sa base.",
         "Rename a calendar or change its base.",
+    ),
+    now(
+        "custom_field.rename",
+        "rename_custom_field",
+        Kind::Write,
+        schema_of::<CustomFieldRename>,
+        "Renomme un champ personnalisé de tâche (alias de Texte1-30, Nombre1-20, Date1-10, Indicateur1-20) ou lui rend son nom ; ses valeurs se posent par task.update { custom }.",
+        "Rename a task custom field (alias of Text1-30, Number1-20, Date1-10, Flag1-20) or restore its name; values are set with task.update { custom }.",
     ),
     now(
         "history.list",

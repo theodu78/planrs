@@ -82,10 +82,10 @@ fn task_info_to_batch_order() {
     d.general.duration = "4j".to_owned();
     d.general.percent = "25".to_owned();
     // Prédécesseurs « 7;6 » → 6 gardé en DD, 7 retiré, 3 ajouté.
-    d.links.retain(|row| row.predecessor == "6");
+    d.links.retain(|row| row.id == "6");
     d.links[0].kind = LinkType::StartToStart;
     d.links.push(LinkRow {
-        predecessor: "3".to_owned(),
+        id: "3".to_owned(),
         kind: LinkType::FinishToStart,
         lag: "+1j".to_owned(),
     });
@@ -94,6 +94,7 @@ fn task_info_to_batch_order() {
     d.assignments.push(AssignRow {
         resource: ResourceUid::new(2),
         units: "5".to_owned(),
+        work: String::new(),
     });
     d.advanced.constraint = ConstraintKind::StartNoEarlierThan;
     d.advanced.constraint_date = "01/03/2027".to_owned();
@@ -164,12 +165,12 @@ fn task_info_field_errors_per_tab() {
     d.general.duration = "abc".to_owned();
     d.general.start = "31/02/2027".to_owned();
     d.links.push(LinkRow {
-        predecessor: "900".to_owned(),
+        id: "900".to_owned(),
         kind: LinkType::FinishToStart,
         lag: String::new(),
     });
     d.links.push(LinkRow {
-        predecessor: "7".to_owned(),
+        id: "7".to_owned(),
         kind: LinkType::FinishToStart,
         lag: String::new(),
     });
@@ -509,6 +510,38 @@ fn task_info_registry_refusal_in_dialog() {
     assert_eq!(state.errors.len(), 1, "{:?}", state.errors);
     assert_eq!(state.errors[0].tab, Tab::General);
     assert_eq!(state.errors[0].field, "name");
+}
+
+/// H-UI-105 (relecture finale ux2, B1) : un refus du registre dans
+/// « Informations sur la tâche » (12 en prédécesseur de 11, déjà son
+/// successeur : boucle) se dit en langage d'utilisateur, tâches nommées
+/// par leur ID, sans code, UID ni numéro d'opération.
+#[test]
+fn h_ui_105_task_info_refusal_user_language() {
+    let mut harness = harness();
+    open_demo(&mut harness);
+    open_info(&mut harness, 11);
+    if let Some(DialogState {
+        body: DialogBody::TaskInfo(state),
+        ..
+    }) = &mut harness.state_mut().view_mut().dialog
+    {
+        state.draft.links.push(LinkRow {
+            id: "12".to_owned(),
+            kind: LinkType::FinishToStart,
+            lag: String::new(),
+        });
+    }
+    harness.run();
+    click_label(&mut harness, &fr(TextId::TaskInfoOk));
+    let app = harness.state();
+    let state = info(app).expect("fenêtre gardée");
+    assert_eq!(generation(app), 0);
+    let want =
+        Texts::new(Language::Fr).get_args(TextId::RefusalLinkCycle, &[("tasks", Arg::Str("11, 12".into()))]);
+    assert_eq!(state.errors.len(), 1, "{:?}", state.errors);
+    assert_eq!(state.errors[0].message, want);
+    assert_eq!(state.errors[0].tab, Tab::Predecessors);
 }
 
 #[test]

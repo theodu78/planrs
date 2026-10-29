@@ -222,15 +222,16 @@ fn h_ui_95_copy_cell_text() {
     assert_eq!(text, "Fondations\t5 jours");
 }
 
-/// H-UI-39 gardée : lignes 6-7 entières copiées puis collées sur
-/// (2, Nom) ⇒ deux tâches insérées avant 2.
+/// H-UI-39 gardée : lignes 6-7 entières copiées puis collées sur la ligne
+/// entière 2 ⇒ deux tâches insérées avant 2 (destination de R-261 : sur
+/// une cellule, le collage serait refusé).
 #[test]
 fn h_ui_95_rows_clip_still_inserts() {
     let mut harness = p_harness();
     whole_rows(&mut harness, 6, 7);
     let text = copy_event(&mut harness, Event::Copy).unwrap();
     assert!(text.starts_with("6\tPlâtrerie\t"), "{text:?}");
-    cells(&mut harness, 2, 2, Column::Name);
+    whole_rows(&mut harness, 2, 2);
     paste(&mut harness, &text);
     let app = harness.state();
     assert_eq!(
@@ -240,12 +241,13 @@ fn h_ui_95_rows_clip_still_inserts() {
     assert_eq!(history_len(app), 1);
 }
 
-/// R-256 a gardée : un texte à en-tête reconnu collé sur une cellule crée
-/// des lignes.
+/// R-256 a gardée : un texte à en-tête reconnu collé sur une ligne entière
+/// crée des lignes (R-261 : sur un bloc de cellules, il se colle en
+/// cellules).
 #[test]
 fn h_ui_95_header_text_imports_rows() {
     let mut harness = p_harness();
-    cells(&mut harness, 5, 5, Column::Duration);
+    whole_rows(&mut harness, 5, 5);
     paste(&mut harness, "Nom\tDurée\nCoffrage\t3j\nFerraillage\t2j");
     let app = harness.state();
     assert_eq!(task_count(app), 9);

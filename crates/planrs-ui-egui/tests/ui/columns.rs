@@ -49,7 +49,7 @@ fn grip_label(column: Column) -> String {
 }
 
 fn visible(app: &App, column: Column) -> bool {
-    app.state.column(column).unwrap().visible
+    app.state.shown(column)
 }
 
 /// Affiche `column` par le réducteur (une image).
@@ -310,8 +310,12 @@ fn column_baseline_and_variance() {
     assert!(first.ends_with("jour") || first.ends_with("jours"), "{first}");
 }
 
-/// Clic droit sur un titre : menu des colonnes ; cocher « % achevé »
-/// l'affiche, « Masquer la colonne » masque la colonne cliquée.
+/// Clic droit sur un titre : menu des colonnes ; « Insérer une colonne »
+/// puis « % achevé » l'affiche à gauche de la colonne cliquée (seconde
+/// passe UX, H-UI-114 : les cases de colonnes du menu d'en-tête sont
+/// remplacées par l'insertion) ; affichée en fin par la case du menu
+/// Format, elle demande de défiler ; « Masquer la colonne » masque la
+/// colonne cliquée.
 #[test]
 fn column_toggle_from_header_menu() {
     let mut harness = harness();
@@ -321,11 +325,22 @@ fn column_toggle_from_header_menu() {
         .get_by_label(&header_label(Column::Duration))
         .click_secondary();
     harness.run();
-    let title = texts().get(Column::PercentComplete.title());
-    crate::click(&mut harness, &title);
+    crate::click(&mut harness, &fr(TextId::MenuInsertColumn));
+    harness.event(Event::Text("% ach".to_owned()));
+    harness.run();
+    harness.key_press(Key::Enter);
+    harness.run();
     assert!(visible(harness.state(), Column::PercentComplete));
-    // La colonne affichée est au bout de la table, qui défile désormais :
-    // son titre apparaît une fois la table défilée.
+    let _ = harness.get_by_label(&header_label(Column::PercentComplete));
+    harness
+        .state_mut()
+        .dispatch(Action::ToggleColumn(Column::PercentComplete));
+    harness.run();
+    assert!(!visible(harness.state(), Column::PercentComplete));
+    // Case d'affichage (Format → Colonnes) : la colonne va au bout de la
+    // table, qui défile désormais ; son titre apparaît une fois la table
+    // défilée.
+    show(&mut harness, Column::PercentComplete);
     assert!(
         harness
             .query_by_label(&header_label(Column::PercentComplete))
@@ -465,6 +480,9 @@ fn table_horizontal_scroll_follows_cursor() {
     assert_eq!(harness.state().view().cursor.column, Column::Mode);
     let max = total - view_w;
     assert!((harness.state().view().table_scroll_x - max).abs() < 0.5);
+    // Défilement borné : colonne « Ajouter une nouvelle colonne » comptée
+    // (H-UI-114, lot L10).
+    let max = max + planrs_ui_egui::view::table::ADD_COLUMN_W;
     // Origine : premier champ, défilement ramené à 0.
     harness.state_mut().dispatch(Action::Nav {
         mv: NavMove::RowStart,

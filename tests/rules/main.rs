@@ -250,6 +250,10 @@ mod r253_mode_toggle;
 mod r254_manual_dates;
 mod r255_active_toggle;
 mod r256_external_paste;
+mod r263_custom_model;
+mod r264_custom_commands;
+mod r265_mspdi_custom_read;
+mod r266_mspdi_custom_write;
 
 /// Vérifie que chaque fichier de `tests/rules/` suit la convention
 /// `rNNN_titre.rs` et qu'il est bien déclaré comme module dans `main.rs`

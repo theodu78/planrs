@@ -37,9 +37,21 @@
 //! ⇒ R-256 ; sinon cellules à partir du coin du bloc (R-257). Le clavier
 //! reste à la table après un clic dans le Gantt (H-UI-101) : les trois
 //! événements y sont pris aussi.
+//!
+//! Seconde passe UX (ADR-0019 D2, R-261, H-UI-106) : la **destination**
+//! décide du collage ([`paste_route`], fonction pure). Bloc de cellules ⇒
+//! toujours un collage de cellules, jamais d'insertion (un tampon de lignes
+//! entières y est refusé, rien n'est écrit) ; lignes entières ⇒ tampon de
+//! lignes inséré avant, texte à en-tête importé, autre texte en cellules à
+//! partir de la cellule active ; ligne vide ⇒ tampon ou texte à en-tête en
+//! tâches à la fin, autre texte en cellules dans la colonne active. Après
+//! un collage de lignes, les lignes collées restent sélectionnées en lignes
+//! entières ; après un collage de cellules, le bloc écrit est sélectionné :
+//! un second Ctrl/Cmd+V suit le même chemin.
 
 use planrs_automation::clip::{
-    self, ClipError, MAX_PASTE_BYTES, PasteOptions, PasteReport, RowClip, paste_batch, paste_text,
+    self, ClipError, MAX_PASTE_BYTES, MAX_PASTE_LINES, PasteOptions, PasteReport, RowClip, paste_batch,
+    paste_text,
 };
 use planrs_automation::csv::{self, CsvColumn, Recognized};
 use planrs_automation::text::TextContext;
@@ -94,6 +106,68 @@ pub enum ClipboardOp {
     PasteSpecial,
 }
 
+/// Destination d'un collage (R-261), lue de la sélection de la table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PasteDest {
+    /// Bloc de cellules (une cellule ou plus) sur des tâches.
+    Cells,
+    /// Lignes entières (sélection par le N°).
+    Rows,
+    /// Ligne vide de fin (cellule seule).
+    Blank,
+}
+
+/// Chemin d'un collage (R-261).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PasteRoute {
+    /// Tampon de lignes inséré (R-244) : avant la tâche active, en fin sur
+    /// la ligne vide.
+    InsertRows,
+    /// Texte à en-tête reconnu importé en lignes (R-256 a).
+    ImportRows,
+    /// Collage de cellules (R-257, R-262).
+    Cells,
+    /// Refus : rien n'est écrit.
+    Refuse(PasteRefusal),
+}
+
+/// Raison d'un collage refusé.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PasteRefusal {
+    /// Lignes entières copiées, collées sur un bloc de cellules.
+    RowsOnCells,
+}
+
+impl PasteRefusal {
+    /// Message du refus.
+    #[must_use]
+    pub const fn text_id(self) -> TextId {
+        match self {
+            Self::RowsOnCells => TextId::PasteRowsOnCells,
+        }
+    }
+}
+
+/// Routage d'un collage (R-261), fonction pure : `dest` la destination,
+/// `slot` le type de la dernière copie de l'application si le texte collé
+/// est le sien (empreinte reconnue ; `None` : texte venu d'ailleurs),
+/// `text` le texte collé.
+///
+/// - `Cells` ⇒ `Cells` (texte ou tampon de cellules), `Refuse(RowsOnCells)`
+///   (tampon de lignes) ;
+/// - `Rows` et `Blank` ⇒ `InsertRows` (tampon de lignes), `ImportRows`
+///   (texte à en-tête reconnu), `Cells` sinon (cellule active, ou colonne
+///   active de la ligne vide : tâches ajoutées en fin).
+#[must_use]
+pub fn paste_route(dest: PasteDest, slot: Option<ClipKind>, text: &str) -> PasteRoute {
+    match (dest, slot) {
+        (PasteDest::Cells, Some(ClipKind::Rows)) => PasteRoute::Refuse(PasteRefusal::RowsOnCells),
+        (PasteDest::Rows | PasteDest::Blank, Some(ClipKind::Rows)) => PasteRoute::InsertRows,
+        (PasteDest::Rows | PasteDest::Blank, None) if has_name_header(text) => PasteRoute::ImportRows,
+        _ => PasteRoute::Cells,
+    }
+}
+
 /// Colonne du texte tabulé pour une colonne de la table : seules les
 /// colonnes qu'un import CSV sait relire (ID, Nom, Durée, Début, Fin,
 /// Prédécesseurs, % achevé) ; les autres (marge, critique, ressources,
@@ -108,13 +182,9 @@ pub const fn tsv_column(column: Column) -> Option<CsvColumn> {
         Column::Finish => Some(CsvColumn::Finish),
         Column::Predecessors => Some(CsvColumn::Predecessors),
         Column::PercentComplete => Some(CsvColumn::PercentComplete),
-        Column::TotalSlack
-        | Column::Critical
-        | Column::ResourceNames
-        | Column::BaselineStart
-        | Column::BaselineFinish
-        | Column::FinishVariance
-        | Column::Mode => None,
+        // Marge, critique, ressources, ligne de base, variation, mode et
+        // champs de la seconde passe UX (copiés à partir du lot L7).
+        _ => None,
     }
 }
 
@@ -337,59 +407,78 @@ impl App {
         }
     }
 
-    /// Colle un texte reçu du presse-papiers du système (H-UI-95) : tampon
-    /// de lignes si l'empreinte est celle des dernières lignes copiées
-    /// (R-244) ; texte à en-tête reconnu, lignes entières sélectionnées ou
-    /// colonne de texte sur la ligne vide ⇒ collage de lignes (R-256) ;
-    /// sinon cellules à partir du coin du bloc (R-257).
+    /// Destination du collage (R-261) : lignes entières, ligne vide de fin
+    /// (cellule seule) ou bloc de cellules.
+    #[must_use]
+    pub fn paste_dest(&self) -> PasteDest {
+        match self.table_block() {
+            Some(block) if block.kind == SelectionKind::Rows => PasteDest::Rows,
+            Some(block) if block.active.0 != crate::nav::RowRef::Blank => PasteDest::Cells,
+            _ => PasteDest::Blank,
+        }
+    }
+
+    /// Colle un texte reçu du presse-papiers du système selon la
+    /// destination ([`paste_route`], R-261) : le tampon de la dernière
+    /// copie est reconnu par l'empreinte du texte.
     pub(crate) fn paste_clipboard_text(&mut self, text: &str) {
-        let Some(document) = &self.document else {
+        if self.document.is_none() {
             return;
-        };
-        if text.len() > MAX_PASTE_BYTES {
+        }
+        // Bornes de R-256 pour tous les chemins (4 Mio, 10 000 lignes) :
+        // même refus, quel que soit le collage.
+        if text.len() > MAX_PASTE_BYTES || text.lines().nth(MAX_PASTE_LINES).is_some() {
             self.report_clip_error(&ClipError::TooLarge);
             return;
         }
+        self.sync_selection();
         let print = clip::fingerprint(text);
-        let slot = self.clipboard.as_ref().filter(|slot| slot.fingerprint == print);
-        let rows_clip = slot.filter(|slot| slot.kind == ClipKind::Rows);
-        let cells_clip = slot.is_some_and(|slot| slot.kind == ClipKind::Cells);
-        let on_blank = self.selection.is_none();
-        let as_rows = rows_clip.is_none()
-            && !cells_clip
-            && (has_name_header(text)
-                || self.selected.kind() == SelectionKind::Rows
-                || (on_blank && !text.contains('\t')));
-        let at = self.paste_placement();
-        let result = match rows_clip {
-            Some(slot) => paste_batch(&document.session, &slot.clip, &at, &PasteOptions::default()),
-            None if as_rows => paste_text(&document.session, text, &at, self.text_language()),
-            None => {
-                self.paste_cells(text);
-                return;
-            }
-        };
-        self.apply_paste(result);
+        let slot = self
+            .clipboard
+            .as_ref()
+            .filter(|slot| slot.fingerprint == print)
+            .map(|slot| slot.kind);
+        let route = paste_route(self.paste_dest(), slot, text);
+        self.paste_by_route(route, text, PasteOptions::default());
     }
 
     /// Colle le tampon interne avec `options` (« Collage spécial… », menu
-    /// Coller sur le web). Sans tampon : rien. Tampon de cellules : collage
-    /// de cellules (R-257 ; options sans objet).
+    /// Coller sur le web), selon la destination (R-261). Sans tampon : rien.
     pub(crate) fn paste_internal(&mut self, options: PasteOptions) {
-        if let Some(slot) = self
-            .clipboard
-            .as_ref()
-            .filter(|slot| slot.kind == ClipKind::Cells)
-        {
-            let text = slot.text.clone();
-            self.paste_cells(&text);
+        let Some(slot) = &self.clipboard else {
             return;
-        }
-        let (Some(document), Some(slot)) = (&self.document, &self.clipboard) else {
+        };
+        let (kind, text) = (slot.kind, slot.text.clone());
+        self.sync_selection();
+        let route = paste_route(self.paste_dest(), Some(kind), &text);
+        self.paste_by_route(route, &text, options);
+    }
+
+    /// Exécute le chemin `route` d'un collage.
+    fn paste_by_route(&mut self, route: PasteRoute, text: &str, options: PasteOptions) {
+        let Some(document) = &self.document else {
             return;
         };
         let at = self.paste_placement();
-        let result = paste_batch(&document.session, &slot.clip, &at, &options);
+        let result = match route {
+            PasteRoute::Cells => {
+                self.paste_cells(text);
+                return;
+            }
+            PasteRoute::Refuse(refusal) => {
+                // H-UI-106 : refus en notification, rien n'est écrit.
+                let text = self.texts.get(refusal.text_id());
+                self.clear_titled(TextId::PasteReportTitle);
+                self.clear_titled(TextId::CommandErrorTitle);
+                self.push_titled(Severity::Error, Some(TextId::CommandErrorTitle), text);
+                return;
+            }
+            PasteRoute::InsertRows => match &self.clipboard {
+                Some(slot) => paste_batch(&document.session, &slot.clip, &at, &options),
+                None => return,
+            },
+            PasteRoute::ImportRows => paste_text(&document.session, text, &at, self.text_language()),
+        };
         self.apply_paste(result);
     }
 
@@ -415,32 +504,44 @@ impl App {
         let Ok(outcome) = self.execute(&batch, EditOrigin::User) else {
             return;
         };
-        if let Some(first) = outcome.created.first() {
-            // Lignes collées : la première, en ligne entière (un second
-            // collage insère encore des lignes, H-UI-95).
-            self.selection = Some(*first);
-            self.selected = Selection::single(Some(*first)).with_kind(SelectionKind::Rows);
-            self.sync_selection();
-        }
+        self.select_pasted_rows(&outcome.created);
         self.report_paste(&report);
     }
 
-    /// Compte rendu d'un collage au bandeau (titre « Collage ») :
-    /// avertissement si des liens, des affectations ou le suivi (avancement,
-    /// ligne de base, calendrier, priorité ; relecture finale de J8, F6) n'ont
-    /// pas été recopiés, information sinon ; remplace le compte rendu précédent.
+    /// Lignes collées sélectionnées en lignes entières, la première active
+    /// (H-UI-106 : un second collage insère encore des lignes).
+    fn select_pasted_rows(&mut self, created: &[TaskUid]) {
+        let Some(first) = created.first().copied() else {
+            return;
+        };
+        let range = self.visible_rows().and_then(|rows| {
+            let mut shown: Vec<_> = created.iter().filter_map(|u| rows.display_of(*u)).collect();
+            shown.sort_unstable();
+            let top = shown.first().and_then(|d| rows.uid(*d))?;
+            let bottom = shown.last().and_then(|d| rows.uid(*d))?;
+            Some((top, Selection::range(bottom, top, SelectionKind::Rows, rows)))
+        });
+        let (active, selected) = range.unwrap_or_else(|| {
+            (
+                first,
+                Selection::single(Some(first)).with_kind(SelectionKind::Rows),
+            )
+        });
+        self.selection = Some(active);
+        self.selected = selected;
+        self.sync_selection();
+    }
+
+    /// Compte rendu d'un collage réussi, toujours en information (H-UI-104,
+    /// titre « Collage ») : tâches collées, affectations omises, suivi non
+    /// repris, ressources créées, puis la phrase des liens non repris ;
+    /// remplace le compte rendu précédent.
     fn report_paste(&mut self, report: &PasteReport) {
         let count = |n: u32| Arg::Count(i64::from(n));
         let mut parts = vec![
             self.texts
                 .get_args(TextId::PasteReportTasks, &[("count", count(report.tasks))]),
         ];
-        if report.links_dropped > 0 {
-            parts.push(self.texts.get_args(
-                TextId::PasteReportLinks,
-                &[("count", count(report.links_dropped))],
-            ));
-        }
         if report.assignments_dropped > 0 {
             parts.push(self.texts.get_args(
                 TextId::PasteReportAssignments,
@@ -459,14 +560,16 @@ impl App {
                 &[("count", count(report.resources_created))],
             ));
         }
-        let severity =
-            if report.links_dropped > 0 || report.assignments_dropped > 0 || report.tracking_dropped > 0 {
-                Severity::Warning
-            } else {
-                Severity::Info
-            };
+        let mut text = parts.join(", ");
+        if report.links_dropped > 0 {
+            text.push_str(". ");
+            text.push_str(&self.texts.get_args(
+                TextId::PasteLinksDropped,
+                &[("count", count(report.links_dropped))],
+            ));
+        }
         self.clear_titled(TextId::PasteReportTitle);
-        self.push_titled(severity, Some(TextId::PasteReportTitle), parts.join(", "));
+        self.push_titled(Severity::Info, Some(TextId::PasteReportTitle), text);
     }
 
     /// Refus d'une copie ou d'un collage au bandeau, traduit par son code
@@ -486,5 +589,67 @@ impl App {
         self.clear_titled(TextId::PasteReportTitle);
         self.clear_titled(TextId::CommandErrorTitle);
         self.push_titled(Severity::Error, Some(TextId::CommandErrorTitle), text);
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    reason = "tests : un échec doit s'arrêter net et lisiblement"
+)]
+mod tests {
+    use super::{ClipKind, PasteDest, PasteRefusal, PasteRoute, paste_route};
+    use crate::i18n::{Arg, Language, TextId, Texts};
+
+    /// R-261 : table complète du routage (destination × dernière copie ×
+    /// texte).
+    #[test]
+    fn r261_paste_route_table() {
+        let header = "Nom\tDurée\nA\t2j";
+        let plain = "7;6\n9\n10";
+        let refuse = PasteRoute::Refuse(PasteRefusal::RowsOnCells);
+        let cases = [
+            (PasteDest::Cells, Some(ClipKind::Rows), plain, refuse),
+            (PasteDest::Cells, Some(ClipKind::Cells), plain, PasteRoute::Cells),
+            (PasteDest::Cells, None, plain, PasteRoute::Cells),
+            (PasteDest::Cells, None, header, PasteRoute::Cells),
+            (
+                PasteDest::Rows,
+                Some(ClipKind::Rows),
+                plain,
+                PasteRoute::InsertRows,
+            ),
+            (PasteDest::Rows, Some(ClipKind::Cells), header, PasteRoute::Cells),
+            (PasteDest::Rows, None, header, PasteRoute::ImportRows),
+            (PasteDest::Rows, None, "5j", PasteRoute::Cells),
+            (
+                PasteDest::Blank,
+                Some(ClipKind::Rows),
+                plain,
+                PasteRoute::InsertRows,
+            ),
+            (PasteDest::Blank, None, header, PasteRoute::ImportRows),
+            (PasteDest::Blank, None, plain, PasteRoute::Cells),
+            (PasteDest::Blank, Some(ClipKind::Cells), plain, PasteRoute::Cells),
+        ];
+        for (dest, slot, text, want) in cases {
+            assert_eq!(paste_route(dest, slot, text), want, "{dest:?} {slot:?} {text:?}");
+        }
+        assert_eq!(PasteRefusal::RowsOnCells.text_id(), TextId::PasteRowsOnCells);
+    }
+
+    /// Textes reformulés (H-UI-104, lot L0) : le compte rendu dit les liens
+    /// non repris dans une phrase, sans l'ancien fragment « non repris » ni
+    /// « un bout ».
+    #[test]
+    fn paste_report_links_sentence() {
+        for lang in [Language::Fr, Language::En] {
+            let texts = Texts::new(lang);
+            let new = texts.get_args(TextId::PasteLinksDropped, &[("count", Arg::Count(2))]);
+            let old = texts.get_args(TextId::PasteReportLinks, &[("count", Arg::Count(2))]);
+            assert_ne!(new, old);
+            assert!(!new.contains("bout"), "{new}");
+            assert!(new.ends_with('.'), "{new}");
+        }
     }
 }

@@ -23,10 +23,22 @@
 //! modale** (`egui::Window`) : la table et le Gantt restent cliquables, la
 //! fenêtre est relue sur la sélection et le document à chaque image où ils
 //! ont changé, et chacun de ses boutons applique aussitôt son lot.
+//!
+//! Seconde passe UX (ADR-0019, lot L9) : « Champs personnalisés »
+//! (`custom_fields.rs`) est hébergée comme les fenêtres du lot L12.
+//!
+//! Seconde passe UX (ADR-0019, lot L6) : le sélecteur de champ
+//! (`field_picker.rs`) et « Paramètres de champ » (`field_settings.rs`)
+//! règlent des préférences d'affichage (`UiState.columns`), sans brouillon
+//! du document : hébergés par `ViewTransient::picker`, hors de
+//! [`DialogState`].
 
 pub mod assign;
 pub mod baseline;
 pub mod csv_import;
+pub mod custom_fields;
+pub mod field_picker;
+pub mod field_settings;
 pub mod filter;
 pub mod gallery;
 pub mod link;
@@ -44,7 +56,7 @@ use planrs_automation::{Batch, Command, SideEffect};
 use planrs_core::TaskUid;
 
 use crate::action::DialogKind;
-use crate::app::{App, EditOrigin};
+use crate::app::{App, EditOrigin, OpenDocument};
 
 /// Lu **avant** le dessin d'une fenêtre : Entrée la validera-t-elle à cette
 /// image ? Aucun widget focalisé, ou une zone de saisie d'une ligne (Entrée y
@@ -109,6 +121,9 @@ pub enum DialogBody {
     Gallery(Box<gallery::GalleryState>),
     /// « Mise en page » et mode impression (J8, lot L15, H-UI-68).
     PageSetup(Box<page_setup::PageSetupState>),
+    /// « Champs personnalisés » (seconde passe UX, lot L9, H-UI-118),
+    /// hébergée comme les fenêtres du lot L12.
+    CustomFields(Box<custom_fields::CustomFieldsState>),
 }
 
 impl DialogBody {
@@ -122,6 +137,7 @@ impl DialogBody {
                 | Self::Baseline(_)
                 | Self::Reschedule(_)
                 | Self::Assign(_)
+                | Self::CustomFields(_)
         )
     }
 
@@ -133,6 +149,7 @@ impl DialogBody {
             Self::ProjectInfo(s) => Some(s.key),
             Self::Baseline(s) => Some(s.key),
             Self::Reschedule(s) => Some(s.key),
+            Self::CustomFields(s) => Some(s.key),
             Self::Empty
             | Self::TaskInfo(_)
             | Self::Link(_)
@@ -229,6 +246,9 @@ impl App {
                 lang,
                 self.selected.uids(),
             ))),
+            DialogKind::CustomFields => {
+                DialogBody::CustomFields(Box::new(custom_fields::CustomFieldsState::open(s, key)))
+            }
             DialogKind::TaskInformation(_)
             | DialogKind::Link { .. }
             | DialogKind::PasteSpecial
@@ -265,6 +285,9 @@ impl App {
             (Some(_), Some(DialogBody::Baseline(state))) => simple(baseline::show(ctx, &self.texts, state)),
             (Some(_), Some(DialogBody::Reschedule(state))) => {
                 simple(reschedule::show(ctx, &self.texts, state))
+            }
+            (Some(_), Some(DialogBody::CustomFields(state))) => {
+                simple(custom_fields::show(ctx, &self.texts, state))
             }
             (Some(_), Some(DialogBody::Assign(state))) => match assign::show(ctx, &self.texts, state) {
                 assign::AssignOutcome::Open => Shown::Open,
@@ -331,10 +354,14 @@ impl App {
             return;
         };
         let result = self.execute(&batch, EditOrigin::Dialog);
-        let message = result
-            .as_ref()
-            .err()
-            .map(|error| task_info::command_message(&self.texts, error, lang));
+        let message = result.as_ref().err().map(|error| {
+            task_info::command_message(
+                &self.texts,
+                error,
+                self.document.as_ref().map(OpenDocument::project),
+                lang,
+            )
+        });
         let Some(DialogState {
             body: DialogBody::Assign(state),
             ..
@@ -422,6 +449,13 @@ impl App {
                 fresh.stale = true;
                 **state = fresh;
             }
+            DialogBody::CustomFields(state) => {
+                let mut fresh = custom_fields::CustomFieldsState::open(s, key);
+                fresh.kind = state.kind;
+                fresh.selected = state.selected;
+                fresh.stale = true;
+                **state = fresh;
+            }
             DialogBody::Empty
             | DialogBody::TaskInfo(_)
             | DialogBody::Link(_)
@@ -438,6 +472,10 @@ impl App {
     /// fenêtre fermée sans lot) ; refus des champs ou du registre affichés
     /// dans la fenêtre. Ligne de base existante (`baseline.exists`) :
     /// confirmation demandée, rien appliqué.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "une branche par fenêtre hébergée, lot et refus"
+    )]
     fn commit_window(&mut self) {
         if self.reread_if_stale() {
             return;
@@ -477,6 +515,13 @@ impl App {
                     return;
                 }
             },
+            DialogBody::CustomFields(state) => match state.to_batch(&self.texts, lang) {
+                Ok(batch) => batch,
+                Err(message) => {
+                    state.error = Some(message);
+                    return;
+                }
+            },
             DialogBody::Empty
             | DialogBody::TaskInfo(_)
             | DialogBody::Link(_)
@@ -495,7 +540,12 @@ impl App {
         match self.execute(&batch, EditOrigin::Dialog) {
             Ok(_) => self.close_dialog(),
             Err(error) => {
-                let message = task_info::command_message(&self.texts, &error, lang);
+                let message = task_info::command_message(
+                    &self.texts,
+                    &error,
+                    self.document.as_ref().map(OpenDocument::project),
+                    lang,
+                );
                 let Some(dialog) = &mut self.view.dialog else {
                     return;
                 };
@@ -522,6 +572,7 @@ impl App {
                         }
                     }
                     DialogBody::Reschedule(state) => state.error = Some(message),
+                    DialogBody::CustomFields(state) => state.error = Some(message),
                     DialogBody::Empty
                     | DialogBody::TaskInfo(_)
                     | DialogBody::Link(_)
@@ -560,10 +611,14 @@ impl App {
             state.delete_batch(lang)
         };
         let result = self.execute(&batch, EditOrigin::Dialog);
-        let message = result
-            .as_ref()
-            .err()
-            .map(|error| task_info::command_message(&self.texts, error, lang));
+        let message = result.as_ref().err().map(|error| {
+            task_info::command_message(
+                &self.texts,
+                error,
+                self.document.as_ref().map(OpenDocument::project),
+                lang,
+            )
+        });
         let created = result.ok().and_then(|outcome| {
             outcome.side_effects.iter().find_map(|e| match e {
                 SideEffect::CalendarCreated(uid) => Some(*uid),

@@ -82,3 +82,22 @@ fn r243_summary_descendant_and_excluded() {
         GestureError::UnknownTask(uid(99))
     );
 }
+
+#[test]
+fn r243_already_linked_gesture() {
+    // R-260 c (seconde passe UX) : glisser 3 → 7 alors que 3 → 7 existe, ou
+    // 7 → 3 alors que 3 → 7 existe ⇒ `AlreadyLinked`, aucun lot ; le
+    // registre garde `link.duplicate` (R-156) pour un lot écrit à la main.
+    let mut s = seven();
+    let b = gesture::link_drag(&s, uid(3), uid(7)).unwrap();
+    s.apply(&b, ApplyMode::Commit).unwrap();
+    let entries = s.history().entries.len();
+    for (a, z) in [(3, 7), (7, 3)] {
+        let err = gesture::link_drag(&s, uid(a), uid(z)).unwrap_err();
+        assert_eq!(err, GestureError::AlreadyLinked);
+        assert_eq!(err.code(), codes::LINK_DUPLICATE);
+    }
+    assert_eq!(s.history().entries.len(), entries);
+    // Une autre paire reste permise.
+    assert!(gesture::link_drag(&s, uid(3), uid(6)).is_ok());
+}

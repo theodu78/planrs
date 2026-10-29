@@ -1,6 +1,8 @@
 //! Commandes de cellule sur le bloc de la sélection (ADR-0018 D3 à D5 ;
-//! R-257 coller, R-258 remplir vers le bas, R-259 effacer ; H-UI-95 à
-//! H-UI-98).
+//! R-257 coller, R-258 remplir vers le bas et à droite, R-259 effacer ;
+//! H-UI-95 à H-UI-98 ; seconde passe UX, ADR-0019 : R-262 source répétée
+//! sur une destination multiple, valeurs hors de la table comptées à part,
+//! Ctrl/Cmd+R, H-UI-120).
 //!
 //! Fonctions pures sur le [`Block`] résolu (`block::resolve`) : chaque
 //! cellule écrite passe par la lecture de la saisie
@@ -45,9 +47,29 @@ pub struct CellPlan {
     pub batch: Batch,
     /// Cellules écrites.
     pub written: usize,
-    /// Cellules sautées (non modifiables, hors des colonnes visibles…),
-    /// comptées au bandeau.
+    /// Cellules sautées (non modifiables), comptées dans le compte rendu.
     pub skipped: usize,
+    /// Valeurs collées au-delà de la dernière colonne visible, comptées à
+    /// part (« 2 valeurs hors de la table n'ont pas été collées »).
+    pub outside: usize,
+    /// Zone écrite par un collage de plusieurs cellules (sélectionnée
+    /// après le collage, H-UI-106) ; `None` : sélection gardée.
+    pub area: Option<PasteArea>,
+}
+
+/// Zone de cellules écrite par un collage : lignes affichées à partir de
+/// `top` (les tâches ajoutées en fin comprises), colonnes visibles de
+/// `first` à `last`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PasteArea {
+    /// Première ligne affichée.
+    pub top: DisplayRow,
+    /// Nombre de lignes (au moins 1).
+    pub rows: usize,
+    /// Première colonne.
+    pub first: Column,
+    /// Dernière colonne.
+    pub last: Column,
 }
 
 /// Refus d'une commande de cellule : rien n'est écrit.
@@ -64,7 +86,9 @@ pub enum CellError {
         id: u32,
         /// Colonne.
         column: Column,
-        /// Détail de la lecture refusée.
+        /// Texte refusé, tel que collé (nommé dans le message, H-UI-105).
+        text: String,
+        /// Détail de la lecture refusée (« Détails » repliable).
         detail: String,
     },
     /// Lignes au-delà de la dernière tâche sous un tri ou un filtre.
@@ -137,6 +161,7 @@ impl CellOp {
     pub const fn menu_label(&self) -> Option<TextId> {
         match self {
             Self::FillDown => Some(TextId::MenuFillDown),
+            Self::FillRight => Some(TextId::MenuFillRight),
             Self::Clear => Some(TextId::MenuClearContents),
             Self::DeleteKey | Self::FillTyped(_) => None,
         }
@@ -198,8 +223,16 @@ struct Builder {
     written: usize,
     /// Cellules sautées et comptées.
     skipped: usize,
+    /// Valeurs au-delà de la dernière colonne visible.
+    outside: usize,
     /// Tâches créées en fin de projet (étiquettes `$cell1`, `$cell2`…).
     created: usize,
+    /// Zone écrite (collage de plusieurs cellules).
+    area: Option<PasteArea>,
+    /// Tâches dont une date (Début ou Fin) a déjà été écrite par ce lot :
+    /// la date suivante remplace sa contrainte (R-158), jamais un
+    /// non-changement (R-260 d).
+    dated: BTreeSet<TaskUid>,
 }
 
 impl Builder {
@@ -208,7 +241,10 @@ impl Builder {
             ops: Vec::new(),
             written: 0,
             skipped: 0,
+            outside: 0,
             created: 0,
+            area: None,
+            dated: BTreeSet::new(),
         }
     }
 
@@ -235,12 +271,14 @@ impl Builder {
             },
             written: self.written,
             skipped: self.skipped,
+            outside: self.outside,
+            area: self.area,
         }
     }
 
     /// Plan rendu, `None` s'il n'y a ni opération ni cellule sautée.
     fn finish_opt(self, kind: PlanKind, lang: TextLanguage) -> Option<CellPlan> {
-        (!self.ops.is_empty() || self.skipped > 0).then(|| self.finish(kind, lang))
+        (!self.ops.is_empty() || self.skipped > 0 || self.outside > 0).then(|| self.finish(kind, lang))
     }
 }
 
@@ -252,7 +290,11 @@ fn parse_detail(error: &EditError, lang: TextLanguage) -> String {
             TextLanguage::Fr => format!("aucune tâche d'ID {id}"),
             TextLanguage::En => format!("no task with ID {id}"),
         },
-        EditError::NotEditable | EditError::NotClearable => String::new(),
+        EditError::BadChoice(choices) => match lang {
+            TextLanguage::Fr => format!("valeurs admises : {choices}"),
+            TextLanguage::En => format!("accepted values: {choices}"),
+        },
+        EditError::NotEditable | EditError::NotClearable | EditError::Computed => String::new(),
     }
 }
 
@@ -271,13 +313,26 @@ fn write_existing(
         b.skip();
         return Ok(());
     }
-    match commit_edit(&EditState::typed(Some(row.uid), column, text), s, lang) {
-        Ok(batch) => b.push(batch.ops),
-        Err(EditError::NotEditable | EditError::NotClearable) => b.skip(),
+    let date = matches!(column, Column::Start | Column::Finish);
+    let state = EditState::typed(Some(row.uid), column, text);
+    let result = if date && b.dated.contains(&row.uid) {
+        edit::commit_edit_dates_forced(&state, s, lang)
+    } else {
+        commit_edit(&state, s, lang)
+    };
+    match result {
+        Ok(batch) => {
+            if date && !batch.ops.is_empty() {
+                b.dated.insert(row.uid);
+            }
+            b.push(batch.ops);
+        }
+        Err(EditError::NotEditable | EditError::NotClearable | EditError::Computed) => b.skip(),
         Err(error) => {
             return Err(CellError::Parse {
                 id: row.id,
                 column,
+                text: text.to_owned(),
                 detail: parse_detail(&error, lang),
             });
         }
@@ -310,6 +365,7 @@ fn write_new_row(
             CellError::Parse {
                 id,
                 column,
+                text: (*text).to_owned(),
                 detail: parse_detail(&error, lang),
             }
         })?;
@@ -371,6 +427,7 @@ const fn empty_update(uid: TaskRef) -> TaskUpdate {
         effort_driven: Patch::Keep,
         work: Patch::Keep,
         mode: Patch::Keep,
+        custom: std::collections::BTreeMap::new(),
     }
 }
 
@@ -458,15 +515,19 @@ pub fn copy_text(block: &Block, doc: &OpenDocument, rows: VisibleRows<'_>, lang:
     out
 }
 
-/// Coller un texte dans les cellules à partir du coin du bloc (R-257).
+/// Coller un texte dans les cellules du bloc (R-257, R-262).
 ///
 /// `visible` : colonnes visibles, dans l'ordre de la vue (la grille déborde
 /// du bloc vers la droite sur ces colonnes). Texte d'une seule cellule :
-/// recopié dans tout le bloc ; sinon posé à partir du coin haut-gauche, sur
-/// les lignes affichées suivantes et les colonnes visibles suivantes ;
-/// colonnes au-delà de la dernière visible et cellules non modifiables :
-/// sautées et comptées ; lignes au-delà de la dernière tâche : tâches
-/// ajoutées en fin (refusé sous tri, filtre ou repli).
+/// recopié dans tout le bloc ; grille `h × l` sur un bloc `H × L` avec
+/// `H % h == 0` et `L % l == 0` (et plus grand) : répétée pour couvrir le
+/// bloc (R-262) ; sinon posée une fois à partir du coin haut-gauche, sur
+/// les lignes affichées suivantes et les colonnes visibles suivantes.
+/// Valeurs au-delà de la dernière colonne visible : comptées à part
+/// (`outside`) ; cellules non modifiables : sautées et comptées ; lignes
+/// au-delà de la dernière tâche : tâches ajoutées en fin (refusé sous tri,
+/// filtre ou repli). La zone écrite (`area`) est rendue pour être
+/// sélectionnée (H-UI-106).
 ///
 /// # Errors
 /// [`CellError`] : rien n'est écrit.
@@ -488,18 +549,59 @@ pub fn paste_plan(
         },
         _ => None,
     };
-    if let Some(value) = single {
-        fill_cells(&mut b, block, value, s, rows, lang)?;
-        return Ok(b.finish(PlanKind::Paste, lang));
-    }
-    let (Some(top), Some(first_col)) = (block.rows.first(), block.columns.first()) else {
+    let (Some(top), Some(first_col), Some(last_col)) =
+        (block.rows.first(), block.columns.first(), block.columns.last())
+    else {
         return Ok(b.finish(PlanKind::Paste, lang));
     };
+    if let Some(value) = single {
+        fill_cells(&mut b, block, value, s, rows, lang)?;
+        // Bloc contigu sur des tâches : il reste (ou devient, depuis des
+        // lignes entières) la sélection.
+        let contiguous = block
+            .rows
+            .windows(2)
+            .all(|w| matches!(w, [a, z] if a.index().checked_add(1) == Some(z.index())));
+        if contiguous && block.active.0 != crate::nav::RowRef::Blank {
+            b.area = Some(PasteArea {
+                top: *top,
+                rows: block.rows.len(),
+                first: *first_col,
+                last: *last_col,
+            });
+        }
+        return Ok(b.finish(PlanKind::Paste, lang));
+    }
+    if tiles(&grid, block) {
+        // R-262 : source répétée sur les lignes et les colonnes du bloc.
+        for (i, d) in block.rows.iter().enumerate() {
+            let Some(line) = i.checked_rem(grid.len()).and_then(|k| grid.get(k)) else {
+                continue;
+            };
+            let Some(row) = rows.row(*d) else {
+                continue;
+            };
+            for (j, column) in block.columns.iter().enumerate() {
+                let Some(text) = j.checked_rem(line.len()).and_then(|k| line.get(k)) else {
+                    continue;
+                };
+                write_existing(&mut b, row, *column, text, s, lang)?;
+            }
+        }
+        b.area = Some(PasteArea {
+            top: *top,
+            rows: block.rows.len(),
+            first: *first_col,
+            last: *last_col,
+        });
+        return Ok(b.finish(PlanKind::Paste, lang));
+    }
     let start = visible.iter().position(|c| c == first_col).unwrap_or(0);
     let len = rows.len();
     let mut next_id = u32::try_from(s.project().tasks.len())
         .unwrap_or(u32::MAX)
         .saturating_add(1);
+    let mut widest = 0_usize;
     for (i, line) in grid.iter().enumerate() {
         let d = top.index().saturating_add(i);
         let cells: Vec<(Column, &str)> = line
@@ -507,9 +609,8 @@ pub fn paste_plan(
             .enumerate()
             .filter_map(|(j, text)| visible.get(start.saturating_add(j)).map(|c| (*c, *text)))
             .collect();
-        for _ in cells.len()..line.len() {
-            b.skip();
-        }
+        widest = widest.max(cells.len());
+        b.outside = b.outside.saturating_add(line.len().saturating_sub(cells.len()));
         if d < len {
             let Some(row) = rows.row(DisplayRow::at(d)) else {
                 continue;
@@ -528,7 +629,33 @@ pub fn paste_plan(
             next_id = next_id.saturating_add(1);
         }
     }
+    let last = visible
+        .get(start.saturating_add(widest.saturating_sub(1)))
+        .copied()
+        .unwrap_or(*first_col);
+    b.area = Some(PasteArea {
+        top: *top,
+        rows: grid.len().max(1),
+        first: *first_col,
+        last,
+    });
     Ok(b.finish(PlanKind::Paste, lang))
+}
+
+/// R-262 : la grille (rectangulaire, `h × l`) se répète sur le bloc
+/// `H × L` (lignes de la sélection, ligne vide exclue) si `H % h == 0`,
+/// `L % l == 0` et le bloc est plus grand que la grille.
+fn tiles(grid: &[Vec<&str>], block: &Block) -> bool {
+    let h = grid.len();
+    let Some(l) = grid.first().map(Vec::len) else {
+        return false;
+    };
+    let (big_h, big_l) = (block.rows.len(), block.columns.len());
+    grid.iter().all(|line| line.len() == l)
+        && big_h.checked_rem(h) == Some(0)
+        && big_l.checked_rem(l) == Some(0)
+        && (big_h > h || big_l > l)
+        && block.active.0 != crate::nav::RowRef::Blank
 }
 
 /// Le même texte dans toutes les cellules du bloc (ligne vide : saisie qui
@@ -615,6 +742,64 @@ pub fn fill_down_plan(
     Ok(b.finish_opt(PlanKind::Fill, lang))
 }
 
+/// Remplir à droite (Ctrl/Cmd+R, R-258 amendée) ; `Ok(None)` : rien à
+/// écrire.
+///
+/// Pour chaque ligne du bloc, texte de la première colonne du bloc
+/// (texte de saisie si elle est modifiable, texte affiché sinon) recopié
+/// dans les colonnes suivantes ; bloc d'une colonne : source = colonne
+/// visible à sa gauche. L'ID n'est jamais une source (un numéro de ligne
+/// recopié en durée ou en nom n'a pas de sens ; hypothèse) : bloc qui
+/// commence à l'ID ⇒ source = colonne suivante ; colonne seule juste à
+/// droite de l'ID ⇒ rien. Mêmes cellules sautées et comptes que Remplir
+/// vers le bas ; ligne vide : rien.
+///
+/// # Errors
+/// [`CellError`] : rien n'est écrit (lecture refusée nommée).
+pub fn fill_right_plan(
+    block: &Block,
+    visible: &[Column],
+    s: &Session,
+    rows: VisibleRows<'_>,
+    lang: TextLanguage,
+) -> Result<Option<CellPlan>, CellError> {
+    check_size(block)?;
+    let columns: &[Column] = match block.columns.first() {
+        Some(Column::Id) => block.columns.get(1..).unwrap_or(&[]),
+        _ => &block.columns,
+    };
+    let (source, targets): (Column, Vec<Column>) = match columns {
+        [] => return Ok(None),
+        [only] => {
+            let Some(at) = visible.iter().position(|c| c == only) else {
+                return Ok(None);
+            };
+            match at.checked_sub(1).and_then(|i| visible.get(i)) {
+                Some(Column::Id) | None => return Ok(None),
+                Some(left) => (*left, vec![*only]),
+            }
+        }
+        [first, rest @ ..] => (*first, rest.to_vec()),
+    };
+    let project = s.project();
+    let ctx = TextContext::for_project(project, lang);
+    let mut b = Builder::new();
+    for d in &block.rows {
+        let (Some(row), Some(model)) = (rows.row(*d), rows.model_row(*d)) else {
+            continue;
+        };
+        let text = if editable(source) {
+            edit::initial_text_in(project, rows.model(), model.index(), source, &ctx)
+        } else {
+            rows.text(*d, source).to_owned()
+        };
+        for column in &targets {
+            write_existing(&mut b, row, *column, &text, s, lang)?;
+        }
+    }
+    Ok(b.finish_opt(PlanKind::Fill, lang))
+}
+
 /// Ctrl/Cmd+Entrée : le texte saisi dans toutes les cellules modifiables du
 /// bloc (H-UI-98, R-258), même lecture que la saisie.
 ///
@@ -676,6 +861,25 @@ fn count_arg(n: usize) -> Arg<'static> {
     Arg::Count(i64::try_from(n).unwrap_or(i64::MAX))
 }
 
+/// Colonne de départ d'un collage de cellules sur des lignes entières
+/// (R-261, relecture finale ux2, C7) : la colonne active, sauf l'ID (jamais
+/// modifiable) ; alors le Nom s'il est affiché, sinon la première colonne
+/// affichée après l'ID.
+#[must_use]
+pub fn rows_paste_column(active: Column, visible: &[Column]) -> Column {
+    if active != Column::Id {
+        return active;
+    }
+    if visible.contains(&Column::Name) {
+        return Column::Name;
+    }
+    visible
+        .iter()
+        .copied()
+        .find(|c| *c != Column::Id)
+        .unwrap_or(active)
+}
+
 impl crate::App {
     /// Bloc de la sélection de la table (lignes affichées × colonnes
     /// visibles), `None` sans document.
@@ -718,6 +922,7 @@ impl crate::App {
             CellOp::Clear => self.clear_cells(),
             CellOp::FillDown => self.fill_down(),
             CellOp::FillTyped(text) => self.fill_typed(&text, ctx),
+            CellOp::FillRight => self.fill_right(),
         }
     }
 
@@ -775,6 +980,25 @@ impl crate::App {
         }
     }
 
+    /// Remplir à droite (Ctrl/Cmd+R, R-258 amendée).
+    fn fill_right(&mut self) {
+        let lang = self.text_language();
+        let visible = self.visible_column_list();
+        let result = match (self.table_block(), &self.document, self.visible_rows()) {
+            (Some(block), Some(doc), Some(rows)) => {
+                fill_right_plan(&block, &visible, &doc.session, rows, lang)
+            }
+            _ => return,
+        };
+        match result {
+            Ok(Some(plan)) => {
+                self.apply_cell_plan(&plan, CellNotice::Skipped);
+            }
+            Ok(None) => {}
+            Err(error) => self.report_cell_error(&error),
+        }
+    }
+
     /// Ctrl/Cmd+Entrée dans une saisie (H-UI-98) : accepté, la saisie se
     /// ferme et le clavier revient à la table ; refusé (lecture ou
     /// registre), la saisie reste ouverte avec le message.
@@ -805,21 +1029,30 @@ impl crate::App {
         }
     }
 
-    /// Colle `text` dans les cellules du bloc (R-257).
+    /// Colle `text` dans les cellules du bloc (R-257, R-262) ; le bloc
+    /// écrit devient la sélection (H-UI-106).
     pub(crate) fn paste_cells(&mut self, text: &str) {
         let lang = self.text_language();
         let visible = self.visible_column_list();
+        let rows = self.visible_rows();
         let block = self.table_block().map(|mut block| {
-            // Lignes entières : le collage de cellules part de la colonne
-            // active (un texte de cellules ne remplit pas l'ID ni toutes
-            // les colonnes).
+            // Lignes entières (R-261) : le collage de cellules part de la
+            // cellule active seule (bloc d'une cellule) ; jamais de l'ID,
+            // jamais modifiable (ligne choisie par son N°, relecture
+            // finale ux2, C7) : le Nom, ou à défaut la première colonne
+            // affichée après l'ID.
             if block.kind == SelectionKind::Rows {
-                block.columns = vec![block.active.1];
+                let active = match (block.active.0, rows) {
+                    (crate::nav::RowRef::Item(uid), Some(rows)) => rows.display_of(uid),
+                    _ => None,
+                };
+                block.rows = active.map_or_else(Vec::new, |d| vec![d]);
+                block.columns = vec![rows_paste_column(block.active.1, &visible)];
                 block.kind = SelectionKind::Cells;
             }
             block
         });
-        let result = match (block, &self.document, self.visible_rows()) {
+        let result = match (block, &self.document, rows) {
             (Some(block), Some(doc), Some(rows)) => {
                 paste_plan(&block, &visible, text, &doc.session, rows, lang)
             }
@@ -827,10 +1060,38 @@ impl crate::App {
         };
         match result {
             Ok(plan) => {
-                self.apply_cell_plan(&plan, CellNotice::Skipped);
+                if self.apply_cell_plan(&plan, CellNotice::Skipped)
+                    && let Some(area) = plan.area
+                {
+                    self.select_area(area);
+                }
             }
             Err(error) => self.report_cell_error(&error),
         }
+    }
+
+    /// Sélectionne la zone écrite par un collage (H-UI-106) : bloc de
+    /// cellules, cellule active au coin haut-gauche, bornée aux lignes
+    /// affichées après le collage.
+    fn select_area(&mut self, area: PasteArea) {
+        let Some(rows) = self.visible_rows() else {
+            return;
+        };
+        let last_row = area
+            .top
+            .index()
+            .saturating_add(area.rows.saturating_sub(1))
+            .min(rows.len().saturating_sub(1));
+        let (Some(top), Some(bottom)) = (rows.uid(area.top), rows.uid(DisplayRow::at(last_row))) else {
+            return;
+        };
+        self.selected = crate::selection::Selection::range(bottom, top, SelectionKind::Cells, rows);
+        self.selection = Some(top);
+        self.view.cursor.row = crate::nav::RowRef::Item(top);
+        self.view.cursor.column = area.first;
+        self.view.cursor.anchor_column = (area.last != area.first).then_some(area.last);
+        self.view.cursor.anchor = (bottom != top).then_some(bottom);
+        self.sync_selection();
     }
 
     /// Applique le lot d'une commande de cellule (une entrée d'annulation ;
@@ -847,24 +1108,36 @@ impl crate::App {
                 .get_args(notice.text_id(), &[("count", count_arg(notice.count()))]);
             self.push_message(Severity::Info, text);
         }
+        if plan.outside > 0 {
+            let text = self
+                .texts
+                .get_args(TextId::PasteValuesOutside, &[("count", count_arg(plan.outside))]);
+            self.push_message(Severity::Info, text);
+        }
         true
     }
 
     /// Refus d'une commande de cellule au bandeau (remplace le refus
     /// précédent, comme un refus du registre).
     pub(crate) fn report_cell_error(&mut self, error: &CellError) {
+        let detail = match error {
+            CellError::Parse { detail, .. } if !detail.is_empty() => Some(detail.clone()),
+            _ => None,
+        };
         let text = match error {
             CellError::TooLarge => self
                 .texts
                 .get_args(error.text_id(), &[("max", count_arg(MAX_BLOCK_CELLS))]),
-            CellError::Parse { id, column, detail } => {
+            CellError::Parse { id, column, text, .. } => {
+                // H-UI-105 : ID, titre de colonne et texte refusé dans la
+                // phrase ; le texte du moteur dans « Détails ».
                 let column = self.texts.get(column.title());
                 self.texts.get_args(
                     error.text_id(),
                     &[
                         ("id", Arg::Count(i64::from(*id))),
                         ("column", Arg::Str(column.into())),
-                        ("detail", Arg::Str(detail.clone().into())),
+                        ("detail", Arg::Str(text.clone().into())),
                     ],
                 )
             }
@@ -877,7 +1150,7 @@ impl crate::App {
             CellError::TooLarge | CellError::Parse { .. } | CellError::PastEnd => Severity::Error,
         };
         self.clear_titled(TextId::CommandErrorTitle);
-        self.push_titled(severity, Some(TextId::CommandErrorTitle), text);
+        self.push_detailed(severity, Some(TextId::CommandErrorTitle), text, detail);
     }
 }
 
@@ -900,8 +1173,8 @@ mod tests {
     use proptest::prelude::*;
 
     use super::{
-        CellError, CellNotice, CellPlan, DeleteTarget, RIBBON_EDITING_TEXTS, clear_plan, copy_text,
-        delete_target, fill_down_plan, fill_with, grid, paste_plan,
+        CellError, CellNotice, CellPlan, DeleteTarget, PasteArea, RIBBON_EDITING_TEXTS, clear_plan,
+        copy_text, delete_target, fill_down_plan, fill_right_plan, fill_with, grid, paste_plan,
     };
     use crate::action::CellOp;
     use crate::app::{App, DocOrigin, Env};
@@ -1061,7 +1334,8 @@ mod tests {
             FR,
         )
         .unwrap();
-        assert_eq!((plan.written, plan.skipped), (1, 1));
+        // Seconde passe UX : la valeur hors de la table est comptée à part.
+        assert_eq!((plan.written, plan.skipped, plan.outside), (1, 0, 1));
         let s = applied(&app, &plan);
         assert_eq!(preds(&s, 7), [2]);
     }
@@ -1410,7 +1684,8 @@ mod tests {
         assert_eq!(lines.len(), 2, "{text:?}");
         assert!(lines[0].starts_with("Fondations\t"), "{text:?}");
         assert!(lines[1].starts_with("Murs\t"), "{text:?}");
-        // Recollé tel quel : rien ne change de valeur.
+        // Recollé tel quel : rien ne change de valeur, et (R-260 d,
+        // seconde passe UX) aucune opération : aucune entrée d'annulation.
         let plan = paste_plan(
             &block(&[2], &[Column::Name]),
             &VISIBLE,
@@ -1420,8 +1695,8 @@ mod tests {
             FR,
         )
         .unwrap();
-        let s = applied(&app, &plan);
-        assert_eq!((days(&s, 2), days(&s, 3)), (5, 10));
+        assert_eq!(plan.batch.ops, []);
+        assert_eq!(plan.written, 0);
     }
 
     /// Bornes de R-256 pour la grille (règle 10).
@@ -1527,6 +1802,354 @@ mod tests {
         }
     }
 
+    /// R-262 : « 2j\n3j » sur Durée 2, 3, 6, 7 ⇒ 2, 3, 2, 3 j (répétée) ;
+    /// 1 × 2 sur 3 × 2 ⇒ répétée trois fois ; un lot, zone sélectionnable.
+    #[test]
+    fn r262_tiles_multiple() {
+        let app = p_app();
+        let target = block(&[2, 3, 6, 7], &[Column::Duration]);
+        let plan = paste_plan(&target, &VISIBLE, "2j\n3j", session(&app), rows(&app), FR).unwrap();
+        let s = applied(&app, &plan);
+        assert_eq!([2, 3, 6, 7].map(|n| days(&s, n)), [2, 3, 2, 3], "source répétée");
+        // 7 durait déjà 3 j : non-changement (R-260 d), trois cellules
+        // écrites.
+        assert_eq!(plan.written, 3);
+        let plan = paste_plan(
+            &block(&[2, 3, 6], &[Column::Name, Column::Duration]),
+            &VISIBLE,
+            "X\t4j",
+            session(&app),
+            rows(&app),
+            FR,
+        )
+        .unwrap();
+        let s = applied(&app, &plan);
+        for n in [2, 3, 6] {
+            assert_eq!(s.project().tasks.get(TaskUid::new(n)).unwrap().name, "X");
+            assert_eq!(days(&s, n), 4);
+        }
+        assert_eq!(
+            plan.area,
+            Some(PasteArea {
+                top: DisplayRow(1),
+                rows: 3,
+                first: Column::Name,
+                last: Column::Duration,
+            })
+        );
+        // « 2j\t3j » sur Durée-Début 2-5 : répétée, Début ne lit pas « 3j »
+        // ⇒ refus nommé, rien écrit.
+        let err = paste_plan(
+            &block(&[2, 3, 4, 5], &[Column::Duration, Column::Start]),
+            &VISIBLE,
+            "2j\t3j",
+            session(&app),
+            rows(&app),
+            FR,
+        )
+        .unwrap_err();
+        let CellError::Parse { id, column, text, .. } = err else {
+            panic!("{err:?}")
+        };
+        assert_eq!((id, column, text.as_str()), (2, Column::Start, "3j"));
+    }
+
+    /// R-262 : destination qui n'est pas un multiple ⇒ collée une fois
+    /// depuis le coin (R-257).
+    #[test]
+    fn r262_non_multiple_once() {
+        let app = p_app();
+        let plan = paste_plan(
+            &block(&[2, 3, 6], &[Column::Duration]),
+            &VISIBLE,
+            "2j\n3j",
+            session(&app),
+            rows(&app),
+            FR,
+        )
+        .unwrap();
+        let s = applied(&app, &plan);
+        assert_eq!([2, 3, 6].map(|n| days(&s, n)), [2, 3, 4]);
+        assert_eq!(plan.written, 2);
+        assert_eq!(plan.area.map(|a| (a.top, a.rows)), Some((DisplayRow(1), 2)));
+    }
+
+    /// R-260 d et R-158 : Début puis Fin collés sur une même tâche ⇒ la
+    /// Fin l'emporte ; recollé, la Fin n'est pas un non-changement (le Début
+    /// du même lot a remplacé sa contrainte) : même état final.
+    #[test]
+    fn r260_start_then_finish_same_lot() {
+        let app = p_app();
+        let paste = |s: &Session| {
+            paste_plan(
+                &block(&[2], &[Column::Start]),
+                &VISIBLE,
+                "09/11/2026\t13/11/2026",
+                s,
+                rows(&app),
+                FR,
+            )
+            .unwrap()
+        };
+        let first = paste(session(&app));
+        assert_eq!(first.batch.ops.len(), 2);
+        let s = applied(&app, &first);
+        let constraint = |s: &Session| s.project().tasks.get(TaskUid::new(2)).unwrap().constraint;
+        let after_first = constraint(&s);
+        assert!(
+            matches!(after_first, Constraint::FinishNoEarlierThan { .. }),
+            "{after_first:?}"
+        );
+        let second = paste(&s);
+        assert_eq!(second.batch.ops.len(), 2, "{:?}", second.batch.ops);
+        let mut again = s.clone();
+        again.apply(&second.batch, ApplyMode::Commit).unwrap();
+        assert_eq!(constraint(&again), after_first);
+    }
+
+    /// R-258 amendée (Ctrl/Cmd+R) : la première colonne du bloc recopiée
+    /// vers la droite ; bloc d'une colonne : celle de gauche ; jamais l'ID.
+    #[test]
+    fn r258_fill_right() {
+        let app = p_app();
+        // (2, Début)-(2, Fin) : la date de début devient la fin saisie
+        // (contrainte de R-158), un lot.
+        let plan = fill_right_plan(
+            &block(&[2], &[Column::Start, Column::Finish]),
+            &VISIBLE,
+            session(&app),
+            rows(&app),
+            FR,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(plan.written, 1);
+        assert!(
+            matches!(&plan.batch.ops[..], [Command::TaskUpdate(u)] if u.finish != planrs_automation::Patch::Keep),
+            "{:?}",
+            plan.batch.ops
+        );
+        assert_eq!(plan.batch.label.as_deref(), Some("Remplir"));
+        applied(&app, &plan);
+        // Bloc d'une colonne (Fin) : source = Début, à sa gauche.
+        let single = fill_right_plan(
+            &block(&[2], &[Column::Finish]),
+            &VISIBLE,
+            session(&app),
+            rows(&app),
+            FR,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(single.batch.ops, plan.batch.ops);
+        // (6, Durée)-(6, Début) : Début ne lit pas « 4 jours » ⇒ refus nommé.
+        let err = fill_right_plan(
+            &block(&[6], &[Column::Duration, Column::Start]),
+            &VISIBLE,
+            session(&app),
+            rows(&app),
+            FR,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, CellError::Parse { id: 6, column: Column::Start, text, .. } if text == "4 jours"),
+            "{err:?}"
+        );
+        // Nom seul (l'ID à sa gauche) ou ID seul : rien.
+        for columns in [[Column::Name], [Column::Id]] {
+            assert_eq!(
+                fill_right_plan(&block(&[2], &columns), &VISIBLE, session(&app), rows(&app), FR),
+                Ok(None)
+            );
+        }
+    }
+
+    /// Paire (prédécesseur, successeur) d'une opération de lien ajoutée.
+    fn added_pair(op: &Command) -> Option<(TaskRef, TaskRef)> {
+        match op {
+            Command::LinkAdd(spec) => Some((spec.pred.clone(), spec.succ.clone())),
+            _ => None,
+        }
+    }
+
+    /// Projet généré : `n` tâches d'un jour, quelques indentations
+    /// (récapitulatives) et des liens vers l'avant (refus ignorés).
+    fn generated(n: usize, indents: &[usize], links: &[(usize, usize)]) -> Session {
+        let tasks: Vec<(String, &str)> = (1..=n).map(|i| (format!("T{i}"), "1j")).collect();
+        let refs: Vec<(&str, &str)> = tasks.iter().map(|(a, b)| (a.as_str(), *b)).collect();
+        let mut s = planrs_tests::resource_edit::with_tasks(&refs);
+        for i in indents {
+            let uid = u32::try_from(i % n + 1).unwrap();
+            drop(planrs_tests::task_edit::try_apply(
+                &mut s,
+                serde_json::json!([{ "op": "task.indent", "uid": uid }]),
+            ));
+        }
+        for (a, b) in links {
+            let (a, b) = (a % n + 1, b % n + 1);
+            if a < b {
+                drop(planrs_tests::task_edit::try_apply(
+                    &mut s,
+                    serde_json::json!([{ "op": "link.add", "pred": a, "succ": b }]),
+                ));
+            }
+        }
+        s
+    }
+
+    /// Application ouverte sur la session `s`.
+    fn app_on(s: &Session) -> App {
+        let mut app = App::new(crate::UiState::default(), Env::fixed(now()));
+        app.open_project(s.project().clone(), DocOrigin::default());
+        app
+    }
+
+    /// P61 : aucun `link.add` d'une paire déjà liée (dans ce sens), ni deux
+    /// fois la même paire (Lier : dans un sens ou dans l'autre).
+    fn check_links(s: &Session, batch: &planrs_automation::Batch, either_way: bool) {
+        let p = s.project();
+        let linked = |a: TaskUid, b: TaskUid| {
+            p.tasks
+                .get(b)
+                .is_some_and(|t| t.predecessors.iter().any(|l| l.predecessor == a))
+        };
+        let mut seen = BTreeSet::new();
+        for (pred, succ) in batch.ops.iter().filter_map(added_pair) {
+            if let (TaskRef::Uid(a), TaskRef::Uid(b)) = (&pred, &succ) {
+                assert!(!linked(*a, *b), "lien {a}→{b} déjà présent : {batch:?}");
+                if either_way {
+                    assert!(!linked(*b, *a), "paire {b}→{a} déjà liée : {batch:?}");
+                }
+            }
+            assert!(
+                seen.insert(format!("{pred:?}{succ:?}")),
+                "paire en double : {batch:?}"
+            );
+        }
+    }
+
+    fn link_token() -> impl Strategy<Value = String> {
+        prop_oneof![
+            (1_u32..14).prop_map(|n| n.to_string()),
+            (1_u32..14).prop_map(|n| format!("{n}DD")),
+            (1_u32..14).prop_map(|n| format!("{n}FF+1j")),
+        ]
+    }
+
+    fn cell_token() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("3j".to_owned()),
+            Just("0".to_owned()),
+            Just("2,5s".to_owned()),
+            Just("02/11/2026".to_owned()),
+            Just("50%".to_owned()),
+            Just("Nom".to_owned()),
+            (1_u32..14).prop_map(|n| n.to_string()),
+        ]
+    }
+
+    proptest! {
+        // La CI force `PROPTEST_CASES=10000` par-dessus `with_cases` ; un
+        // tiers des cas générés est écarté (`prop_assume` : colonnes Début et
+        // Fin ensemble), donc le plafond de rejets globaux suit le nombre de
+        // cas au lieu des 1 024 par défaut.
+        #![proptest_config(ProptestConfig { cases: 256, max_global_rejects: 1_000_000, ..ProptestConfig::default() })]
+
+        /// P61 (seconde passe UX, R-260) : sur un projet généré (≤ 40
+        /// tâches, récapitulatives, liens), toute saisie de Prédécesseurs,
+        /// toute chaîne de Lier, tout bloc collé, rempli vers le bas ou à
+        /// droite : aucun `link.add` d'une paire déjà liée ni deux fois la
+        /// même paire ; appliquer le lot puis replanifier le même geste ⇒
+        /// lot vide ; aucune panique.
+        #[test]
+        fn p61_ui_batches_idempotent(
+            n in 3_usize..40,
+            indents in prop::collection::vec(0_usize..40, 0..8),
+            links in prop::collection::vec((0_usize..40, 0_usize..40), 0..30),
+            target in 0_usize..40,
+            entry in prop::collection::vec(link_token(), 0..5),
+            chain in prop::collection::vec(0_usize..40, 0..6),
+            r0 in 0_usize..40,
+            h in 1_usize..4,
+            c0 in 1_usize..6,
+            w in 1_usize..3,
+            cells in prop::collection::vec(cell_token(), 1..5),
+            gesture in 0_u8..4,
+        ) {
+            let s = generated(n, &indents, &links);
+            let app = app_on(&s);
+            let s = session(&app).clone();
+            let rows = rows(&app);
+            let len = rows.len();
+            // (a) Prédécesseurs saisis.
+            let uid = rows.uid(DisplayRow::at(target % len)).unwrap();
+            let state = crate::edit::EditState::typed(Some(uid), Column::Predecessors, &entry.join(";"));
+            if let Ok(batch) = crate::edit::commit_edit(&state, &s, FR) {
+                check_links(&s, &batch, false);
+                let mut after = s.clone();
+                if after.apply(&batch, ApplyMode::Commit).is_ok() {
+                    let again = crate::edit::commit_edit(&state, &after, FR).unwrap();
+                    prop_assert_eq!(again.ops, Vec::<Command>::new());
+                }
+            }
+            // (b) Lier une chaîne.
+            let mut sel = crate::selection::Selection::default();
+            for i in &chain {
+                if let Some(u) = rows.uid(DisplayRow::at(i % len)) {
+                    sel.click(u, crate::selection::SelectMode::Toggle, rows);
+                }
+            }
+            if let Some(plan) = crate::structure::plan(crate::structure::StructureOp::Link, s.project(), &sel) {
+                check_links(&s, &plan.batch, true);
+                let mut after = s.clone();
+                if after.apply(&plan.batch, ApplyMode::Commit).is_ok() {
+                    prop_assert_eq!(
+                        crate::structure::plan(crate::structure::StructureOp::Link, after.project(), &sel),
+                        None
+                    );
+                }
+            }
+            // (c) Bloc collé ou rempli (lignes existantes seulement).
+            let top = r0 % len;
+            let rs: Vec<DisplayRow> = (top..(top + h).min(len)).map(DisplayRow::at).collect();
+            let cs: Vec<Column> = VISIBLE[c0..(c0 + w).min(VISIBLE.len())].to_vec();
+            // Début et Fin saisis sur une même tâche : chacun pose la
+            // contrainte (R-158), la dernière l'emporte ; rejouer le geste
+            // les repose dans le même ordre (effet net nul, mais deux
+            // opérations) : hors de la propriété.
+            let reach = VISIBLE.get(c0..(c0 + w.max(cells.len())).min(VISIBLE.len())).unwrap_or(&[]);
+            prop_assume!(!(reach.contains(&Column::Start) && reach.contains(&Column::Finish)));
+            let last = *rs.last().unwrap();
+            let b = Block { kind: SelectionKind::Cells, active: (RowRef::Item(rows.uid(last).unwrap()), *cs.last().unwrap()), rows: rs, columns: cs };
+            let text = cells.join("\t");
+            let plan = |s: &Session, rows: VisibleRows<'_>| -> Option<CellPlan> {
+                match gesture {
+                    0 => paste_plan(&b, &VISIBLE, &text, s, rows, FR).ok(),
+                    1 => fill_with(&b, &text, s, rows, FR).ok(),
+                    2 => fill_down_plan(&b, s, rows, FR).ok().flatten(),
+                    _ => fill_right_plan(&b, &VISIBLE, s, rows, FR).ok().flatten(),
+                }
+            };
+            if let Some(first) = plan(&s, rows) {
+                check_links(&s, &first.batch, false);
+                let creates = first.batch.ops.iter().any(|op| matches!(op, Command::TaskAdd(_)));
+                // Remplir vers le bas ou à droite relit sa source après le
+                // lot : une source calculée qui dépend des cibles (durée
+                // d'une récapitulative remplie dans sa sous-tâche) change ;
+                // l'idempotence ne vaut que pour un texte fixé.
+                let fixed = gesture < 2;
+                let mut after_app = app_on(&s);
+                if fixed && !creates && after_app.execute(&first.batch, crate::app::EditOrigin::Agent).is_ok() {
+                    let after = session(&after_app).clone();
+                    let rows = after_app.visible_rows().unwrap();
+                    if let Some(second) = plan(&after, rows) {
+                        prop_assert_eq!(second.batch.ops, Vec::<Command>::new(), "geste rejoué");
+                    }
+                }
+            }
+        }
+    }
+
     /// H-UI-97 : lignes entières, ou une seule cellule de l'ID ou du Nom ⇒
     /// supprimer les tâches ; Durée (et toute autre colonne) ⇒ effacer.
     #[test]
@@ -1605,6 +2228,7 @@ mod tests {
             CellError::Parse {
                 id: 3,
                 column: crate::column::Column::Duration,
+                text: String::new(),
                 detail: String::new(),
             },
             CellError::PastEnd,
@@ -1626,6 +2250,7 @@ mod tests {
         assert_eq!(ids.len(), before, "un message par cas");
         assert_eq!(CellNotice::TasksDeleted(3).count(), 3);
         assert!(CellOp::FillDown.menu_label().is_some());
+        assert!(CellOp::FillRight.menu_label().is_some());
         assert!(CellOp::FillTyped("2".into()).menu_label().is_none());
     }
 }

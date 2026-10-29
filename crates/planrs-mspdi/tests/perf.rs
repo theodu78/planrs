@@ -6,7 +6,10 @@
 //! - coût linéaire des liens (§ 7.5, relecture J2) : une tâche à 199 999
 //!   prédécesseurs, surcoût < 1 s, vérifié par le job CI `perf` ;
 //! - écriture (J3) : 5 000 tâches et 10 000 liens avec les valeurs du
-//!   moteur, échec au-delà de 100 ms (cible 30 ms), job CI `perf`.
+//!   moteur, échec au-delà de 100 ms (cible 30 ms), job CI `perf` ;
+//! - champs personnalisés (seconde passe UX, lot L8, `custom_mspdi_5000`) :
+//!   lecture puis écriture du même réseau avec 10 champs personnalisés par
+//!   tâche, échec au-delà de 1,5 × la lecture puis l'écriture sans champs.
 //!
 //! `cargo test -p planrs-mspdi --release --test perf -- --ignored --nocapture`
 
@@ -167,4 +170,171 @@ fn write_5000_tasks_under_100_ms() {
         "écriture MSPDI, 5 000 tâches et 10 000 liens : médiane {median:?} (limite 100 ms, cible 30 ms)"
     );
     assert!(median < Duration::from_millis(100), "{median:?}");
+}
+
+/// Texte1-3, Nombre1-3, Date1-2, Indicateur1-2 (S90) et le type de leur
+/// valeur.
+const CUSTOM_FIELDS: [(i64, char); 10] = [
+    (188_743_731, 't'),
+    (188_743_734, 't'),
+    (188_743_737, 't'),
+    (188_743_767, 'n'),
+    (188_743_768, 'n'),
+    (188_743_769, 'n'),
+    (188_743_945, 'd'),
+    (188_743_946, 'd'),
+    (188_743_752, 'f'),
+    (188_743_753, 'f'),
+];
+
+/// Éléments à durée nulle d'une tâche enregistrée par MS Project.
+const ZERO_D: [&str; 12] = [
+    "Work",
+    "OvertimeWork",
+    "ActualDuration",
+    "ActualWork",
+    "ActualOvertimeWork",
+    "RegularWork",
+    "RemainingWork",
+    "RemainingOvertimeWork",
+    "WorkVariance",
+    "ACWP",
+    "CV",
+    "BCWS",
+];
+
+/// Éléments à 0 d'une tâche enregistrée par MS Project.
+const ZERO: [&str; 30] = [
+    "ResumeValid",
+    "EffortDriven",
+    "Recurring",
+    "OverAllocated",
+    "Estimated",
+    "Milestone",
+    "DisplayAsSummary",
+    "Critical",
+    "IsSubproject",
+    "IsSubprojectReadOnly",
+    "ExternalTask",
+    "StartVariance",
+    "FinishVariance",
+    "FreeSlack",
+    "TotalSlack",
+    "StartSlack",
+    "FinishSlack",
+    "FixedCost",
+    "PercentComplete",
+    "PercentWorkComplete",
+    "Cost",
+    "OvertimeCost",
+    "ActualCost",
+    "ActualOvertimeCost",
+    "RemainingCost",
+    "RemainingOvertimeCost",
+    "ConstraintType",
+    "IgnoreResourceCalendar",
+    "HideBar",
+    "Rollup",
+];
+
+/// Document de `n` tâches écrit à la façon d'un fichier enregistré par
+/// MS Project (indentation, environ 80 éléments par tâche, comme les
+/// fichiers du corpus), chaque tâche liée à la précédente ; `custom` :
+/// définitions des 10 champs de [`CUSTOM_FIELDS`] (deux avec alias) et 10
+/// valeurs par tâche.
+fn saved_like(n: u32, custom: bool) -> String {
+    let mut xml = generated(0);
+    let cut = xml.find("<Tasks>").unwrap();
+    xml.truncate(cut);
+    if custom {
+        xml.push_str("\n\t<ExtendedAttributes>");
+        for (i, (id, _)) in CUSTOM_FIELDS.iter().enumerate() {
+            let alias = if i < 2 {
+                format!("\n\t\t\t<Alias>Champ {i}</Alias>")
+            } else {
+                String::new()
+            };
+            let _ = write!(
+                xml,
+                "\n\t\t<ExtendedAttribute>\n\t\t\t<FieldID>{id}</FieldID>\n\t\t\t<FieldName>F{i}</FieldName>{alias}\n\t\t</ExtendedAttribute>"
+            );
+        }
+        xml.push_str("\n\t</ExtendedAttributes>");
+    }
+    xml.push_str("\n\t<Tasks>");
+    for uid in 1..=n {
+        let _ = write!(
+            xml,
+            "\n\t\t<Task>\n\t\t\t<UID>{uid}</UID>\n\t\t\t<GUID>F1AD89CD-6EE0-48F2-9945-{uid:012}</GUID>\n\t\t\t<ID>{uid}</ID>\n\t\t\t<Name>Tâche {uid}</Name>\n\t\t\t<Active>1</Active>\n\t\t\t<Manual>0</Manual>\n\t\t\t<Type>0</Type>\n\t\t\t<IsNull>0</IsNull>\n\t\t\t<CreateDate>2026-10-01T08:00:00</CreateDate>\n\t\t\t<WBS>{uid}</WBS>\n\t\t\t<OutlineNumber>{uid}</OutlineNumber>\n\t\t\t<OutlineLevel>1</OutlineLevel>\n\t\t\t<Priority>500</Priority>\n\t\t\t<Start>2026-10-19T08:00:00</Start>\n\t\t\t<Finish>2026-10-20T17:00:00</Finish>\n\t\t\t<Duration>PT16H0M0S</Duration>\n\t\t\t<DurationFormat>7</DurationFormat>\n\t\t\t<Summary>0</Summary>\n\t\t\t<EarlyStart>2026-10-19T08:00:00</EarlyStart>\n\t\t\t<EarlyFinish>2026-10-20T17:00:00</EarlyFinish>\n\t\t\t<LateStart>2026-10-19T08:00:00</LateStart>\n\t\t\t<LateFinish>2026-10-20T17:00:00</LateFinish>\n\t\t\t<RemainingDuration>PT16H0M0S</RemainingDuration>\n\t\t\t<CalendarUID>-1</CalendarUID>"
+        );
+        for name in ZERO {
+            let _ = write!(xml, "\n\t\t\t<{name}>0</{name}>");
+        }
+        for name in ZERO_D {
+            let _ = write!(xml, "\n\t\t\t<{name}>PT0H0M0S</{name}>");
+        }
+        if uid > 1 {
+            let _ = write!(
+                xml,
+                "\n\t\t\t<PredecessorLink>\n\t\t\t\t<PredecessorUID>{}</PredecessorUID>\n\t\t\t\t<Type>1</Type>\n\t\t\t\t<CrossProject>0</CrossProject>\n\t\t\t\t<LinkLag>0</LinkLag>\n\t\t\t\t<LagFormat>7</LagFormat>\n\t\t\t</PredecessorLink>",
+                uid - 1
+            );
+        }
+        if custom {
+            for (id, kind) in CUSTOM_FIELDS {
+                let value = match kind {
+                    't' => format!("Lot {}", uid % 7),
+                    'n' => format!("{}.25", uid % 1000),
+                    'd' => "2026-11-02T08:00:00".to_owned(),
+                    _ => "1".to_owned(),
+                };
+                let _ = write!(
+                    xml,
+                    "\n\t\t\t<ExtendedAttribute>\n\t\t\t\t<FieldID>{id}</FieldID>\n\t\t\t\t<Value>{value}</Value>\n\t\t\t</ExtendedAttribute>"
+                );
+            }
+        }
+        xml.push_str("\n\t\t</Task>");
+    }
+    xml.push_str("\n\t</Tasks>\n</Project>\n");
+    xml
+}
+
+/// `custom_mspdi_5000` (seconde passe UX, lot L8, R-265, R-266) : lecture
+/// puis écriture de 5 000 tâches écrites comme par MS Project
+/// ([`saved_like`]) avec 10 champs personnalisés par tâche ; échec au-delà
+/// de 1,5 × la lecture puis l'écriture du même document sans champs
+/// (médianes de 9 mesures, release).
+#[test]
+#[ignore = "mesure, à lancer en --release"]
+fn custom_mspdi_5000() {
+    use planrs_mspdi::write::{Computed, WriteOptions, write};
+    let opts = ReadOptions::new("2026-01-01T00:00".parse().unwrap());
+    let median = |xml: &str| {
+        let mut times: Vec<Duration> = (0..9)
+            .map(|_| {
+                let t = Instant::now();
+                let doc = read(xml.as_bytes(), &opts).unwrap();
+                let out = write(&doc.project, Computed::Omit, &WriteOptions::default());
+                std::hint::black_box(out);
+                t.elapsed()
+            })
+            .collect();
+        times.sort();
+        times[4]
+    };
+    let with = saved_like(5_000, true);
+    let doc = read(with.as_bytes(), &opts).unwrap();
+    assert_eq!(doc.project.custom_fields.len(), 2);
+    assert!(doc.project.tasks.iter().all(|t| t.custom.len() == 10));
+    let without = median(&saved_like(5_000, false));
+    let custom = median(&with);
+    println!(
+        "MSPDI, 5 000 tâches : lecture + écriture {without:?} sans champs, {custom:?} avec 10 champs \
+         personnalisés par tâche (limite 1,5 ×)"
+    );
+    assert!(
+        custom.as_nanos() * 2 < without.as_nanos() * 3,
+        "{custom:?} / {without:?}"
+    );
 }

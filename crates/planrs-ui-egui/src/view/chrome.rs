@@ -1,5 +1,5 @@
-//! Habillage : barre de menus, écran d'accueil, barre d'état et bandeau de
-//! messages (le ruban à onglets est dans `view::ribbon`, ADR-0017 ; il
+//! Habillage : barre de menus, écran d'accueil, barre d'état, bandeau des
+//! décisions, notifications et historique des messages (le ruban à onglets est dans `view::ribbon`, ADR-0017 ; il
 //! remplace depuis le lot L5 l'ancienne barre d'outils de J7 et J8).
 //!
 //! `menu_bar` et `status_bar` reçoivent l'`Ui` racine et posent leur propre
@@ -8,8 +8,8 @@
 
 use planrs_core::Severity;
 
-use crate::action::Action;
 use crate::action::ConfirmChoice;
+use crate::action::{Action, MessageOp};
 use crate::app::{MAX_MESSAGES, UserMessage};
 use crate::column::Column;
 use crate::dialog::filter::FilterDialogMode;
@@ -17,10 +17,13 @@ use crate::format::format_date;
 use crate::i18n::{Arg, TextId};
 use crate::io::SaveKind;
 use crate::keymap::{Binding, Shortcut, UiBinding, shortcut_for_os, shortcut_text};
+use crate::notify::{MessageKind, MessageStore};
+use crate::ribbon::icon_data::Icon;
+use crate::ribbon::icons::paint_icon;
 use crate::ribbon::spec::{PERCENT_STEPS, RibbonCmd, percent_value};
 use crate::state::{FilterChoice, MAX_OUTLINE_LEVEL};
 use crate::state::{LanguagePref, ThemePref};
-use crate::theme::Palette;
+use crate::theme::{Palette, ToastTokens};
 use crate::timescale::TimeScaleZoom;
 use crate::view::task_view::TaskViewOp;
 
@@ -260,6 +263,9 @@ fn view_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, _side_open: bool) {
         twin(ui, fc, RibbonCmd::Diagnostics, None);
         // --- Ruban L2 : chronologie (H-UI-78), repli du ruban (H-UI-72).
         twin(ui, fc, RibbonCmd::TimelineVisible, None);
+        // --- Seconde passe UX (L10) : volet de détails (H-UI-112), jumeau
+        // de la case Affichage → Fractionner → Détails.
+        twin(ui, fc, RibbonCmd::DetailsPane, None);
         twin(
             ui,
             fc,
@@ -313,7 +319,17 @@ fn file_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
         });
     });
     ui.separator();
-    menu_item(ui, fc, TextId::MenuClose, None, has_doc, Action::CloseDocument);
+    // Fermer (H-UI-109) : raccourci Ctrl/Cmd+W affiché (Ctrl+F4 aussi lu
+    // hors macOS) ; même fermeture gardée que la touche.
+    let close = Binding::Ui(UiBinding::CloseDocument);
+    menu_item(
+        ui,
+        fc,
+        TextId::MenuClose,
+        Some(close),
+        has_doc,
+        Action::CloseDocumentGuarded,
+    );
     // Quitter : le navigateur ne laisse pas une page fermer son onglet.
     if !cfg!(target_arch = "wasm32") {
         ui.separator();
@@ -363,6 +379,8 @@ fn project_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
         RibbonCmd::WorkingTime,
         RibbonCmd::SetBaseline,
         RibbonCmd::UpdateProject,
+        // Seconde passe UX (L10) : Projet → Champs personnalisés… (H-UI-118).
+        RibbonCmd::CustomFields,
     ] {
         twin(ui, fc, cmd, None);
     }
@@ -455,6 +473,9 @@ fn edit_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
         RibbonCmd::SelectAll,
     ] {
         twin_cmd(ui, fc, cmd);
+        if cmd == RibbonCmd::FillDown {
+            fill_right_item(ui, fc, TextId::MenuFillRight);
+        }
     }
     // --- J8 L15 : menu Tâche (%, mode, actif) ---
 }
@@ -502,6 +523,11 @@ fn format_menu(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
     twin(ui, fc, RibbonCmd::RelativeMonths, None);
     ui.separator();
     twin(ui, fc, RibbonCmd::PageSetup, None);
+    // --- Seconde passe UX (L10) : Insérer une colonne…, Paramètres de
+    // champ… (H-UI-114, H-UI-115), jumeaux du groupe Colonnes du ruban.
+    ui.separator();
+    twin_cmd(ui, fc, RibbonCmd::InsertColumn);
+    twin_cmd(ui, fc, RibbonCmd::FieldSettings);
     // --- Ruban L2 : colonnes.
     let has_doc = fc.doc.is_some();
     let texts = fc.texts;
@@ -534,21 +560,54 @@ pub(crate) fn dropdown_contents(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, cmd: R
                 let shortcut = cmd.shortcut(ui.ctx().os());
                 twin_item(ui, fc, cmd, fc.texts.get(label), shortcut);
             }
+            // Remplir ▾ → À droite (Ctrl/Cmd+R, R-258 amendée), comme la
+            // liste Fill de Project.
+            if cmd == RibbonCmd::FillDown {
+                fill_right_item(ui, fc, TextId::RibbonFillRight);
+            }
         }
         _ => {}
     }
 }
 
-/// Une case par colonne de [`Column::ALL`] (ID et Nom grisées), comme le
-/// menu du titre de colonne (J7, lot L6).
-fn column_choices(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
-    for column in Column::ALL {
-        let mut visible = fc.state.column(column).is_some_and(|state| state.visible);
-        let check = egui::Checkbox::new(&mut visible, fc.texts.get(column.title()));
-        if ui.add_enabled(column.hideable(), check).clicked() {
-            fc.actions.push(Action::ToggleColumn(column));
-        }
+/// Entrée « Remplir à droite » (Ctrl/Cmd+R, R-258 amendée, H-UI-120) :
+/// mêmes prédicats que « Remplir vers le bas » ([`RibbonCmd::FillDown`]),
+/// action `CellOp::FillRight`, raccourci du `KEYMAP`.
+fn fill_right_item(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, label: TextId) {
+    let enabled = RibbonCmd::FillDown.enabled(fc);
+    let mut button = egui::Button::new(fc.texts.get(label));
+    if let Some(shortcut) = binding_shortcut(ui, Some(Binding::Ui(UiBinding::FillRight))) {
+        button = button.shortcut_text(shortcut_text(ui.ctx(), &shortcut));
     }
+    let response = ui.add_enabled(enabled.yes, button);
+    let response = match enabled.reason {
+        Some(reason) => response.on_disabled_hover_text(fc.texts.get(reason)),
+        None => response,
+    };
+    if response.clicked() {
+        fc.actions.push(Action::Cells(crate::action::CellOp::FillRight));
+    }
+}
+
+/// Colonnes (Format → Colonnes, liste du ruban ; seconde passe UX, lot
+/// L6, COL-02) : « Insérer une colonne », « Paramètres de champ… »
+/// (commandes partagées du ruban), puis les cases d'affichage des colonnes
+/// de [`Column::ALL`] (ID et Nom grisées) dans un sous-menu « Affichage du
+/// tableau ».
+fn column_choices(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    twin_cmd(ui, fc, RibbonCmd::InsertColumn);
+    twin_cmd(ui, fc, RibbonCmd::FieldSettings);
+    ui.separator();
+    let texts = fc.texts;
+    ui.menu_button(texts.get(TextId::MenuTableDisplay), |ui| {
+        for column in Column::ALL {
+            let mut visible = fc.state.shown(column);
+            let check = egui::Checkbox::new(&mut visible, fc.texts.get(column.title()));
+            if ui.add_enabled(column.hideable(), check).clicked() {
+                fc.actions.push(Action::ToggleColumn(column));
+            }
+        }
+    });
 }
 
 /// Entrée d'un sous-menu de la vue des tâches, raccourci de `binding`.
@@ -809,66 +868,353 @@ fn centered_row(ui: &mut egui::Ui, labels: &[String], add_contents: impl FnOnce(
 }
 
 /// Barre d'état (nom précédé de « * » si le document est modifié, nombre de
-/// tâches, plage, diagnostics) et bandeau des
-/// messages (sous la barre d'outils).
-pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMessage]) {
-    let texts = fc.texts;
-    egui::Panel::bottom("planrs_status_bar").show(ui, |ui| {
+/// tâches, plage, diagnostics, bouton de l'historique des messages), puis
+/// bandeau des décisions (`Blocking`, sous le ruban), notifications (en
+/// surimpression, en bas à droite au-dessus de la barre) et fenêtre de
+/// l'historique (H-UI-104). Les notifications ne déplacent aucune vue.
+pub fn status_bar(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &MessageStore) {
+    let bar = egui::Panel::bottom("planrs_status_bar").show(ui, |ui| {
         ui.horizontal(|ui| {
-            let Some(doc) = fc.doc else {
-                ui.label(texts.get(TextId::StatusNoDocument));
-                return;
-            };
-            // « * » si modifié, comme le titre de la fenêtre : sur le web,
-            // seul indicateur visible dans la page (relecture finale J4, F4).
-            ui.strong(crate::app::document_label(doc));
-            ui.separator();
-            let count = fc
-                .rows
-                .map(crate::rows::RowModel::len)
-                .filter(|&len| len > 0)
-                .unwrap_or_else(|| doc.project().tasks.len());
-            let count = i64::try_from(count).unwrap_or(i64::MAX);
-            ui.label(texts.get_args(TextId::StatusTasks, &[("count", Arg::Count(count))]));
-            ui.separator();
-            let labels = texts.format_labels();
-            ui.label(texts.get_args(
-                TextId::StatusRange,
-                &[
-                    (
-                        "start",
-                        Arg::Str(format_date(doc.schedule().project_start, labels).into()),
-                    ),
-                    (
-                        "finish",
-                        Arg::Str(format_date(doc.schedule().project_finish, labels).into()),
-                    ),
-                ],
-            ));
-            ui.separator();
-            // Cliquer sur un compteur ouvre ou referme le panneau des
-            // diagnostics. Compteurs calculés une fois par document (cache
-            // d'`App`, `DiagnosticsView`).
-            let errors = i64::try_from(fc.diagnostics.errors).unwrap_or(i64::MAX);
-            let warnings = i64::try_from(fc.diagnostics.warnings).unwrap_or(i64::MAX);
-            let counters = [
-                (TextId::StatusErrors, errors, ui.visuals().error_fg_color),
-                (TextId::StatusWarnings, warnings, ui.visuals().warn_fg_color),
-            ];
-            for (id, count, color) in counters {
-                let mut text = egui::RichText::new(texts.get_args(id, &[("count", Arg::Count(count))]));
-                if count > 0 {
-                    text = text.color(color);
-                }
-                if ui.selectable_label(fc.state.diagnostics_open, text).clicked() {
+            // Bouton de l'historique à droite, seulement s'il y a un
+            // message (barre inchangée sinon).
+            if messages.history().is_empty() {
+                status_contents(ui, fc);
+            } else {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    history_button(ui, fc, messages);
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        status_contents(ui, fc);
+                    });
+                });
+            }
+        });
+    });
+    let bar_h = bar.response.rect.height();
+    let bar_h = if bar_h.is_finite() {
+        bar_h.clamp(0.0, 200.0)
+    } else {
+        0.0
+    };
+    message_banner(ui, fc, messages.banner());
+    let ctx = ui.ctx().clone();
+    let hovered = if messages.history_open() {
+        history_window(&ctx, fc, messages, bar_h);
+        None
+    } else {
+        toasts(&ctx, fc, messages.toasts(), bar_h)
+    };
+    ctx.data_mut(|data| data.insert_temp(hovered_toast_id(), hovered));
+    // Repeint à l'échéance de la prochaine notification (aucun repeint
+    // immédiat : l'application reste au repos entre deux échéances).
+    let now = ctx.input(|input| input.time);
+    if let Some(left) = messages.next_expiry(now)
+        && let Ok(delay) = std::time::Duration::try_from_secs_f64(left + TOAST_REPAINT_SLACK)
+    {
+        ctx.request_repaint_after(delay);
+    }
+}
+
+/// Contenu de la barre d'état (document, tâches, plage, diagnostics,
+/// filtre).
+fn status_contents(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    let texts = fc.texts;
+    let Some(doc) = fc.doc else {
+        ui.label(texts.get(TextId::StatusNoDocument));
+        return;
+    };
+    // « * » si modifié, comme le titre de la fenêtre : sur le web,
+    // seul indicateur visible dans la page (relecture finale J4, F4).
+    ui.strong(crate::app::document_label(doc));
+    ui.separator();
+    let count = fc
+        .rows
+        .map(crate::rows::RowModel::len)
+        .filter(|&len| len > 0)
+        .unwrap_or_else(|| doc.project().tasks.len());
+    let count = i64::try_from(count).unwrap_or(i64::MAX);
+    ui.label(texts.get_args(TextId::StatusTasks, &[("count", Arg::Count(count))]));
+    ui.separator();
+    let labels = texts.format_labels();
+    ui.label(texts.get_args(
+        TextId::StatusRange,
+        &[
+            (
+                "start",
+                Arg::Str(format_date(doc.schedule().project_start, labels).into()),
+            ),
+            (
+                "finish",
+                Arg::Str(format_date(doc.schedule().project_finish, labels).into()),
+            ),
+        ],
+    ));
+    ui.separator();
+    // Cliquer sur un compteur ouvre ou referme le panneau des
+    // diagnostics. Compteurs calculés une fois par document (cache
+    // d'`App`, `DiagnosticsView`).
+    let errors = i64::try_from(fc.diagnostics.errors).unwrap_or(i64::MAX);
+    let warnings = i64::try_from(fc.diagnostics.warnings).unwrap_or(i64::MAX);
+    let counters = [
+        (
+            TextId::StatusErrors,
+            errors,
+            ui.visuals().error_fg_color,
+            Severity::Error,
+        ),
+        (
+            TextId::StatusWarnings,
+            warnings,
+            ui.visuals().warn_fg_color,
+            Severity::Warning,
+        ),
+    ];
+    // H-UI-119 (lot L10) : une pastille ouvre le volet filtré sur sa
+    // gravité ; la même pastille, volet ouvert, le referme ; l'autre change
+    // le filtre. Volet fermé : filtre retiré (la case du menu Affichage
+    // l'ouvre sur tous les diagnostics).
+    let open = fc.state.diagnostics_open;
+    if !open {
+        super::diagnostics::closed(ui.ctx());
+    }
+    let filter = super::diagnostics::filter(ui.ctx());
+    for (id, count, color, severity) in counters {
+        let mut text = egui::RichText::new(texts.get_args(id, &[("count", Arg::Count(count))]));
+        if count > 0 {
+            text = text.color(color);
+        }
+        let selected = open && filter.is_none_or(|f| f == severity);
+        if ui.selectable_label(selected, text).clicked() {
+            if open && filter == Some(severity) {
+                fc.actions.push(Action::ToggleDiagnostics);
+            } else {
+                super::diagnostics::set_filter(ui.ctx(), Some(severity));
+                if !open {
                     fc.actions.push(Action::ToggleDiagnostics);
                 }
             }
-            // --- J8 L9 : « Filtre : Critiques » (rien sans filtre).
-            super::task_view::status_indicator(ui, fc);
+        }
+    }
+    // --- J8 L9 : « Filtre : Critiques » (rien sans filtre).
+    super::task_view::status_indicator(ui, fc);
+}
+
+/// Largeur maximale d'une notification (H-UI-104).
+pub const TOAST_W: f32 = 420.0;
+
+/// Bouton qui ferme une notification (signe de multiplication U+00D7,
+/// symbole et non texte : rien à traduire).
+pub const TOAST_CLOSE_GLYPH: &str = "\u{d7}";
+
+/// Marge entre les notifications et le bord de la fenêtre ou la barre
+/// d'état.
+const TOAST_MARGIN: f32 = 12.0;
+
+/// Marge ajoutée au délai de repeint, pour que l'image tombe après
+/// l'échéance.
+const TOAST_REPAINT_SLACK: f64 = 0.05;
+
+/// Clé de la mémoire d'egui où la zone des notifications dépose la
+/// notification survolée de l'image (survol = pause, relu par `App` à
+/// l'image suivante).
+fn hovered_toast_id() -> egui::Id {
+    egui::Id::unique("planrs.toast-hovered")
+}
+
+/// Notification survolée à l'image précédente, s'il y en a une.
+#[must_use]
+pub fn hovered_toast(ctx: &egui::Context) -> Option<u64> {
+    ctx.data(|data| data.get_temp::<Option<u64>>(hovered_toast_id()))
+        .flatten()
+}
+
+/// Liseré et icône d'un message selon sa sorte (H-UI-104, jetons de
+/// [`ToastTokens`]).
+const fn toast_accent(kind: MessageKind, tokens: &ToastTokens) -> (egui::Color32, Icon) {
+    match kind {
+        MessageKind::Refusal | MessageKind::Blocking => (tokens.error, Icon::CircleX),
+        MessageKind::Warning => (tokens.warning, Icon::TriangleAlert),
+        MessageKind::Info => (tokens.info, Icon::Info),
+    }
+}
+
+/// Côté de l'icône d'une notification.
+const TOAST_ICON: f32 = 16.0;
+
+/// Largeur du liseré gauche d'une notification.
+const TOAST_STRIPE: f32 = 4.0;
+
+/// Bouton de l'historique dans la barre d'état : « Messages », puis le
+/// compte des non lus s'il y en a.
+fn history_button(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &MessageStore) {
+    let texts = fc.texts;
+    let mut label = texts.get(TextId::NotifyHistory);
+    let unread = messages.unread();
+    if unread > 0 {
+        let count = i64::try_from(unread).unwrap_or(i64::MAX);
+        label.push_str(" · ");
+        label.push_str(&texts.get_args(TextId::NotifyUnread, &[("count", Arg::Count(count))]));
+    }
+    if ui.selectable_label(messages.history_open(), label).clicked() {
+        fc.actions.push(Action::Message(MessageOp::ToggleHistory));
+    }
+}
+
+/// Corps d'un message : titre, texte, « Détails » repliable (fermé par
+/// défaut) ; `salt` distingue les repliables d'une même voie.
+fn message_body(ui: &mut egui::Ui, fc: &FrameCtx<'_>, message: &UserMessage, fg: egui::Color32, salt: &str) {
+    let texts = fc.texts;
+    if let Some(title) = message.title {
+        ui.label(egui::RichText::new(texts.get(title)).strong().color(fg));
+    }
+    ui.label(egui::RichText::new(message.text.as_str()).color(fg));
+    if let Some(detail) = message.detail.as_deref().filter(|d| !d.is_empty()) {
+        egui::CollapsingHeader::new(texts.get(TextId::NotifyDetails))
+            .id_salt((salt, message.id))
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new(detail).small().monospace().color(fg));
+            });
+    }
+}
+
+/// Zone des notifications, en bas à droite au-dessus de la barre d'état
+/// (`bar_h`), la plus récente en bas ; « × » sur chacune. Rend la
+/// notification survolée.
+fn toasts(ctx: &egui::Context, fc: &mut FrameCtx<'_>, toasts: &[UserMessage], bar_h: f32) -> Option<u64> {
+    if toasts.is_empty() {
+        return None;
+    }
+    let tokens = ToastTokens::of(fc.palette);
+    let close = fc.texts.get(TextId::NotifyClose);
+    let mut hovered = None;
+    let mut dismissed = Vec::new();
+    egui::Area::new(egui::Id::unique("planrs.toasts"))
+        .order(egui::Order::Foreground)
+        .anchor(
+            egui::Align2::RIGHT_BOTTOM,
+            egui::vec2(-TOAST_MARGIN, -(bar_h + TOAST_MARGIN)),
+        )
+        .show(ctx, |ui| {
+            // Largeur fixe (≤ `TOAST_W`, bornée par la fenêtre) : cartes
+            // alignées, quelle que soit la longueur de la phrase.
+            let screen = ctx.content_rect().width();
+            let width = if screen.is_finite() {
+                (screen - 2.0 * TOAST_MARGIN).clamp(160.0, TOAST_W)
+            } else {
+                TOAST_W
+            };
+            ui.set_width(width);
+            for toast in toasts {
+                let (accent, icon) = toast_accent(toast.kind, &tokens);
+                let frame = egui::Frame::new()
+                    .fill(tokens.bg)
+                    .stroke(egui::Stroke::new(1.0, tokens.border))
+                    .corner_radius(egui::CornerRadius::same(6))
+                    .shadow(egui::Shadow {
+                        offset: [0, 3],
+                        blur: 14,
+                        spread: 0,
+                        color: tokens.shadow,
+                    })
+                    .inner_margin(egui::Margin {
+                        left: 14,
+                        right: 6,
+                        top: 8,
+                        bottom: 8,
+                    });
+                let response = frame
+                    .show(ui, |ui| {
+                        ui.set_width(width - 22.0);
+                        ui.horizontal_top(|ui| {
+                            let (icon_rect, _) = ui.allocate_exact_size(
+                                egui::vec2(TOAST_ICON, TOAST_ICON),
+                                egui::Sense::hover(),
+                            );
+                            paint_icon(ui.painter(), icon_rect, icon, accent);
+                            ui.add_space(4.0);
+                            ui.vertical(|ui| {
+                                ui.set_width((width - 22.0 - TOAST_ICON - 36.0).max(80.0));
+                                message_body(ui, fc, toast, tokens.text, "planrs_toast_detail");
+                            });
+                            // « × » (H-UI-104) : nom distinct des « Fermer » des
+                            // fenêtres ; le texte traduit en infobulle.
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                                let close_button = egui::Button::new(
+                                    egui::RichText::new(TOAST_CLOSE_GLYPH).color(tokens.text),
+                                )
+                                .frame(false)
+                                .small();
+                                if ui.add(close_button).on_hover_text(close.as_str()).clicked() {
+                                    dismissed.push(toast.id);
+                                }
+                            });
+                        });
+                    })
+                    .response;
+                // Liseré gauche, couleur de la sorte (coins gauches arrondis
+                // comme la carte).
+                let card = response.rect;
+                if card.is_finite() && card.is_positive() {
+                    let stripe = egui::Rect::from_min_max(
+                        card.left_top(),
+                        egui::pos2(card.left() + TOAST_STRIPE, card.bottom()),
+                    );
+                    ui.painter().rect_filled(
+                        stripe,
+                        egui::CornerRadius {
+                            nw: 6,
+                            sw: 6,
+                            ne: 0,
+                            se: 0,
+                        },
+                        accent,
+                    );
+                }
+                if ui.rect_contains_pointer(card) {
+                    hovered = Some(toast.id);
+                }
+                ui.add_space(8.0);
+            }
         });
-    });
-    message_banner(ui, fc, messages);
+    for id in dismissed {
+        fc.actions.push(Action::Message(MessageOp::Dismiss(id)));
+    }
+    hovered
+}
+
+/// Fenêtre de l'historique (les [`crate::notify::MAX_HISTORY`] derniers
+/// messages, le plus récent en haut, détails repliables), ancrée comme les
+/// notifications.
+fn history_window(ctx: &egui::Context, fc: &mut FrameCtx<'_>, messages: &MessageStore, bar_h: f32) {
+    let texts = fc.texts;
+    let mut open = true;
+    egui::Window::new(texts.get(TextId::NotifyHistoryTitle))
+        .id(egui::Id::unique("planrs.message-history"))
+        .anchor(
+            egui::Align2::RIGHT_BOTTOM,
+            egui::vec2(-TOAST_MARGIN, -(bar_h + TOAST_MARGIN)),
+        )
+        .collapsible(false)
+        .resizable(false)
+        .default_width(TOAST_W)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            ui.set_max_width(TOAST_W);
+            if messages.history().is_empty() {
+                ui.label(texts.get(TextId::NotifyHistoryEmpty));
+                return;
+            }
+            egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                let fg = ui.visuals().text_color();
+                for message in messages.history().iter().rev() {
+                    message_body(ui, fc, message, fg, "planrs_history_detail");
+                    ui.separator();
+                }
+            });
+        });
+    if !open {
+        fc.actions.push(Action::Message(MessageOp::ToggleHistory));
+    }
 }
 
 /// Bandeau « Enregistrer les modifications de « nom » ? » (Enregistrer /
@@ -922,10 +1268,12 @@ fn banner_colors(
     }
 }
 
-/// Bandeau des messages, refermable ; jamais de modale. Texte fort
+/// Bandeau des décisions (`Blocking` : ouverture, enregistrement ou
+/// export échoués, état illisible), jamais de modale. Texte fort
 /// (`text_strong`) sur fond teinté (contraste ≥ 4,5:1, testé dans `theme`),
 /// liseré gauche coloré selon la gravité ; au plus [`MAX_MESSAGES`]
-/// messages, les plus récents.
+/// messages, les plus récents ; « Fermer le message » ne ferme que le
+/// sien (H-UI-104).
 fn message_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMessage]) {
     let messages = recent_messages(messages);
     if messages.is_empty() {
@@ -934,20 +1282,6 @@ fn message_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
     let texts = fc.texts;
     let palette = fc.palette;
     let has_error = messages.iter().any(|message| message.severity == Severity::Error);
-    // Titre de chaque message (« Impossible d'ouvrir le fichier »,
-    // « Modification refusée »), une fois par suite de messages de même
-    // titre.
-    let titled: Vec<(Option<String>, &UserMessage)> = messages
-        .iter()
-        .scan(None, |previous: &mut Option<TextId>, message| {
-            let title = message
-                .title
-                .filter(|title| *previous != Some(*title))
-                .map(|title| texts.get(title));
-            *previous = message.title;
-            Some((title, message))
-        })
-        .collect();
     let (fill, accent) = banner_colors(has_error, palette, ui.visuals());
     let fg = palette.text_strong;
     let frame = egui::Frame::side_top_panel(ui.style()).fill(fill);
@@ -961,22 +1295,19 @@ fn message_banner(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, messages: &[UserMess
                 ui.painter()
                     .rect_filled(bar.expand2(egui::vec2(0.0, 2.0)), 0.0, accent);
             }
-            ui.horizontal(|ui| {
-                ui.add_space(6.0);
-                ui.vertical(|ui| {
-                    for (title, message) in titled {
-                        if let Some(title) = title {
-                            ui.label(egui::RichText::new(title).strong().size(15.0).color(fg));
+            for message in messages {
+                ui.horizontal(|ui| {
+                    ui.add_space(6.0);
+                    ui.vertical(|ui| {
+                        message_body(ui, fc, message, fg, "planrs_banner_detail");
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(texts.get(TextId::MessageDismiss)).clicked() {
+                            fc.actions.push(Action::Message(MessageOp::Dismiss(message.id)));
                         }
-                        ui.label(egui::RichText::new(message.text.as_str()).color(fg));
-                    }
+                    });
                 });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(texts.get(TextId::MessageDismiss)).clicked() {
-                        fc.actions.push(Action::DismissMessage);
-                    }
-                });
-            });
+            }
         });
 }
 
@@ -995,11 +1326,12 @@ mod tests {
     use crate::app::{MAX_MESSAGES, UserMessage};
 
     fn message(n: usize) -> UserMessage {
-        UserMessage {
-            severity: Severity::Warning,
-            title: None,
-            text: n.to_string(),
-        }
+        UserMessage::new(
+            crate::notify::MessageKind::Warning,
+            Severity::Warning,
+            None,
+            n.to_string(),
+        )
     }
 
     #[test]

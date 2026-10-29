@@ -18,7 +18,9 @@ use planrs_render::style::BarRole;
 
 use super::icon_data::Icon;
 use super::{Enabled, RibbonOp, RibbonTab};
-use crate::action::{Action, CellOp, DialogKind, FormatOp, SelectOp, TaskCmd, TimelineOp};
+use crate::action::{
+    ACTIVE_COLUMN, Action, CellOp, ColumnOp, DialogKind, FormatOp, PaneOp, SelectOp, TaskCmd, TimelineOp,
+};
 use crate::clipboard::ClipboardOp;
 use crate::i18n::TextId;
 use crate::io::SaveKind;
@@ -202,6 +204,17 @@ pub enum RibbonCmd {
     /// Supprimer la tâche (Suppr ; menus seulement : pas d'élément du
     /// ruban).
     DeleteTask,
+    // --- Seconde passe UX (ADR-0019, contrat L0) : éléments du ruban et
+    // jumeaux de menus posés par L10.
+    /// Case Détails (Affichage → Fractionner, H-UI-112).
+    DetailsPane,
+    /// Insérer une colonne… (Format → Colonnes, H-UI-114).
+    InsertColumn,
+    /// Paramètres de champ… (Format → Colonnes, H-UI-115).
+    FieldSettings,
+    /// Champs personnalisés… (Projet → Propriétés, H-UI-118 ; fenêtre du
+    /// lot L9).
+    CustomFields,
 }
 
 /// Pas de « marquer n % », dans l'ordre de la rangée (H-UI-35).
@@ -243,6 +256,8 @@ impl RibbonCmd {
             | Self::ThemeMenu
             | Self::LanguageMenu
             | Self::ColumnsMenu => return None,
+            // Fenêtre « Champs personnalisés » (lot L9, H-UI-118).
+            Self::CustomFields => Action::ShowDialog(DialogKind::CustomFields),
             // Comme le menu Affichage : le style du Gantt ramène à la vue
             // Gantt ; le moteur pousse aussi `SetGanttStyle` (voir
             // [`Self::gantt_style`]).
@@ -292,6 +307,9 @@ impl RibbonCmd {
             Self::ClearContents => Action::Cells(CellOp::Clear),
             Self::SelectAll => Action::SelectOp(SelectOp::All),
             Self::DeleteTask => Action::Structure(StructureOp::Delete),
+            Self::DetailsPane => Action::Pane(PaneOp::ShowDetails(!fc.state.details.visible)),
+            Self::InsertColumn => Action::Column(ColumnOp::OpenPicker { at: ACTIVE_COLUMN }),
+            Self::FieldSettings => Action::Column(ColumnOp::OpenSettings(ACTIVE_COLUMN)),
         })
     }
 
@@ -321,6 +339,7 @@ impl RibbonCmd {
             | Self::AiPanel
             | Self::Diagnostics
             | Self::TimelineVisible
+            | Self::DetailsPane
             | Self::CriticalTasks
             | Self::ChartOnly => return Enabled::YES,
             Self::Undo if history.as_ref().is_none_or(|h| h.entries.is_empty()) => {
@@ -384,6 +403,8 @@ impl RibbonCmd {
                 | Self::ClearContents
                 | Self::SelectAll
                 | Self::DeleteTask
+                | Self::InsertColumn
+                | Self::FieldSettings
         )
     }
 
@@ -421,6 +442,7 @@ impl RibbonCmd {
     pub fn checked(self, fc: &FrameCtx<'_>) -> Option<bool> {
         match self {
             Self::TimelineVisible => Some(fc.state.timeline_visible),
+            Self::DetailsPane => Some(fc.state.details.visible),
             Self::AiPanel => Some(false),
             Self::Inactivate => Some(active_task(fc).is_some_and(|task| !task.active)),
             Self::ManualSchedule => Some(
@@ -501,6 +523,10 @@ impl RibbonCmd {
             Self::ClearContents => TextId::MenuClearContents,
             Self::SelectAll => TextId::MenuSelectAll,
             Self::DeleteTask => TextId::StructureDelete,
+            Self::DetailsPane => TextId::MenuDetailsPane,
+            Self::InsertColumn => TextId::MenuInsertColumn,
+            Self::FieldSettings => TextId::MenuFieldSettings,
+            Self::CustomFields => TextId::MenuCustomFields,
         }
     }
 
@@ -546,7 +572,8 @@ impl RibbonCmd {
             | Self::LanguageMenu
             | Self::CollapseRibbon
             | Self::CriticalTasks
-            | Self::ChartOnly => &[TextId::MenuView],
+            | Self::ChartOnly
+            | Self::DetailsPane => &[TextId::MenuView],
             Self::MarkPercent(_)
             | Self::InsertSummary
             | Self::InsertMilestone
@@ -557,12 +584,17 @@ impl RibbonCmd {
             | Self::TaskInformation
             | Self::TaskNotes
             | Self::AddToTimeline => &[TextId::MenuTask],
-            Self::ProjectInformation | Self::WorkingTime | Self::SetBaseline | Self::UpdateProject => {
-                &[TextId::MenuProject]
-            }
-            Self::FormatBars | Self::Gallery | Self::RelativeMonths | Self::ColumnsMenu => {
-                &[TextId::MenuFormat]
-            }
+            Self::ProjectInformation
+            | Self::WorkingTime
+            | Self::SetBaseline
+            | Self::UpdateProject
+            | Self::CustomFields => &[TextId::MenuProject],
+            Self::FormatBars
+            | Self::Gallery
+            | Self::RelativeMonths
+            | Self::ColumnsMenu
+            | Self::InsertColumn
+            | Self::FieldSettings => &[TextId::MenuFormat],
         }
     }
 
@@ -574,6 +606,7 @@ impl RibbonCmd {
         matches!(
             self,
             Self::TimelineVisible
+                | Self::DetailsPane
                 | Self::AiPanel
                 | Self::Diagnostics
                 | Self::CollapseRibbon
@@ -623,6 +656,7 @@ impl RibbonCmd {
             Self::FillDown => ui(UiBinding::FillDown),
             Self::ClearContents => ui(UiBinding::ClearCells),
             Self::SelectAll => ui(UiBinding::SelectAll),
+            Self::FieldSettings => ui(UiBinding::FieldSettings),
             _ => return None,
         })
     }
@@ -1155,6 +1189,15 @@ const PROJECT_GROUPS: &[GroupSpec] = &[
                 TextId::RibbonTipProjectInformation,
                 RibbonCmd::ProjectInformation,
             ),
+            // Seconde passe UX (L10, H-UI-118) : Champs personnalisés,
+            // groupe Propriétés comme Project.
+            plain(
+                Large,
+                Some(Icon::Tags),
+                TextId::RibbonCustomFields,
+                TextId::RibbonTipCustomFields,
+                RibbonCmd::CustomFields,
+            ),
             plain(
                 Large,
                 Some(Icon::CalendarCog),
@@ -1324,6 +1367,15 @@ const VIEW_GROUPS: &[GroupSpec] = &[
                 TextId::RibbonTipTimeline,
                 RibbonCmd::TimelineVisible,
             ),
+            // Seconde passe UX (L10, H-UI-112) : Détails à côté de
+            // Chronologie, comme le groupe Split View de Project.
+            plain(
+                Check,
+                None,
+                TextId::RibbonDetails,
+                TextId::RibbonTipDetails,
+                RibbonCmd::DetailsPane,
+            ),
             plain(
                 Check,
                 None,
@@ -1377,13 +1429,33 @@ const FORMAT_GROUPS: &[GroupSpec] = &[
     GroupSpec {
         label: TextId::RibbonGroupColumns,
         icon: Icon::Columns3,
-        items: &[plain(
-            Dropdown,
-            Some(Icon::Columns3),
-            TextId::RibbonColumns,
-            TextId::RibbonTipColumns,
-            RibbonCmd::ColumnsMenu,
-        )],
+        items: &[
+            // Seconde passe UX (L10, H-UI-114, H-UI-115) : Insérer une
+            // colonne et Paramètres de champ, comme le groupe Columns de
+            // Project ; la liste garde l'affichage du tableau.
+            plain(
+                Large,
+                Some(Icon::BetweenVerticalStart),
+                TextId::RibbonInsertColumn,
+                TextId::RibbonTipInsertColumn,
+                RibbonCmd::InsertColumn,
+            ),
+            item(
+                Small,
+                Some(Icon::Columns3Cog),
+                TextId::RibbonFieldSettings,
+                TextId::RibbonTipFieldSettings,
+                Some(ui(UiBinding::FieldSettings)),
+                RibbonCmd::FieldSettings,
+            ),
+            plain(
+                Dropdown,
+                Some(Icon::Columns3),
+                TextId::RibbonColumns,
+                TextId::RibbonTipColumns,
+                RibbonCmd::ColumnsMenu,
+            ),
+        ],
         shrink_rank: 4,
     },
     GroupSpec {

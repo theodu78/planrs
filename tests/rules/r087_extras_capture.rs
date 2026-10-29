@@ -63,11 +63,12 @@ fn r087_out_of_schema_element_is_anchored_on_the_previous_always_written_sibling
 #[test]
 fn r087_schema_elements_keep_their_name_and_order() {
     // `ExtendedAttribute` (P) deux fois après `CommitmentType` (P) : trois
-    // `Extras` nommés, ordre du document gardé.
+    // `Extras` nommés, ordre du document gardé. Champs hors de R-263 (Cost1,
+    // Cost2) : Texte1 et Texte2 sont lus dans le modèle depuis L8 (R-265).
     let xml = project(
         "<Task><UID>1</UID><Name>A</Name><CommitmentType>0</CommitmentType>\
-         <ExtendedAttribute><FieldID>188743731</FieldID><Value>a</Value></ExtendedAttribute>\
-         <ExtendedAttribute><FieldID>188743734</FieldID><Value>b</Value></ExtendedAttribute></Task>",
+         <ExtendedAttribute><FieldID>188743786</FieldID><Value>a</Value></ExtendedAttribute>\
+         <ExtendedAttribute><FieldID>188743787</FieldID><Value>b</Value></ExtendedAttribute></Task>",
         "",
     );
     let doc = read_xml(&xml, true);
@@ -77,11 +78,11 @@ fn r087_schema_elements_keep_their_name_and_order() {
             ("CommitmentType", "<CommitmentType>0</CommitmentType>"),
             (
                 "ExtendedAttribute",
-                "<ExtendedAttribute><FieldID>188743731</FieldID><Value>a</Value></ExtendedAttribute>"
+                "<ExtendedAttribute><FieldID>188743786</FieldID><Value>a</Value></ExtendedAttribute>"
             ),
             (
                 "ExtendedAttribute",
-                "<ExtendedAttribute><FieldID>188743734</FieldID><Value>b</Value></ExtendedAttribute>"
+                "<ExtendedAttribute><FieldID>188743787</FieldID><Value>b</Value></ExtendedAttribute>"
             ),
         ]
     );

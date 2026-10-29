@@ -1,9 +1,11 @@
 //! Tâches (R-120, R-127, R-129, R-132) : champs modélisés, liens, mode
 //! manuel ; ID, numéro hiérarchique et drapeau `Summary` déduits.
 
+use std::collections::BTreeSet;
+
 use planrs_core::{
-    Constraint, Duration, Lag, LagValue, Link, Minutes, Progress, Project, SchedulingMode, Subject, Task,
-    TaskUid, Work,
+    Constraint, CustomFieldId, CustomValue, Duration, Lag, LagValue, Link, Minutes, Progress, Project,
+    SchedulingMode, Subject, Task, TaskUid, Work,
 };
 
 use super::computed::{TaskValues, Values};
@@ -12,12 +14,16 @@ use super::{
     NO_EXTRAS, OrderProfile, Planned, WriteCode, baseline, entity, leveling, max_len, percent, plan, unscoped,
 };
 use crate::codes;
+use crate::custom;
 use crate::scalar::{format_bool, format_datetime, format_iso_duration};
 use crate::schema::Parent;
 
 /// Position d'une tâche dans le document.
 struct Row<'p> {
     task: &'p Task,
+    /// Champs personnalisés étrangers : valeurs du modèle non écrites
+    /// (R-266).
+    foreign: &'p BTreeSet<CustomFieldId>,
     /// `ID` (0 pour la récapitulative du projet).
     id: u32,
     /// Récapitulative (R-052) ; UID 0 : vrai.
@@ -31,11 +37,18 @@ struct Row<'p> {
 }
 
 /// Écrit la récapitulative du projet puis les tâches, dans l'ordre des ID.
-pub(crate) fn write_all(em: &mut Emitter, p: &Project, values: Option<&Values>, profile: OrderProfile) {
+pub(crate) fn write_all(
+    em: &mut Emitter,
+    p: &Project,
+    values: Option<&Values>,
+    profile: OrderProfile,
+    foreign: &BTreeSet<CustomFieldId>,
+) {
     let of = |uid: TaskUid| values.and_then(|v| v.tasks.get(&uid));
     if let Some(summary) = &p.summary_task {
         let row = Row {
             task: summary,
+            foreign,
             id: 0,
             summary: true,
             level: 0,
@@ -55,6 +68,7 @@ pub(crate) fn write_all(em: &mut Emitter, p: &Project, values: Option<&Values>, 
             .unwrap_or(u32::MAX);
         let row = Row {
             task,
+            foreign,
             id,
             summary,
             level: task.outline_level.get(),
@@ -321,7 +335,26 @@ fn field(
             }
         }
         "Baseline" => baseline::task(em, &t.baselines, planned, profile),
+        "ExtendedAttribute" => custom_values(em, t, row.foreign),
         _ => {}
+    }
+}
+
+/// R-266 : valeurs des champs personnalisés, dans l'ordre des `FieldID`,
+/// à la place de `ExtendedAttribute` (les `Extras` de ce nom suivent) :
+/// texte nettoyé et tronqué à 255 caractères, nombre au point sans zéro
+/// final, date ISO, indicateur `1`.
+fn custom_values(em: &mut Emitter, t: &Task, foreign: &BTreeSet<CustomFieldId>) {
+    for (id, value) in custom::task_values(&t.custom, foreign) {
+        em.open(custom::ATTRIBUTE);
+        em.leaf_int("FieldID", custom::field_id(id));
+        match value {
+            CustomValue::Text(s) => em.text("Value", s, Some(255)),
+            CustomValue::Number(n) => em.leaf("Value", &custom::format_number(*n)),
+            CustomValue::Date(m) => em.leaf_date("Value", *m),
+            CustomValue::Flag(b) => em.leaf("Value", format_bool(*b)),
+        }
+        em.close();
     }
 }
 

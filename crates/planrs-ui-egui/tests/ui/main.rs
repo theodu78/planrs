@@ -16,7 +16,11 @@
 //! en bout du ruban (`ribbon_e2e`) ajouté par le lot L6. Modules de la
 //! passe UX (`select_mouse`, `select_keys`, `cells`, `rows_columns`,
 //! `context_menus`, `ux_e2e`) posés par le contrat ADR-0018 (lot L0),
-//! remplis par L1 à L6.
+//! remplis par L1 à L6. Modules de la seconde passe UX (`messages`,
+//! `paste_destination`, `quit`, `panes`, `details`, `columns_insert`,
+//! `fields`, `custom_fields`, `ux2_e2e`) posés vides par le contrat
+//! ADR-0019 (lot L0), remplis par leur lot ; `ux2_contract` : touches,
+//! actions et état posés par L0.
 //!
 //! Cible unique `ui` (un seul binaire lié à wgpu, ADR-0011, décision 12).
 //! Les libellés cherchés sont construits par `Texts` (jamais en dur : le
@@ -40,20 +44,28 @@ mod assign;
 mod cells;
 mod clipboard;
 mod columns;
+mod columns_insert;
 mod common;
 mod context_menus;
 mod csv_import;
+mod custom_fields;
 mod desktop;
+mod details;
 mod dialogs;
 mod e2e;
 mod edit;
+mod fields;
 mod files;
 mod filters;
 mod gestures;
 mod j8_e2e;
+mod messages;
 mod nav;
 mod outline;
+mod panes;
+mod paste_destination;
 mod pseudo;
+mod quit;
 mod recovery;
 mod relay;
 mod resource_sheet;
@@ -73,6 +85,8 @@ mod task_info;
 mod timeline;
 mod tracking;
 mod usage;
+mod ux2_contract;
+mod ux2_e2e;
 mod ux_e2e;
 mod visible;
 mod web_keys;
@@ -534,8 +548,9 @@ fn diagnostics_panel_toggles() {
     let no_errors = Texts::new(Language::Fr).get_args(TextId::StatusErrors, &[("count", Arg::Count(0))]);
     click(&mut harness, &no_errors);
     assert!(harness.state().state.diagnostics_open);
-    // Le panneau (exemple sans diagnostic) répète les compteurs.
-    assert_eq!(harness.query_all_by_label(&no_errors).count(), 2);
+    // Exemple sans diagnostic : aucun volet (H-UI-119, lot L10), la
+    // pastille seule dit « aucune erreur ».
+    assert_eq!(harness.query_all_by_label(&no_errors).count(), 1);
     harness.state_mut().dispatch(Action::ToggleDiagnostics);
     harness.run();
     assert!(!harness.state().state.diagnostics_open);

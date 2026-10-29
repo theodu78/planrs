@@ -31,6 +31,13 @@
 //! (`ExecOn`). Glisser dans le vide : défilement, inchangé. Double-clic sur
 //! une barre : « Informations sur la tâche » ; sur un lien : boîte
 //! « Dépendance ». Échap annule le glisser.
+//!
+//! Volets (ADR-0019 D5, H-UI-110, H-UI-111, lot L4) : la zone est découpée
+//! par `panes::layout` en chronologie, vue et volet de détails ; deux
+//! séparateurs tirés (±4 points sur la frontière, hauteur écrite au
+//! relâcher, double-clic ⇒ hauteur par défaut) ; volet de détails avec
+//! en-tête « Formulaire tâche » et × ; F6 / Maj+F6 servis ici (focus
+//! d'egui donné au × d'un volet ou à la table).
 
 use egui::containers::menu::menu_style;
 use egui::scroll_area::ScrollBarVisibility;
@@ -43,16 +50,20 @@ use planrs_automation::gesture::{self, GestureKind};
 use planrs_core::TaskUid;
 
 use super::{BarDrag, FrameCtx, OVERSCAN, Pane, ViewTransient, chrome, gantt, table, timeline, timescale};
-use crate::action::{Action, DialogKind, PressMode, PressTarget, SelectOp};
+use crate::action::{Action, DialogKind, PaneOp, PressMode, PressTarget, SelectOp};
 use crate::app::OpenDocument;
 use crate::column::Column;
 use crate::geom::{self, GanttHit, MainLayout};
 use crate::i18n::TextId;
 use crate::nav::RowRef;
+use crate::panes::{self, PaneFocus, SplitDrag, Splitter};
 use crate::ribbon::spec::{CONTEXT_MENU, RibbonCmd, TIMESCALE_MENU};
 use crate::row_view::{DisplayRow, VisibleRows};
 use crate::rows::RowKind;
 use crate::selection::SelectMode;
+use crate::state::{
+    DETAILS_HEIGHT_DEFAULT, DETAILS_HEIGHT_MIN, TIMELINE_HEIGHT_DEFAULT, TIMELINE_HEIGHT_MIN,
+};
 use crate::timescale::TimeAxis;
 
 /// Largeur minimale du curseur de la barre horizontale, en points.
@@ -91,18 +102,19 @@ struct GanttInput {
 /// Affiche la vue principale dans la place restante de `ui`.
 pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) {
     let full = ui.available_rect_before_wrap();
-    // Chronologie (ADR-0017, H-UI-78) : bande fixe de 72 points en tête,
-    // sur toute la largeur ; la table et le Gantt commencent dessous et
-    // défilent sans elle.
-    let timeline_rect = (timeline::wanted(fc) && full.height() >= 2.0 * timeline::TIMELINE_H)
-        .then(|| Rect::from_min_size(full.min, vec2(full.width(), timeline::TIMELINE_H)));
-    let avail = timeline_rect.map_or(full, |r| {
-        Rect::from_min_max(pos2(full.left(), r.bottom()), full.max)
-    });
+    // Volets (ADR-0019 D5, H-UI-111) : chronologie en tête (ADR-0017,
+    // H-UI-78), vue (table et Gantt) au milieu, volet de détails en bas ;
+    // hauteurs bornées par `panes::layout` (pendant un glisser de
+    // séparateur : hauteur suivie au pointeur, écrite au relâcher).
+    let slots = pane_slots(ui, fc, view, full);
+    let timeline_rect = slots.timeline;
+    let avail = slots.view;
     let metrics = *fc.metrics;
     let layout = geom::main_layout(avail, f32::from(fc.state.effective_table_width()), &metrics);
     let Some(doc) = fc.doc else {
         view.timeline.drawn = None;
+        view.panes.drawn = None;
+        view.split_drag = None;
         ui.advance_cursor_after_rect(full);
         return;
     };
@@ -122,7 +134,7 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
     // (une colonne masquée ou rétrécie réduit le maximum).
     let table_w = layout.table_clip.width();
     view.last_table_width = table_w;
-    let columns_w: f32 = fc.state.visible_columns().map(|c| f32::from(c.width)).sum();
+    let columns_w = super::table::content_width(ui.ctx(), fc.state);
     let table_max = max_scroll_x(columns_w, table_w);
     let table_x = clamp_scroll(view.table_scroll_x, table_max);
     view.table_scroll_x = table_x;
@@ -201,7 +213,311 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
     if dx.abs() > f32::EPSILON {
         fc.actions.push(Action::ScrollGanttX(dx));
     }
+    // Volet de détails, séparateurs (après la table et le Gantt : ils
+    // l'emportent sur les bords qu'ils chevauchent), puis F6.
+    if let Some(rect) = slots.details {
+        details_pane(ui, fc, &mut view.details, rect);
+    }
+    let drawn = pane_splitters(ui, fc, view, &slots);
+    serve_focus_request(ui, view, &drawn);
+    view.panes.drawn = Some(drawn);
     ui.advance_cursor_after_rect(full);
+}
+
+/// Relevé des volets de la dernière image (H-UI-111 ; F6, tests).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PanesDrawn {
+    /// Chronologie, si affichée.
+    pub timeline: Option<Rect>,
+    /// Vue (table et Gantt).
+    pub view: Rect,
+    /// Volet de détails (en-tête compris), si affiché.
+    pub details: Option<Rect>,
+    /// Zone de saisie du séparateur sous la chronologie.
+    pub timeline_splitter: Option<Rect>,
+    /// Zone de saisie du séparateur au-dessus du volet de détails.
+    pub details_splitter: Option<Rect>,
+}
+
+/// État transitoire des volets (jamais persisté ; H-UI-111).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PanesView {
+    /// Relevé de la dernière image (`None` : vue sans document).
+    pub drawn: Option<PanesDrawn>,
+    /// F6 (`Some(false)`) ou Maj+F6 (`Some(true)`) en attente : servi à
+    /// l'image suivante, quand les volets affichés sont connus.
+    pub focus_request: Option<bool>,
+}
+
+/// Hauteur de l'en-tête du volet de détails (titre et ×), en points.
+pub const DETAILS_HEADER_H: f32 = 22.0;
+
+/// Côté du bouton × des volets, en points.
+const CLOSE_SIDE: f32 = 16.0;
+
+/// Rectangles des volets de l'image.
+#[derive(Clone, Copy, Debug)]
+struct PaneSlots {
+    /// Chronologie, si affichée.
+    timeline: Option<Rect>,
+    /// Vue (table et Gantt).
+    view: Rect,
+    /// Volet de détails, si affiché.
+    details: Option<Rect>,
+}
+
+/// Hauteur d'un volet : pendant le glisser de son séparateur, suivie au
+/// pointeur depuis la hauteur du début (bornée à `[min, part × zone]`) ;
+/// sinon la hauteur enregistrée.
+fn live_height(ui: &egui::Ui, view: &ViewTransient, splitter: Splitter, saved: u16, total: f32) -> f32 {
+    let (min, share) = match splitter {
+        Splitter::Timeline => (TIMELINE_HEIGHT_MIN, panes::TIMELINE_MAX_SHARE),
+        Splitter::Details => (DETAILS_HEIGHT_MIN, panes::DETAILS_MAX_SHARE),
+    };
+    let Some(d) = view.split_drag.filter(|d| d.splitter == splitter) else {
+        return f32::from(saved);
+    };
+    let Some(y) = ui.input(|i| i.pointer.latest_pos()).map(|p| p.y) else {
+        return d.start_height;
+    };
+    // Séparateur du bas : tirer vers le haut agrandit le volet.
+    let delta = match splitter {
+        Splitter::Timeline => y - d.start_y,
+        Splitter::Details => d.start_y - y,
+    };
+    let min = f32::from(min);
+    panes::drag_split(d.start_height, delta, min, (share * total).max(min))
+}
+
+/// Découpe `full` en volets (`panes::layout`).
+fn pane_slots(ui: &egui::Ui, fc: &FrameCtx<'_>, view: &ViewTransient, full: Rect) -> PaneSlots {
+    let total = full.height();
+    let timeline = timeline::wanted(fc)
+        .then(|| live_height(ui, view, Splitter::Timeline, fc.state.timeline_height, total));
+    let details = (fc.state.details.visible && fc.doc.is_some())
+        .then(|| live_height(ui, view, Splitter::Details, fc.state.details.height, total));
+    let h = panes::layout(total, timeline, details);
+    let view_top = full.top() + h.timeline;
+    let view_rect = Rect::from_min_size(pos2(full.left(), view_top), vec2(full.width(), h.view));
+    PaneSlots {
+        timeline: (h.timeline > 0.0).then(|| Rect::from_min_size(full.min, vec2(full.width(), h.timeline))),
+        view: view_rect,
+        details: (h.details > 0.0).then(|| {
+            Rect::from_min_size(
+                pos2(full.left(), view_rect.bottom()),
+                vec2(full.width(), h.details),
+            )
+        }),
+    }
+}
+
+/// Hauteur d'écran en points entiers pour `UiState` (non finie ⇒ 0, bornée
+/// ensuite par `App::pane_op`).
+fn height_u16(h: f32) -> u16 {
+    u16::try_from(geom::f32_to_index(h.round())).unwrap_or(u16::MAX)
+}
+
+/// Identifiant d'un séparateur de volets.
+fn splitter_id(which: Splitter) -> Id {
+    Id::unique("planrs.pane_splitter").with(which == Splitter::Details)
+}
+
+/// Identifiant du × du volet de détails (focus de F6).
+#[must_use]
+pub fn details_close_id() -> Id {
+    Id::unique("planrs.details.close")
+}
+
+/// Séparateur horizontal à l'ordonnée `y` (H-UI-111) : zone de ±4 points,
+/// curseur `ResizeVertical`, glisser suivi par `view.split_drag`,
+/// double-clic ⇒ hauteur par défaut. `height` : hauteur affichée du volet.
+fn splitter(
+    ui: &mut egui::Ui,
+    fc: &mut FrameCtx<'_>,
+    view: &mut ViewTransient,
+    which: Splitter,
+    (y, x, height): (f32, egui::Rangef, f32),
+) -> Option<Rect> {
+    if !y.is_finite() || !height.is_finite() || x.span() < 1.0 {
+        return None;
+    }
+    let grab = Rect::from_x_y_ranges(x, (y - panes::SPLITTER_GRAB)..=(y + panes::SPLITTER_GRAB));
+    let texts = fc.texts;
+    let response = ui.interact(grab, splitter_id(which), Sense::click_and_drag());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::Splitter, true, texts.get(TextId::SplitterTip))
+    });
+    let response = response.on_hover_and_drag_cursor(CursorIcon::ResizeVertical);
+    if response.hovered() || response.dragged() {
+        ui.painter().line_segment(
+            [pos2(x.min, y), pos2(x.max, y)],
+            Stroke::new(2.0, fc.palette.grid_major),
+        );
+        fc.stats.shapes = fc.stats.shapes.saturating_add(1);
+    }
+    if response.double_clicked() {
+        view.split_drag = None;
+        fc.actions.push(Action::Pane(match which {
+            Splitter::Timeline => PaneOp::SetTimelineHeight(TIMELINE_HEIGHT_DEFAULT),
+            Splitter::Details => PaneOp::SetDetailsHeight(DETAILS_HEIGHT_DEFAULT),
+        }));
+    } else if response.drag_started() {
+        let start_y = ui
+            .input(|i| i.pointer.press_origin())
+            .or_else(|| response.interact_pointer_pos())
+            .map_or(y, |p| p.y);
+        view.split_drag = Some(SplitDrag {
+            splitter: which,
+            start_height: height,
+            start_y,
+        });
+    }
+    Some(grab)
+}
+
+/// Séparateurs des volets affichés ; au relâcher d'un glisser, la hauteur
+/// bornée de l'image est écrite dans `UiState` (`PaneOp::Set*Height`).
+fn pane_splitters(
+    ui: &mut egui::Ui,
+    fc: &mut FrameCtx<'_>,
+    view: &mut ViewTransient,
+    slots: &PaneSlots,
+) -> PanesDrawn {
+    let x = slots.view.x_range();
+    let timeline_splitter = slots
+        .timeline
+        .and_then(|r| splitter(ui, fc, view, Splitter::Timeline, (r.bottom(), x, r.height())));
+    let details_splitter = slots
+        .details
+        .and_then(|r| splitter(ui, fc, view, Splitter::Details, (r.top(), x, r.height())));
+    if let Some(d) = view.split_drag
+        && !ui.input(|i| i.pointer.primary_down())
+    {
+        view.split_drag = None;
+        let op = match d.splitter {
+            Splitter::Timeline => slots
+                .timeline
+                .map(|r| PaneOp::SetTimelineHeight(height_u16(r.height()))),
+            Splitter::Details => slots
+                .details
+                .map(|r| PaneOp::SetDetailsHeight(height_u16(r.height()))),
+        };
+        if let Some(op) = op {
+            fc.actions.push(Action::Pane(op));
+        }
+    }
+    PanesDrawn {
+        timeline: slots.timeline,
+        view: slots.view,
+        details: slots.details,
+        timeline_splitter,
+        details_splitter,
+    }
+}
+
+/// Bouton × de 16 points d'un volet (chronologie, détails) : peint si
+/// `shown` ou s'il a le focus clavier ; nom accessible et info-bulle
+/// `tip`. Rend (cliqué, peint).
+pub(crate) fn close_button(
+    ui: &mut egui::Ui,
+    fc: &mut FrameCtx<'_>,
+    rect: Rect,
+    id: Id,
+    tip: TextId,
+    shown: bool,
+) -> (bool, bool) {
+    if !rect.is_finite() {
+        return (false, false);
+    }
+    let texts = fc.texts;
+    let response = ui.interact(rect, id, Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, texts.get(tip)));
+    let focused = response.has_focus();
+    let visible = shown || focused;
+    if visible {
+        let p = ui.painter();
+        if response.hovered() || focused {
+            p.rect_filled(rect, 3.0, fc.palette.grid);
+        }
+        let r = rect.shrink(4.5);
+        let stroke = Stroke::new(1.5, fc.palette.text);
+        p.line_segment([r.left_top(), r.right_bottom()], stroke);
+        p.line_segment([r.right_top(), r.left_bottom()], stroke);
+        fc.stats.shapes = fc.stats.shapes.saturating_add(3);
+    }
+    let response = response.on_hover_text(texts.get(tip));
+    (response.clicked(), visible)
+}
+
+/// Volet de détails dans `rect` (H-UI-112, cadre du lot L4) : en-tête de 22
+/// points « Formulaire tâche » et ×, puis le contenu (`details::show`).
+fn details_pane(
+    ui: &mut egui::Ui,
+    fc: &mut FrameCtx<'_>,
+    details: &mut Option<super::details::DetailsTransient>,
+    rect: Rect,
+) {
+    if !rect.is_finite() || rect.height() < 1.0 {
+        return;
+    }
+    let header = Rect::from_min_size(rect.min, vec2(rect.width(), DETAILS_HEADER_H.min(rect.height())));
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(header, 0.0, fc.palette.header_bg);
+    painter.line_segment(
+        [rect.left_top(), rect.right_top()],
+        Stroke::new(1.0, fc.palette.grid_major),
+    );
+    painter.text(
+        pos2(header.left() + 8.0, header.center().y),
+        egui::Align2::LEFT_CENTER,
+        fc.texts.get(TextId::DetailsTitle),
+        egui::FontId::proportional(12.0),
+        fc.palette.text_strong,
+    );
+    fc.stats.shapes = fc.stats.shapes.saturating_add(3);
+    let close = Rect::from_center_size(
+        pos2(header.right() - 6.0 - CLOSE_SIDE * 0.5, header.center().y),
+        vec2(CLOSE_SIDE, CLOSE_SIDE),
+    );
+    let (clicked, _) = close_button(ui, fc, close, details_close_id(), TextId::DetailsCloseTip, true);
+    if clicked {
+        fc.actions.push(Action::Pane(PaneOp::ShowDetails(false)));
+    }
+    let body = Rect::from_min_max(pos2(rect.left(), header.bottom()), rect.max);
+    super::details::show(ui, fc, details, body);
+}
+
+/// F6 / Maj+F6 en attente (H-UI-111) : volet courant lu au focus d'egui
+/// (rectangle du widget focalisé), clavier donné au volet suivant ou
+/// précédent : table (focus de la table), chronologie ou détails (leur ×).
+fn serve_focus_request(ui: &egui::Ui, view: &mut ViewTransient, drawn: &PanesDrawn) {
+    let Some(back) = view.panes.focus_request.take() else {
+        return;
+    };
+    let ctx = ui.ctx();
+    let current = ctx
+        .memory(egui::Memory::focused)
+        .and_then(|id| ctx.read_response(id))
+        .map_or(PaneFocus::Table, |r| {
+            let c = r.rect.center();
+            if drawn.timeline.is_some_and(|t| t.contains(c)) {
+                PaneFocus::Timeline
+            } else if drawn.details.is_some_and(|d| d.contains(c)) {
+                PaneFocus::Details
+            } else {
+                PaneFocus::Table
+            }
+        });
+    let target = panes::next(current, (drawn.timeline.is_some(), drawn.details.is_some()), back);
+    match target {
+        PaneFocus::Table => {
+            view.focus = Pane::Table;
+            ctx.memory_mut(|m| m.request_focus(table::table_id()));
+        }
+        PaneFocus::Timeline => ctx.memory_mut(|m| m.request_focus(timeline::close_id())),
+        PaneFocus::Details => ctx.memory_mut(|m| m.request_focus(details_close_id())),
+    }
+    ctx.request_repaint();
 }
 
 /// Saisie ouverte (F2, frappe, double-clic) : sa ligne, si elle n'est pas
@@ -531,7 +847,7 @@ fn autoscroll(ui: &egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient, la
             p.x - origin.x,
             threshold,
         );
-        let columns_w: f32 = fc.state.visible_columns().map(|c| f32::from(c.width)).sum();
+        let columns_w = super::table::content_width(ui.ctx(), fc.state);
         let max = max_scroll_x(columns_w, clip.width());
         if let Some(x) =
             crate::nav::autoscroll_offset(view.table_scroll_x, speed, AUTOSCROLL_COLUMN_W, dt, max)

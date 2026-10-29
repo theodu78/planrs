@@ -224,7 +224,9 @@ fn ui_edit_invalid_stays_in_edit() {
 fn ui_edit_focus_loss_commits_before_document_replaced() {
     let (mut harness, _, uid) = demo_cell(Column::Duration);
     assert!(!harness.state().document.as_ref().unwrap().is_dirty());
-    type_text(&mut harness, "10j");
+    // Valeur différente de la durée en place (R-260 d : la même valeur ne
+    // modifierait rien).
+    type_text(&mut harness, "11j");
     assert!(harness.state().view().edit.editing.is_some());
     // Fichier → Ouvrir l'exemple (bouton de la barre d'outils jusqu'au lot
     // L5) : le clic sur le menu retire déjà le focus de la cellule.
@@ -239,7 +241,7 @@ fn ui_edit_focus_loss_commits_before_document_replaced() {
     let doc = app.document.as_ref().unwrap();
     assert_eq!(doc.opening, 1, "le document ne doit pas être remplacé");
     assert!(doc.is_dirty());
-    assert_eq!(schedule_of(app, uid).duration, Minutes::new(10 * 480));
+    assert_eq!(schedule_of(app, uid).duration, Minutes::new(11 * 480));
 }
 
 #[test]

@@ -14,6 +14,7 @@
 
 mod assignment;
 mod baseline;
+pub mod custom;
 mod extras;
 mod leveling;
 mod link;
@@ -22,12 +23,15 @@ mod resource;
 mod task;
 mod validate;
 
+use std::collections::BTreeMap;
+
 use serde::de::{Deserializer, Error as _};
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 
 pub use assignment::{Assignment, WorkContour};
 pub use baseline::{AssignmentBaseline, ResourceBaseline, TaskBaseline};
+pub use custom::{CustomFieldDef, CustomFieldId, CustomKind, CustomValue, CustomValueError};
 pub use extras::{ExtraEntry, Extras};
 pub use leveling::LevelingDelay;
 pub use link::{Link, LinkType};
@@ -120,6 +124,9 @@ pub struct Project {
     pub resources: Arena<ResourceUid, Resource>,
     /// Affectations.
     pub assignments: Arena<AssignmentUid, Assignment>,
+    /// Définitions des champs personnalisés (R-263) : alias des champs
+    /// renommés ; un champ sans entrée garde son nom canonique.
+    pub custom_fields: BTreeMap<CustomFieldId, CustomFieldDef>,
     /// Données hors modèle.
     pub extras: Extras,
 }
@@ -167,6 +174,7 @@ impl Project {
             tasks: Arena::new(),
             resources: Arena::new(),
             assignments: Arena::new(),
+            custom_fields: BTreeMap::new(),
             extras: Extras::new(),
         }
     }
@@ -210,6 +218,9 @@ struct ProjectData {
     tasks: Arena<TaskUid, Task>,
     resources: Arena<ResourceUid, Resource>,
     assignments: Arena<AssignmentUid, Assignment>,
+    /// Absent d'un projet enregistré avant L8 (R-263) : aucun.
+    #[serde(default)]
+    custom_fields: BTreeMap<CustomFieldId, CustomFieldDef>,
     extras: Extras,
 }
 
@@ -229,6 +240,8 @@ struct ProjectDataRef<'a> {
     tasks: &'a Arena<TaskUid, Task>,
     resources: &'a Arena<ResourceUid, Resource>,
     assignments: &'a Arena<AssignmentUid, Assignment>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    custom_fields: &'a BTreeMap<CustomFieldId, CustomFieldDef>,
     extras: &'a Extras,
 }
 
@@ -264,6 +277,7 @@ impl TryFrom<ProjectData> for Project {
             tasks: d.tasks,
             resources: d.resources,
             assignments: d.assignments,
+            custom_fields: d.custom_fields,
             extras: d.extras,
         })
     }
@@ -284,6 +298,7 @@ impl Serialize for Project {
             tasks: &self.tasks,
             resources: &self.resources,
             assignments: &self.assignments,
+            custom_fields: &self.custom_fields,
             extras: &self.extras,
         }
         .serialize(serializer)

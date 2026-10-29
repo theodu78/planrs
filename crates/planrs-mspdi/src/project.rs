@@ -17,6 +17,7 @@ use crate::ReadOptions;
 use crate::assignment;
 use crate::calendar;
 use crate::codes::{self, DurationCode};
+use crate::custom;
 use crate::diag::{ImportCode, Sink};
 use crate::extras::{self, ORIGIN};
 use crate::fields::Fields;
@@ -87,8 +88,25 @@ pub(crate) fn build(raw: &RawDocument<'_>, options: &ReadOptions, sink: &mut Sin
         ..RecordedSchedule::default()
     };
 
+    // R-265 : champs personnalisés étrangers (définis par une formule, une
+    // table de choix…) d'après le conteneur des définitions : leurs valeurs
+    // restent en `Extras`.
+    let containers: Vec<&str> = raw
+        .fields
+        .iter()
+        .filter(|e| e.name == custom::CONTAINER)
+        .filter_map(|e| e.raw)
+        .collect();
+    let foreign = custom::foreign_in_payloads(&containers);
     let mut replaced = task::Replaced::default();
-    task::import(&raw.tasks, &mut project, &mut recorded, &mut replaced, sink);
+    task::import(
+        &raw.tasks,
+        &mut project,
+        &mut recorded,
+        &mut replaced,
+        &foreign,
+        sink,
+    );
     honor_constraints_off(&f, &project, sink);
     project.resources = resource::import(
         &raw.resources,
@@ -112,6 +130,7 @@ pub(crate) fn build(raw: &RawDocument<'_>, options: &ReadOptions, sink: &mut Sin
     }
     project.assignments = assignments;
     project.extras = project_extras(raw, &project);
+    custom::lift_container(&mut project.extras, &mut project.custom_fields, &BTreeSet::new());
     let mut dropped_computed = BTreeMap::new();
     if dropped_timephased > 0 {
         dropped_computed.insert("TimephasedData".to_owned(), dropped_timephased);

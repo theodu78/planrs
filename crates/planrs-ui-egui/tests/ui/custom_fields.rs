@@ -605,3 +605,39 @@ fn h_ui_118_paste_fill_custom() {
         Some(CustomValue::Text("GO".to_owned()))
     );
 }
+
+/// H-UI-114 (relecture finale ux2, C6) : Texte1 renommé « Lot », « lot »
+/// puis Entrée ⇒ « Lot (Texte1) » inséré (correspondance en début de
+/// titre), pas « Pilotée par l'effort » (« pi-lot-ée », premier du
+/// catalogue).
+#[test]
+fn h_ui_114_picker_best_match_on_enter() {
+    let mut harness = p_harness();
+    let text1 = Column::Custom(CustomFieldId::TEXT1);
+    exec(
+        &mut harness,
+        &serde_json::json!([{ "op": "custom_field.rename", "field": "text1", "alias": "Lot" }]),
+    );
+    let effort_before = harness.state().state.column(Column::EffortDriven).is_some();
+    assert!(harness.state().state.column(text1).is_none());
+    harness
+        .state_mut()
+        .dispatch(Action::Column(ColumnOp::OpenPicker { at: 2 }));
+    harness.run();
+    type_text(&mut harness, "lot");
+    let custom = CustomCatalog::of(project(harness.state()));
+    let list = choices_in("lot", Language::Fr, &custom);
+    assert!(list.contains(&Column::EffortDriven), "{list:?}");
+    harness.key_press(Key::Enter);
+    harness.run();
+    let state = &harness.state().state;
+    assert!(state.column(text1).is_some(), "Lot (Texte1) non inséré");
+    assert_eq!(state.column(Column::EffortDriven).is_some(), effort_before);
+    // Fonction pure : rangs de la meilleure correspondance.
+    let best = planrs_ui_egui::field::best_choice("lot", Language::Fr, &custom, &list);
+    assert_eq!(list[best], text1);
+    assert_eq!(
+        planrs_ui_egui::field::best_choice("", Language::Fr, &custom, &list),
+        0
+    );
+}

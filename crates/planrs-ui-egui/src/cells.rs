@@ -861,6 +861,25 @@ fn count_arg(n: usize) -> Arg<'static> {
     Arg::Count(i64::try_from(n).unwrap_or(i64::MAX))
 }
 
+/// Colonne de départ d'un collage de cellules sur des lignes entières
+/// (R-261, relecture finale ux2, C7) : la colonne active, sauf l'ID (jamais
+/// modifiable) ; alors le Nom s'il est affiché, sinon la première colonne
+/// affichée après l'ID.
+#[must_use]
+pub fn rows_paste_column(active: Column, visible: &[Column]) -> Column {
+    if active != Column::Id {
+        return active;
+    }
+    if visible.contains(&Column::Name) {
+        return Column::Name;
+    }
+    visible
+        .iter()
+        .copied()
+        .find(|c| *c != Column::Id)
+        .unwrap_or(active)
+}
+
 impl crate::App {
     /// Bloc de la sélection de la table (lignes affichées × colonnes
     /// visibles), `None` sans document.
@@ -1018,14 +1037,17 @@ impl crate::App {
         let rows = self.visible_rows();
         let block = self.table_block().map(|mut block| {
             // Lignes entières (R-261) : le collage de cellules part de la
-            // cellule active seule (bloc d'une cellule).
+            // cellule active seule (bloc d'une cellule) ; jamais de l'ID,
+            // jamais modifiable (ligne choisie par son N°, relecture
+            // finale ux2, C7) : le Nom, ou à défaut la première colonne
+            // affichée après l'ID.
             if block.kind == SelectionKind::Rows {
                 let active = match (block.active.0, rows) {
                     (crate::nav::RowRef::Item(uid), Some(rows)) => rows.display_of(uid),
                     _ => None,
                 };
                 block.rows = active.map_or_else(Vec::new, |d| vec![d]);
-                block.columns = vec![block.active.1];
+                block.columns = vec![rows_paste_column(block.active.1, &visible)];
                 block.kind = SelectionKind::Cells;
             }
             block

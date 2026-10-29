@@ -77,8 +77,10 @@ pub const TIMELINE_HEIGHT_DEFAULT: u16 = 72;
 /// Hauteur minimale de la chronologie, en points (H-UI-111).
 pub const TIMELINE_HEIGHT_MIN: u16 = 48;
 
-/// Hauteur par défaut du volet de détails, en points (H-UI-111).
-pub const DETAILS_HEIGHT_DEFAULT: u16 = 220;
+/// Hauteur par défaut du volet de détails, en points (H-UI-111) : 360,
+/// pour que les grilles du Formulaire tâche soient à l'écran dès
+/// l'ouverture en 1 440 × 900 (relecture finale ux2, C5).
+pub const DETAILS_HEIGHT_DEFAULT: u16 = 360;
 
 /// Hauteur minimale du volet de détails, en points (H-UI-111).
 pub const DETAILS_HEIGHT_MIN: u16 = 120;

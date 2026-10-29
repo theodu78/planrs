@@ -534,6 +534,71 @@ pub fn choices_in(query: &str, lang: Language, custom: &CustomCatalog) -> Vec<Co
     ordered(&search_in(query, lang, custom))
 }
 
+/// Rang, dans `list` (= [`choices_in`] pour `query`), de l'entrée à mettre
+/// en surbrillance quand la recherche change (H-UI-114, relecture finale
+/// ux2, C6) : la **meilleure** correspondance, et non la première de
+/// l'ordre du catalogue. Classement : titre ou alias égal à la recherche,
+/// puis qui commence par elle, puis qui la contient en début de mot, puis
+/// simple sous-chaîne ; à égalité, la première de la liste. Recherche
+/// vide : 0. La liste reste affichée par catégorie (↑/↓ la parcourent dans
+/// cet ordre).
+#[must_use]
+pub fn best_choice(query: &str, lang: Language, custom: &CustomCatalog, list: &[Column]) -> usize {
+    let needle = fold(query.trim());
+    if needle.is_empty() {
+        return 0;
+    }
+    TEXTS.with(|cell| {
+        let mut cache = cell.borrow_mut();
+        let texts = match cache.take() {
+            Some(texts) if texts.language() == lang => texts,
+            _ => Texts::new(lang),
+        };
+        let best = list
+            .iter()
+            .enumerate()
+            .filter_map(|(i, column)| {
+                let rank = match column {
+                    Column::Custom(id) => {
+                        let alias = custom.aliases.get(id).map(String::as_str);
+                        let title = custom_title(*id, &texts, alias);
+                        let by_title = match_rank(&fold(&title), &needle);
+                        let by_alias = alias.and_then(|a| match_rank(&fold(a), &needle));
+                        by_title.into_iter().chain(by_alias).min()
+                    }
+                    _ => describe(*column).and_then(|d| match_rank(&fold(&texts.get(d.title)), &needle)),
+                };
+                rank.map(|rank| (rank, i))
+            })
+            .min()
+            .map_or(0, |(_, i)| i);
+        *cache = Some(texts);
+        best
+    })
+}
+
+/// Qualité d'une correspondance de `needle` dans `title` (textes repliés,
+/// [`fold`]) : 0 égal, 1 début du titre, 2 début d'un mot, 3 ailleurs ;
+/// `None` : absent.
+fn match_rank(title: &str, needle: &str) -> Option<u8> {
+    if title == needle {
+        return Some(0);
+    }
+    if title.starts_with(needle) {
+        return Some(1);
+    }
+    let mut rank = None;
+    for (at, _) in title.match_indices(needle) {
+        let word_start = title
+            .get(..at)
+            .and_then(|head| head.chars().next_back())
+            .is_none_or(|c| !c.is_alphanumeric());
+        let r = if word_start { 2 } else { 3 };
+        rank = Some(rank.map_or(r, |old: u8| old.min(r)));
+    }
+    rank
+}
+
 /// Champs trouvés `found` non grisés, par catégorie puis dans leur ordre.
 fn ordered(found: &[Column]) -> Vec<Column> {
     let mut out = Vec::with_capacity(found.len());

@@ -623,3 +623,40 @@ fn r260_link_drag_already_linked_info() {
         Err(GestureError::AlreadyLinked)
     );
 }
+
+/// R-261 (relecture finale ux2, C7 ; constat 2 du lot L11) : ligne 6
+/// choisie par son N° (cellule active dans l'ID), texte collé ⇒ écrit dans
+/// le Nom, jamais sauté sur l'ID non modifiable ; une entrée.
+#[test]
+fn r261_rows_by_id_paste_not_skipped() {
+    let mut harness = p_harness();
+    press(
+        &mut harness,
+        6,
+        Column::Id,
+        PressTarget::RowHeader,
+        PressMode::Replace,
+    );
+    assert_eq!(block(harness.state()).active.1, Column::Id);
+    paste(&mut harness, "Gros œuvre");
+    let app = harness.state();
+    let project = app.document.as_ref().unwrap().project();
+    assert_eq!(project.tasks.at(5).unwrap().name, "Gros œuvre");
+    assert_eq!(history_len(app), 1);
+    assert_eq!(task_count(app), 7, "aucune tâche insérée");
+    let skipped = fr_count(TextId::CellsSkipped, 1);
+    assert!(
+        app.messages().iter().all(|m| m.text != skipped),
+        "{:?}",
+        app.messages()
+    );
+    // Fonction pure : Nom, sinon première colonne après l'ID.
+    use planrs_ui_egui::cells::rows_paste_column;
+    let all = [Column::Id, Column::Name, Column::Duration];
+    assert_eq!(rows_paste_column(Column::Id, &all), Column::Name);
+    assert_eq!(rows_paste_column(Column::Duration, &all), Column::Duration);
+    assert_eq!(
+        rows_paste_column(Column::Id, &[Column::Id, Column::Duration]),
+        Column::Duration
+    );
+}

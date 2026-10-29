@@ -742,3 +742,31 @@ fn h_ui_113_hide_commits_draft() {
     assert!(!details(app).errors.is_empty());
     assert_eq!(history_len(app), 1);
 }
+
+/// H-UI-112 (relecture finale ux2, C5 ; constat 1 du lot L11) : à la
+/// hauteur par défaut, dans une fenêtre de 1 440 × 900, la première ligne
+/// des deux grilles de la forme par défaut est entièrement dans le volet
+/// (pas de défilement ni de séparateur à tirer).
+#[test]
+fn h_ui_112_default_height_shows_grids() {
+    let mut harness = open(DetailsForm::default());
+    dispatch(
+        &mut harness,
+        Action::Pane(PaneOp::SetDetailsHeight(
+            planrs_ui_egui::state::DETAILS_HEIGHT_DEFAULT,
+        )),
+    );
+    select(&mut harness, Some(11));
+    let pane = harness.state().view().panes.drawn.unwrap().details.unwrap();
+    for (grid, column) in [
+        (TextId::DetailsResources, TextId::DetailsColName),
+        (TextId::DetailsPredecessors, TextId::DetailsColId),
+    ] {
+        let label = cell(grid, column, 1);
+        let rect = harness.get_by_label(&label).rect();
+        assert!(
+            rect.top() >= pane.top() && rect.bottom() <= pane.bottom(),
+            "{label} : {rect:?} hors du volet {pane:?}"
+        );
+    }
+}

@@ -329,7 +329,7 @@ fn h_ui_111_splitter_bounds() {
 }
 
 /// H-UI-111 : double-clic sur un séparateur ⇒ hauteur par défaut (72 et
-/// 220 points).
+/// 360 points, bornée à la fenêtre).
 #[test]
 fn h_ui_111_double_click_resets() {
     let mut harness = p();
@@ -348,13 +348,14 @@ fn h_ui_111_double_click_resets() {
     let g = grip(panes(&harness).details_splitter);
     double_click(&mut harness, g);
     assert_eq!(harness.state().state.details.height, DETAILS_HEIGHT_DEFAULT);
-    assert!((panes(&harness).details.unwrap().height() - 220.0).abs() < 0.01);
+    assert!((panes(&harness).details.unwrap().height() - details_default(&harness)).abs() < 0.01);
     assert_eq!(history_len(harness.state()), 0);
 }
 
 /// H-UI-111, H-UI-112 (cadre) : volet de détails fermé par défaut ; ouvert
-/// ⇒ 220 points en bas, en-tête « Formulaire tâche » et × ; séparateur tiré
-/// de 60 points vers le haut ⇒ 280 ; × ⇒ fermé, vue rendue.
+/// ⇒ hauteur par défaut (360 points, bornée à la fenêtre) en bas, en-tête
+/// « Formulaire tâche » et × ; séparateur tiré de 60 points vers le bas ⇒
+/// 60 de moins ; × ⇒ fermé, vue rendue.
 #[test]
 fn h_ui_111_details_splitter() {
     let mut harness = p();
@@ -364,7 +365,8 @@ fn h_ui_111_details_splitter() {
     dispatch(&mut harness, Action::Pane(PaneOp::ShowDetails(true)));
     let d = panes(&harness);
     let details = d.details.expect("volet affiché");
-    assert!((details.height() - 220.0).abs() < 0.01, "{d:?}");
+    let start = details_default(&harness);
+    assert!((details.height() - start).abs() < 0.01, "{d:?}");
     assert!((details.top() - d.view.bottom()).abs() < 0.01);
     assert!((closed.view.bottom() - details.bottom()).abs() < 0.01);
     assert!(harness.query_by_label(&fr(TextId::DetailsCloseTip)).is_some());
@@ -386,9 +388,10 @@ fn h_ui_111_details_splitter() {
         harness.output().platform_output.cursor_icon,
         CursorIcon::ResizeVertical
     );
-    drag(&mut harness, g, g - vec2(0.0, 60.0));
-    assert_eq!(harness.state().state.details.height, 280);
-    assert!((panes(&harness).details.unwrap().height() - 280.0).abs() < 0.01);
+    drag(&mut harness, g, g + vec2(0.0, 60.0));
+    let want = start - 60.0;
+    assert_eq!(f32::from(harness.state().state.details.height), want);
+    assert!((panes(&harness).details.unwrap().height() - want).abs() < 0.01);
     // Forme et hauteur gardées après relance.
     dispatch(
         &mut harness,
@@ -594,4 +597,14 @@ proptest! {
         prop_assert!(warning.is_none(), "{warning:?}");
         prop_assert_eq!(&read, state);
     }
+}
+
+/// Hauteur affichée du volet de détails à sa hauteur par défaut dans la
+/// zone du harnais (bornée par `panes::layout`).
+fn details_default(harness: &Harness<'static, App>) -> f32 {
+    let d = panes(harness);
+    let total =
+        d.view.height() + d.details.map_or(0.0, |r| r.height()) + d.timeline.map_or(0.0, |r| r.height());
+    let timeline = d.timeline.map(|r| r.height());
+    planrs_ui_egui::panes::layout(total, timeline, Some(f32::from(DETAILS_HEIGHT_DEFAULT))).details
 }

@@ -12,8 +12,8 @@
 use crate::action::{Action, ColumnOp};
 use crate::column::Column;
 use crate::field::{
-    Availability, CustomCatalog, FieldCategory, FieldPicker, category, choices_in, custom_title, describe,
-    search_in,
+    Availability, CustomCatalog, FieldCategory, FieldPicker, best_choice, category, choices_in, custom_title,
+    describe, search_in,
 };
 use crate::i18n::{TextId, Texts};
 use crate::view::FrameCtx;
@@ -115,7 +115,9 @@ fn show_picker(ctx: &egui::Context, fc: &FrameCtx<'_>, picker: &mut FieldPicker)
             response.request_focus();
         }
         if picker.query != before {
-            picker.highlighted = 0;
+            // Meilleure correspondance en surbrillance (Entrée l'insère).
+            let list = choices_in(&picker.query, lang, &custom);
+            picker.highlighted = best_choice(&picker.query, lang, &custom, &list);
         }
         ui.separator();
         egui::ScrollArea::vertical()

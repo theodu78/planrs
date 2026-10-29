@@ -401,14 +401,16 @@ fn e2e_daily_j8() {
             "Peinture"
         ]
     );
+    // Seconde passe UX (H-UI-104) : compte rendu toujours en information,
+    // liens non repris dans leur propre phrase.
     let expected = [
         label(TextId::PasteReportTasks, &[("count", Arg::Count(2))]),
-        label(TextId::PasteReportLinks, &[("count", Arg::Count(2))]),
+        label(TextId::PasteLinksDropped, &[("count", Arg::Count(2))]),
     ]
-    .join(", ");
+    .join(". ");
     assert_eq!(
         titled(app, TextId::PasteReportTitle),
-        Some((Severity::Warning, expected))
+        Some((Severity::Info, expected))
     );
     assert_eq!(history(app), (1, 0));
 

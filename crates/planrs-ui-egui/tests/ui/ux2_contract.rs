@@ -101,12 +101,17 @@ pub fn check_keymap_entry(i: usize) {
             assert_eq!(texts(harness.state()), Vec::<String>::new());
             assert_eq!(harness.state().document.as_ref().unwrap().generation(), 0);
         }
-        Binding::Ui(
-            UiBinding::FillRight
-            | UiBinding::FieldSettings
-            | UiBinding::FocusNextPane
-            | UiBinding::FocusPreviousPane,
-        ) => {
+        Binding::Ui(UiBinding::FillRight) => {
+            // Servi par le lot L2 (R-258 amendée) : cellule du Nom, à droite
+            // de l'ID (jamais une source) ⇒ rien à recopier, aucun message.
+            assert_eq!(context, KeyContext::Table);
+            let mut harness = demo_on_row(3);
+            press(&mut harness, i);
+            let app = harness.state();
+            assert_eq!(texts(app), Vec::<String>::new(), "{shortcut:?}");
+            assert_eq!(app.document.as_ref().unwrap().generation(), 0);
+        }
+        Binding::Ui(UiBinding::FieldSettings | UiBinding::FocusNextPane | UiBinding::FocusPreviousPane) => {
             let mut harness = demo_on_row(3);
             let filtered = harness.state().task_view().clone();
             press(&mut harness, i);

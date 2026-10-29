@@ -111,7 +111,25 @@ pub fn check_keymap_entry(i: usize) {
             assert_eq!(texts(app), Vec::<String>::new(), "{shortcut:?}");
             assert_eq!(app.document.as_ref().unwrap().generation(), 0);
         }
-        Binding::Ui(UiBinding::FieldSettings | UiBinding::FocusNextPane | UiBinding::FocusPreviousPane) => {
+        Binding::Ui(UiBinding::FocusNextPane | UiBinding::FocusPreviousPane) => {
+            // Servi par le lot L4 (H-UI-111) : clavier au volet suivant ou
+            // précédent (chronologie affichée), aucun message.
+            assert_eq!(context, KeyContext::Document);
+            let mut harness = demo_on_row(3);
+            press(&mut harness, i);
+            harness.run();
+            let app = harness.state();
+            assert_eq!(texts(app), Vec::<String>::new(), "{shortcut:?}");
+            assert_eq!(app.document.as_ref().unwrap().generation(), 0);
+            assert!(app.view().edit.editing.is_none());
+            assert!(
+                harness
+                    .ctx
+                    .memory(|m| m.has_focus(planrs_ui_egui::view::timeline::close_id())),
+                "{shortcut:?}"
+            );
+        }
+        Binding::Ui(UiBinding::FieldSettings) => {
             let mut harness = demo_on_row(3);
             let filtered = harness.state().task_view().clone();
             press(&mut harness, i);

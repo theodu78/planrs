@@ -1,5 +1,7 @@
-//! Chronologie à l'écran (ADR-0017 D7, H-UI-78 à H-UI-81) : frise de 72 px
-//! au-dessus de la table et du Gantt, disposée par
+//! Chronologie à l'écran (ADR-0017 D7, H-UI-78 à H-UI-81, H-UI-110,
+//! H-UI-111) : frise au-dessus de la table et du Gantt (72 points par
+//! défaut, hauteur `UiState::timeline_height` réglée par le séparateur du
+//! volet), disposée par
 //! `planrs_automation::timeline::input` puis `planrs_render::timeline::layout`
 //! (aucune date calculée ici, règle 3), mise en cache.
 //!
@@ -20,11 +22,20 @@
 //! - **Clics** : une zone par barre et par losange (`widget_info` au nom de
 //!   la tâche) : clic ⇒ `Timeline(Activate(uid))` (sélection et défilement) ;
 //!   clic droit ⇒ menu « Retirer de la chronologie »
-//!   (`Timeline(Remove(uid))`). Clic ailleurs : rien.
+//!   (`Timeline(Remove(uid))`) et « Masquer la chronologie ». Clic ailleurs :
+//!   rien ; clic droit ailleurs ⇒ « Masquer la chronologie » (H-UI-110).
+//! - **Fermer (H-UI-110)** : × de 16 points au coin haut droit, peint au
+//!   survol de la frise et au focus clavier (F6) ; menu et × poussent
+//!   `Timeline(SetVisible(false))`, comme la case Affichage → Chronologie.
+//! - **Hauteur (H-UI-111)** : la disposition du moteur de rendu a la
+//!   hauteur fixe de 72 px (trois lignes) ; plus haute, la frise est
+//!   centrée dans le volet et son fond étendu ; plus basse (48 points au
+//!   moins), elle est réduite à l'échelle (disposition faite pour la
+//!   largeur agrandie d'autant, textes compris).
 
 use egui::{Color32, FontFamily, Id, Rect, Sense, Shape, Stroke, pos2};
 use planrs_core::{Moment, TaskUid};
-use planrs_render::geometry::Item;
+use planrs_render::geometry::{Class, Item, Prim};
 use planrs_render::timeline::{TimelineLayout, TimelineShape};
 
 use super::FrameCtx;
@@ -38,9 +49,34 @@ use crate::timescale::TimeAxis;
 /// (H-UI-79, H-UI-81) : ajouter, retirer.
 pub const CONTEXT_LABELS: (TextId, TextId) = (TextId::TimelineAdd, TextId::TimelineRemove);
 
-/// Hauteur de la frise, en points (72, H-UI-78 ;
-/// `planrs_render::timeline::TIMELINE_HEIGHT16`).
+/// Hauteur par défaut de la frise et hauteur de sa disposition, en points
+/// (72, H-UI-78 ; `planrs_render::timeline::TIMELINE_HEIGHT16`).
 pub const TIMELINE_H: f32 = 72.0;
+
+/// Côté du bouton × de la frise, en points (H-UI-110).
+const CLOSE_SIDE: f32 = 16.0;
+
+/// Identifiant du × de la frise (focus de F6, H-UI-111).
+#[must_use]
+pub fn close_id() -> Id {
+    Id::unique("planrs.timeline.close")
+}
+
+/// Mise à l'échelle de la frise dans un volet de hauteur `height` :
+/// `(échelle, décalage vertical)` ; échelle ≤ 1 (volet plus bas que la
+/// disposition), décalage ≥ 0 (volet plus haut : disposition centrée).
+/// Hauteur non finie ou nulle ⇒ `(1, 0)`.
+#[must_use]
+pub fn fit(height: f32) -> (f32, f32) {
+    if !height.is_finite() || height <= 0.0 {
+        return (1.0, 0.0);
+    }
+    if height < TIMELINE_H {
+        (height / TIMELINE_H, 0.0)
+    } else {
+        (1.0, ((height - TIMELINE_H) * 0.5).floor())
+    }
+}
 
 /// Seizièmes de pixel par point (échelle de la frise à l'écran).
 const SUB: f32 = 16.0;
@@ -58,8 +94,10 @@ pub struct TimelineKey {
     /// liste des tâches de la frise (seule partie du style lue par la
     /// disposition).
     pub style: u64,
-    /// Largeur, en pixels entiers.
+    /// Largeur de la disposition, en pixels entiers.
     pub width_px: u32,
+    /// Hauteur du volet, en pixels entiers (fond étendu).
+    pub height_px: u32,
     /// Langue des textes.
     pub language: Language,
 }
@@ -76,6 +114,8 @@ pub struct TimelineDrawn {
     pub elements: Vec<(TaskUid, Rect)>,
     /// Rectangles peints (fond, barres), dans l'ordre de dessin.
     pub painted: Vec<Rect>,
+    /// Bouton × peint (survol de la frise ou focus clavier, H-UI-110).
+    pub close: Option<Rect>,
 }
 
 /// État transitoire de la frise (jamais persisté).
@@ -127,20 +167,21 @@ const fn engine_language(lang: Language) -> planrs_automation::text::Language {
     }
 }
 
-/// Rectangle d'écran d'un rectangle de la frise (1/16 px, origine `o`).
-fn screen_rect(origin: egui::Pos2, rect16: [i64; 4]) -> Rect {
-    let px = |v: i64| i64_to_f32(v) / SUB;
+/// Rectangle d'écran d'un rectangle de la frise (1/16 px, origine `o`,
+/// échelle `scale` points par pixel de la disposition).
+fn screen_rect(origin: egui::Pos2, scale: f32, rect16: [i64; 4]) -> Rect {
+    let px = |v: i64| i64_to_f32(v) / SUB * scale;
     let [left, top, width, height] = rect16.map(px);
     Rect::from_min_size(pos2(origin.x + left, origin.y + top), egui::vec2(width, height))
 }
 
 /// Zones cliquables de la disposition : barre ou losange de chaque tâche.
-fn elements(layout: &TimelineLayout, o: egui::Pos2) -> Vec<(TaskUid, Rect)> {
+fn elements(layout: &TimelineLayout, o: egui::Pos2, scale: f32) -> Vec<(TaskUid, Rect)> {
     layout
         .shapes
         .iter()
         .filter_map(|s| match s {
-            TimelineShape::Bar { uid, rect16, .. } => Some((*uid, screen_rect(o, *rect16))),
+            TimelineShape::Bar { uid, rect16, .. } => Some((*uid, screen_rect(o, scale, *rect16))),
             TimelineShape::Diamond {
                 uid,
                 center16,
@@ -152,6 +193,7 @@ fn elements(layout: &TimelineLayout, o: egui::Pos2) -> Vec<(TaskUid, Rect)> {
                     *uid,
                     screen_rect(
                         o,
+                        scale,
                         [
                             center16.0.saturating_sub(*half16),
                             center16.1.saturating_sub(*half16),
@@ -177,25 +219,29 @@ fn axis_x16(layout: &TimelineLayout) -> Option<(i64, i64)> {
 
 /// Partie visible du Gantt sur la frise (H-UI-81) : projection pixel →
 /// pixel. `gantt` : axe de l'écran et rectangle visible du Gantt ;
-/// `bounds` : début et fin du projet (du moteur) ; `axis` : extrémités de
-/// l'axe de la frise (1/16 px depuis `rect.left()`). `None` si le projet
-/// est de durée nulle à l'écran ou si la partie visible tombe hors de la
-/// frise.
+/// `bounds` : début et fin du projet (du moteur) ; `axis` : abscisses
+/// d'écran des extrémités de l'axe de la frise. `None` si le projet est de
+/// durée nulle à l'écran ou si la partie visible tombe hors de la frise.
 #[must_use]
 pub fn visible_window(
     rect: Rect,
-    axis: (i64, i64),
+    axis: (f32, f32),
     gantt: (&TimeAxis, Rect),
     bounds: (Moment, Moment),
 ) -> Option<Rect> {
     let (time_axis, clip) = gantt;
     let (gs, gf) = (time_axis.x(bounds.0), time_axis.x(bounds.1));
     let span = gf - gs;
-    if !span.is_finite() || span < 1.0 || !rect.is_finite() || !clip.is_finite() {
+    let (fx0, fx1) = axis;
+    if !span.is_finite()
+        || span < 1.0
+        || !rect.is_finite()
+        || !clip.is_finite()
+        || !fx0.is_finite()
+        || !fx1.is_finite()
+    {
         return None;
     }
-    let fx0 = rect.left() + i64_to_f32(axis.0) / SUB;
-    let fx1 = rect.left() + i64_to_f32(axis.1) / SUB;
     let k = (fx1 - fx0) / span;
     let project = |x: f32| (fx0 + (x - gs) * k).clamp(rect.left(), rect.right());
     let (left, right) = (project(clip.left()), project(clip.right()));
@@ -216,10 +262,31 @@ impl TimelineView {
             let width16 = i64::from(key.width_px).saturating_mul(16);
             let out = planrs_render::timeline::layout(&input, width16);
             self.items = planrs_render::timeline::items(&out);
+            extend_band(&mut self.items, key.height_px);
             self.bounds = Some((input.start, input.finish));
             self.cache = Some((key, out));
             self.layouts_computed = self.layouts_computed.saturating_add(1);
         }
+    }
+}
+
+/// Volet plus haut que la disposition (H-UI-111) : fond de la frise
+/// (première bande, `Class::HeaderBg`) étendu à toute la hauteur du volet,
+/// la disposition étant centrée (décalage de [`fit`]).
+fn extend_band(items: &mut [Item], height_px: u32) {
+    let (scale, offset) = fit(f32::from(u16::try_from(height_px).unwrap_or(u16::MAX)));
+    if scale < 1.0 || offset <= 0.0 {
+        return;
+    }
+    let off16 = crate::geom::f32_to_bounded_i64(offset * SUB, MAX_WIDTH_PX.saturating_mul(16));
+    let h16 = i64::from(height_px).saturating_mul(16);
+    if let Some(Prim::Rect { r, .. }) = items
+        .iter_mut()
+        .find(|it| it.class == Class::HeaderBg && matches!(it.prim, Prim::Rect { .. }))
+        .map(|it| &mut it.prim)
+    {
+        r.y = r.y.saturating_sub(off16);
+        r.h = h16.saturating_add(2 * 16);
     }
 }
 
@@ -235,10 +302,22 @@ fn empty_hint(painter: &egui::Painter, fc: &FrameCtx<'_>, rect: Rect) {
     );
 }
 
+/// Entrée « Masquer la chronologie » d'un menu contextuel (H-UI-110).
+fn hide_entry(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>) {
+    if ui.button(fc.texts.get(TextId::TimelineHide)).clicked() {
+        fc.actions.push(Action::Timeline(TimelineOp::SetVisible(false)));
+        ui.close();
+    }
+}
+
 /// Dessine la frise dans `rect` (en tête de la vue Gantt : habillage
 /// ruban, frise visible, vue Gantt ou Gantt de suivi, voir [`wanted`]) ;
 /// `gantt` : axe et rectangle visible du Gantt de cette image, pour le
 /// rectangle de la partie visible (H-UI-81).
+#[allow(
+    clippy::too_many_lines,
+    reason = "dessin, zones cliquables et × de la frise, dans l'ordre"
+)]
 pub fn show(
     ui: &mut egui::Ui,
     fc: &mut FrameCtx<'_>,
@@ -253,24 +332,31 @@ pub fn show(
     if !rect.is_finite() || rect.width() < 1.0 || rect.height() < 1.0 {
         return;
     }
+    // Volet plus bas que la disposition : réduite à l'échelle (faite pour
+    // une largeur agrandie d'autant) ; plus haut : centrée.
+    let (scale, offset) = fit(rect.height());
     let screen = fc.task_view.style.clone();
     let tasks = screen.style.timeline.tasks.iter().map(|uid| u64::from(*uid));
     let key = TimelineKey {
         generation: doc.generation(),
         style: fingerprint(std::iter::once(doc.opening).chain(tasks)),
-        width_px: width_px(rect.width()),
+        width_px: width_px(rect.width() / scale),
+        height_px: width_px(rect.height()),
         language: fc.texts.language(),
     };
     view.refresh(fc, key);
     let Some((_, layout)) = &view.cache else {
         return;
     };
-    let origin = rect.min;
-    let found = elements(layout, origin);
+    let origin = pos2(rect.left(), rect.top() + offset);
+    let found = elements(layout, origin, scale);
     let window = gantt
         .zip(axis_x16(layout))
         .zip(view.bounds)
-        .and_then(|((g, axis), bounds)| visible_window(rect, axis, g, bounds));
+        .and_then(|((g, (a0, a1)), bounds)| {
+            let x = |v: i64| origin.x + i64_to_f32(v) / SUB * scale;
+            visible_window(rect, (x(a0), x(a1)), g, bounds)
+        });
 
     // Dessin : primitives de la scène, puis la partie visible et le
     // séparateur bas.
@@ -289,7 +375,7 @@ pub fn show(
     let pr = Projection {
         src: (0, 0),
         dst: origin,
-        k: 1.0 / SUB,
+        k: scale / SUB,
     };
     let mut shapes = Vec::with_capacity(view.items.len().saturating_add(3));
     items_shapes(&painter, &view.items, &ink, &pr, &mut shapes);
@@ -320,6 +406,13 @@ pub fn show(
         empty_hint(&painter, fc, rect);
     }
 
+    // Fond de la frise : clic droit n'importe où ⇒ « Masquer la
+    // chronologie » (H-UI-110) ; les éléments, interrogés après, passent
+    // devant.
+    let hovered = ui.rect_contains_pointer(rect);
+    let background = ui.interact(rect, Id::unique("planrs.timeline.background"), Sense::click());
+    background.context_menu(|ui| hide_entry(ui, fc));
+
     // Zones cliquables : une par élément, au nom de la tâche.
     let project = doc.project();
     let texts = fc.texts;
@@ -339,13 +432,27 @@ pub fn show(
                 fc.actions.push(Action::Timeline(TimelineOp::Remove(*uid)));
                 ui.close();
             }
+            hide_entry(ui, fc);
         });
+    }
+
+    // × au coin haut droit, peint au survol de la frise ou au focus
+    // clavier (H-UI-110).
+    let close_rect = Rect::from_min_size(
+        pos2(rect.right() - CLOSE_SIDE - 4.0, rect.top() + 4.0),
+        egui::vec2(CLOSE_SIDE, CLOSE_SIDE),
+    );
+    let (clicked, close_shown) =
+        super::main_view::close_button(ui, fc, close_rect, close_id(), TextId::TimelineCloseTip, hovered);
+    if clicked {
+        fc.actions.push(Action::Timeline(TimelineOp::SetVisible(false)));
     }
     view.drawn = Some(TimelineDrawn {
         rect,
         window,
         elements: found,
         painted: filled,
+        close: close_shown.then_some(close_rect),
     });
 }
 
@@ -397,20 +504,20 @@ mod tests {
         let (gs, gf) = (axis.x(start), axis.x(finish));
         // Partie visible = projet entier ⇒ l'axe de la frise.
         let clip = Rect::from_min_max(pos2(gs, 0.0), pos2(gf, 10.0));
-        let w = visible_window(rect, (1_600, 15_200), (&axis, clip), (start, finish)).unwrap();
+        let w = visible_window(rect, (100.0, 950.0), (&axis, clip), (start, finish)).unwrap();
         assert!(
             (w.left() - 100.0).abs() < 0.01 && (w.right() - 950.0).abs() < 0.01,
             "{w:?}"
         );
         // Décalage de 100 px ⇒ décalage de 100 × rapport.
         let shifted = clip.translate(egui::vec2(100.0, 0.0));
-        let s = visible_window(rect, (1_600, 15_200), (&axis, shifted), (start, finish)).unwrap();
+        let s = visible_window(rect, (100.0, 950.0), (&axis, shifted), (start, finish)).unwrap();
         let ratio = 850.0 / (gf - gs);
         assert!((s.left() - w.left() - 100.0 * ratio).abs() < 0.01, "{s:?}");
         assert_eq!(s.right(), rect.right());
         // Hors de la frise, ou projet de durée nulle : rien.
         let far = clip.translate(egui::vec2(1.0e6, 0.0));
-        assert!(visible_window(rect, (1_600, 15_200), (&axis, far), (start, finish)).is_none());
-        assert!(visible_window(rect, (1_600, 15_200), (&axis, clip), (start, start)).is_none());
+        assert!(visible_window(rect, (100.0, 950.0), (&axis, far), (start, finish)).is_none());
+        assert!(visible_window(rect, (100.0, 950.0), (&axis, clip), (start, start)).is_none());
     }
 }

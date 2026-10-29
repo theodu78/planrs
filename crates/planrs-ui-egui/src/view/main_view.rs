@@ -134,7 +134,7 @@ pub fn show(ui: &mut egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient) 
     // (une colonne masquée ou rétrécie réduit le maximum).
     let table_w = layout.table_clip.width();
     view.last_table_width = table_w;
-    let columns_w: f32 = fc.state.visible_columns().map(|c| f32::from(c.width)).sum();
+    let columns_w = super::table::content_width(ui.ctx(), fc.state);
     let table_max = max_scroll_x(columns_w, table_w);
     let table_x = clamp_scroll(view.table_scroll_x, table_max);
     view.table_scroll_x = table_x;
@@ -847,7 +847,7 @@ fn autoscroll(ui: &egui::Ui, fc: &mut FrameCtx<'_>, view: &mut ViewTransient, la
             p.x - origin.x,
             threshold,
         );
-        let columns_w: f32 = fc.state.visible_columns().map(|c| f32::from(c.width)).sum();
+        let columns_w = super::table::content_width(ui.ctx(), fc.state);
         let max = max_scroll_x(columns_w, clip.width());
         if let Some(x) =
             crate::nav::autoscroll_offset(view.table_scroll_x, speed, AUTOSCROLL_COLUMN_W, dt, max)

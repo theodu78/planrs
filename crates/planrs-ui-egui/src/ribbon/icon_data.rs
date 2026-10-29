@@ -30,6 +30,8 @@ pub enum Icon {
     ArrowDownToLine,
     /// `arrow-up-down.svg`.
     ArrowUpDown,
+    /// `between-vertical-start.svg`.
+    BetweenVerticalStart,
     /// `calendar-check.svg`.
     CalendarCheck,
     /// `calendar-cog.svg`.
@@ -48,12 +50,16 @@ pub enum Icon {
     ChevronsUpDown,
     /// `circle-off.svg`.
     CircleOff,
+    /// `circle-x.svg`.
+    CircleX,
     /// `clipboard-list.svg`.
     ClipboardList,
     /// `clipboard-paste.svg`.
     ClipboardPaste,
     /// `columns-3.svg`.
     Columns3,
+    /// `columns-3-cog.svg`.
+    Columns3Cog,
     /// `copy.svg`.
     Copy,
     /// `diamond.svg`.
@@ -110,8 +116,12 @@ pub enum Icon {
     SunMoon,
     /// `swatch-book.svg`.
     SwatchBook,
+    /// `tags.svg`.
+    Tags,
     /// `timeline.svg`.
     Timeline,
+    /// `triangle-alert.svg`.
+    TriangleAlert,
     /// `undo-2.svg`.
     Undo2,
     /// `unlink.svg`.
@@ -128,9 +138,10 @@ pub enum Icon {
 
 impl Icon {
     /// Toutes les icônes, dans l'ordre des fichiers.
-    pub const ALL: [Self; 49] = [
+    pub const ALL: [Self; 54] = [
         Self::ArrowDownToLine,
         Self::ArrowUpDown,
+        Self::BetweenVerticalStart,
         Self::CalendarCheck,
         Self::CalendarCog,
         Self::CalendarRange,
@@ -140,9 +151,11 @@ impl Icon {
         Self::ChevronsDownUp,
         Self::ChevronsUpDown,
         Self::CircleOff,
+        Self::CircleX,
         Self::ClipboardList,
         Self::ClipboardPaste,
         Self::Columns3,
+        Self::Columns3Cog,
         Self::Copy,
         Self::Diamond,
         Self::Eraser,
@@ -171,7 +184,9 @@ impl Icon {
         Self::Search,
         Self::SunMoon,
         Self::SwatchBook,
+        Self::Tags,
         Self::Timeline,
+        Self::TriangleAlert,
         Self::Undo2,
         Self::Unlink,
         Self::UserPlus,
@@ -186,6 +201,7 @@ impl Icon {
         match self {
             Self::ArrowDownToLine => "arrow-down-to-line",
             Self::ArrowUpDown => "arrow-up-down",
+            Self::BetweenVerticalStart => "between-vertical-start",
             Self::CalendarCheck => "calendar-check",
             Self::CalendarCog => "calendar-cog",
             Self::CalendarRange => "calendar-range",
@@ -195,9 +211,11 @@ impl Icon {
             Self::ChevronsDownUp => "chevrons-down-up",
             Self::ChevronsUpDown => "chevrons-up-down",
             Self::CircleOff => "circle-off",
+            Self::CircleX => "circle-x",
             Self::ClipboardList => "clipboard-list",
             Self::ClipboardPaste => "clipboard-paste",
             Self::Columns3 => "columns-3",
+            Self::Columns3Cog => "columns-3-cog",
             Self::Copy => "copy",
             Self::Diamond => "diamond",
             Self::Eraser => "eraser",
@@ -226,7 +244,9 @@ impl Icon {
             Self::Search => "search",
             Self::SunMoon => "sun-moon",
             Self::SwatchBook => "swatch-book",
+            Self::Tags => "tags",
             Self::Timeline => "timeline",
+            Self::TriangleAlert => "triangle-alert",
             Self::Undo2 => "undo-2",
             Self::Unlink => "unlink",
             Self::UserPlus => "user-plus",
@@ -242,6 +262,7 @@ impl Icon {
         match self {
             Self::ArrowDownToLine => &ARROW_DOWN_TO_LINE,
             Self::ArrowUpDown => &ARROW_UP_DOWN,
+            Self::BetweenVerticalStart => &BETWEEN_VERTICAL_START,
             Self::CalendarCheck => &CALENDAR_CHECK,
             Self::CalendarCog => &CALENDAR_COG,
             Self::CalendarRange => &CALENDAR_RANGE,
@@ -251,9 +272,11 @@ impl Icon {
             Self::ChevronsDownUp => &CHEVRONS_DOWN_UP,
             Self::ChevronsUpDown => &CHEVRONS_UP_DOWN,
             Self::CircleOff => &CIRCLE_OFF,
+            Self::CircleX => &CIRCLE_X,
             Self::ClipboardList => &CLIPBOARD_LIST,
             Self::ClipboardPaste => &CLIPBOARD_PASTE,
             Self::Columns3 => &COLUMNS_3,
+            Self::Columns3Cog => &COLUMNS_3_COG,
             Self::Copy => &COPY,
             Self::Diamond => &DIAMOND,
             Self::Eraser => &ERASER,
@@ -282,7 +305,9 @@ impl Icon {
             Self::Search => &SEARCH,
             Self::SunMoon => &SUN_MOON,
             Self::SwatchBook => &SWATCH_BOOK,
+            Self::Tags => &TAGS,
             Self::Timeline => &TIMELINE,
+            Self::TriangleAlert => &TRIANGLE_ALERT,
             Self::Undo2 => &UNDO_2,
             Self::Unlink => &UNLINK,
             Self::UserPlus => &USER_PLUS,
@@ -323,6 +348,26 @@ static ARROW_UP_DOWN: IconData = IconData {
         ] },
         IconLine { closed: false, points: &[
             (448, 256), (448, 1280),
+        ] },
+    ],
+    dots: &[],
+};
+
+/// `between-vertical-start.svg`.
+static BETWEEN_VERTICAL_START: IconData = IconData {
+    lines: &[
+        IconLine { closed: true, points: &[
+            (192, 576), (195, 556), (204, 538), (218, 524), (236, 515), (256, 512), (576, 512), (596, 515), (614, 524), (628, 538),
+            (637, 556), (640, 576), (640, 1280), (637, 1300), (628, 1318), (614, 1332), (596, 1341), (576, 1344), (256, 1344), (236, 1341),
+            (218, 1332), (204, 1318), (195, 1300), (192, 1280),
+        ] },
+        IconLine { closed: false, points: &[
+            (960, 128), (768, 320), (576, 128),
+        ] },
+        IconLine { closed: true, points: &[
+            (896, 576), (899, 556), (908, 538), (922, 524), (940, 515), (960, 512), (1280, 512), (1300, 515), (1318, 524), (1332, 538),
+            (1341, 556), (1344, 576), (1344, 1280), (1341, 1300), (1332, 1318), (1318, 1332), (1300, 1341), (1280, 1344), (960, 1344), (940, 1341),
+            (922, 1332), (908, 1318), (899, 1300), (896, 1280),
         ] },
     ],
     dots: &[],
@@ -532,6 +577,27 @@ static CIRCLE_OFF: IconData = IconData {
     dots: &[],
 };
 
+/// `circle-x.svg`.
+static CIRCLE_X: IconData = IconData {
+    lines: &[
+        IconLine { closed: true, points: &[
+            (1408, 768), (1404, 842), (1392, 912), (1372, 979), (1345, 1046), (1310, 1108), (1268, 1167), (1220, 1220), (1167, 1268), (1108, 1310),
+            (1046, 1345), (979, 1372), (912, 1392), (842, 1404), (768, 1408), (694, 1404), (624, 1392), (557, 1372), (490, 1345), (428, 1310),
+            (369, 1268), (316, 1220), (268, 1167), (226, 1108), (191, 1046), (164, 979), (144, 912), (132, 842), (128, 768), (132, 694),
+            (144, 624), (164, 557), (191, 490), (226, 428), (268, 369), (316, 316), (369, 268), (428, 226), (490, 191), (557, 164),
+            (624, 144), (694, 132), (768, 128), (842, 132), (912, 144), (979, 164), (1046, 191), (1108, 226), (1167, 268), (1220, 316),
+            (1268, 369), (1310, 428), (1345, 490), (1372, 557), (1392, 624), (1404, 694),
+        ] },
+        IconLine { closed: false, points: &[
+            (960, 576), (576, 960),
+        ] },
+        IconLine { closed: false, points: &[
+            (576, 576), (960, 960),
+        ] },
+    ],
+    dots: &[],
+};
+
 /// `clipboard-list.svg`.
 static CLIPBOARD_LIST: IconData = IconData {
     lines: &[
@@ -596,6 +662,54 @@ static COLUMNS_3: IconData = IconData {
         ] },
         IconLine { closed: false, points: &[
             (960, 192), (960, 1344),
+        ] },
+    ],
+    dots: &[],
+};
+
+/// `columns-3-cog.svg`.
+static COLUMNS_3_COG: IconData = IconData {
+    lines: &[
+        IconLine { closed: false, points: &[
+            (678, 1344), (320, 1344), (286, 1339), (256, 1327), (229, 1307), (209, 1280), (197, 1250), (192, 1216), (192, 320), (197, 286),
+            (209, 256), (229, 229), (256, 209), (286, 197), (320, 192), (1216, 192), (1250, 197), (1280, 209), (1307, 229), (1327, 256),
+            (1339, 286), (1344, 320), (1344, 678),
+        ] },
+        IconLine { closed: false, points: &[
+            (916, 1250), (975, 1225),
+        ] },
+        IconLine { closed: false, points: &[
+            (960, 192), (960, 678),
+        ] },
+        IconLine { closed: false, points: &[
+            (975, 1079), (916, 1054),
+        ] },
+        IconLine { closed: false, points: &[
+            (1079, 975), (1054, 916),
+        ] },
+        IconLine { closed: false, points: &[
+            (1079, 1329), (1054, 1389),
+        ] },
+        IconLine { closed: false, points: &[
+            (1225, 975), (1250, 916),
+        ] },
+        IconLine { closed: false, points: &[
+            (1250, 1389), (1225, 1329),
+        ] },
+        IconLine { closed: false, points: &[
+            (1329, 1079), (1388, 1054),
+        ] },
+        IconLine { closed: false, points: &[
+            (1329, 1225), (1388, 1250),
+        ] },
+        IconLine { closed: false, points: &[
+            (576, 192), (576, 1344),
+        ] },
+        IconLine { closed: true, points: &[
+            (1344, 1152), (1340, 1190), (1329, 1225), (1312, 1259), (1288, 1288), (1259, 1312), (1225, 1329), (1190, 1340), (1152, 1344), (1114, 1340),
+            (1079, 1329), (1045, 1312), (1016, 1288), (992, 1259), (975, 1225), (964, 1190), (960, 1152), (964, 1114), (975, 1079), (992, 1045),
+            (1016, 1016), (1045, 992), (1079, 975), (1114, 964), (1152, 960), (1190, 964), (1225, 975), (1259, 992), (1288, 1016), (1312, 1045),
+            (1329, 1079), (1340, 1114),
         ] },
     ],
     dots: &[],
@@ -1206,6 +1320,27 @@ static SWATCH_BOOK: IconData = IconData {
     ],
 };
 
+/// `tags.svg`.
+static TAGS: IconData = IconData {
+    lines: &[
+        IconLine { closed: true, points: &[
+            (843, 128), (876, 132), (907, 145), (934, 166), (1363, 595), (1382, 618), (1397, 645), (1405, 674), (1408, 704), (1405, 734),
+            (1397, 763), (1382, 790), (1363, 813), (1069, 1107), (1046, 1126), (1019, 1141), (990, 1149), (960, 1152), (930, 1149), (901, 1141),
+            (874, 1126), (851, 1107), (422, 678), (401, 651), (388, 620), (384, 587), (384, 192), (387, 172), (396, 154), (410, 140),
+            (428, 131), (448, 128),
+        ] },
+        IconLine { closed: false, points: &[
+            (128, 448), (128, 843), (132, 876), (145, 907), (166, 934), (595, 1363), (625, 1386), (658, 1401), (695, 1408), (732, 1406),
+            (767, 1395), (799, 1375),
+        ] },
+        IconLine { closed: true, points: &[
+            (704, 416), (700, 432), (688, 444), (672, 448), (656, 444), (644, 432), (640, 416), (644, 400), (656, 388), (672, 384),
+            (688, 388), (700, 400),
+        ] },
+    ],
+    dots: &[],
+};
+
 /// `timeline.svg`.
 static TIMELINE: IconData = IconData {
     lines: &[
@@ -1227,6 +1362,23 @@ static TIMELINE: IconData = IconData {
     ],
     dots: &[
         (256, 768), (256, 1024), (256, 1280), (256, 256), (256, 512),
+    ],
+};
+
+/// `triangle-alert.svg`.
+static TRIANGLE_ALERT: IconData = IconData {
+    lines: &[
+        IconLine { closed: false, points: &[
+            (1391, 1152), (879, 256), (858, 229), (832, 209), (801, 196), (767, 191), (734, 196), (703, 209), (677, 229), (656, 256),
+            (144, 1152), (131, 1183), (127, 1216), (131, 1249), (144, 1281), (165, 1307), (192, 1327), (222, 1340), (256, 1344), (1280, 1344),
+            (1314, 1340), (1344, 1327), (1370, 1307), (1391, 1280), (1404, 1249), (1408, 1216), (1404, 1183), (1391, 1152),
+        ] },
+        IconLine { closed: false, points: &[
+            (768, 576), (768, 832),
+        ] },
+    ],
+    dots: &[
+        (768, 1088),
     ],
 };
 

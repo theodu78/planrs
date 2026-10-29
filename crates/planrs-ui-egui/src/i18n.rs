@@ -1400,6 +1400,16 @@ text_ids! {
     CustomTypeDate => "custom-type-date",
     CustomTypeFlag => "custom-type-flag",
     // --- UX2 L10 ---
+    RibbonFillRight => "ribbon-fill-right",
+    RibbonDetails => "ribbon-details",
+    RibbonInsertColumn => "ribbon-insert-column",
+    RibbonFieldSettings => "ribbon-field-settings",
+    RibbonCustomFields => "ribbon-custom-fields",
+    RibbonTipDetails => "ribbon-tip-details",
+    RibbonTipInsertColumn => "ribbon-tip-insert-column",
+    RibbonTipFieldSettings => "ribbon-tip-field-settings",
+    RibbonTipCustomFields => "ribbon-tip-custom-fields",
+    DiagnosticsShowAll => "diagnostics-show-all",
     // --- UX2 L11 ---
 }
 

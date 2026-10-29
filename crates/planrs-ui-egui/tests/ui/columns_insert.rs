@@ -139,9 +139,8 @@ fn h_ui_114_insert_left_of_clicked() {
 #[test]
 fn h_ui_114_add_new_column_slot() {
     let mut harness = p_harness();
-    assert!(!table::add_column_slot(&harness.ctx), "éteinte avant L10");
-    assert!(harness.query_by_label(&fr(TextId::AddNewColumn)).is_none());
-    table::set_add_column_slot(&harness.ctx, true);
+    // Affichée par défaut depuis le lot L10.
+    assert!(table::add_column_slot(&harness.ctx), "affichée depuis L10");
     // Table élargie : la colonne tient à droite des colonnes par défaut
     // (642 points, largeur par défaut de la table).
     harness.state_mut().dispatch(Action::SetTableWidth(900));

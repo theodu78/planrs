@@ -548,8 +548,9 @@ fn diagnostics_panel_toggles() {
     let no_errors = Texts::new(Language::Fr).get_args(TextId::StatusErrors, &[("count", Arg::Count(0))]);
     click(&mut harness, &no_errors);
     assert!(harness.state().state.diagnostics_open);
-    // Le panneau (exemple sans diagnostic) répète les compteurs.
-    assert_eq!(harness.query_all_by_label(&no_errors).count(), 2);
+    // Exemple sans diagnostic : aucun volet (H-UI-119, lot L10), la
+    // pastille seule dit « aucune erreur ».
+    assert_eq!(harness.query_all_by_label(&no_errors).count(), 1);
     harness.state_mut().dispatch(Action::ToggleDiagnostics);
     harness.run();
     assert!(!harness.state().state.diagnostics_open);

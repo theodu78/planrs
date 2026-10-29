@@ -5,7 +5,8 @@
 //! cargo run -p planrs-ui-egui --example snapshot -- <fichier.xml | --generate N | --p> <vue>
 //!     [--row N] [--zoom day|week|month|quarter] [--size LxH] [--style <modèle>]
 //!     [--tab task|resource|project|view|format] [--ribbon-collapsed]
-//!     [--block <id1>:<col1>-<id2>:<col2>] [sortie.png]
+//!     [--block <id1>:<col1>-<id2>:<col2>] [--details] [--columns <c1,c2,…>]
+//!     [--toast] [sortie.png]
 //! ```
 //!
 //! Vues : `welcome` (accueil, la source est ignorée), `main` (zoom ajusté),
@@ -22,7 +23,13 @@
 //! d'ID `id1`, colonne `col1`, puis Maj+appui sur celle de `id2`, `col2`) ;
 //! colonnes nommées comme dans un fichier d'état (`id`, `name`,
 //! `duration`, `start`, `finish`, `predecessors`…), `id` des deux côtés :
-//! lignes entières (passe UX, lot L5). `--generate N` : réseau généré sans MSPDI
+//! lignes entières (passe UX, lot L5). Seconde passe UX (lot L10) :
+//! `--details` ouvre le volet de détails (Formulaire tâche, H-UI-112) sur
+//! la tâche active ; `--columns` remplace les colonnes affichées par l'ID
+//! puis la liste donnée, dans l'ordre (noms du fichier d'état : `work`,
+//! `free_slack`…, et `text1`, `number3`… pour les champs personnalisés) ;
+//! `--toast` publie une notification de refus (lien déjà présent, refusé
+//! par le registre, H-UI-104, H-UI-105). `--generate N` : réseau généré sans MSPDI
 //! (`planrs_tests::generate::ui_network_with_resources`, N arrondi au
 //! multiple de 20 supérieur, deux liens par tâche, une ressource pour 25
 //! tâches), comme le test de fluidité. `--row N` : sélectionne la ligne de
@@ -56,8 +63,8 @@ use egui_kittest::Harness;
 use egui_kittest::wgpu::WgpuTestRenderer;
 use planrs_core::Moment;
 use planrs_render::style::TemplateId;
-use planrs_ui_egui::action::{DialogKind, PressMode, PressTarget, SelectOp};
-use planrs_ui_egui::column::Column;
+use planrs_ui_egui::action::{DialogKind, PaneOp, PressMode, PressTarget, SelectOp};
+use planrs_ui_egui::column::{Column, ColumnState};
 use planrs_ui_egui::nav::RowRef;
 use planrs_ui_egui::ribbon::{RibbonOp, RibbonTab};
 use planrs_ui_egui::timescale::TimeAxis;
@@ -68,7 +75,8 @@ use planrs_ui_egui::{
 /// Usage affiché en cas d'arguments invalides.
 pub const USAGE: &str = "usage : cargo run -p planrs-ui-egui --example snapshot -- \
 <fichier.xml | --generate N | --p> <vue> [--row N] [--zoom day|week|month|quarter] [--size LxH] [--style <modèle>] \
-[--tab task|resource|project|view|format] [--ribbon-collapsed] [--block ID:COL-ID:COL] [sortie.png]\n\
+[--tab task|resource|project|view|format] [--ribbon-collapsed] [--block ID:COL-ID:COL] [--details] \
+[--columns C1,C2,…] [--toast] [sortie.png]\n\
 vues : welcome | main | main-week | main-day | main-dark | main-en | tracking | resources | usage | timeline | print-timeline\n\
 modèles : classique | sobre | contraste_eleve | presentation | chantier | impression_nb";
 
@@ -193,6 +201,12 @@ pub struct Args {
     /// Bloc sélectionné (`--block`) : (ID, colonne) de l'appui, puis du
     /// Maj+appui.
     pub block: Option<[(u32, Column); 2]>,
+    /// Volet de détails ouvert (`--details`, H-UI-112).
+    pub details: bool,
+    /// Colonnes affichées après l'ID (`--columns`, H-UI-114).
+    pub columns: Option<Vec<Column>>,
+    /// Notification de refus publiée (`--toast`, H-UI-104).
+    pub toast: bool,
     /// PNG à écrire.
     pub output: PathBuf,
 }
@@ -243,10 +257,15 @@ fn parse_tab(text: &str) -> Result<RibbonTab, String> {
     }
 }
 
-/// Colonne nommée comme dans l'état de l'interface (`duration`, `start`…).
+/// Colonne nommée comme dans l'état de l'interface (`duration`, `start`,
+/// `work`… ; `text1`, `number3`… pour un champ personnalisé).
 fn parse_column(text: &str) -> Result<Column, String> {
+    if let Ok(id) = serde_json::from_value::<planrs_core::CustomFieldId>(serde_json::Value::from(text)) {
+        return Ok(Column::Custom(id));
+    }
     Column::ALL
         .into_iter()
+        .chain(Column::FIELDS)
         .find(|c| {
             serde_json::to_value(c)
                 .ok()
@@ -255,6 +274,23 @@ fn parse_column(text: &str) -> Result<Column, String> {
                 == Some(text)
         })
         .ok_or_else(|| format!("colonne inconnue : {text}"))
+}
+
+/// Liste `C1,C2,…` de `--columns` : colonnes distinctes, sans l'ID (toujours
+/// en tête), au moins une.
+fn parse_columns(text: &str) -> Result<Vec<Column>, String> {
+    let mut columns = Vec::new();
+    for part in text.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let column = parse_column(part)?;
+        if column == Column::Id || columns.contains(&column) {
+            return Err(format!("--columns : colonne en double ou ID « {part} »"));
+        }
+        columns.push(column);
+    }
+    if columns.is_empty() {
+        return Err("--columns attend au moins une colonne".to_owned());
+    }
+    Ok(columns)
 }
 
 /// Bloc `ID:COL-ID:COL` de `--block`.
@@ -314,6 +350,9 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Stri
     let mut tab = None;
     let mut ribbon_collapsed = false;
     let mut block = None;
+    let mut details = false;
+    let mut columns = None;
+    let mut toast = false;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--generate") => {
@@ -330,6 +369,9 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Stri
             Some("--tab") => tab = Some(parse_tab(&option_value("--tab", args.next())?)?),
             Some("--ribbon-collapsed") => ribbon_collapsed = true,
             Some("--block") => block = Some(parse_block(&option_value("--block", args.next())?)?),
+            Some("--details") => details = true,
+            Some("--toast") => toast = true,
+            Some("--columns") => columns = Some(parse_columns(&option_value("--columns", args.next())?)?),
             Some("--p") => source = Some(Source::P),
             Some(other) if other.starts_with("--") => return Err(format!("option inconnue : {other}")),
             _ => positional.push(arg),
@@ -369,6 +411,9 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Stri
         tab,
         ribbon_collapsed,
         block,
+        details,
+        columns,
+        toast,
         output,
     })
 }
@@ -621,11 +666,45 @@ fn prepare(harness: &mut Harness<'static, App>, args: &Args) -> Result<(), Strin
     if let Some(block) = args.block {
         select_block(harness, block)?;
     }
+    if args.details {
+        harness
+            .state_mut()
+            .dispatch(Action::Pane(PaneOp::ShowDetails(true)));
+        settle(harness)?;
+    }
+    if args.toast {
+        post_refusal(harness.state_mut())?;
+        settle(harness)?;
+    }
     if args.view == View::PrintTimeline {
         harness
             .state_mut()
             .dispatch(Action::ShowDialog(DialogKind::PageSetup { print_mode: true }));
         settle(harness)?;
+    }
+    Ok(())
+}
+
+/// Publie le refus d'un lien déjà présent (premier lien du projet, ajouté
+/// une seconde fois) : notification `Refusal` en langage utilisateur,
+/// détails repliés (H-UI-104, H-UI-105).
+fn post_refusal(app: &mut App) -> Result<(), String> {
+    let link = app.document.as_ref().and_then(|doc| {
+        doc.project().tasks.iter().find_map(|task| {
+            task.predecessors
+                .first()
+                .map(|l| (l.predecessor.get(), task.uid().get()))
+        })
+    });
+    let (pred, succ) = link.ok_or("--toast : aucun lien dans le projet")?;
+    let json = serde_json::json!({
+        "format_version": 1,
+        "ops": [{ "op": "link.add", "pred": pred, "succ": succ }]
+    });
+    let batch = planrs_automation::Batch::from_json_str(&json.to_string())
+        .map_err(|error| format!("--toast : lot refusé à la lecture : {error}"))?;
+    if app.execute(&batch, planrs_ui_egui::EditOrigin::User).is_ok() {
+        return Err("--toast : le lien en double a été accepté".to_owned());
     }
     Ok(())
 }
@@ -665,15 +744,19 @@ fn select_block(harness: &mut Harness<'static, App>, block: [(u32, Column); 2]) 
 /// Document refusé, ligne absente, interface instable.
 pub fn prepared(args: &Args, renderer: Option<WgpuTestRenderer>) -> Result<Harness<'static, App>, String> {
     let (language, theme) = args.view.prefs();
-    let app = App::new(
-        UiState {
-            language,
-            theme,
-            default_template: args.style.unwrap_or(TemplateId::Classique),
-            ..UiState::default()
-        },
-        Env::fixed(fixed_now(&args.source)?),
-    );
+    let mut state = UiState {
+        language,
+        theme,
+        default_template: args.style.unwrap_or(TemplateId::Classique),
+        ..UiState::default()
+    };
+    if let Some(columns) = &args.columns {
+        state.columns = std::iter::once(Column::Id)
+            .chain(columns.iter().copied())
+            .map(ColumnState::default_for)
+            .collect();
+    }
+    let app = App::new(state, Env::fixed(fixed_now(&args.source)?));
     let egui_theme = if theme == ThemePref::Dark {
         egui::Theme::Dark
     } else {

@@ -2049,7 +2049,11 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(256))]
+        // La CI force `PROPTEST_CASES=10000` par-dessus `with_cases` ; un
+        // tiers des cas générés est écarté (`prop_assume` : colonnes Début et
+        // Fin ensemble), donc le plafond de rejets globaux suit le nombre de
+        // cas au lieu des 1 024 par défaut.
+        #![proptest_config(ProptestConfig { cases: 256, max_global_rejects: 1_000_000, ..ProptestConfig::default() })]
 
         /// P61 (seconde passe UX, R-260) : sur un projet généré (≤ 40
         /// tâches, récapitulatives, liens), toute saisie de Prédécesseurs,
